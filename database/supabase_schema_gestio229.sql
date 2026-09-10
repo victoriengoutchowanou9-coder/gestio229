@@ -502,3 +502,138 @@ VALUES
 ('sup00001-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'FOURN-001', 'IMPORT-EXPORT BÉNIN SÀRL', 'M. SOSSOU Bernard', '3201888999000', '+229 97 88 77 66', 'contact@importbenin.bj', 'Cotonou', 0),
 ('sup00002-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 'FOURN-002', 'GRANDS MOULINS DU BÉNIN SA', 'Direction Commerciale', '3201555666777', '+229 21 30 40 50', 'ventes@gmb.bj', 'Cotonou', 0)
 ON CONFLICT DO NOTHING;
+
+-- ==============================================================================
+-- 8. MODULE BON DE COMMANDE PRO (BC) & RÈGLE B.1 (UCD)
+-- ==============================================================================
+CREATE TABLE IF NOT EXISTS bons_commande (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    reference VARCHAR(50) NOT NULL UNIQUE,
+    fournisseur_id UUID REFERENCES suppliers(id) ON DELETE SET NULL,
+    fournisseur_nom VARCHAR(255) NOT NULL,
+    date_commande DATE NOT NULL DEFAULT CURRENT_DATE,
+    date_livraison_prevue DATE,
+    statut VARCHAR(50) NOT NULL DEFAULT 'En attente Signature Gestionnaire',
+    total_ttc NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+    notes TEXT,
+    created_by UUID REFERENCES user_profiles(id) ON DELETE SET NULL,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bons_commande_ref ON bons_commande(reference);
+CREATE INDEX IF NOT EXISTS idx_bons_commande_statut ON bons_commande(statut);
+
+CREATE TABLE IF NOT EXISTS bc_lignes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bc_id UUID NOT NULL REFERENCES bons_commande(id) ON DELETE CASCADE,
+    produit_id UUID REFERENCES products(id) ON DELETE SET NULL,
+    code_produit VARCHAR(50) NOT NULL,
+    nom_produit VARCHAR(255) NOT NULL,
+    ucd VARCHAR(50) NOT NULL DEFAULT 'Carton',
+    stock_actuel_ucd NUMERIC(15,2) DEFAULT 0.00,
+    qte_commande NUMERIC(15,2) NOT NULL CHECK (qte_commande > 0),
+    qte_recue NUMERIC(15,2) DEFAULT 0.00 CHECK (qte_recue >= 0),
+    pu_ttc NUMERIC(15,2) NOT NULL DEFAULT 0.00 CHECK (pu_ttc >= 0),
+    total_ligne NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_bc_lignes_bc ON bc_lignes(bc_id);
+
+CREATE TABLE IF NOT EXISTS signatures_bc (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bc_id UUID NOT NULL REFERENCES bons_commande(id) ON DELETE CASCADE,
+    role VARCHAR(50) NOT NULL,
+    signer_name VARCHAR(255) NOT NULL,
+    signature_image_base64 TEXT NOT NULL,
+    date_signature TIMESTAMPTZ DEFAULT now(),
+    ip_address VARCHAR(50),
+    CONSTRAINT chk_bc_role CHECK (role IN ('gestionnaire', 'directeur', 'magasinier'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_signatures_bc ON signatures_bc(bc_id);
+
+CREATE TABLE IF NOT EXISTS stock_magasin (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    produit_id UUID NOT NULL UNIQUE REFERENCES products(id) ON DELETE CASCADE,
+    code_produit VARCHAR(50),
+    stock_ucd NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+    ucd VARCHAR(50) NOT NULL DEFAULT 'Carton',
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+ALTER TABLE bons_commande ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bc_lignes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE signatures_bc ENABLE ROW LEVEL SECURITY;
+ALTER TABLE stock_magasin ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "Permettre lecture bons_commande" ON bons_commande FOR SELECT USING (true);
+CREATE POLICY "Permettre insertion bons_commande" ON bons_commande FOR INSERT WITH CHECK (true);
+CREATE POLICY "Permettre mise à jour bons_commande" ON bons_commande FOR UPDATE USING (true);
+
+CREATE POLICY "Permettre lecture bc_lignes" ON bc_lignes FOR SELECT USING (true);
+CREATE POLICY "Permettre insertion bc_lignes" ON bc_lignes FOR INSERT WITH CHECK (true);
+CREATE POLICY "Permettre mise à jour bc_lignes" ON bc_lignes FOR UPDATE USING (true);
+
+CREATE POLICY "Permettre lecture signatures_bc" ON signatures_bc FOR SELECT USING (true);
+CREATE POLICY "Permettre insertion signatures_bc" ON signatures_bc FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Permettre lecture stock_magasin" ON stock_magasin FOR SELECT USING (true);
+CREATE POLICY "Permettre upsert stock_magasin" ON stock_magasin FOR ALL USING (true);
+
+CREATE OR REPLACE FUNCTION receptionner_bc_maj_stock(
+    p_bc_id UUID,
+    p_magasinier_name VARCHAR,
+    p_signature_base64 TEXT,
+    p_lignes_recues JSONB
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+AS $$
+DECLARE
+    v_bc RECORD;
+    v_item JSONB;
+    v_prod_id UUID;
+    v_code VARCHAR;
+    v_qte_recue NUMERIC(15,2);
+    v_ucd VARCHAR;
+BEGIN
+    SELECT * INTO v_bc FROM bons_commande WHERE id = p_bc_id;
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Bon de Commande introuvable.');
+    END IF;
+
+    IF v_bc.statut <> 'Validé' THEN
+        RETURN jsonb_build_object('success', false, 'error', 'Statut non éligible à la réception: ' || v_bc.statut);
+    END IF;
+
+    INSERT INTO signatures_bc (bc_id, role, signer_name, signature_image_base64, date_signature)
+    VALUES (p_bc_id, 'magasinier', COALESCE(p_magasinier_name, 'Magasinier'), p_signature_base64, now());
+
+    FOR v_item IN SELECT * FROM jsonb_array_elements(p_lignes_recues)
+    LOOP
+        v_prod_id := (v_item->>'produit_id')::UUID;
+        v_code := v_item->>'code_produit';
+        v_qte_recue := COALESCE((v_item->>'qte_recue')::NUMERIC, 0);
+        v_ucd := COALESCE(v_item->>'ucd', 'Carton');
+
+        UPDATE bc_lignes
+        SET qte_recue = v_qte_recue
+        WHERE bc_id = p_bc_id AND produit_id = v_prod_id;
+
+        -- Règle B.1 : UPSERT stock_magasin en UCD
+        INSERT INTO stock_magasin (produit_id, code_produit, stock_ucd, ucd, updated_at)
+        VALUES (v_prod_id, v_code, v_qte_recue, v_ucd, now())
+        ON CONFLICT (produit_id)
+        DO UPDATE SET
+            stock_ucd = stock_magasin.stock_ucd + EXCLUDED.stock_ucd,
+            updated_at = now();
+    END LOOP;
+
+    UPDATE bons_commande SET statut = 'Réceptionné', updated_at = now() WHERE id = p_bc_id;
+
+    RETURN jsonb_build_object('success', true, 'message', 'Bon de Commande ' || v_bc.reference || ' réceptionné en UCD.');
+END;
+$$;
