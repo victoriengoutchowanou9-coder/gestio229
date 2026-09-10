@@ -2365,6 +2365,7 @@
         <button onclick="closeNewSupplierModal()" class="px-4 py-2 text-xs font-bold text-slate-600">Annuler</button>
         <button onclick="saveNewSupplier()" class="px-5 py-2 bg-indigo-600 text-white rounded-xl text-xs font-bold">Enregistrer</button>
       </div>
+    </div>
   </div>
 
   <!-- ==================================================================== -->
@@ -4510,13 +4511,21 @@
     // 2. MODULE GESTION DU STOCK : NORMES UCD / UV & RÈGLES DE GESTION
     // =========================================================================
     function openNewProductModal() {
-      document.getElementById('new-product-modal').classList.remove('hidden');
-      updateNewPrdFormulaPreview();
-      lucide.createIcons();
+      const m = document.getElementById('new-product-modal');
+      if (m) {
+        m.classList.remove('hidden');
+        m.style.display = 'flex';
+      }
+      try { updateNewPrdFormulaPreview(); } catch (e) { console.warn(e); }
+      try { if (window.lucide) lucide.createIcons(); } catch (e) { console.warn(e); }
     }
 
     function closeNewProductModal() {
-      document.getElementById('new-product-modal').classList.add('hidden');
+      const m = document.getElementById('new-product-modal');
+      if (m) {
+        m.classList.add('hidden');
+        m.style.display = 'none';
+      }
     }
 
     function updateNewPrdFormulaPreview() {
@@ -4884,42 +4893,55 @@
     // SECTION C : FICHE DE STOCK & IMPRESSION VALORISÉE AVEC FILTRE PAR LOT
     // =========================================================================
     function openStockSheetModal(targetProdId = 'all') {
-      APP_STATE.selectedProductForSheet = targetProdId;
-      APP_STATE.selectedLotForSheet = 'all';
+      try {
+        APP_STATE.selectedProductForSheet = targetProdId;
+        APP_STATE.selectedLotForSheet = 'all';
 
-      // Remplir le sélecteur d'articles
-      const prdSelect = document.getElementById('sheet-product-filter');
-      if (prdSelect) {
-        prdSelect.innerHTML = `<option value="all">Fiche Globale (Tous les Articles)</option>`;
-        APP_STATE.products.forEach(p => {
-          prdSelect.innerHTML += `<option value="${p.id}" ${p.id === targetProdId ? 'selected' : ''}>[${p.code}] ${p.name}</option>`;
-        });
-        prdSelect.value = targetProdId;
+        // Remplir le sélecteur d'articles
+        const prdSelect = document.getElementById('sheet-product-filter');
+        if (prdSelect) {
+          prdSelect.innerHTML = `<option value="all">Fiche Globale (Tous les Articles)</option>`;
+          (APP_STATE.products || []).forEach(p => {
+            prdSelect.innerHTML += `<option value="${p.id}" ${p.id === targetProdId ? 'selected' : ''}>[${p.code}] ${p.name}</option>`;
+          });
+          prdSelect.value = targetProdId;
+        }
+
+        // Remplir le filtre par Lot dynamiquement
+        const lotSelect = document.getElementById('sheet-lot-filter');
+        if (lotSelect) {
+          const lots = new Set();
+          (APP_STATE.products || []).forEach(p => {
+            if (p.lot) lots.add(p.lot);
+            if (p.movements) {
+              p.movements.forEach(m => { if (m.lot) lots.add(m.lot); });
+            }
+          });
+          lotSelect.innerHTML = `<option value="all">Tous les Lots</option>`;
+          Array.from(lots).sort().forEach(lot => {
+            lotSelect.innerHTML += `<option value="${lot}">Lot : ${lot}</option>`;
+          });
+        }
+
+        renderStockSheetDoc();
+        const m = document.getElementById('stock-sheet-modal');
+        if (m) {
+          m.classList.remove('hidden');
+          m.style.display = 'flex';
+        }
+        try { if (window.lucide) lucide.createIcons(); } catch(e) {}
+      } catch (err) {
+        console.error("Erreur openStockSheetModal:", err);
+        alert("Erreur lors de l'ouverture de la fiche de stock : " + err.message);
       }
-
-      // Remplir le filtre par Lot dynamiquement
-      const lotSelect = document.getElementById('sheet-lot-filter');
-      if (lotSelect) {
-        const lots = new Set();
-        APP_STATE.products.forEach(p => {
-          if (p.lot) lots.add(p.lot);
-          if (p.movements) {
-            p.movements.forEach(m => { if (m.lot) lots.add(m.lot); });
-          }
-        });
-        lotSelect.innerHTML = `<option value="all">Tous les Lots</option>`;
-        Array.from(lots).sort().forEach(lot => {
-          lotSelect.innerHTML += `<option value="${lot}">Lot : ${lot}</option>`;
-        });
-      }
-
-      renderStockSheetDoc();
-      document.getElementById('stock-sheet-modal').classList.remove('hidden');
-      lucide.createIcons();
     }
 
     function closeStockSheetModal() {
-      document.getElementById('stock-sheet-modal').classList.add('hidden');
+      const m = document.getElementById('stock-sheet-modal');
+      if (m) {
+        m.classList.add('hidden');
+        m.style.display = 'none';
+      }
     }
 
     function renderStockSheetDoc() {
@@ -4984,7 +5006,7 @@
                 DOCUMENT DE GESTION OFFICIEL
               </span>
               <p class="text-[11px] text-slate-500 font-mono mt-1.5">Édité le : <strong>${nowStr}</strong></p>
-              <p class="text-[11px] text-slate-500">Émetteur : <strong>${APP_STATE.currentUser.name}</strong></p>
+              <p class="text-[11px] text-slate-500">Émetteur : <strong>${(APP_STATE.currentUser && APP_STATE.currentUser.name) || 'Super Admin Bénin'}</strong></p>
             </div>
           </div>
           <div class="mt-4 bg-slate-900 text-white p-3 rounded-xl flex items-center justify-between">
