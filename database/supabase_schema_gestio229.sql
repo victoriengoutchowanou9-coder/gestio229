@@ -492,7 +492,7 @@ VALUES
 ('cli00001-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111', 'CLI-001', 'ETS BIO BÉNIN & FILS', '3201999888777', '+229 97 10 20 30', 'contact@biobenin.bj', 'Dantokpa, Cotonou', 3000000, 0),
 ('cli00002-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111', 'CLI-002', 'SOCIÉTÉ AGOS DISTRIBUTION', '3201888777666', '+229 95 40 50 60', 'agos@distrib.bj', 'Akpakpa, Cotonou', 5000000, 0),
 ('cli00003-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111', 'CLI-003', 'M. KOUASSI Jean (Particulier VIP)', '3202111222333', '+229 96 70 80 90', 'kouassi@gmail.com', 'Cadjehoun, Cotonou', 1000000, 10000),
-('cli00004-0000-0000-0000-000000000004', '11111111-1111-1111-1111-111111111111', 'CLI-004', 'PHARMACIE DE L\'ÉTOILE', '3201444555666', '+229 21 30 15 20', 'etoile@pharma.bj', 'Saint-Michel, Cotonou', 2000000, 0),
+('cli00004-0000-0000-0000-000000000004', '11111111-1111-1111-1111-111111111111', 'CLI-004', 'PHARMACIE DE L ETOILE', '3201444555666', '+229 21 30 15 20', 'etoile@pharma.bj', 'Saint-Michel, Cotonou', 2000000, 0),
 ('cli00005-0000-0000-0000-000000000005', '11111111-1111-1111-1111-111111111111', 'CLI-005', 'HÔTEL DU LAC COTONOU', '3201333222111', '+229 21 33 44 55', 'hotel@dulac.bj', 'Plage, Cotonou', 4000000, 0)
 ON CONFLICT DO NOTHING;
 
@@ -642,7 +642,7 @@ $$;
 -- PARTIE NOUVELLE : HUB CENTRAL & MULTI-ACTIVITÉS GESTIO 229 (SANS RÉGRESSION)
 -- ==============================================================================
 
--- 1. CATALOGUE DES SECTEURS D'ACTIVITÉ (15+ SECTEURS)
+-- 1. CATALOGUE DES SECTEURS D ACTIVITE (15+ SECTEURS)
 CREATE TABLE IF NOT EXISTS sectors (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     code VARCHAR(50) UNIQUE NOT NULL,
@@ -660,20 +660,20 @@ CREATE TABLE IF NOT EXISTS sectors (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- 2. ACTIVITÉS SOUSCRITES & CRÉÉES PAR L'ENTREPRISE DANS LE HUB (PARTIES 5, 6, 7, 9)
+-- 2. ACTIVITES SOUSCRITES & CREEES PAR L ENTREPRISE DANS LE HUB (PARTIES 5, 6, 7, 9)
 CREATE TABLE IF NOT EXISTS company_activities (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
     sector_slug VARCHAR(50) NOT NULL,
     sector_code VARCHAR(50) NOT NULL,
     activity_name VARCHAR(255) NOT NULL,
-    pos_location VARCHAR(255) NOT NULL,  -- Lieu de l'activité (PARTIE 6)
+    pos_location VARCHAR(255) NOT NULL,  -- Lieu de l activite (PARTIE 6)
     manager_name VARCHAR(150),
     status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'SUSPENDUE', 'ARCHIVEE')), -- PARTIE 9
     is_active BOOLEAN DEFAULT true,
     color VARCHAR(20),
     settings JSONB DEFAULT '{}'::jsonb,
-    archived_at TIMESTAMPTZ,             -- Horodatage de l'archivage lors de la suppression (PARTIE 9)
+    archived_at TIMESTAMPTZ,             -- Horodatage de l archivage lors de la suppression (PARTIE 9)
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
@@ -997,7 +997,7 @@ CREATE TABLE IF NOT EXISTS microfinance_credits (
     date_octroi DATE NOT NULL DEFAULT CURRENT_DATE
 );
 
--- [SECTEUR 15] TONTINE & COLLECTE D'ÉPARGNE
+-- [SECTEUR 15] TONTINE & COLLECTE D EPARGNE
 CREATE TABLE IF NOT EXISTS tontine_cycles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
@@ -1030,12 +1030,12 @@ VALUES
 ('BRASSERIE', 'brasserie', 'Brasserie & Dépôt Boissons', 'Boissons & Restauration', '🍾', 'Wine', '#eab308', 'Dépôt Boissons', 'Gestion des casiers pleins/vides Sobebra, suivi strict des consignes emballages et fiches maquis.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["casiers", "consignes", "vente_gros"]'),
 ('STATION', 'station', 'Station-Service & Hydrocarbures', 'Énergie & Carburants', '⛽', 'Fuel', '#f97316', 'Hydrocarbures', 'Jaugeage des cuves (Super, Gazole), index pompes début/fin de quart et lubrifiants.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["pompes_cuves", "postes_pompistes", "lubrifiants"]'),
 ('SUPERMARCHE', 'supermarche', 'Supermarché & Supérette', 'Grande Distribution', '🛒', 'ShoppingCart', '#10b981', 'Grande Distribution', 'Scannage codes-barres POS rapide, têtes de gondoles, démarques DLC courtes et rayons.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["rayons", "promos_dlc"]'),
-('IMPRESSION', 'impression', 'Imprimerie & Print', 'Industrie Graphique', '🖨️', 'Printer', '#ec4899', 'Imprimerie & Graphisme', 'Calculette BAT, formats et grammages papiers, suivi d’atelier et sous-traitance.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["devis_bat", "production_atelier"]'),
+('IMPRESSION', 'impression', 'Imprimerie & Print', 'Industrie Graphique', '🖨️', 'Printer', '#ec4899', 'Imprimerie & Graphisme', 'Calculette BAT, formats et grammages papiers, suivi atelier et sous-traitance.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["devis_bat", "production_atelier"]'),
 ('EVENEMENTIEL', 'evenementiel', 'Événementiel & Prestations', 'Services & Loisirs', '🎉', 'PartyPopper', '#8b5cf6', 'Prestations & Fêtes', 'Réservations dates, traiteur, location bâches, chaises, sono et encaissements acomptes.', '["ventes", "caisse", "finances", "clients", "depenses", "rapports"]', '["reservations_dates", "location_materiel"]'),
 ('HOTEL', 'hotel', 'Hôtel & Résidences Hôtelières', 'Hôtellerie & Hébergement', '🏨', 'Building2', '#6366f1', 'Hébergement', 'Planning chambres, nuitées, check-in/check-out, housekeeping et factures séjour.', '["ventes", "caisse", "finances", "clients", "depenses", "rapports"]', '["chambres_reservations", "housekeeping"]'),
 ('PHARMACIE', 'pharmacie', 'Pharmacie & Parapharmacie', 'Santé', '💊', 'Pill', '#14b8a6', 'Santé & Médicaments', 'Ordonnances, numéros de lots, dates de péremption et répartiteurs agréés (CAMU/UBIPHAR).', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["ordonnances", "lots_peremption"]'),
 ('ECOLE', 'ecole', 'École & Établissement Scolaire', 'Éducation & Formation', '🎓', 'GraduationCap', '#3b82f6', 'Éducation', 'Classes, inscriptions élèves, suivi des tranches de frais de scolarité et reçus.', '["ventes", "caisse", "finances", "clients", "depenses", "rapports"]', '["eleves_classes", "frais_scolaires"]'),
-('GARAGE', 'garage', 'Atelier Garage & Mécanique', 'Automobile & Transport', '🚗', 'Wrench', '#64748b', 'Mécanique Auto', 'Ordres de réparation (OR), pièces détachées, fiches véhicules clients et main d’œuvre.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["ordres_reparation", "pieces_detachees"]'),
+('GARAGE', 'garage', 'Atelier Garage & Mécanique', 'Automobile & Transport', '🚗', 'Wrench', '#64748b', 'Mécanique Auto', 'Ordres de réparation (OR), pièces détachées, fiches véhicules clients et main oeuvre.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["ordres_reparation", "pieces_detachees"]'),
 ('LOCATION', 'location', 'Gestion de location & Immobilier', 'Immobilier', '🏠', 'Home', '#a855f7', 'Immobilier & Baux', 'Baux locatifs, états des lieux, quittances de loyer, suivi des impayés et charges.', '["caisse", "finances", "clients", "depenses", "rapports"]', '["biens_logements", "quittances_loyer", "relances_impayes"]'),
 ('MICROFINANCE', 'microfinance', 'Microfinance & Crédit', 'Services Financiers', '🏦', 'Landmark', '#059669', 'Finance Inclusive', 'Comptes épargne membres, demandes de crédits, échéanciers et remboursements.', '["caisse", "finances", "clients", "depenses", "rapports"]', '["comptes_epargne", "credits_echeanciers"]'),
 ('TONTINE', 'tontine', 'Tontine & Épargne Journalière', 'Finance Populaire', '🔄', 'Repeat', '#0284c7', 'Tontine Traditionnelle', 'Cycles de tontine, pointage journalier des collecteurs, mises quotidiennes et attributions.', '["caisse", "finances", "clients", "depenses", "rapports"]', '["cycles_tontine", "collecteurs_mises"]')
