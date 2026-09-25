@@ -1,0 +1,891 @@
+<!DOCTYPE html>
+<html lang="fr" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>GESTIO 229 — Inscription Multi-Secteurs</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          animation: {
+            'fade-in': 'fadeIn 0.3s ease-out',
+            'slide-up': 'slideUp 0.3s ease-out',
+            'pulse-dot': 'pulseDot 1.5s infinite',
+          },
+          keyframes: {
+            fadeIn: { '0%': { opacity: '0' }, '100%': { opacity: '1' } },
+            slideUp: { '0%': { opacity: '0', transform: 'translateY(20px)' }, '100%': { opacity: '1', transform: 'translateY(0)' } },
+            pulseDot: { '0%,100%': { transform: 'scale(1)' }, '50%': { transform: 'scale(1.4)' } },
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f172a; }
+    .sector-card { transition: all 0.18s ease; user-select: none; cursor: pointer; }
+    .sector-card:hover { transform: translateY(-2px); }
+    .sector-card.selected { background: #eff6ff; border-color: #4F46E5; box-shadow: 0 0 0 3px rgba(79,70,229,0.15); }
+    .sector-card .check-ring { border: 2px solid #d1d5db; border-radius: 8px; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; background: white; transition: all 0.15s; }
+    .sector-card.selected .check-ring { background: #4F46E5; border-color: #4F46E5; color: white; }
+    .step-bar { transition: width 0.4s ease; }
+    input:focus, select:focus { outline: none; box-shadow: 0 0 0 3px rgba(79,70,229,0.2); border-color: #4F46E5 !important; }
+    .btn-primary { transition: all 0.15s; }
+    .btn-primary:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(79,70,229,0.4); }
+    .btn-primary:active { transform: scale(0.98); }
+    .btn-success { transition: all 0.15s; }
+    .btn-success:hover { transform: translateY(-1px); box-shadow: 0 6px 20px rgba(5,150,105,0.4); }
+    ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 6px; } ::-webkit-scrollbar-thumb { background: #c7d2fe; border-radius: 6px; }
+    @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-8px); } 75% { transform: translateX(8px); } }
+    .shake { animation: shake 0.4s ease; }
+    .hidden { display: none !important; }
+  </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-2 sm:p-4">
+
+  <!-- FOND DÉGRADÉ ANIMÉ -->
+  <div class="fixed inset-0 -z-10" style="background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 40%, #0c4a6e 70%, #0f172a 100%);"></div>
+  <div class="fixed inset-0 -z-10 opacity-20" style="background-image: radial-gradient(ellipse at 20% 50%, #4F46E5 0%, transparent 50%), radial-gradient(ellipse at 80% 20%, #059669 0%, transparent 50%);"></div>
+
+  <!-- CARD PRINCIPALE -->
+  <div class="w-full max-w-4xl bg-white rounded-3xl shadow-2xl overflow-hidden flex flex-col animate-[slideUp_0.4s_ease-out]" style="max-height: 96vh;">
+
+    <!-- EN-TÊTE -->
+    <div style="background: linear-gradient(90deg, #0f172a 0%, #1e1b4b 100%);" class="p-4 sm:p-5 flex items-center justify-between shrink-0">
+      <div class="flex items-center space-x-3">
+        <div class="w-10 h-10 rounded-xl flex items-center justify-center font-black text-white text-sm shadow-lg" style="background: linear-gradient(135deg, #4F46E5, #059669);">G29</div>
+        <div>
+          <h1 class="font-black text-white text-base sm:text-lg leading-none">GESTIO 229</h1>
+          <p class="text-indigo-300 text-xs font-semibold mt-0.5">Inscription Entreprise · Multi-Secteurs</p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <a href="index.html" class="text-xs font-bold text-indigo-300 hover:text-white underline transition-colors">← Connexion</a>
+        <div class="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border border-emerald-500/40" style="background: rgba(5,150,105,0.15); color: #6ee7b7;">
+          Bénin 🇧🇯
+        </div>
+      </div>
+    </div>
+
+    <!-- STEPPER 1 → 2 -->
+    <div class="px-6 py-3 border-b border-slate-200 bg-slate-50 shrink-0">
+      <div class="flex items-center max-w-sm mx-auto relative">
+        <div class="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1 bg-slate-200 rounded-full -z-0"></div>
+        <div id="progress-bar" class="step-bar absolute left-0 top-1/2 -translate-y-1/2 h-1 rounded-full -z-0" style="width:0%; background:#4F46E5;"></div>
+
+        <div class="flex flex-col items-center z-10 bg-slate-50 pr-3">
+          <div id="badge-1" class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black text-white ring-4 ring-slate-50 transition-all" style="background:#4F46E5;">1</div>
+          <span class="text-[10px] font-bold text-slate-700 mt-1 whitespace-nowrap">Votre Établissement</span>
+        </div>
+
+        <div class="flex-1"></div>
+
+        <div class="flex flex-col items-center z-10 bg-slate-50 pl-3">
+          <div id="badge-2" class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-black ring-4 ring-slate-50 transition-all" style="background:#cbd5e1; color:#64748b;">2</div>
+          <span class="text-[10px] font-bold text-slate-500 mt-1 whitespace-nowrap" id="step2-label">Vos Secteurs d'Activité</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- MESSAGE ERREUR -->
+    <div id="error-box" class="hidden mx-4 sm:mx-6 mt-4 p-3 rounded-xl border border-rose-200 text-xs font-semibold flex items-center gap-2 shrink-0" style="background:#fff1f2; color:#be123c;">
+      <span>⚠️</span>
+      <span id="error-text">Veuillez remplir tous les champs obligatoires.</span>
+    </div>
+
+    <!-- CORPS DÉFILANT -->
+    <div class="overflow-y-auto flex-1 p-4 sm:p-6 space-y-5">
+
+      <!-- ============================== -->
+      <!-- ÉTAPE 1 : COORDONNÉES          -->
+      <!-- ============================== -->
+      <div id="step-1" class="space-y-5">
+        <div>
+          <h2 class="text-xl sm:text-2xl font-black text-slate-900">Informations de l'Entreprise</h2>
+          <p class="text-xs text-slate-500 mt-1">Renseignez les données légales et les coordonnées de votre établissement.</p>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
+          
+          <div class="sm:col-span-2">
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Nom Commercial / Raison Sociale <span class="text-rose-500">*</span></label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">🏢</span>
+              <input type="text" id="f-company" placeholder="Ex: ETS BIO BÉNIN, QUINCAILLERIE DU NORD, RESTAURANT CHEZ KOFFI..." class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Numéro IFU (13 chiffres)</label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">📄</span>
+              <input type="text" id="f-ifu" maxlength="13" placeholder="Ex: 3202612345678" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-semibold text-slate-800" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Responsable / Gérant <span class="text-rose-500">*</span></label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">👤</span>
+              <input type="text" id="f-resp" placeholder="Ex: M. KODJO Jean-Baptiste" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Téléphone / WhatsApp <span class="text-rose-500">*</span></label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">📞</span>
+              <input type="tel" id="f-phone" placeholder="+229 97 00 00 00" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-mono font-semibold text-slate-800" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Email de Connexion <span class="text-rose-500">*</span></label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">✉️</span>
+              <input type="email" id="f-email" placeholder="contact@monentreprise.bj" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Mot de Passe <span class="text-rose-500">*</span></label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">🔒</span>
+              <input type="password" id="f-password" placeholder="Minimum 6 caractères" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800" />
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Pays</label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">🌍</span>
+              <select id="f-country" class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 appearance-none">
+                <option value="Bénin" selected>Bénin 🇧🇯</option>
+                <option value="Togo">Togo 🇹🇬</option>
+                <option value="Côte d'Ivoire">Côte d'Ivoire 🇨🇮</option>
+                <option value="Sénégal">Sénégal 🇸🇳</option>
+                <option value="Burkina Faso">Burkina Faso 🇧🇫</option>
+                <option value="Niger">Niger 🇳🇪</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label class="block font-bold text-slate-700 mb-1.5 uppercase tracking-wide text-[10px]">Ville / Commune</label>
+            <div class="relative">
+              <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400">📍</span>
+              <input type="text" id="f-city" value="Cotonou" placeholder="Cotonou, Parakou, Calavi..." class="w-full pl-10 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800" />
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      <!-- ============================== -->
+      <!-- ÉTAPE 2 : SECTEURS             -->
+      <!-- ============================== -->
+      <div id="step-2" class="hidden space-y-4">
+        <div>
+          <h2 class="text-xl sm:text-2xl font-black text-slate-900">Choisissez vos Activités</h2>
+          <p class="text-xs text-slate-500 mt-1">Cochez <strong>un ou plusieurs secteurs</strong> simultanément — ex : <span class="text-indigo-600 font-bold">Quincaillerie + Poissonnerie + Restaurant</span>.</p>
+        </div>
+
+        <!-- Barre de recherche EN DIRECT -->
+        <div class="relative">
+          <span class="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-sm">🔍</span>
+          <input type="text" id="sector-search" oninput="filterSectors()" placeholder="Filtrer les secteurs (ex: quincaillerie, poissonnerie, école...)" class="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl text-xs font-semibold text-slate-800 bg-slate-50" />
+          <button onclick="clearSearch()" id="clear-btn" class="hidden absolute right-3.5 top-1/2 -translate-y-1/2 text-[10px] font-bold text-slate-400 hover:text-slate-700 bg-slate-200 px-2 py-0.5 rounded-lg">✕ Effacer</button>
+        </div>
+
+        <!-- Suggestions rapides -->
+        <div class="flex flex-wrap items-center gap-2">
+          <span class="text-[11px] text-slate-500 font-semibold">Sélection rapide :</span>
+          <button onclick="toggleSector('sec-quincaillerie')" class="quick-btn text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all" data-id="sec-quincaillerie" style="background:white; border-color:#e2e8f0; color:#374151;">+ Quincaillerie</button>
+          <button onclick="toggleSector('sec-poissonnerie')" class="quick-btn text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all" data-id="sec-poissonnerie" style="background:white; border-color:#e2e8f0; color:#374151;">+ Poissonnerie</button>
+          <button onclick="toggleSector('sec-restaurant')" class="quick-btn text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all" data-id="sec-restaurant" style="background:white; border-color:#e2e8f0; color:#374151;">+ Restaurant</button>
+          <button onclick="toggleSector('sec-boutique')" class="quick-btn text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all" data-id="sec-boutique" style="background:white; border-color:#e2e8f0; color:#374151;">+ Boutique</button>
+          <button onclick="toggleSector('sec-pharmacie')" class="quick-btn text-[11px] px-2.5 py-1 rounded-lg border font-bold transition-all" data-id="sec-pharmacie" style="background:white; border-color:#e2e8f0; color:#374151;">+ Pharmacie</button>
+        </div>
+
+        <!-- GRILLE 3 COLONNES des secteurs -->
+        <div id="sectors-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 max-h-[380px] overflow-y-auto p-1 pr-2">
+
+          <div id="card-sec-quincaillerie" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-quincaillerie')" data-name="quincaillerie matériaux ciment fer béton">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#fef3c7;">🔨</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Quincaillerie & Matériaux BTP</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Ciment, fer à béton, plomberie, électricité, outillage, vente gros/détail.</p>
+            </div>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded w-fit" style="background:#fef3c7; color:#b45309;">⭐ Populaire Bénin</span>
+          </div>
+
+          <div id="card-sec-poissonnerie" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-poissonnerie')" data-name="poissonnerie surgelés viande volaille poisson frais">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#ecfeff;">🐟</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Poissonnerie & Surgelés</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Poissons congelés, viandes, volailles, cartons, pesées, chambres froides.</p>
+            </div>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded w-fit" style="background:#ecfeff; color:#0e7490;">⭐ Populaire Bénin</span>
+          </div>
+
+          <div id="card-sec-restaurant" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-restaurant')" data-name="restaurant maquis bar snack fast food cuisine">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#fff1f2;">🍽️</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Restaurant, Maquis & Bar</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Tables, commandes cuisine, menus du jour, livraisons et boissons.</p>
+            </div>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded w-fit" style="background:#fff1f2; color:#be123c;">⭐ Populaire Bénin</span>
+          </div>
+
+          <div id="card-sec-boutique" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-boutique')" data-name="boutique commerce général épicerie bazar prêt à porter">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#eff6ff;">🏪</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Boutique & Commerce Général</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Vente au détail, épicerie, alimentation générale, bazar, prêt-à-porter.</p>
+            </div>
+            <span class="text-[9px] font-bold px-2 py-0.5 rounded w-fit" style="background:#eff6ff; color:#1d4ed8;">⭐ Populaire Bénin</span>
+          </div>
+
+          <div id="card-sec-supermarche" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-supermarche')" data-name="supermarché supérette rayons code-barres">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#f0fdf4;">🛒</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Supermarché & Supérette</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Multiples rayons, code-barres rapide, gestion DLC, promotions.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-pharmacie" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-pharmacie')" data-name="pharmacie parapharmacie médicaments ordonnance lot péremption">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#faf5ff;">💊</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Pharmacie & Parapharmacie</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Ordonnances, lots, dates de péremption, alertes automatiques.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-station" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-station')" data-name="station service carburant pompe cuve pompiste hydrocarbure">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#fff7ed;">⛽</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Station-Service & Hydrocarbures</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Index pompes, cuves, clôtures de postes pompistes, lubrifiants.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-hotel" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-hotel')" data-name="hotel résidence auberge chambre réservation check-in">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#eef2ff;">🏨</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Hôtel, Résidence & Auberge</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Chambres, réservations, check-in/out, room-service, nuitées.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-ecole" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-ecole')" data-name="école formation scolarité élèves frais scolaire">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#f7fee7;">🎓</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">École & Centre de Formation</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Effectifs élèves, scolarités, tranches de paiement, reçus officiels.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-location" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-location')" data-name="gestion locative immobilier loyer bail contrat quittance">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#faf5ff;">🏠</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Gestion Locative & Immobilier</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Contrats de bail, loyers mensuels, quittances, relances impayés.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-garage" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-garage')" data-name="garage atelier mécanique voiture réparation pièces devis">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#f8fafc;">🚗</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Garage & Atelier Mécanique</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Ordres de réparation, pièces détachées, devis et main d'œuvre.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-brasserie" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-brasserie')" data-name="brasserie boissons casier dépôt consigne">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#fffbeb;">🍾</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Brasserie & Dépôt Boissons</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Casiers consignés, bouteilles pleines/vides, grossistes boissons.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-microfinance" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-microfinance')" data-name="microfinance tontine crédit épargne cotisation collecteur">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#f0fdfa;">💰</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Microfinance & Tontine</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Cotisations, carnets de tontine, crédits et épargne solidaire.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-agro" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-agro')" data-name="agro business élevage agriculture intrant provende récolte">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#f0fdf4;">🌱</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Agro-Business & Élevage</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Intrants agricoles, provendes, récoltes, élevage et ventes en gros.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-impression" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-impression')" data-name="imprimerie sérigraphie impression numérique BAT devis graphiste">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#fdf2f8;">🖨️</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Imprimerie & Sérigraphie</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Devis sur mesure, BAT, tirages offset/numérique, sous-traitance.</p>
+            </div>
+          </div>
+
+          <div id="card-sec-cosmetique" class="sector-card border-2 border-slate-200 bg-white rounded-2xl p-4 flex flex-col gap-2" onclick="toggleSector('sec-cosmetique')" data-name="cosmétique salon beauté coiffure soin esthétique">
+            <div class="flex items-start justify-between">
+              <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" style="background:#fff1f2;">✨</div>
+              <div class="check-ring"><span class="check-icon text-xs font-black hidden">✓</span></div>
+            </div>
+            <div>
+              <h3 class="font-extrabold text-xs text-slate-900">Cosmétique & Salon de Beauté</h3>
+              <p class="text-[11px] text-slate-500 mt-0.5 leading-snug">Soins du corps, produits beauté, coiffure et prestations esthétiques.</p>
+            </div>
+          </div>
+
+          <!-- Message Aucun résultat -->
+          <div id="no-result" class="hidden col-span-3 py-10 text-center">
+            <div class="text-4xl mb-2">🔍</div>
+            <p class="text-sm font-bold text-slate-700" id="no-result-msg">Aucun secteur trouvé</p>
+            <p class="text-xs text-slate-500 mt-1">Essayez un autre terme ou effacez la recherche.</p>
+          </div>
+        </div>
+
+        <!-- PARTIE 10 : CONFIGURATION PAR ÉTABLISSEMENT SÉLECTIONNÉ -->
+        <div id="selected-activities-container" class="hidden space-y-3 pt-2 bg-slate-50 p-4 rounded-2xl border border-slate-200">
+          <div class="flex items-center justify-between pb-2 border-b border-slate-200">
+            <div class="flex items-center space-x-2">
+              <span class="text-base">🏢</span>
+              <div>
+                <h4 class="text-xs font-black uppercase text-slate-800 tracking-wider">Configuration de vos Établissements (Partie 10)</h4>
+                <p class="text-[11px] text-slate-500">Chaque activité est une entité propre avec son nom d'établissement et son lieu.</p>
+              </div>
+            </div>
+            <span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">Entité Dédiée</span>
+          </div>
+          <div id="selected-activities-configs" class="space-y-3 max-h-60 overflow-y-auto pr-1"></div>
+        </div>
+
+        <!-- ENCART DYNAMIQUE DE TARIFICATION -->
+        <div id="plan-box" class="rounded-2xl p-4 sm:p-5 text-white" style="background: linear-gradient(90deg, #0f172a 0%, #1e1b4b 100%);">
+          <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <div class="flex items-center gap-2 mb-2">
+                <span class="text-xs font-semibold text-indigo-300 uppercase tracking-wider">Secteurs sélectionnés :</span>
+                <span id="count-badge" class="px-2.5 py-0.5 rounded-full text-xs font-black" style="background:#4F46E5; color:white;">0</span>
+              </div>
+              <div id="plan-details" class="text-sm text-slate-400">
+                ⚠️ Cochez au moins 1 secteur d'activité pour continuer.
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+    </div>
+
+    <!-- PIED — BOUTONS D'ACTION -->
+    <div class="bg-slate-100 border-t border-slate-200 p-4 sm:p-5 flex items-center justify-between shrink-0">
+      <div class="text-xs text-slate-500">
+        <span class="font-bold text-slate-700" id="footer-step-label">Étape 1 sur 2</span> · GESTIO 229 ERP Bénin
+      </div>
+
+      <div class="flex items-center gap-2.5">
+        <button id="btn-back" onclick="goStep(1)" class="hidden px-4 py-2.5 rounded-xl text-sm font-bold transition-all" style="background:#e2e8f0; color:#374151;">
+          ← Retour
+        </button>
+
+        <button id="btn-next" onclick="goStep(2)" class="btn-primary px-6 py-2.5 rounded-xl text-sm font-extrabold text-white shadow-lg" style="background:#4F46E5;">
+          Continuer →
+        </button>
+
+        <button id="btn-submit" onclick="submitForm()" disabled class="hidden btn-success px-6 py-2.5 rounded-xl text-sm font-extrabold text-white shadow-lg opacity-40 cursor-not-allowed" style="background:#059669;">
+          ✓ Créer mon compte
+        </button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- MODALE DE SUCCÈS & ENVOI EMAIL -->
+  <div id="success-modal" class="hidden fixed inset-0 flex items-center justify-center p-4 z-50" style="background:rgba(0,0,0,0.75); backdrop-filter: blur(4px);">
+    <div class="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full text-center shadow-2xl animate-[slideUp_0.4s_ease] space-y-4">
+      <div class="w-16 h-16 rounded-2xl flex items-center justify-center text-4xl mx-auto" style="background:#f0fdf4;">🎉</div>
+      <div>
+        <h2 class="text-xl font-black text-slate-900">Inscription Réussie !</h2>
+        <p class="text-xs text-slate-500 mt-1" id="success-text">Votre entreprise a été configurée avec succès.</p>
+      </div>
+
+      <div id="success-sectors" class="flex flex-wrap gap-1.5 justify-center py-1"></div>
+
+      <!-- Alerte email envoyé -->
+      <div class="p-4 rounded-2xl border border-indigo-200 text-left space-y-2" style="background:#f8fafc;">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">📧</span>
+          <span class="text-xs font-black text-slate-900 uppercase tracking-wide">Email d'activation envoyé</span>
+        </div>
+        <p class="text-xs text-slate-600 leading-relaxed">
+          Un lien sécurisé pour activer votre compte a été automatiquement envoyé à l'adresse :<br>
+          <strong id="success-email-dest" class="text-indigo-600 font-mono text-xs font-bold">...</strong>
+        </p>
+      </div>
+
+      <!-- Boutons d'action -->
+      <div class="space-y-2 pt-2">
+        <button type="button" onclick="openActivationEmailPage()" class="w-full py-3 px-4 rounded-xl text-xs sm:text-sm font-extrabold text-white shadow-lg flex items-center justify-center gap-2 transition-all cursor-pointer" style="background:#4F46E5;">
+          <span>📬 Ouvrir l'email d'activation reçu</span>
+          <span>→</span>
+        </button>
+        <button type="button" onclick="activateAndGoToLogin()" class="w-full py-2.5 px-4 rounded-xl text-xs font-bold border border-emerald-300 text-emerald-800 hover:bg-emerald-50 transition-all cursor-pointer" style="background:#f0fdf4;">
+          ⚡ Activer directement mon compte &amp; me connecter
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ─────────────────────────────────────────────
+    // ÉTAT DE L'APPLICATION
+    // ─────────────────────────────────────────────
+    const state = {
+      step: 1,
+      selected: []
+    };
+
+    const SECTOR_LABELS = {
+      'sec-quincaillerie': { name: 'Quincaillerie & Matériaux', emoji: '🔨' },
+      'sec-poissonnerie':  { name: 'Poissonnerie & Surgelés', emoji: '🐟' },
+      'sec-restaurant':    { name: 'Restaurant, Maquis & Bar', emoji: '🍽️' },
+      'sec-boutique':      { name: 'Boutique & Commerce Général', emoji: '🏪' },
+      'sec-supermarche':   { name: 'Supermarché & Supérette', emoji: '🛒' },
+      'sec-pharmacie':     { name: 'Pharmacie & Parapharmacie', emoji: '💊' },
+      'sec-station':       { name: 'Station-Service', emoji: '⛽' },
+      'sec-hotel':         { name: 'Hôtel & Résidence', emoji: '🏨' },
+      'sec-ecole':         { name: 'École & Formation', emoji: '🎓' },
+      'sec-location':      { name: 'Gestion Locative', emoji: '🏠' },
+      'sec-garage':        { name: 'Garage & Mécanique', emoji: '🚗' },
+      'sec-brasserie':     { name: 'Brasserie & Boissons', emoji: '🍾' },
+      'sec-microfinance':  { name: 'Microfinance & Tontine', emoji: '💰' },
+      'sec-agro':          { name: 'Agro-Business & Élevage', emoji: '🌱' },
+      'sec-impression':    { name: 'Imprimerie & Sérigraphie', emoji: '🖨️' },
+      'sec-cosmetique':    { name: 'Cosmétique & Beauté', emoji: '✨' }
+    };
+
+    // ─────────────────────────────────────────────
+    // NAVIGATION ENTRE LES ÉTAPES
+    // ─────────────────────────────────────────────
+    function goStep(step) {
+      const errBox = document.getElementById('error-box');
+      errBox.classList.add('hidden');
+
+      if (step === 2) {
+        // Validation étape 1
+        const company  = document.getElementById('f-company').value.trim();
+        const resp     = document.getElementById('f-resp').value.trim();
+        const phone    = document.getElementById('f-phone').value.trim();
+        const email    = document.getElementById('f-email').value.trim();
+        const password = document.getElementById('f-password').value.trim();
+
+        if (!company || !resp || !phone || !email || !password) {
+          document.getElementById('error-text').textContent = 'Remplissez tous les champs obligatoires (*) avant de continuer.';
+          errBox.classList.remove('hidden');
+          errBox.classList.add('shake');
+          setTimeout(() => errBox.classList.remove('shake'), 500);
+          return;
+        }
+        if (!email.includes('@')) {
+          document.getElementById('error-text').textContent = 'Adresse email invalide.';
+          errBox.classList.remove('hidden');
+          return;
+        }
+        if (password.length < 6) {
+          document.getElementById('error-text').textContent = 'Le mot de passe doit contenir au moins 6 caractères.';
+          errBox.classList.remove('hidden');
+          return;
+        }
+      }
+
+      state.step = step;
+
+      document.getElementById('step-1').classList.toggle('hidden', step !== 1);
+      document.getElementById('step-2').classList.toggle('hidden', step !== 2);
+      document.getElementById('btn-next').classList.toggle('hidden', step !== 1);
+      document.getElementById('btn-back').classList.toggle('hidden', step !== 2);
+      document.getElementById('btn-submit').classList.toggle('hidden', step !== 2);
+      document.getElementById('footer-step-label').textContent = `Étape ${step} sur 2`;
+
+      // Mise à jour du stepper visuel
+      const bar    = document.getElementById('progress-bar');
+      const badge1 = document.getElementById('badge-1');
+      const badge2 = document.getElementById('badge-2');
+
+      if (step === 1) {
+        bar.style.width = '0%';
+        badge1.style.background = '#4F46E5'; badge1.style.color = 'white';
+        badge2.style.background = '#cbd5e1'; badge2.style.color = '#64748b';
+      } else {
+        bar.style.width = '100%';
+        badge1.style.background = '#059669'; badge1.style.color = 'white';
+        badge2.style.background = '#4F46E5'; badge2.style.color = 'white';
+        updatePricing();
+      }
+
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    // ─────────────────────────────────────────────
+    // TOGGLE SECTEUR (coche / décoche)
+    // ─────────────────────────────────────────────
+    function toggleSector(id) {
+      const idx = state.selected.indexOf(id);
+      if (idx >= 0) {
+        state.selected.splice(idx, 1);
+      } else {
+        state.selected.push(id);
+      }
+      refreshCardUI();
+      updatePricing();
+      renderSelectedActivitiesConfigs();
+    }
+
+    function renderSelectedActivitiesConfigs() {
+      const container = document.getElementById('selected-activities-container');
+      const listEl = document.getElementById('selected-activities-configs');
+      if (!container || !listEl) return;
+
+      if (state.selected.length === 0) {
+        container.classList.add('hidden');
+        listEl.innerHTML = '';
+        return;
+      }
+
+      container.classList.remove('hidden');
+
+      const currentValues = {};
+      state.selected.forEach(secId => {
+        const nameInput = document.getElementById('act-name-' + secId);
+        const locInput = document.getElementById('act-loc-' + secId);
+        if (nameInput) currentValues[secId + '_name'] = nameInput.value;
+        if (locInput) currentValues[secId + '_loc'] = locInput.value;
+      });
+
+      const cityVal = (document.getElementById('f-city')?.value || 'Cotonou').trim();
+
+      listEl.innerHTML = state.selected.map(secId => {
+        const lbl = SECTOR_LABELS[secId] || { name: secId, emoji: '🏢' };
+        const savedName = currentValues[secId + '_name'] !== undefined ? currentValues[secId + '_name'] : '';
+        const savedLoc = currentValues[secId + '_loc'] !== undefined ? currentValues[secId + '_loc'] : cityVal;
+
+        return '<div class="p-3.5 bg-white border-2 border-slate-200 rounded-xl space-y-2 shadow-sm">' +
+          '<div class="flex items-center justify-between">' +
+            '<div class="flex items-center space-x-2">' +
+              '<span class="text-xl">' + lbl.emoji + '</span>' +
+              '<span class="font-black text-xs text-slate-800 uppercase tracking-tight">' + lbl.name + '</span>' +
+            '</div>' +
+            '<span class="text-[10px] font-bold text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-md">Entité propre</span>' +
+          '</div>' +
+          '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs pt-1">' +
+            '<div>' +
+              '<label class="block font-bold text-slate-700 mb-1">Nom de l\'établissement <span class="text-rose-500">*</span></label>' +
+              '<input type="text" id="act-name-' + secId + '" value="' + savedName.replace(/"/g, '&quot;') + '" placeholder="Ex: ' + lbl.name + ' Dieu Fera" class="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-bold text-slate-900" />' +
+            '</div>' +
+            '<div>' +
+              '<label class="block font-bold text-slate-700 mb-1">Lieu / Ville / Quartier <span class="text-rose-500">*</span></label>' +
+              '<input type="text" id="act-loc-' + secId + '" value="' + savedLoc.replace(/"/g, '&quot;') + '" placeholder="Ex: Calavi, Cotonou..." class="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 font-semibold text-slate-800" />' +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+    }
+
+    function refreshCardUI() {
+      document.querySelectorAll('.sector-card').forEach(card => {
+        const id = card.id.replace('card-', '');
+        const isChecked = state.selected.includes(id);
+        const checkRing = card.querySelector('.check-ring');
+        const checkIcon = card.querySelector('.check-icon');
+
+        if (isChecked) {
+          card.classList.add('selected');
+          checkRing.style.background = '#4F46E5';
+          checkRing.style.borderColor = '#4F46E5';
+          checkIcon.classList.remove('hidden');
+          checkIcon.style.color = 'white';
+        } else {
+          card.classList.remove('selected');
+          checkRing.style.background = 'white';
+          checkRing.style.borderColor = '#d1d5db';
+          checkIcon.classList.add('hidden');
+        }
+      });
+
+      // Mettre à jour les boutons de suggestion rapide
+      document.querySelectorAll('.quick-btn').forEach(btn => {
+        const dataId = btn.getAttribute('data-id');
+        const isSelected = state.selected.includes(dataId);
+        if (isSelected) {
+          btn.style.background = '#4F46E5';
+          btn.style.borderColor = '#4F46E5';
+          btn.style.color = 'white';
+          btn.textContent = '✓ ' + btn.textContent.replace(/^[+✓] /, '');
+        } else {
+          btn.style.background = 'white';
+          btn.style.borderColor = '#e2e8f0';
+          btn.style.color = '#374151';
+          btn.textContent = '+ ' + btn.textContent.replace(/^[+✓] /, '');
+        }
+      });
+    }
+
+    // ─────────────────────────────────────────────
+    // ENCART TARIFICATION DYNAMIQUE
+    // ─────────────────────────────────────────────
+    function updatePricing() {
+      const count   = state.selected.length;
+      const badge   = document.getElementById('count-badge');
+      const details = document.getElementById('plan-details');
+      const btnSub  = document.getElementById('btn-submit');
+
+      badge.textContent = count + (count > 1 ? ' secteurs' : ' secteur');
+
+      if (count === 0) {
+        details.innerHTML = '<span style="color:#94a3b8;">⚠️ Cochez au moins 1 secteur d\'activité pour continuer.</span>';
+        btnSub.disabled = true;
+        btnSub.style.opacity = '0.4';
+        btnSub.style.cursor = 'not-allowed';
+      } else if (count === 1) {
+        const key = state.selected[0];
+        const lbl = SECTOR_LABELS[key] || { name: key, emoji: '📦' };
+        details.innerHTML = `
+          <span style="display:inline-flex;align-items:center;gap:6px;background:rgba(5,150,105,0.2);border:1px solid rgba(5,150,105,0.4);color:#6ee7b7;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">
+            ✓ Plan Solo Activité
+          </span>
+          <strong style="font-size:18px;color:white;margin-left:8px;">10 000 FCFA</strong>
+          <span style="font-size:11px;color:#94a3b8;"> / mois</span>
+          <div style="margin-top:6px;font-size:11px;color:#94a3b8;">Secteur : ${lbl.emoji} ${lbl.name}</div>
+        `;
+        enableSubmit();
+      } else {
+        const names = state.selected.map(id => {
+          const lbl = SECTOR_LABELS[id] || { name: id, emoji: '📦' };
+          return `${lbl.emoji} ${lbl.name}`;
+        }).join(', ');
+        details.innerHTML = `
+          <span style="display:inline-flex;align-items:center;gap:6px;background:rgba(245,158,11,0.2);border:1px solid rgba(245,158,11,0.4);color:#fcd34d;padding:2px 10px;border-radius:8px;font-size:11px;font-weight:700;">
+            ✨ Plan Multiservices (${count} activités)
+          </span>
+          <strong style="font-size:18px;color:white;margin-left:8px;">25 000 FCFA</strong>
+          <span style="font-size:11px;color:#94a3b8;"> / mois</span>
+          <div style="margin-top:6px;font-size:11px;color:#94a3b8;">${names}</div>
+        `;
+        enableSubmit();
+      }
+    }
+
+    function enableSubmit() {
+      const btnSub = document.getElementById('btn-submit');
+      btnSub.disabled = false;
+      btnSub.style.opacity = '1';
+      btnSub.style.cursor = 'pointer';
+    }
+
+    // ─────────────────────────────────────────────
+    // RECHERCHE EN DIRECT
+    // ─────────────────────────────────────────────
+    function filterSectors() {
+      const term   = (document.getElementById('sector-search').value || '').toLowerCase().trim();
+      const clearBtn = document.getElementById('clear-btn');
+      clearBtn.classList.toggle('hidden', !term);
+
+      let visible = 0;
+      document.querySelectorAll('.sector-card').forEach(card => {
+        const text = (card.getAttribute('data-name') || '') + ' ' + (card.textContent || '').toLowerCase();
+        const show = !term || text.includes(term);
+        card.classList.toggle('hidden', !show);
+        if (show) visible++;
+      });
+
+      const noResult = document.getElementById('no-result');
+      noResult.classList.toggle('hidden', visible > 0);
+      if (visible === 0 && term) {
+        document.getElementById('no-result-msg').textContent = `Aucun résultat pour "${term}"`;
+      }
+    }
+
+    function clearSearch() {
+      document.getElementById('sector-search').value = '';
+      filterSectors();
+    }
+
+    // ─────────────────────────────────────────────
+    // SOUMISSION DU FORMULAIRE & ACTIVATION EMAIL
+    // ─────────────────────────────────────────────
+    function submitForm() {
+      if (state.selected.length === 0) return;
+
+      const company  = document.getElementById('f-company').value.trim();
+      const ifu      = document.getElementById('f-ifu').value.trim() || '3202612345678';
+      const resp     = document.getElementById('f-resp').value.trim();
+      const phone    = document.getElementById('f-phone').value.trim();
+      const email    = document.getElementById('f-email').value.trim().toLowerCase();
+      const password = document.getElementById('f-password').value.trim();
+      const country  = document.getElementById('f-country').value;
+      const city     = document.getElementById('f-city').value.trim() || 'Cotonou';
+      const count    = state.selected.length;
+      const plan     = count > 1 ? 'MULTISERVICES' : 'SOLO';
+      const price    = count > 1 ? '25 000 FCFA' : '10 000 FCFA';
+
+      // 1. Sauvegarder les activités entités propres (PARTIE 10)
+      const activities = state.selected.map((secId, idx) => {
+        const nameEl = document.getElementById('act-name-' + secId);
+        const locEl = document.getElementById('act-loc-' + secId);
+        const lbl = SECTOR_LABELS[secId] || { name: secId, emoji: '🏢' };
+        const customName = (nameEl && nameEl.value.trim()) ? nameEl.value.trim() : (company + ' - ' + lbl.name);
+        const customLoc = (locEl && locEl.value.trim()) ? locEl.value.trim() : city;
+        return {
+          id: 'act-' + Date.now() + '-' + idx,
+          sectorSlug: secId,
+          name: customName.toUpperCase(),
+          location: customLoc,
+          status: 'ACTIVE',
+          revenue: 0,
+          expenses: 0,
+          netMargin: 0,
+          monthRevenue: 0,
+          monthExpenses: 0,
+          monthNetMargin: 0
+        };
+      });
+
+      const regData = {
+        company,
+        ifu,
+        resp,
+        phone,
+        email,
+        password,
+        country,
+        city,
+        sectors: state.selected,
+        activities,
+        plan,
+        price,
+        status: 'en_attente_activation',
+        createdAt: new Date().toISOString()
+      };
+
+      try {
+        localStorage.setItem('gestio229_last_registration', JSON.stringify(regData));
+        localStorage.setItem('gestio229_hub_sectors_v3', JSON.stringify(activities));
+        localStorage.removeItem('gestio229_test_dataset_active');
+        
+        let users = [];
+        const rawUsers = localStorage.getItem('gestio229_registered_users');
+        if (rawUsers) users = JSON.parse(rawUsers);
+        users = users.filter(u => (u.email || '').toLowerCase() !== email);
+        users.push(regData);
+        localStorage.setItem('gestio229_registered_users', JSON.stringify(users));
+      } catch (e) {
+        console.warn('Erreur sauvegarde inscription:', e);
+      }
+
+      // 2. Afficher les secteurs dans la modale succès
+      const successSectors = document.getElementById('success-sectors');
+      successSectors.innerHTML = state.selected.map(id => {
+        const lbl = SECTOR_LABELS[id] || { name: id, emoji: '📦' };
+        return `<span style="font-size:11px;font-weight:700;padding:3px 10px;border-radius:8px;background:#f0fdf4;border:1px solid #bbf7d0;color:#15803d;">${lbl.emoji} ${lbl.name}</span>`;
+      }).join('');
+
+      document.getElementById('success-text').innerHTML = `
+        <strong>${company}</strong> a été enregistrée avec <strong>${count} secteur(s)</strong>.<br>
+        Plan <strong>${plan}</strong> — <strong>${price}/mois</strong>
+      `;
+      document.getElementById('success-email-dest').textContent = email;
+
+      // Afficher la modale
+      document.getElementById('success-modal').classList.remove('hidden');
+    }
+
+    function openActivationEmailPage() {
+      const email = encodeURIComponent(document.getElementById('f-email').value.trim().toLowerCase());
+      window.location.href = `activation_email.html?email=${email}`;
+    }
+
+    function activateAndGoToLogin() {
+      const email = document.getElementById('f-email').value.trim().toLowerCase();
+      
+      // Activer immédiatement dans localStorage
+      try {
+        let rawUsers = localStorage.getItem('gestio229_registered_users');
+        if (rawUsers) {
+          let users = JSON.parse(rawUsers);
+          let target = users.find(u => (u.email || '').toLowerCase() === email);
+          if (target) target.status = 'actif';
+          localStorage.setItem('gestio229_registered_users', JSON.stringify(users));
+        }
+
+        let rawLast = localStorage.getItem('gestio229_last_registration');
+        if (rawLast) {
+          let last = JSON.parse(rawLast);
+          last.status = 'actif';
+          localStorage.setItem('gestio229_last_registration', JSON.stringify(last));
+        }
+      } catch (e) {}
+
+      window.location.href = `index.html?activated=1&email=${encodeURIComponent(email)}`;
+    }
+  </script>
+
+</body>
+</html>

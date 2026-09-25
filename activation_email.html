@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="fr" class="h-full">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Boîte de Réception — Email d'Activation GESTIO 229</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; }
+    .email-card { box-shadow: 0 20px 40px -15px rgba(0,0,0,0.3); }
+    .btn-activate { transition: all 0.2s ease; }
+    .btn-activate:hover { transform: translateY(-2px); box-shadow: 0 10px 25px rgba(5,150,105,0.4); }
+    .btn-activate:active { transform: scale(0.98); }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col justify-between p-3 sm:p-6 text-slate-800">
+
+  <!-- En-tête simulateur Webmail -->
+  <header class="max-w-3xl w-full mx-auto mb-4 bg-slate-900 border border-slate-800 rounded-2xl p-3 sm:p-4 text-white flex items-center justify-between shadow-lg">
+    <div class="flex items-center space-x-3">
+      <div class="w-9 h-9 rounded-xl bg-indigo-600 flex items-center justify-center text-white font-black text-sm">
+        ✉️
+      </div>
+      <div>
+        <h1 class="text-xs sm:text-sm font-black">Messagerie Sécurisée · Simulation Boîte de Réception</h1>
+        <p class="text-[11px] text-slate-400">Email transactionnel officiel généré par GESTIO 229 Bénin</p>
+      </div>
+    </div>
+    <div class="flex items-center space-x-2">
+      <a href="index.html" class="text-xs font-semibold text-slate-300 hover:text-white underline mr-2">← Connexion</a>
+      <span class="text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2 py-0.5 rounded-full">
+        Reçu à l'instant
+      </span>
+    </div>
+  </header>
+
+  <!-- Corps de l'email -->
+  <main class="max-w-3xl w-full mx-auto bg-white rounded-3xl overflow-hidden email-card border border-slate-200">
+    
+    <!-- Méta-données de l'email -->
+    <div class="bg-slate-50 p-4 sm:p-5 border-b border-slate-200 text-xs text-slate-600 space-y-2">
+      <div class="flex flex-wrap items-center justify-between gap-1">
+        <span class="font-bold text-slate-900">De :</span>
+        <span class="font-mono text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">GESTIO 229 Bénin &lt;activation@gestio229.bj&gt;</span>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-1">
+        <span class="font-bold text-slate-900">À :</span>
+        <span class="font-mono text-slate-800 font-semibold" id="email-recipient">chargement...</span>
+      </div>
+      <div class="flex flex-wrap items-center justify-between gap-1">
+        <span class="font-bold text-slate-900">Objet :</span>
+        <span class="font-bold text-slate-900 text-sm" id="email-subject">🔐 Activation de votre compte GESTIO 229</span>
+      </div>
+    </div>
+
+    <!-- Contenu officiel GESTIO 229 -->
+    <div class="p-6 sm:p-10 space-y-6">
+      
+      <!-- Bannière logo -->
+      <div class="flex items-center justify-between border-b border-slate-100 pb-5">
+        <div class="flex items-center space-x-3">
+          <div class="w-12 h-12 rounded-2xl flex items-center justify-center font-black text-white text-lg shadow-md" style="background: linear-gradient(135deg, #4F46E5, #059669);">
+            G29
+          </div>
+          <div>
+            <h2 class="text-xl font-black text-slate-900 leading-none">GESTIO 229</h2>
+            <p class="text-xs text-emerald-600 font-bold mt-0.5">SaaS ERP Multiservices · Bénin 🇧🇯</p>
+          </div>
+        </div>
+        <div class="text-right">
+          <span class="text-[10px] font-mono text-slate-400">Réf: ACT-2026-BJ</span>
+        </div>
+      </div>
+
+      <!-- Salutation -->
+      <div class="space-y-2">
+        <h3 class="text-lg sm:text-xl font-extrabold text-slate-900">
+          Bonjour <span id="email-resp" class="text-indigo-600">Responsable</span> 👋,
+        </h3>
+        <p class="text-sm text-slate-600 leading-relaxed">
+          Félicitations ! Votre demande d'inscription pour l'entreprise <strong id="email-company" class="text-slate-900">mon entreprise</strong> a été enregistrée avec succès.
+        </p>
+        <p class="text-sm text-slate-600 leading-relaxed">
+          Pour des raisons de sécurité fiscale et d'intégrité de vos futures factures normalisées DGI, veuillez activer votre compte en cliquant sur le bouton ci-dessous :
+        </p>
+      </div>
+
+      <!-- Récapitulatif des secteurs choisis -->
+      <div class="rounded-2xl p-5 border border-indigo-100 bg-gradient-to-br from-indigo-50/70 to-slate-50 space-y-3">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-bold uppercase tracking-wider text-indigo-900">Vos activités &amp; secteurs configurés :</span>
+          <span id="email-plan-badge" class="px-2.5 py-0.5 rounded-full text-xs font-black bg-indigo-600 text-white">Plan Multiservices</span>
+        </div>
+
+        <div id="email-sectors-list" class="flex flex-wrap gap-2 pt-1">
+          <!-- Injecté dynamiquement -->
+        </div>
+
+        <div class="pt-2 border-t border-indigo-100 flex items-center justify-between text-xs text-slate-600">
+          <span>Identifiant de connexion : <strong id="email-login-id" class="text-slate-900 font-mono">...</strong></span>
+          <span class="text-emerald-700 font-bold">Essai 30 jours inclus</span>
+        </div>
+      </div>
+
+      <!-- GROS BOUTON D'ACTIVATION -->
+      <div class="py-4 text-center space-y-3">
+        <button id="btn-activate-account" onclick="activateAccount()" class="btn-activate inline-flex items-center justify-center space-x-2 w-full sm:w-auto px-8 py-4 rounded-2xl bg-emerald-600 hover:bg-emerald-500 text-white text-base font-black shadow-xl shadow-emerald-950/20 cursor-pointer">
+          <span>👉 ACTIVER MON COMPTE GESTIO 229</span>
+          <span class="text-lg">→</span>
+        </button>
+        <p class="text-[11px] text-slate-400">Ce lien sécurisé expire dans 24 heures.</p>
+      </div>
+
+      <!-- Avertissement légal -->
+      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500 space-y-1">
+        <p><strong>Note de sécurité :</strong> Si vous n'êtes pas à l'origine de cette inscription, veuillez ignorer ce message.</p>
+        <p>Support technique Bénin : WhatsApp <strong>+229 01 62 27 23 24</strong> · Cotonou, Ganhi.</p>
+      </div>
+
+    </div>
+
+    <!-- Pied de page de l'email -->
+    <div class="bg-slate-900 p-4 sm:p-5 text-center text-xs text-slate-400 border-t border-slate-800">
+      © 2026 GESTIO 229 Bénin · Conforme SYSCOHADA Révisé &amp; DGI e-MECeF Bénin.
+    </div>
+
+  </main>
+
+  <!-- Notification de succès modal -->
+  <div id="activated-modal" class="hidden fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="bg-white rounded-3xl p-6 sm:p-8 max-w-md w-full text-center shadow-2xl space-y-4 animate-in fade-in zoom-in">
+      <div class="w-16 h-16 rounded-2xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-3xl mx-auto">
+        🎉
+      </div>
+      <h3 class="text-xl font-black text-slate-900">Compte Activé avec Succès !</h3>
+      <p class="text-xs sm:text-sm text-slate-600 leading-relaxed">
+        Votre entreprise <strong id="modal-company-name">...</strong> est prête.<br>
+        Vous allez être redirigé vers la <strong>page d'accueil</strong> pour renseigner votre mot de passe et ouvrir votre Tableau de Bord.
+      </p>
+      <div class="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+        <div id="redirect-bar" class="bg-emerald-600 h-full w-0 transition-all duration-1500"></div>
+      </div>
+      <button onclick="goToLoginPage()" class="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-xs sm:text-sm rounded-xl shadow-lg">
+        Se connecter immédiatement →
+      </button>
+    </div>
+  </div>
+
+  <script>
+    const SECTOR_LABELS = {
+      'sec-quincaillerie': { name: 'Quincaillerie & Matériaux', emoji: '🔨' },
+      'sec-poissonnerie':  { name: 'Poissonnerie & Surgelés', emoji: '🐟' },
+      'sec-restaurant':    { name: 'Restaurant, Maquis & Bar', emoji: '🍽️' },
+      'sec-boutique':      { name: 'Boutique & Commerce Général', emoji: '🏪' },
+      'sec-supermarche':   { name: 'Supermarché & Supérette', emoji: '🛒' },
+      'sec-pharmacie':     { name: 'Pharmacie & Parapharmacie', emoji: '💊' },
+      'sec-station':       { name: 'Station-Service', emoji: '⛽' },
+      'sec-hotel':         { name: 'Hôtel & Résidence', emoji: '🏨' },
+      'sec-ecole':         { name: 'École & Formation', emoji: '🎓' },
+      'sec-location':      { name: 'Gestion Locative', emoji: '🏠' },
+      'sec-garage':        { name: 'Garage & Mécanique', emoji: '🚗' },
+      'sec-brasserie':     { name: 'Brasserie & Boissons', emoji: '🍾' },
+      'sec-microfinance':  { name: 'Microfinance & Tontine', emoji: '💰' },
+      'sec-agro':          { name: 'Agro-Business & Élevage', emoji: '🌱' },
+      'sec-impression':    { name: 'Imprimerie & Sérigraphie', emoji: '🖨️' },
+      'sec-cosmetique':    { name: 'Cosmétique & Beauté', emoji: '✨' }
+    };
+
+    let currentUserData = null;
+
+    window.addEventListener('DOMContentLoaded', () => {
+      // 1. Lire paramètres URL ou localStorage
+      const params = new URLSearchParams(window.location.search);
+      const emailParam = params.get('email');
+
+      // Récupérer les données de la dernière inscription
+      let lastReg = null;
+      try {
+        const raw = localStorage.getItem('gestio229_last_registration');
+        if (raw) lastReg = JSON.parse(raw);
+      } catch (e) {}
+
+      // Données par défaut si direct sans inscription préalable
+      currentUserData = lastReg || {
+        company: 'ETS BIO BÉNIN & MATÉRIAUX',
+        resp: 'KODJO Jean-Baptiste',
+        email: emailParam || 'admin@gestio229.bj',
+        sectors: ['sec-quincaillerie', 'sec-poissonnerie', 'sec-restaurant'],
+        plan: 'MULTISERVICES'
+      };
+
+      if (emailParam) {
+        currentUserData.email = emailParam;
+      }
+
+      // Remplir l'UI
+      document.getElementById('email-recipient').textContent = currentUserData.email;
+      document.getElementById('email-login-id').textContent = currentUserData.email;
+      document.getElementById('email-resp').textContent = currentUserData.resp || 'Responsable';
+      document.getElementById('email-company').textContent = currentUserData.company || 'Votre Entreprise';
+      document.getElementById('email-subject').textContent = `🔐 Activation de votre compte GESTIO 229 — ${currentUserData.company || 'Bénin'}`;
+      
+      const isMulti = currentUserData.sectors && currentUserData.sectors.length > 1;
+      const planBadge = document.getElementById('email-plan-badge');
+      planBadge.textContent = isMulti ? `Plan Multiservices (${currentUserData.sectors.length} activités)` : 'Plan Solo';
+      planBadge.className = isMulti 
+        ? 'px-2.5 py-0.5 rounded-full text-xs font-black bg-amber-500 text-white' 
+        : 'px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-600 text-white';
+
+      // Afficher les badges des secteurs
+      const sectorsList = document.getElementById('email-sectors-list');
+      const sectors = currentUserData.sectors || ['sec-quincaillerie', 'sec-poissonnerie', 'sec-restaurant'];
+      sectorsList.innerHTML = sectors.map(id => {
+        const lbl = SECTOR_LABELS[id] || { name: id, emoji: '📦' };
+        return `<span class="inline-flex items-center gap-1 text-xs font-bold px-3 py-1 rounded-xl bg-white border border-slate-200 text-slate-800 shadow-sm">
+          <span>${lbl.emoji}</span>
+          <span>${lbl.name}</span>
+        </span>`;
+      }).join('');
+    });
+
+    function activateAccount() {
+      // 1. Mettre à jour l'état dans localStorage
+      try {
+        let registeredUsers = [];
+        const rawUsers = localStorage.getItem('gestio229_registered_users');
+        if (rawUsers) registeredUsers = JSON.parse(rawUsers);
+
+        // Trouver ou ajouter l'utilisateur
+        const targetEmail = currentUserData.email.toLowerCase().trim();
+        let found = registeredUsers.find(u => u.email.toLowerCase().trim() === targetEmail);
+
+        if (found) {
+          found.status = 'actif';
+        } else {
+          registeredUsers.push({
+            company: currentUserData.company,
+            ifu: currentUserData.ifu || '3202612345678',
+            responsible: currentUserData.resp,
+            phone: currentUserData.phone || '+229 97 00 00 00',
+            email: targetEmail,
+            username: targetEmail,
+            password: currentUserData.password || 'Admin123@',
+            sectors: currentUserData.sectors,
+            plan: currentUserData.plan || (currentUserData.sectors.length > 1 ? 'MULTISERVICES' : 'SOLO'),
+            status: 'actif'
+          });
+        }
+        localStorage.setItem('gestio229_registered_users', JSON.stringify(registeredUsers));
+
+        // Mettre à jour également dans gestio229_app_state_v1 si présent
+        const rawState = localStorage.getItem('gestio229_app_state_v1');
+        if (rawState) {
+          const appState = JSON.parse(rawState);
+          if (!appState.teamMembers) appState.teamMembers = [];
+          
+          let member = appState.teamMembers.find(m => (m.username || '').toLowerCase() === targetEmail || (m.email || '').toLowerCase() === targetEmail);
+          if (member) {
+            member.status = 'actif';
+          } else {
+            appState.teamMembers.push({
+              id: 'u_' + Date.now(),
+              username: targetEmail,
+              email: targetEmail,
+              password: currentUserData.password || 'Admin123@',
+              prenom: (currentUserData.resp || 'Admin').split(' ')[0],
+              nom: (currentUserData.resp || 'Admin').split(' ').slice(1).join(' ') || 'Admin',
+              role: 'admin',
+              status: 'actif'
+            });
+          }
+
+          appState.company = {
+            name: currentUserData.company,
+            ifu: currentUserData.ifu || '3202612345678',
+            phone: currentUserData.phone || '+229 97 00 00 00',
+            email: targetEmail,
+            responsible: currentUserData.resp,
+            sectors: currentUserData.sectors,
+            plan: currentUserData.plan || (currentUserData.sectors.length > 1 ? 'MULTISERVICES' : 'SOLO')
+          };
+
+          if (!appState.subscription) appState.subscription = {};
+          appState.subscription.activeSectors = currentUserData.sectors;
+          appState.subscription.plan = currentUserData.plan || (currentUserData.sectors.length > 1 ? 'Plan Multiservices' : 'Plan Solo');
+          appState.subscription.status = 'actif';
+
+          localStorage.setItem('gestio229_app_state_v1', JSON.stringify(appState));
+        }
+
+        // Marquer la dernière inscription comme activée
+        if (currentUserData) {
+          currentUserData.status = 'actif';
+          localStorage.setItem('gestio229_last_registration', JSON.stringify(currentUserData));
+        }
+      } catch (err) {
+        console.warn('Erreur stockage activation:', err);
+      }
+
+      // 2. Afficher la modale de confirmation
+      document.getElementById('modal-company-name').textContent = currentUserData.company || 'Votre Entreprise';
+      document.getElementById('activated-modal').classList.remove('hidden');
+
+      const bar = document.getElementById('redirect-bar');
+      setTimeout(() => bar.style.width = '100%', 50);
+
+      // Redirection après 2 secondes vers index.html
+      setTimeout(goToLoginPage, 2200);
+    }
+
+    function goToLoginPage() {
+      const email = encodeURIComponent(currentUserData.email || '');
+      window.location.href = `index.html?activated=1&email=${email}`;
+    }
+  </script>
+
+</body>
+</html>

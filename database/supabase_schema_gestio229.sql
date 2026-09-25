@@ -637,3 +637,416 @@ BEGIN
     RETURN jsonb_build_object('success', true, 'message', 'Bon de Commande ' || v_bc.reference || ' réceptionné en UCD.');
 END;
 $$;
+
+-- ==============================================================================
+-- PARTIE NOUVELLE : HUB CENTRAL & MULTI-ACTIVITÉS GESTIO 229 (SANS RÉGRESSION)
+-- ==============================================================================
+
+-- 1. CATALOGUE DES SECTEURS D'ACTIVITÉ (15+ SECTEURS)
+CREATE TABLE IF NOT EXISTS sectors (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    code VARCHAR(50) UNIQUE NOT NULL,
+    slug VARCHAR(50) UNIQUE NOT NULL,
+    name VARCHAR(150) NOT NULL,
+    category VARCHAR(100) NOT NULL,
+    emoji VARCHAR(10) NOT NULL,
+    icon VARCHAR(50) NOT NULL,
+    color VARCHAR(20) DEFAULT '#059669',
+    badge VARCHAR(50),
+    description TEXT,
+    modules JSONB NOT NULL DEFAULT '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]'::jsonb,
+    specific_modules JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- 2. ACTIVITÉS SOUSCRITES & CRÉÉES PAR L'ENTREPRISE DANS LE HUB (PARTIES 5, 6, 7, 9)
+CREATE TABLE IF NOT EXISTS company_activities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    sector_slug VARCHAR(50) NOT NULL,
+    sector_code VARCHAR(50) NOT NULL,
+    activity_name VARCHAR(255) NOT NULL,
+    pos_location VARCHAR(255) NOT NULL,  -- Lieu de l'activité (PARTIE 6)
+    manager_name VARCHAR(150),
+    status VARCHAR(20) NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'SUSPENDUE', 'ARCHIVEE')), -- PARTIE 9
+    is_active BOOLEAN DEFAULT true,
+    color VARCHAR(20),
+    settings JSONB DEFAULT '{}'::jsonb,
+    archived_at TIMESTAMPTZ,             -- Horodatage de l'archivage lors de la suppression (PARTIE 9)
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_company_activities_company ON company_activities(company_id);
+CREATE INDEX IF NOT EXISTS idx_company_activities_sector ON company_activities(sector_slug);
+CREATE INDEX IF NOT EXISTS idx_company_activities_status ON company_activities(status);
+
+-- 3. CONSOLIDATION JOURNALIÈRE DU TABLEAU DE BORD HUB (TEMPS RÉEL)
+CREATE TABLE IF NOT EXISTS activity_daily_metrics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    sector_slug VARCHAR(50) NOT NULL,
+    metric_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    revenue NUMERIC(15,2) DEFAULT 0.00,       -- CA DU JOUR
+    cogs NUMERIC(15,2) DEFAULT 0.00,          -- Coût marchandises vendues
+    gross_margin NUMERIC(15,2) DEFAULT 0.00,  -- Marge brute = CA - COGS
+    expenses NUMERIC(15,2) DEFAULT 0.00,      -- DÉPENSES DU JOUR
+    net_margin NUMERIC(15,2) DEFAULT 0.00,    -- MARGE NETTE DU JOUR = Marge brute - Dépenses
+    sales_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_activity_date UNIQUE (activity_id, metric_date)
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_daily_metrics_date ON activity_daily_metrics(metric_date);
+
+-- 4. CONSOLIDATION MENSUELLE DU TABLEAU DE BORD HUB (PARTIE 4 - SYNTHÈSE DU MOIS)
+CREATE TABLE IF NOT EXISTS activity_monthly_metrics (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    sector_slug VARCHAR(50) NOT NULL,
+    metric_month VARCHAR(7) NOT NULL,         -- Format 'YYYY-MM' (mois en cours automatique)
+    revenue NUMERIC(15,2) DEFAULT 0.00,       -- CA DU MOIS
+    cogs NUMERIC(15,2) DEFAULT 0.00,          -- Coût marchandises vendues du mois
+    gross_margin NUMERIC(15,2) DEFAULT 0.00,  -- Marge brute du mois
+    expenses NUMERIC(15,2) DEFAULT 0.00,      -- DÉPENSES DU MOIS
+    net_margin NUMERIC(15,2) DEFAULT 0.00,    -- MARGE NETTE DU MOIS = Marge brute - Dépenses
+    sales_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT now(),
+    updated_at TIMESTAMPTZ DEFAULT now(),
+    CONSTRAINT uq_activity_month UNIQUE (activity_id, metric_month)
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_monthly_metrics_month ON activity_monthly_metrics(metric_month);
+
+-- ==============================================================================
+-- TABLES SPÉCIFIQUES MÉTIERS (DONNÉES INITIALES VIDES POUR PRODUCTION RÉELLE)
+-- ==============================================================================
+
+-- [SECTEUR 1] POISSONNERIE & SURGELÉS (RÉFÉRENCE EXISTANTE CONSERVÉE)
+CREATE TABLE IF NOT EXISTS poissonnerie_cold_rooms (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    room_name VARCHAR(100) NOT NULL,
+    temperature_target NUMERIC(5,2) DEFAULT -18.00,
+    current_temperature NUMERIC(5,2) DEFAULT -18.00,
+    capacity_cartons INTEGER DEFAULT 0,
+    last_defrost_date DATE,
+    status VARCHAR(50) DEFAULT 'optimal',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS poissonnerie_avaries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    loss_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    weight_kg NUMERIC(10,3) NOT NULL,
+    reason VARCHAR(150),
+    loss_amount NUMERIC(15,2) DEFAULT 0.00,
+    declared_by VARCHAR(100),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 2] QUINCAILLERIE & MATÉRIAUX BTP (RÉFÉRENCE EXISTANTE CONSERVÉE)
+CREATE TABLE IF NOT EXISTS quincaillerie_chantiers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    chantier_name VARCHAR(255) NOT NULL,
+    location TEXT,
+    site_manager VARCHAR(150),
+    phone VARCHAR(50),
+    estimated_budget NUMERIC(15,2) DEFAULT 0.00,
+    current_balance NUMERIC(15,2) DEFAULT 0.00,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS quincaillerie_livraisons (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chantier_id UUID REFERENCES quincaillerie_chantiers(id) ON DELETE CASCADE,
+    bl_number VARCHAR(100) NOT NULL,
+    delivery_date TIMESTAMPTZ DEFAULT now(),
+    truck_registration VARCHAR(50),
+    driver_name VARCHAR(100),
+    status VARCHAR(50) DEFAULT 'livre',
+    items JSONB NOT NULL DEFAULT '[]'::jsonb
+);
+
+-- [SECTEUR 3] BOUTIQUE & COMMERCE GÉNÉRAL
+CREATE TABLE IF NOT EXISTS boutique_variantes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    size VARCHAR(50),
+    color VARCHAR(50),
+    sku VARCHAR(100),
+    additional_price NUMERIC(15,2) DEFAULT 0.00,
+    stock_quantity NUMERIC(15,2) DEFAULT 0.00,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 4] BRASSERIE & DÉPÔT DE BOISSONS
+CREATE TABLE IF NOT EXISTS brasserie_casiers (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    casier_format VARCHAR(50) DEFAULT '24 Bouteilles',
+    consigne_unit_price NUMERIC(15,2) DEFAULT 3000.00,
+    stock_casiers_pleins INTEGER DEFAULT 0,
+    stock_casiers_vides INTEGER DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS brasserie_consignations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    movement_type VARCHAR(20) NOT NULL, -- 'depot_consigne', 'restitution_consigne'
+    nb_casiers INTEGER NOT NULL,
+    amount NUMERIC(15,2) NOT NULL,
+    receipt_date TIMESTAMPTZ DEFAULT now(),
+    notes TEXT
+);
+
+-- [SECTEUR 5] STATION-SERVICE & HYDROCARBURES
+CREATE TABLE IF NOT EXISTS station_cuves (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    fuel_type VARCHAR(50) NOT NULL, -- 'Super 95', 'Gazole', 'Pétrole'
+    capacity_liters NUMERIC(15,2) NOT NULL,
+    current_volume_liters NUMERIC(15,2) DEFAULT 0.00,
+    min_alert_liters NUMERIC(15,2) DEFAULT 2000.00,
+    updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS station_pompes_index (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    cuve_id UUID REFERENCES station_cuves(id) ON DELETE CASCADE,
+    pump_code VARCHAR(50) NOT NULL,
+    opening_index NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+    closing_index NUMERIC(15,2) DEFAULT 0.00,
+    pompiste_name VARCHAR(150),
+    shift_date DATE NOT NULL DEFAULT CURRENT_DATE,
+    revenue_cash NUMERIC(15,2) DEFAULT 0.00,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 6] SUPERMARCHÉ & SUPÉRETTE
+CREATE TABLE IF NOT EXISTS supermarche_rayons (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    code_rayon VARCHAR(50) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    chef_rayon VARCHAR(150),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 7] IMPRIMERIE & PRINT
+CREATE TABLE IF NOT EXISTS imprimerie_dossiers_bat (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    dossier_code VARCHAR(50) NOT NULL,
+    titre_ouvrage VARCHAR(255) NOT NULL,
+    format_papier VARCHAR(50), -- 'A4', 'A3', 'Bâche 3x2m', etc.
+    quantite INTEGER NOT NULL,
+    statut_bat VARCHAR(50) DEFAULT 'En attente validation', -- 'Validé BAT', 'En tirage', 'Façonnage', 'Livré'
+    fichier_maquette_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 8] ÉVÉNEMENTIEL (TRAITEUR, LOCATION MATÉRIEL, DÉCORATION)
+CREATE TABLE IF NOT EXISTS evenementiel_prestations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    event_type VARCHAR(100) NOT NULL, -- 'Mariage', 'Conférence', 'Anniversaire'
+    event_date DATE NOT NULL,
+    location TEXT,
+    guests_count INTEGER DEFAULT 0,
+    acompte_paye NUMERIC(15,2) DEFAULT 0.00,
+    solde_restant NUMERIC(15,2) DEFAULT 0.00,
+    status VARCHAR(50) DEFAULT 'Réservé',
+    materiel_loue JSONB DEFAULT '[]'::jsonb,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 9] HÔTEL & RÉSIDENCES HÔTELIÈRES
+CREATE TABLE IF NOT EXISTS hotel_chambres (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    room_number VARCHAR(50) NOT NULL,
+    room_type VARCHAR(100) NOT NULL, -- 'Standard', 'Suite VIP', 'Appartement'
+    price_per_night NUMERIC(15,2) NOT NULL,
+    occupancy_status VARCHAR(50) DEFAULT 'Libre', -- 'Occupée', 'Réservée', 'En Nettoyage'
+    cleanliness_status VARCHAR(50) DEFAULT 'Propre',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS hotel_reservations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    room_id UUID REFERENCES hotel_chambres(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    check_in_date TIMESTAMPTZ NOT NULL,
+    check_out_date TIMESTAMPTZ NOT NULL,
+    total_amount NUMERIC(15,2) NOT NULL,
+    status VARCHAR(50) DEFAULT 'Confirmée',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 10] PHARMACIE & PARAPHARMACIE
+CREATE TABLE IF NOT EXISTS pharmacie_lots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    product_id UUID REFERENCES products(id) ON DELETE CASCADE,
+    batch_number VARCHAR(100) NOT NULL,
+    expiry_date DATE NOT NULL,
+    stock_quantity NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+    repartiteur VARCHAR(150), -- 'CAMU', 'UBIPHAR', 'COPHARBI'
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 11] ÉCOLE & FORMATION
+CREATE TABLE IF NOT EXISTS ecole_classes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL, -- '6ème A', 'Terminale D', etc.
+    frais_scolarite_total NUMERIC(15,2) NOT NULL DEFAULT 0.00,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS ecole_eleves (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    classe_id UUID REFERENCES ecole_classes(id) ON DELETE CASCADE,
+    matricule VARCHAR(50) UNIQUE NOT NULL,
+    full_name VARCHAR(255) NOT NULL,
+    parent_name VARCHAR(255),
+    parent_phone VARCHAR(50),
+    scolarite_payee NUMERIC(15,2) DEFAULT 0.00,
+    scolarite_solde NUMERIC(15,2) DEFAULT 0.00,
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 12] ATELIER GARAGE & MÉCANIQUE
+CREATE TABLE IF NOT EXISTS garage_ordres_reparation (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    numero_or VARCHAR(50) NOT NULL,
+    immatriculation VARCHAR(50) NOT NULL,
+    marque_modele VARCHAR(100),
+    kilometrage INTEGER,
+    diagnostic TEXT,
+    statut_reparation VARCHAR(50) DEFAULT 'En cours', -- 'En attente pièces', 'Terminé', 'Livré'
+    cout_pieces NUMERIC(15,2) DEFAULT 0.00,
+    cout_main_oeuvre NUMERIC(15,2) DEFAULT 0.00,
+    total_ttc NUMERIC(15,2) DEFAULT 0.00,
+    date_entree TIMESTAMPTZ DEFAULT now()
+);
+
+-- [SECTEUR 13] GESTION DE LOCATION & IMMOBILIER
+CREATE TABLE IF NOT EXISTS location_biens (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    designation VARCHAR(255) NOT NULL,
+    type_bien VARCHAR(100) NOT NULL, -- 'Boutique', 'Appartement 2 pièces', 'Villa'
+    adresse TEXT,
+    loyer_mensuel NUMERIC(15,2) NOT NULL,
+    statut_location VARCHAR(50) DEFAULT 'Disponible', -- 'Loué', 'Travaux'
+    compteur_sbee VARCHAR(50),
+    compteur_soneb VARCHAR(50),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS location_quittances (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bien_id UUID REFERENCES location_biens(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    mois_loyer VARCHAR(20) NOT NULL, -- '2026-09'
+    montant_loyer NUMERIC(15,2) NOT NULL,
+    charges NUMERIC(15,2) DEFAULT 0.00,
+    total_paye NUMERIC(15,2) NOT NULL,
+    date_paiement TIMESTAMPTZ DEFAULT now(),
+    numero_quittance VARCHAR(100) NOT NULL
+);
+
+-- [SECTEUR 14] MICROFINANCE & CRÉDIT
+CREATE TABLE IF NOT EXISTS microfinance_comptes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    numero_compte VARCHAR(50) UNIQUE NOT NULL,
+    solde_epargne NUMERIC(15,2) DEFAULT 0.00,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS microfinance_credits (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    compte_id UUID REFERENCES microfinance_comptes(id) ON DELETE CASCADE,
+    montant_emprunte NUMERIC(15,2) NOT NULL,
+    taux_interet NUMERIC(5,2) DEFAULT 2.00,
+    duree_mois INTEGER NOT NULL,
+    mensualite NUMERIC(15,2) NOT NULL,
+    capital_restant NUMERIC(15,2) NOT NULL,
+    statut VARCHAR(50) DEFAULT 'En cours', -- 'Soldé', 'En retard'
+    date_octroi DATE NOT NULL DEFAULT CURRENT_DATE
+);
+
+-- [SECTEUR 15] TONTINE & COLLECTE D'ÉPARGNE
+CREATE TABLE IF NOT EXISTS tontine_cycles (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    activity_id UUID REFERENCES company_activities(id) ON DELETE CASCADE,
+    nom_cycle VARCHAR(150) NOT NULL,
+    mise_journaliere NUMERIC(15,2) NOT NULL DEFAULT 500.00, -- ex: 500 F, 1000 F CFA
+    duree_jours INTEGER DEFAULT 31,
+    date_debut DATE NOT NULL DEFAULT CURRENT_DATE,
+    statut VARCHAR(50) DEFAULT 'Actif',
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS tontine_cotisations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    cycle_id UUID REFERENCES tontine_cycles(id) ON DELETE CASCADE,
+    customer_id UUID REFERENCES customers(id) ON DELETE CASCADE,
+    date_cotisation DATE NOT NULL DEFAULT CURRENT_DATE,
+    montant NUMERIC(15,2) NOT NULL,
+    collecteur_name VARCHAR(150),
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- ==============================================================================
+-- 4. AMORÇAGE DU CATALOGUE DES 15+ SECTEURS (MÉTADONNÉES SEULEMENT, SANS DONNÉES TRANSACTIONNELLES)
+-- ==============================================================================
+INSERT INTO sectors (code, slug, name, category, emoji, icon, color, badge, description, modules, specific_modules)
+VALUES
+('POISSONNERIE', 'poissonnerie', 'Poissonnerie & Surgelés', 'Alimentation & Frais', '🐟', 'Fish', '#06b6d4', 'Surgelés & Frais', 'Chambres froides (-18°C), pesée au kg, gestion des cartons et alertes avaries.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["chambres_froides", "pesee_kg", "avaries"]'),
+('QUINCAILLERIE', 'quincaillerie', 'Quincaillerie & Matériaux BTP', 'Bâtiment & Construction', '🔨', 'Hammer', '#f59e0b', 'Matériaux BTP', 'Ciment, fer à béton, facturation au mètre/tonne, livraison chantiers et comptes entrepreneurs.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["chantiers", "conversions_btp", "livraisons"]'),
+('BOUTIQUE', 'boutique', 'Boutique & Commerce général', 'Commerce Détail', '🏪', 'Store', '#3b82f6', 'Commerce Détail', 'Vente comptoir rapide, gestion des variantes (taille/couleur), approvisionnement et remises.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["variantes", "fidélité"]'),
+('BRASSERIE', 'brasserie', 'Brasserie & Dépôt Boissons', 'Boissons & Restauration', '🍾', 'Wine', '#eab308', 'Dépôt Boissons', 'Gestion des casiers pleins/vides Sobebra, suivi strict des consignes emballages et fiches maquis.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["casiers", "consignes", "vente_gros"]'),
+('STATION', 'station', 'Station-Service & Hydrocarbures', 'Énergie & Carburants', '⛽', 'Fuel', '#f97316', 'Hydrocarbures', 'Jaugeage des cuves (Super, Gazole), index pompes début/fin de quart et lubrifiants.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["pompes_cuves", "postes_pompistes", "lubrifiants"]'),
+('SUPERMARCHE', 'supermarche', 'Supermarché & Supérette', 'Grande Distribution', '🛒', 'ShoppingCart', '#10b981', 'Grande Distribution', 'Scannage codes-barres POS rapide, têtes de gondoles, démarques DLC courtes et rayons.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["rayons", "promos_dlc"]'),
+('IMPRESSION', 'impression', 'Imprimerie & Print', 'Industrie Graphique', '🖨️', 'Printer', '#ec4899', 'Imprimerie & Graphisme', 'Calculette BAT, formats et grammages papiers, suivi d’atelier et sous-traitance.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["devis_bat", "production_atelier"]'),
+('EVENEMENTIEL', 'evenementiel', 'Événementiel & Prestations', 'Services & Loisirs', '🎉', 'PartyPopper', '#8b5cf6', 'Prestations & Fêtes', 'Réservations dates, traiteur, location bâches, chaises, sono et encaissements acomptes.', '["ventes", "caisse", "finances", "clients", "depenses", "rapports"]', '["reservations_dates", "location_materiel"]'),
+('HOTEL', 'hotel', 'Hôtel & Résidences Hôtelières', 'Hôtellerie & Hébergement', '🏨', 'Building2', '#6366f1', 'Hébergement', 'Planning chambres, nuitées, check-in/check-out, housekeeping et factures séjour.', '["ventes", "caisse", "finances", "clients", "depenses", "rapports"]', '["chambres_reservations", "housekeeping"]'),
+('PHARMACIE', 'pharmacie', 'Pharmacie & Parapharmacie', 'Santé', '💊', 'Pill', '#14b8a6', 'Santé & Médicaments', 'Ordonnances, numéros de lots, dates de péremption et répartiteurs agréés (CAMU/UBIPHAR).', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["ordonnances", "lots_peremption"]'),
+('ECOLE', 'ecole', 'École & Établissement Scolaire', 'Éducation & Formation', '🎓', 'GraduationCap', '#3b82f6', 'Éducation', 'Classes, inscriptions élèves, suivi des tranches de frais de scolarité et reçus.', '["ventes", "caisse", "finances", "clients", "depenses", "rapports"]', '["eleves_classes", "frais_scolaires"]'),
+('GARAGE', 'garage', 'Atelier Garage & Mécanique', 'Automobile & Transport', '🚗', 'Wrench', '#64748b', 'Mécanique Auto', 'Ordres de réparation (OR), pièces détachées, fiches véhicules clients et main d’œuvre.', '["ventes", "stock", "caisse", "finances", "clients", "depenses", "rapports"]', '["ordres_reparation", "pieces_detachees"]'),
+('LOCATION', 'location', 'Gestion de location & Immobilier', 'Immobilier', '🏠', 'Home', '#a855f7', 'Immobilier & Baux', 'Baux locatifs, états des lieux, quittances de loyer, suivi des impayés et charges.', '["caisse", "finances", "clients", "depenses", "rapports"]', '["biens_logements", "quittances_loyer", "relances_impayes"]'),
+('MICROFINANCE', 'microfinance', 'Microfinance & Crédit', 'Services Financiers', '🏦', 'Landmark', '#059669', 'Finance Inclusive', 'Comptes épargne membres, demandes de crédits, échéanciers et remboursements.', '["caisse", "finances", "clients", "depenses", "rapports"]', '["comptes_epargne", "credits_echeanciers"]'),
+('TONTINE', 'tontine', 'Tontine & Épargne Journalière', 'Finance Populaire', '🔄', 'Repeat', '#0284c7', 'Tontine Traditionnelle', 'Cycles de tontine, pointage journalier des collecteurs, mises quotidiennes et attributions.', '["caisse", "finances", "clients", "depenses", "rapports"]', '["cycles_tontine", "collecteurs_mises"]')
+ON CONFLICT (code) DO UPDATE SET
+    name = EXCLUDED.name,
+    category = EXCLUDED.category,
+    emoji = EXCLUDED.emoji,
+    icon = EXCLUDED.icon,
+    color = EXCLUDED.color,
+    badge = EXCLUDED.badge,
+    description = EXCLUDED.description,
+    modules = EXCLUDED.modules,
+    specific_modules = EXCLUDED.specific_modules;
+
