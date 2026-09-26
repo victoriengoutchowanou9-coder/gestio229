@@ -109,7 +109,9 @@ const AppRoutes: React.FC = () => {
     <Routes>
       {/* Routes publiques */}
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
+      <Route path="/connexion" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
+      <Route path="/inscription" element={<PublicRoute><RegisterPage /></PublicRoute>} />
 
       {/* Compte suspendu */}
       <Route path="/suspended" element={<SuspendedPage />} />

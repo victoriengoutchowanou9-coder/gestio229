@@ -1,28 +1,41 @@
 // =============================================================================
-// GESTIO 229 SaaS — Page Login
+// GESTIO 229 SaaS — Page Login Unifiée (Administrateur & Utilisateurs Internes)
 // =============================================================================
 
 import React, { useState, useEffect } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { Mail, Lock, Eye, EyeOff, LogIn, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { UserCheck, Lock, Eye, EyeOff, LogIn, AlertCircle, CheckCircle2, Mail, ShieldAlert } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
-import clsx from 'clsx'
+import { supabase } from '../../lib/supabase'
 
 const LoginPage: React.FC = () => {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
-  const { login, status, errorMessage, clearError } = useAuthStore()
+  const { login, status, errorMessage, clearError, refreshTenantContext } = useAuthStore()
 
   const urlEmail = searchParams.get('email') || ''
-  const isSuccess = searchParams.get('success') === 'compte_cree' || searchParams.get('activated') === '1'
+  const isConfirmed = searchParams.get('confirmed') === 'true' || searchParams.get('confirmed') === '1'
+  const isRegistered = searchParams.get('registered') === '1' || searchParams.get('success') === 'compte_cree'
 
-  const [email, setEmail] = useState(urlEmail || '')
+  const [identifier, setIdentifier] = useState(urlEmail || '')
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd] = useState(false)
+  const [confirmedSuccess, setConfirmedSuccess] = useState(isConfirmed)
 
   useEffect(() => {
     if (urlEmail) {
-      setEmail(urlEmail)
+      setIdentifier(urlEmail)
+    }
+
+    // Détection d'un retour de lien magique ou confirmation de hash Supabase
+    if (window.location.hash.includes('access_token')) {
+      setConfirmedSuccess(true)
+      // Tenter de récupérer la session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (session?.user?.email) {
+          setIdentifier(session.user.email)
+        }
+      })
     }
   }, [urlEmail])
 
@@ -31,10 +44,11 @@ const LoginPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
-    const result = await login(email, password)
+
+    const result = await login(identifier, password)
     if (result.success) {
-      // CORRECTION: Redirection stricte vers le HUB
-      navigate('/hub', { replace: true })
+      const target = result.redirectTo || '/hub'
+      navigate(target, { replace: true })
     }
   }
 
@@ -43,88 +57,105 @@ const LoginPage: React.FC = () => {
       {/* Panel gauche — branding */}
       <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-emerald-700 to-emerald-900 flex-col items-center justify-center p-12 text-white">
         <div className="max-w-md text-center">
-          <div className="w-20 h-20 rounded-3xl bg-white/20 flex items-center justify-center mx-auto mb-6 backdrop-blur-sm">
+          <div className="w-20 h-20 rounded-3xl bg-white/20 flex items-center justify-center mx-auto mb-6 backdrop-blur-sm shadow-xl">
             <span className="text-4xl font-black text-white">G</span>
           </div>
           <h1 className="text-4xl font-black mb-3">GESTIO 229</h1>
           <p className="text-emerald-200 text-lg font-medium mb-2">Votre gestion, au standard du Bénin</p>
-          <p className="text-emerald-300 text-sm">
-            Logiciel ERP multi-activités — Commerce, Restaurant, Pharmacie,<br />
-            Station-service et plus encore.
+          <p className="text-emerald-300 text-sm leading-relaxed">
+            Plateforme ERP & SaaS Multi-Activités — Commerce, Poissonnerie, Quincaillerie,
+            Pharmacie, Restaurant et bien plus.
           </p>
-          <div className="mt-10 grid grid-cols-2 gap-4">
-            {[
-              { label: 'Entreprises actives', value: '1 200+' },
-              { label: 'Secteurs supportés', value: '12+' },
-              { label: 'Uptime', value: '99.9%' },
-              { label: 'Support Bénin', value: '24/7' },
-            ].map((stat) => (
-              <div key={stat.label} className="bg-white/10 rounded-2xl p-4">
-                <p className="text-2xl font-black">{stat.value}</p>
-                <p className="text-emerald-300 text-xs mt-1">{stat.label}</p>
-              </div>
-            ))}
+          <div className="mt-10 grid grid-cols-2 gap-4 text-left">
+            <div className="bg-white/10 rounded-2xl p-4 backdrop-blur-sm">
+              <p className="text-2xl font-black">100%</p>
+              <p className="text-emerald-300 text-xs mt-1">Conforme DGI Bénin (e-MECeF)</p>
+            </div>
+            <div className="bg-white/10 rounded-2xl p-4 backdrop-blur-sm">
+              <p className="text-2xl font-black">15+</p>
+              <p className="text-emerald-300 text-xs mt-1">Secteurs métiers intégrés</p>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Panel droit — formulaire */}
+      {/* Panel droit — formulaire unifié */}
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           {/* Logo mobile */}
           <div className="lg:hidden text-center mb-8">
-            <div className="w-16 h-16 rounded-2xl bg-emerald-600 flex items-center justify-center mx-auto mb-3">
+            <div className="w-16 h-16 rounded-2xl bg-emerald-600 flex items-center justify-center mx-auto mb-3 shadow-lg">
               <span className="text-3xl font-black text-white">G</span>
             </div>
             <h1 className="text-2xl font-black text-slate-800">GESTIO 229</h1>
+            <p className="text-xs text-slate-500 mt-1">SaaS Multi-Secteurs & Multi-Tenants</p>
           </div>
 
-          <div className="bg-white rounded-3xl shadow-xl p-8">
-            <h2 className="text-2xl font-bold text-slate-800 mb-1">Connexion</h2>
-            <p className="text-slate-500 text-sm mb-6">Accédez à votre espace de gestion</p>
+          <div className="bg-white rounded-3xl shadow-xl border border-slate-100 p-8">
+            <div className="mb-6">
+              <h2 className="text-2xl font-black text-slate-900 tracking-tight">Connexion</h2>
+              <p className="text-slate-500 text-xs mt-1">
+                Administrateurs (email) & Utilisateurs internes (identifiant)
+              </p>
+            </div>
 
-            {/* Notification de succès après inscription */}
-            {isSuccess && (
-              <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-300 rounded-xl p-4 mb-6">
+            {/* Notification de confirmation email réussie */}
+            {confirmedSuccess && (
+              <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-300 rounded-2xl p-4 mb-6 animate-fadeIn">
                 <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-                <div className="text-xs text-emerald-800">
-                  <p className="font-bold">Compte initialisé avec succès !</p>
-                  <p className="mt-0.5">Saisissez votre mot de passe pour ouvrir votre <strong>HUB Central</strong>.</p>
+                <div className="text-xs text-emerald-900">
+                  <p className="font-bold">Adresse email confirmée avec succès !</p>
+                  <p className="mt-0.5">Saisissez votre mot de passe pour ouvrir immédiatement votre HUB.</p>
                 </div>
               </div>
             )}
 
-            {/* Erreur */}
+            {/* Notification après inscription (attente confirmation email) */}
+            {isRegistered && !confirmedSuccess && (
+              <div className="flex items-start gap-3 bg-amber-50 border border-amber-300 rounded-2xl p-4 mb-6">
+                <Mail className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-900">
+                  <p className="font-bold">Compte enregistré !</p>
+                  <p className="mt-0.5">Vérifiez vos emails et cliquez sur le lien d'activation avant de vous connecter.</p>
+                </div>
+              </div>
+            )}
+
+            {/* Message d'erreur */}
             {errorMessage && (
-              <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-                <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
-                <p className="text-sm text-red-700">{errorMessage}</p>
+              <div className="flex items-start gap-3 bg-rose-50 border border-rose-200 rounded-2xl p-4 mb-6 animate-shake">
+                <AlertCircle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+                <p className="text-xs text-rose-700 font-medium leading-relaxed">{errorMessage}</p>
               </div>
             )}
 
             <form onSubmit={handleSubmit} className="space-y-5">
-              {/* Email */}
+              {/* Champ Unique : Adresse email / Identifiant */}
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
-                  Adresse email
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
+                  Adresse email / Identifiant
                 </label>
                 <div className="relative">
-                  <Mail className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                  <UserCheck className="absolute left-3.5 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                   <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    placeholder="admin@monentreprise.bj"
+                    type="text"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    placeholder="admin@monentreprise.bj ou identifiant"
                     required
                     disabled={isLoading}
-                    className="w-full pl-11 pr-4 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-50"
+                    autoComplete="username"
+                    className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition disabled:bg-slate-100"
                   />
                 </div>
+                <p className="text-[11px] text-slate-400 mt-1.5">
+                  Admin : utilisez votre email. Utilisateur de secteur : utilisez votre identifiant.
+                </p>
               </div>
 
               {/* Mot de passe */}
               <div>
-                <label className="block text-sm font-semibold text-slate-700 mb-2">
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-2">
                   Mot de passe
                 </label>
                 <div className="relative">
@@ -136,58 +167,45 @@ const LoginPage: React.FC = () => {
                     placeholder="••••••••"
                     required
                     disabled={isLoading}
-                    className="w-full pl-11 pr-12 py-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent disabled:bg-slate-50"
+                    autoComplete="current-password"
+                    className="w-full pl-11 pr-12 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition disabled:bg-slate-100"
                   />
                   <button
                     type="button"
                     onClick={() => setShowPwd(!showPwd)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
                   >
-                    {showPwd ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    {showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                   </button>
                 </div>
               </div>
 
-              {/* Bouton connexion */}
+              {/* Bouton de connexion */}
               <button
                 type="submit"
-                disabled={isLoading || !email || !password}
-                className={clsx(
-                  'w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-white transition-all',
-                  isLoading || !email || !password
-                    ? 'bg-slate-300 cursor-not-allowed'
-                    : 'bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] shadow-lg shadow-emerald-200'
-                )}
+                disabled={isLoading}
+                className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition disabled:opacity-60"
               >
                 {isLoading ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Connexion en cours...
-                  </>
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                 ) : (
                   <>
-                    <LogIn className="w-5 h-5" />
-                    Se connecter
+                    <LogIn className="w-4 h-4" />
+                    <span>Se connecter</span>
                   </>
                 )}
               </button>
             </form>
 
-            {/* Compte test */}
-            <div className="mt-6 p-4 bg-emerald-50 border border-emerald-100 rounded-xl">
-              <p className="text-xs font-semibold text-emerald-700 mb-1">🧪 Compte de démonstration</p>
-              <p className="text-xs text-emerald-600">
-                Email : <code className="bg-white px-1 rounded">admin@gestio229.bj</code><br />
-                Mot de passe : <code className="bg-white px-1 rounded">Gestio229!</code>
+            {/* Lien Inscription */}
+            <div className="mt-6 pt-6 border-t border-slate-100 text-center">
+              <p className="text-xs text-slate-500">
+                Vous n'avez pas encore d'espace ?{' '}
+                <Link to="/register" className="text-emerald-600 font-bold hover:underline">
+                  Inscrire mon entreprise
+                </Link>
               </p>
             </div>
-
-            <p className="text-center text-sm text-slate-500 mt-6">
-              Pas encore de compte ?{' '}
-              <Link to="/register" className="text-emerald-600 font-semibold hover:underline">
-                Créer un compte
-              </Link>
-            </p>
           </div>
         </div>
       </div>

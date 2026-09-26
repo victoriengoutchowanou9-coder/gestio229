@@ -1,8 +1,8 @@
 // =============================================================================
 // GESTIO 229 SaaS — SectorLoader : Factory Pattern de chargement dynamique
 // =============================================================================
-// Responsabilité unique : résoudre les modules actifs pour une entreprise
-// et décider la route post-connexion.
+// Responsabilité unique : résoudre les modules actifs pour une entreprise,
+// lier l'utilisateur à son profil et son entreprise, et décider la route post-connexion.
 // =============================================================================
 
 import { supabase } from './supabase'
@@ -41,98 +41,220 @@ export interface TenantContext {
 // FACTORY : SectorLoader
 // =============================================================================
 
-/**
- * Charge le contexte complet d'un tenant depuis Supabase.
- * Résout les modules, construit la nav, décide la route post-login.
- *
- * Usage :
- *   const ctx = await SectorLoader.loadTenantContext(userId)
- */
 export const SectorLoader = {
 
   // ─── Chargement principal ─────────────────────────────────────────────────
 
-  async loadTenantContext(authUserId: string): Promise<TenantContext | null> {
-    // 1. Récupérer le profil utilisateur + company
-    const { data: profile, error: profileError } = await supabase
-      .from('user_profiles')
-      .select(`
-        *,
-        company:companies(*)
-      `)
-      .eq('auth_user_id', authUserId)
-      .maybeSingle()
+  async loadTenantContext(
+    authUserId?: string,
+    emailHint?: string,
+    directProfile?: UserProfile
+  ): Promise<TenantContext | null> {
+    try {
+      let profile: any = directProfile ?? null
+      let company: Company | null = (directProfile as any)?.company ?? null
 
-    if (profileError || !profile) {
-      console.error('[SectorLoader] Profil introuvable :', profileError)
-      return null
-    }
+      // 1. Récupération ou liaison du profil utilisateur
+      if (!profile && authUserId) {
+        // Tentative 1 : par auth_user_id
+        const { data: p1 } = await supabase
+          .from('user_profiles')
+          .select(`*, company:companies(*)`)
+          .eq('auth_user_id', authUserId)
+          .maybeSingle()
 
-    const company = profile.company as Company
-    const user = profile as UserProfile
+        if (p1) {
+          profile = p1
+          company = p1.company as Company
+        }
+      }
 
-    // 2. Charger les secteurs actifs de l'entreprise
-    const { data: companySectors, error: sectorsError } = await supabase
-      .from('company_sectors')
-      .select(`
-        *,
-        sector:sectors(*)
-      `)
-      .eq('company_id', company.id)
-      .order('activated_at')
+      // Tentative 2 : si non trouvé et email fourni
+      if (!profile && emailHint) {
+        const normalizedEmail = emailHint.trim().toLowerCase()
+        const { data: p2 } = await supabase
+          .from('user_profiles')
+          .select(`*, company:companies(*)`)
+          .ilike('email', normalizedEmail)
+          .maybeSingle()
 
-    if (sectorsError) {
-      console.error('[SectorLoader] Erreur secteurs :', sectorsError)
-    }
+        if (p2) {
+          profile = p2
+          company = p2.company as Company
+          // Si authUserId est disponible, on lie le compte
+          if (authUserId && (!p2.auth_user_id || p2.auth_user_id !== authUserId)) {
+            await supabase
+              .from('user_profiles')
+              .update({ auth_user_id: authUserId, updated_at: new Date().toISOString() })
+              .eq('id', p2.id)
+            profile.auth_user_id = authUserId
+          }
+        } else {
+          // Tentative 3 : Trouver l'entreprise par email et auto-créer le profil administrateur
+          const { data: comp } = await supabase
+            .from('companies')
+            .select('*')
+            .ilike('email', normalizedEmail)
+            .maybeSingle()
 
-    const rawSectors = (companySectors ?? [])
-      .map((cs: any) => cs.sector as Sector)
-      .filter(Boolean)
+          if (comp) {
+            company = comp as Company
+            const defaultAdminPermissions = {
+              admin: true,
+              commercial: true,
+              stock: true,
+              treasury: true,
+              purchases: true,
+              reporting: true,
+              accounting: true,
+              hr: true,
+              ventes: { view: true, create: true, edit: true, delete: true },
+              finances: { view: true, caisse: true, tresorerie: true }
+            }
 
-    // 3. Résoudre les modules pour chaque secteur
-    const resolvedSectors: ResolvedSector[] = rawSectors.map((sector) => {
-      const modules = resolveModulesForSector(
-        sector.slug,
-        sector.modules as string[],
-        sector.specific_modules as string[]
-      )
-      const navItems = modulesToNavItems(sector.slug, modules)
-      const groupedNav = groupNavItems(navItems)
+            const { data: newProfile, error: createErr } = await supabase
+              .from('user_profiles')
+              .insert({
+                company_id: comp.id,
+                auth_user_id: authUserId || null,
+                full_name: comp.name || 'Administrateur',
+                username: normalizedEmail,
+                email: normalizedEmail,
+                phone: comp.phone || null,
+                role: 'administrateur',
+                is_active: true,
+                permissions: defaultAdminPermissions
+              })
+              .select(`*, company:companies(*)`)
+              .single()
+
+            if (!createErr && newProfile) {
+              profile = newProfile
+              company = (newProfile.company as Company) || comp
+            }
+          }
+        }
+      }
+
+      // Si le profil n'a pas encore l'objet company chargé
+      if (profile && !company && profile.company_id) {
+        const { data: c } = await supabase
+          .from('companies')
+          .select('*')
+          .eq('id', profile.company_id)
+          .maybeSingle()
+        if (c) company = c as Company
+      }
+
+      if (!profile || !company) {
+        console.error('[SectorLoader] Impossible de charger le profil ou l\'entreprise :', {
+          authUserId,
+          emailHint,
+          hasProfile: !!profile,
+          hasCompany: !!company
+        })
+        return null
+      }
+
+      const user = profile as UserProfile
+
+      // 2. Charger les secteurs actifs de l'entreprise
+      let rawSectors: Sector[] = []
+
+      // A. Essayer depuis company_sectors (si la table existe)
+      try {
+        const { data: companySectors } = await supabase
+          .from('company_sectors')
+          .select(`*, sector:sectors(*)`)
+          .eq('company_id', company.id)
+          .order('activated_at')
+
+        if (companySectors && companySectors.length > 0) {
+          rawSectors = companySectors.map((cs: any) => cs.sector as Sector).filter(Boolean)
+        }
+      } catch (err) {
+        // Ignorer si la table company_sectors n'existe pas
+      }
+
+      // B. Si aucun secteur trouvé, utiliser les champs de la table companies
+      if (rawSectors.length === 0) {
+        const targetSlugs: string[] = []
+        if (Array.isArray(company.selected_sectors) && company.selected_sectors.length > 0) {
+          targetSlugs.push(...company.selected_sectors)
+        } else if (Array.isArray(company.sectors) && company.sectors.length > 0) {
+          targetSlugs.push(...company.sectors)
+        } else if (company.active_sector) {
+          targetSlugs.push(company.active_sector)
+        }
+
+        if (targetSlugs.length > 0) {
+          const { data: matchedSectors } = await supabase
+            .from('sectors')
+            .select('*')
+            .in('slug', targetSlugs)
+
+          if (matchedSectors && matchedSectors.length > 0) {
+            rawSectors = matchedSectors as Sector[]
+          }
+        }
+      }
+
+      // C. Fallback : secteurs par défaut de la base
+      if (rawSectors.length === 0) {
+        const { data: defaultSectors } = await supabase
+          .from('sectors')
+          .select('*')
+          .eq('is_active', true)
+          .limit(3)
+
+        rawSectors = (defaultSectors as Sector[]) || []
+      }
+
+      // 3. Résoudre les modules pour chaque secteur
+      const resolvedSectors: ResolvedSector[] = rawSectors.map((sector) => {
+        const modules = resolveModulesForSector(
+          sector.slug,
+          (sector.modules as string[]) || [],
+          (sector.specific_modules as string[]) || []
+        )
+        const navItems = modulesToNavItems(sector.slug, modules)
+        const groupedNav = groupNavItems(navItems)
+
+        return {
+          sector,
+          navItems,
+          groupedNav,
+          groupOrder: GROUP_ORDER,
+          groupLabels: GROUP_LABELS,
+        }
+      })
+
+      // 4. Décider la route post-connexion
+      const routingDecision = SectorLoader.resolveRoute(company, rawSectors, user)
 
       return {
-        sector,
-        navItems,
-        groupedNav,
-        groupOrder: GROUP_ORDER,
-        groupLabels: GROUP_LABELS,
+        company,
+        user,
+        sectors: resolvedSectors,
+        activeSectorSlug: resolvedSectors[0]?.sector.slug ?? null,
+        routingDecision,
       }
-    })
-
-    // 4. Décider la route
-    const routingDecision = SectorLoader.resolveRoute(company, rawSectors)
-
-    return {
-      company,
-      user,
-      sectors: resolvedSectors,
-      activeSectorSlug: resolvedSectors[0]?.sector.slug ?? null,
-      routingDecision,
+    } catch (error) {
+      console.error('[SectorLoader] Erreur globale loadTenantContext :', error)
+      return null
     }
   },
 
   // ─── Moteur de routage post-login ─────────────────────────────────────────
 
   /**
-   * Résout la route de redirection après connexion selon l'état du tenant.
-   *
-   * Règles :
-   * - Suspendu → /suspended
-   * - Onboarding incomplet → /dashboard/configuration
-   * - 0 secteur configuré → /dashboard/configuration
-   * - 1 secteur → /dashboard/vente-pos (dashboard solo)
-   * - N secteurs → /hub (hub multi-services)
+   * Résout la route de redirection après connexion selon l'état du tenant et le rôle.
+   * Règle absolue GESTIO 229 :
+   * - Compte suspendu → /suspended
+   * - Administrateur / Gérant multi-secteurs → /hub
+   * - Utilisateur interne orienté caisse/vente → /dashboard/vente-pos
    */
-  resolveRoute(company: Company, sectors: Sector[]): RoutingDecision {
+  resolveRoute(company: Company, sectors: Sector[], user?: UserProfile): RoutingDecision {
     // Cas : compte suspendu
     if (
       company.subscription_status === 'suspended' ||
@@ -145,17 +267,17 @@ export const SectorLoader = {
       }
     }
 
-    // Cas : onboarding non terminé
-    if (!company.onboarding_completed || sectors.length === 0) {
+    // Cas Administrateur : accès direct et prioritaire au HUB central
+    if (!user || user.role === 'administrateur' || user.role === 'super_admin') {
       return {
-        type: 'ONBOARDING' as RoutingType,
-        redirectTo: '/dashboard/configuration',
+        type: 'MULTISERVICES' as RoutingType,
+        redirectTo: '/hub',
         activeSectors: sectors,
       }
     }
 
-    // Cas : un seul secteur → dashboard direct
-    if (sectors.length === 1) {
+    // Cas Utilisateurs Internes selon rôle :
+    if (user.role === 'caissier' || user.role === 'vendeur') {
       return {
         type: 'SOLO' as RoutingType,
         redirectTo: '/dashboard/vente-pos',
@@ -163,20 +285,32 @@ export const SectorLoader = {
       }
     }
 
-    // Cas : plusieurs secteurs → hub multiservices
+    if (user.role === 'magasinier') {
+      return {
+        type: 'SOLO' as RoutingType,
+        redirectTo: '/dashboard/stocks',
+        activeSectors: sectors,
+      }
+    }
+
+    if (user.role === 'comptable') {
+      return {
+        type: 'SOLO' as RoutingType,
+        redirectTo: '/dashboard/syscohada',
+        activeSectors: sectors,
+      }
+    }
+
+    // Par défaut pour les autres profils internes autorisés
     return {
-      type: 'MULTISERVICES' as RoutingType,
-      redirectTo: '/hub',
+      type: 'SOLO' as RoutingType,
+      redirectTo: '/dashboard/vente-pos',
       activeSectors: sectors,
     }
   },
 
   // ─── Résolution Nav Globale (sans secteur — modules communs) ─────────────
 
-  /**
-   * Retourne la nav complète des 14 modules communs pour le dashboard standard.
-   * Utilisé quand l'entreprise a un seul secteur (mode SOLO).
-   */
   getDefaultNav(): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const commonModuleIds = [
       'ventes', 'stock', 'caisse', 'finances', 'clients',
@@ -184,7 +318,6 @@ export const SectorLoader = {
       'configuration', 'audit', 'abonnement',
     ]
 
-    // On mappe les IDs vers des NavItems avec des hrefs /dashboard/...
     const flat: NavItem[] = commonModuleIds
       .map((id) => {
         const mod = MODULE_REGISTRY[id]
@@ -203,17 +336,46 @@ export const SectorLoader = {
     return { grouped, flat }
   },
 
-  // ─── Vérification accès module ────────────────────────────────────────────
+  // ─── Vérification d'accès par rôle et permissions ────────────────────────
 
-  /**
-   * Vérifie si un utilisateur a accès à un module donné.
-   * Basé sur les permissions JSONB du profil.
-   */
-  canAccess(user: UserProfile, moduleId: string, action: string = 'view'): boolean {
+  canAccess(user: UserProfile | null | undefined, moduleId: string, action: string = 'view'): boolean {
+    if (!user) return false
     if (user.is_super_admin) return true
-    if (user.role === 'administrateur') return true
-    const perms = user.permissions as Record<string, Record<string, boolean>>
-    return perms?.[moduleId]?.[action] ?? false
+    if (user.role === 'administrateur' || user.role === 'admin' || user.role === 'gerant') return true
+
+    // Permissions fines
+    const perms = (user.permissions as any) || {}
+
+    // Raccourcis booléens globaux
+    if (perms[moduleId] === true) return true
+    if (perms[moduleId] === false) return false
+
+    // Raccourcis sous-modules (ex: ventes: { view: true })
+    if (typeof perms[moduleId] === 'object' && perms[moduleId] !== null) {
+      if (perms[moduleId][action] !== undefined) {
+        return !!perms[moduleId][action]
+      }
+      return !!perms[moduleId].view
+    }
+
+    // Permissions spécifiques par rôle pour les modules clés
+    if (moduleId === 'ventes' || moduleId === 'caisse') {
+      return ['caissier', 'vendeur', 'commercial', 'gerant'].includes(user.role)
+    }
+    if (moduleId === 'stock') {
+      return ['magasinier', 'gestionnaire', 'gerant'].includes(user.role)
+    }
+    if (moduleId === 'syscohada' || moduleId === 'finances' || moduleId === 'depenses') {
+      return ['comptable', 'gestionnaire', 'gerant'].includes(user.role)
+    }
+    if (moduleId === 'clients') {
+      return ['caissier', 'vendeur', 'commercial', 'comptable', 'gerant'].includes(user.role)
+    }
+    if (moduleId === 'fournisseurs') {
+      return ['magasinier', 'gestionnaire', 'comptable', 'gerant'].includes(user.role)
+    }
+
+    return false
   },
 }
 

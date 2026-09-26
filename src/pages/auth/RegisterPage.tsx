@@ -94,91 +94,184 @@ export const RegisterPage: React.FC = () => {
     setError('')
 
     try {
-      // 1. Création du compte utilisateur Auth Supabase
+      const cleanEmail = form.email.trim().toLowerCase()
+      const defaultSector = form.selected_sectors[0] || 'boutique'
+
+      // 1. Création du compte utilisateur Auth Supabase (avec URL de redirection)
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: form.email.trim().toLowerCase(),
-        password: form.password
+        email: cleanEmail,
+        password: form.password,
+        options: {
+          data: {
+            company_name: form.company_name.trim(),
+            responsible_name: form.responsible_name.trim(),
+            role: 'administrateur'
+          },
+          emailRedirectTo: `${window.location.origin}/login?confirmed=true`
+        }
       })
 
       if (authError && !authError.message.includes('already registered')) {
         throw new Error(authError.message)
       }
 
-      // 2. Création de l'entreprise (Company)
-      const { data: company, error: companyError } = await supabase
+      // 2. Création ou liaison de l'entreprise (Company)
+      let company: any = null
+      const { data: existingComp } = await supabase
         .from('companies')
-        .insert({
-          name: form.company_name.trim(),
-          ifu_number: form.ifu_number.trim() || '0000000000000',
-          phone: form.phone.trim(),
-          email: form.email.trim().toLowerCase(),
-          country: form.country,
-          city: form.city.trim(),
-          subscription_status: 'active',
-          onboarding_completed: true,
-          currency: 'FCFA'
-        })
-        .select()
-        .single()
+        .select('*')
+        .ilike('email', cleanEmail)
+        .maybeSingle()
 
-      if (companyError) throw new Error(companyError.message)
-
-      // 3. Liaison Multi-Secteurs (company_sectors)
-      // On insère pour chaque secteur coché (ex: Quincaillerie + Poissonnerie + Restaurant)
-      for (const sectorKey of form.selected_sectors) {
-        const matchedSector = ALL_SECTORS.find(
-          (s) => s.id === sectorKey || s.slug === sectorKey
-        )
-        const slug = matchedSector ? matchedSector.slug : sectorKey
-
-        await supabase.from('company_sectors').insert({
-          company_id: company.id,
-          sector_slug: slug,
-          sector_name: matchedSector ? matchedSector.name : slug,
-          is_configured: true,
-          configuration: {
+      if (existingComp) {
+        company = existingComp
+        await supabase
+          .from('companies')
+          .update({
+            name: form.company_name.trim(),
+            phone: form.phone.trim(),
+            city: form.city.trim(),
+            active_sector: defaultSector,
+            selected_sectors: form.selected_sectors,
+            sectors: form.selected_sectors,
+            onboarding_completed: true,
+            subscription_status: 'active',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingComp.id)
+      } else {
+        const { data: newComp, error: companyError } = await supabase
+          .from('companies')
+          .insert({
+            name: form.company_name.trim(),
+            ifu_number: form.ifu_number.trim() || '0000000000000',
+            phone: form.phone.trim(),
+            email: cleanEmail,
+            country: form.country,
+            city: form.city.trim(),
+            active_sector: defaultSector,
+            selected_sectors: form.selected_sectors,
+            sectors: form.selected_sectors,
+            subscription_status: 'active',
+            onboarding_completed: true,
             currency: 'FCFA',
-            billing_mode: 'direct',
-            point_of_sale_name: `${form.company_name} — ${matchedSector ? matchedSector.name : slug}`
-          }
+            subscription_plan: form.selected_sectors.length > 1 ? 'multiservices' : 'starter',
+            plan: form.selected_sectors.length > 1 ? 'multiservices' : 'starter'
+          })
+          .select()
+          .single()
+
+        if (companyError) throw new Error(companyError.message)
+        company = newComp
+      }
+
+      // 3. Liaison Multi-Secteurs & Abonnements (tolérant aux tables optionnelles)
+      try {
+        for (const sectorKey of form.selected_sectors) {
+          const matchedSector = ALL_SECTORS.find(
+            (s) => s.id === sectorKey || s.slug === sectorKey
+          )
+          const slug = matchedSector ? matchedSector.slug : sectorKey
+
+          await supabase.from('company_sectors').insert({
+            company_id: company.id,
+            sector_slug: slug,
+            sector_name: matchedSector ? matchedSector.name : slug,
+            is_configured: true,
+            configuration: {
+              currency: 'FCFA',
+              billing_mode: 'direct',
+              point_of_sale_name: `${form.company_name} — ${matchedSector ? matchedSector.name : slug}`
+            }
+          })
+        }
+      } catch (e) {
+        // Table optionnelle selon les migrations exécutées
+      }
+
+      // 4. Profil Administrateur (Obligatoire, avec toutes les permissions NOT NULL)
+      const defaultAdminPermissions = {
+        admin: true,
+        commercial: true,
+        stock: true,
+        treasury: true,
+        purchases: true,
+        reporting: true,
+        accounting: true,
+        hr: true,
+        ventes: { view: true, create: true, edit: true, delete: true },
+        finances: { view: true, caisse: true, tresorerie: true }
+      }
+
+      const { data: existingProfile } = await supabase
+        .from('user_profiles')
+        .select('id')
+        .ilike('email', cleanEmail)
+        .maybeSingle()
+
+      if (existingProfile) {
+        await supabase
+          .from('user_profiles')
+          .update({
+            company_id: company.id,
+            auth_user_id: authData?.user?.id || null,
+            full_name: form.responsible_name.trim(),
+            username: cleanEmail,
+            phone: form.phone.trim(),
+            role: 'administrateur',
+            password_hash: form.password,
+            is_active: true,
+            permissions: defaultAdminPermissions,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', existingProfile.id)
+      } else {
+        await supabase.from('user_profiles').insert({
+          company_id: company.id,
+          auth_user_id: authData?.user?.id || null,
+          full_name: form.responsible_name.trim(),
+          username: cleanEmail,
+          email: cleanEmail,
+          phone: form.phone.trim(),
+          role: 'administrateur',
+          password_hash: form.password,
+          is_active: true,
+          permissions: defaultAdminPermissions
         })
       }
 
-      // 4. Création de l'abonnement Solo ou Multiservices
-      const planType = form.selected_sectors.length > 1 ? 'MULTISERVICES' : 'SOLO'
-      const expiresDate = new Date()
-      expiresDate.setDate(expiresDate.getDate() + 30) // 30 jours offerts / essai actif
+      // 5. Initialiser les activités du HUB dans le cache local
+      try {
+        const hubActivities = form.selected_sectors.map((sId) => {
+          const matched = ALL_SECTORS.find((s) => s.id === sId || s.slug === sId)
+          return {
+            id: `act-${sId}-${Date.now()}`,
+            sectorSlug: matched ? matched.slug : sId,
+            sectorLabel: matched ? matched.name : sId,
+            sectorIcon: matched ? matched.icon : 'Store',
+            sectorColor: matched ? matched.color : '#3B82F6',
+            name: `${form.company_name} — ${matched ? matched.name : sId}`,
+            location: form.city,
+            manager: form.responsible_name,
+            status: 'ACTIVE',
+            isConfigured: true,
+            revenue: 0,
+            expenses: 0,
+            netMargin: 0,
+            monthRevenue: 0,
+            monthExpenses: 0,
+            monthNetMargin: 0
+          }
+        })
+        localStorage.setItem('gestio229_hub_sectors_v3', JSON.stringify(hubActivities))
+      } catch (e) {}
 
-      await supabase.from('subscriptions').insert({
-        company_id: company.id,
-        plan: planType,
-        status: 'active',
-        sectors_count: form.selected_sectors.length,
-        price_monthly: planType === 'MULTISERVICES' ? 25000 : 10000,
-        currency: 'FCFA',
-        starts_at: new Date().toISOString(),
-        expires_at: expiresDate.toISOString()
-      })
-
-      // 5. Profil Administrateur
-      await supabase.from('user_profiles').insert({
-        company_id: company.id,
-        auth_user_id: authData?.user?.id,
-        full_name: form.responsible_name.trim(),
-        username: form.email.trim().toLowerCase(),
-        email: form.email.trim().toLowerCase(),
-        phone: form.phone.trim(),
-        role: 'administrateur',
-        is_active: true
-      })
-
-      // CORRECTION: Déconnexion automatique et redirection stricte vers le login
-      await supabase.auth.signOut()
+      // Déconnexion préventive de la session d'inscription
+      try {
+        await supabase.auth.signOut()
+      } catch (e) {}
 
       setSuccess(true)
-      setTimeout(() => {
-        navigate('/login?success=compte_cree&email=' + encodeURIComponent(form.email.trim().toLowerCase()))
-      }, 1800)
     } catch (err: any) {
       console.error('[GESTIO 229] Erreur inscription:', err)
       setError(err.message || "Une erreur est survenue lors de l'inscription.")
@@ -190,7 +283,7 @@ export const RegisterPage: React.FC = () => {
   if (success) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
-        <div className="max-w-md w-full bg-white rounded-3xl p-8 text-center shadow-2xl animate-scaleUp">
+        <div className="max-w-lg w-full bg-white rounded-3xl p-8 text-center shadow-2xl animate-scaleUp">
           <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
             <CheckCircle2 className="w-10 h-10" />
           </div>
@@ -199,8 +292,30 @@ export const RegisterPage: React.FC = () => {
             Bienvenue sur GESTIO 229, <strong>{form.company_name}</strong>.
             Vos <strong>{form.selected_sectors.length} secteurs d'activités</strong> ont été initialisés.
           </p>
-          <div className="mt-6 p-4 rounded-xl bg-emerald-50 border border-emerald-200 text-xs text-emerald-800 font-semibold">
-            Redirection vers la page de <strong>Connexion</strong> pour saisir votre mot de passe...
+
+          <div className="mt-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-left">
+            <div className="flex items-center gap-2 text-amber-800 font-bold text-sm mb-1">
+              <Mail className="w-4 h-4 text-amber-600" />
+              <span>Confirmation obligatoire par email</span>
+            </div>
+            <p className="text-xs text-amber-700 leading-relaxed">
+              Un email de confirmation a été envoyé automatiquement à l'adresse :<br />
+              <strong className="text-slate-900 font-semibold">{form.email}</strong>.<br />
+              Veuillez ouvrir votre boîte de réception et cliquer sur le lien reçu pour activer votre compte Administrateur.
+            </p>
+          </div>
+
+          <div className="mt-6 flex flex-col gap-3">
+            <Link
+              to={`/login?email=${encodeURIComponent(form.email.trim().toLowerCase())}&registered=1`}
+              className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition"
+            >
+              <span>Accéder à la page de Connexion</span>
+              <ArrowRight className="w-4 h-4" />
+            </Link>
+            <p className="text-[11px] text-slate-400">
+              Après confirmation du mail, saisissez votre mot de passe pour ouvrir le HUB.
+            </p>
           </div>
         </div>
       </div>
