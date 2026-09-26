@@ -180,12 +180,83 @@ export const useAuthStore = create<AuthState>()(
             }
 
             // Authentification Supabase réussie : charger le tenant et l'entreprise
-            const ctx = await SectorLoader.loadTenantContext(authData.user.id, authData.user.email)
+            let ctx = await SectorLoader.loadTenantContext(authData.user.id, authData.user.email)
+
+            // ── Self-Healing : profil non trouvé malgré auth valide ────────────
+            // Cause probable : auth_user_id = NULL dans user_profiles (bug inscription)
+            // Solution : chercher par email et lier automatiquement le compte
+            if (!ctx) {
+              try {
+                console.warn('[AuthStore] Profil non trouvé par auth_user_id, tentative self-healing par email...')
+
+                // Récupérer l'email exact depuis Supabase Auth
+                const { data: { user: authFullUser } } = await supabase.auth.getUser()
+                const authEmail = authFullUser?.email || emailLower
+
+                // 1. Chercher le profil par email (fonctionne si RLS M015 appliquée)
+                const { data: orphanProfile } = await supabase
+                  .from('user_profiles')
+                  .select(`id, company_id, auth_user_id, email, role`)
+                  .ilike('email', authEmail)
+                  .maybeSingle()
+
+                if (orphanProfile) {
+                  console.log('[AuthStore] Profil orphelin trouvé, liaison en cours...')
+                  // 2. Lier le auth_user_id au profil
+                  await supabase
+                    .from('user_profiles')
+                    .update({
+                      auth_user_id: authData.user.id,
+                      updated_at: new Date().toISOString()
+                    })
+                    .eq('id', orphanProfile.id)
+
+                  // 3. Réessayer le chargement du contexte
+                  ctx = await SectorLoader.loadTenantContext(authData.user.id, authEmail)
+                  console.log('[AuthStore] Self-healing résultat :', ctx ? '✅ Succès' : '❌ Échec')
+                }
+
+                // 4. Si toujours introuvable, essayer depuis companies
+                if (!ctx) {
+                  const { data: companyByEmail } = await supabase
+                    .from('companies')
+                    .select('*')
+                    .ilike('email', authEmail)
+                    .maybeSingle()
+
+                  if (companyByEmail) {
+                    const defaultAdminPerms = {
+                      admin: true, commercial: true, stock: true,
+                      treasury: true, purchases: true, reporting: true,
+                      accounting: true, hr: true,
+                      ventes: { view: true, create: true, edit: true, delete: true },
+                      finances: { view: true, caisse: true, tresorerie: true }
+                    }
+                    await supabase.from('user_profiles').upsert({
+                      company_id: companyByEmail.id,
+                      auth_user_id: authData.user.id,
+                      email: authEmail,
+                      username: authEmail,
+                      full_name: authData.user.user_metadata?.responsible_name
+                        || authData.user.user_metadata?.full_name
+                        || companyByEmail.name || 'Administrateur',
+                      role: 'administrateur',
+                      is_active: true,
+                      permissions: defaultAdminPerms,
+                    }, { onConflict: 'email' })
+
+                    ctx = await SectorLoader.loadTenantContext(authData.user.id, authEmail)
+                  }
+                }
+              } catch (healErr: any) {
+                console.error('[AuthStore] Erreur self-healing :', healErr)
+              }
+            }
 
             if (!ctx) {
               set({
                 status: 'error',
-                errorMessage: 'Profil entreprise introuvable. Veuillez vérifier vos accès.',
+                errorMessage: 'Profil entreprise introuvable. Exécutez la migration M015 dans Supabase SQL Editor, puis reconnectez-vous.',
               })
               return { success: false, error: 'Profil introuvable' }
             }

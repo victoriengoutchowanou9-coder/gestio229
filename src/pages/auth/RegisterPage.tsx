@@ -111,8 +111,18 @@ export const RegisterPage: React.FC = () => {
         }
       })
 
-      if (authError && !authError.message.includes('already registered')) {
-        throw new Error(authError.message)
+      // Récupérer l'ID utilisateur de manière robuste (même si "already registered")
+      let resolvedAuthUserId: string | null = authData?.user?.id || null
+
+      if (authError) {
+        if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
+          // L'email est déjà dans Auth Supabase → récupérer la session existante
+          const { data: sessionData } = await supabase.auth.getSession()
+          resolvedAuthUserId = sessionData?.session?.user?.id || null
+          console.warn('[Register] Email déjà enregistré, auth_user_id récupéré :', resolvedAuthUserId)
+        } else {
+          throw new Error(authError.message)
+        }
       }
 
       // 2. Création ou liaison de l'entreprise (Company)
@@ -214,7 +224,7 @@ export const RegisterPage: React.FC = () => {
           .from('user_profiles')
           .update({
             company_id: company.id,
-            auth_user_id: authData?.user?.id || null,
+            auth_user_id: resolvedAuthUserId,
             full_name: form.responsible_name.trim(),
             username: cleanEmail,
             phone: form.phone.trim(),
@@ -228,7 +238,7 @@ export const RegisterPage: React.FC = () => {
       } else {
         await supabase.from('user_profiles').insert({
           company_id: company.id,
-          auth_user_id: authData?.user?.id || null,
+          auth_user_id: resolvedAuthUserId,
           full_name: form.responsible_name.trim(),
           username: cleanEmail,
           email: cleanEmail,
