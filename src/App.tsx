@@ -26,6 +26,7 @@ const SyscohadaPage      = lazy(() => import('./pages/dashboard/syscohada/Syscoh
 const ConfigPage         = lazy(() => import('./pages/dashboard/configuration/ConfigPage'))
 const AuditPage          = lazy(() => import('./pages/dashboard/journal-audit/AuditPage'))
 const AbonnementPage     = lazy(() => import('./pages/dashboard/abonnement/AbonnementPage'))
+const UtilisateursPage   = lazy(() => import('./pages/dashboard/utilisateurs/UtilisateursPage'))
 const FournisseursPage2  = FournisseursPage // alias
 
 // Hub multi-services
@@ -142,6 +143,7 @@ const AppRoutes: React.FC = () => {
         <Route path="configuration"  element={<ConfigPage />} />
         <Route path="journal-audit"  element={<AuditPage />} />
         <Route path="abonnement"     element={<AbonnementPage />} />
+        <Route path="utilisateurs"   element={<UtilisateursPage />} />
       </Route>
 
       {/* Fallback */}

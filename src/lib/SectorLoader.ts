@@ -315,7 +315,7 @@ export const SectorLoader = {
     const commonModuleIds = [
       'ventes', 'stock', 'caisse', 'finances', 'clients',
       'fournisseurs', 'depenses', 'rapports', 'syscohada',
-      'configuration', 'audit', 'abonnement',
+      'configuration', 'utilisateurs', 'audit', 'abonnement',
     ]
 
     const flat: NavItem[] = commonModuleIds

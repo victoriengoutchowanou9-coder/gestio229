@@ -23,6 +23,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
   'configuration': { title: 'Configuration', subtitle: 'Paramètres entreprise' },
   'journal-audit': { title: "Journal d'Audit", subtitle: 'Traçabilité des actions' },
   'abonnement':    { title: 'Mon Abonnement', subtitle: 'Gestion & renouvellement' },
+  'utilisateurs':  { title: 'Gestion des Utilisateurs', subtitle: 'Équipe & permissions' },
 }
 
 const Header: React.FC = () => {

@@ -180,17 +180,26 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // ── Persistence ────────────────────────────────────────────────────────────
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        const parsed: ActivityEntry[] = JSON.parse(raw);
-        setActivities(parsed);
+    const loadFromStorage = () => {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (raw) {
+          const parsed: ActivityEntry[] = JSON.parse(raw);
+          setActivities(parsed);
+        }
+        const testFlag = localStorage.getItem(TEST_FLAG_KEY) === 'true';
+        setIsTestDataActive(testFlag);
+      } catch {
+        // ignore
       }
-      const testFlag = localStorage.getItem(TEST_FLAG_KEY) === 'true';
-      setIsTestDataActive(testFlag);
-    } catch {
-      // ignore
-    }
+    };
+
+    // Chargement initial
+    loadFromStorage();
+
+    // Écouter les mises à jour externes (ex: auto-sync depuis HubPage)
+    window.addEventListener('storage', loadFromStorage);
+    return () => window.removeEventListener('storage', loadFromStorage);
   }, []);
 
   const persist = useCallback((data: ActivityEntry[]) => {

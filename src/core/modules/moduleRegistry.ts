@@ -128,7 +128,17 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     id: 'equipe',
     label: 'Équipe & Accès',
     icon: 'Shield',
-    path: 'equipe',
+    path: 'utilisateurs',
+    isCommon: true,
+    defaultEnabled: true,
+    group: 'admin',
+  },
+
+  'utilisateurs': {
+    id: 'utilisateurs',
+    label: 'Gestion Utilisateurs',
+    icon: 'Users',
+    path: 'utilisateurs',
     isCommon: true,
     defaultEnabled: true,
     group: 'admin',
