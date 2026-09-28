@@ -164,6 +164,26 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'admin',
   },
 
+  'syscohada': {
+    id: 'syscohada',
+    label: 'Comptabilité SYSCOHADA',
+    icon: 'BookOpen',
+    path: 'syscohada',
+    isCommon: true,
+    defaultEnabled: true,
+    group: 'finance',
+  },
+
+  'configuration': {
+    id: 'configuration',
+    label: 'Configuration',
+    icon: 'Settings',
+    path: 'configuration',
+    isCommon: true,
+    defaultEnabled: true,
+    group: 'admin',
+  },
+
   'abonnement': {
     id: 'abonnement',
     label: 'Mon Abonnement',

@@ -16,6 +16,7 @@ import {
   GROUP_LABELS,
 } from '../core/modules/moduleRegistry'
 import type { Company, Sector, UserProfile, RoutingDecision, RoutingType } from '../types/tenant'
+import { checkModuleAccess } from '../core/subscription/subscriptionEngine'
 
 // =============================================================================
 // TYPES INTERNES
@@ -338,8 +339,16 @@ export const SectorLoader = {
 
   // ─── Vérification d'accès par rôle et permissions ────────────────────────
 
-  canAccess(user: UserProfile | null | undefined, moduleId: string, action: string = 'view'): boolean {
+  canAccess(user: UserProfile | null | undefined, moduleId: string, action: string = 'view', company?: Company | null): boolean {
     if (!user) return false
+
+    // Vérification prioritaire de l'abonnement entreprise (Plan Starter vs Entreprise)
+    const comp = company || (user as any).company
+    if (comp) {
+      const planCheck = checkModuleAccess(moduleId, comp)
+      if (!planCheck.allowed) return false
+    }
+
     if (user.is_super_admin) return true
     if (user.role === 'administrateur' || user.role === 'admin' || user.role === 'gerant') return true
     if (moduleId === 'dashboard') return true

@@ -6,6 +6,7 @@ import React, { useEffect, Suspense, lazy } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import AppLayout from './components/layout/AppLayout'
+import ModuleGuard from './components/subscription/ModuleGuard'
 
 // ─── Lazy Loading des pages ─────────────────────────────────────────────────
 
@@ -136,13 +137,13 @@ const AppRoutes: React.FC = () => {
         <Route path="vente-pos"      element={<POSPage />} />
         <Route path="stocks"         element={<StocksPage />} />
         <Route path="caisse"         element={<CaissePage />} />
-        <Route path="tresorerie"     element={<TresoreriePage />} />
+        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
         <Route path="clients"        element={<ClientsPage />} />
         <Route path="achats"         element={<FournisseursPage />} />
         <Route path="fournisseurs"   element={<FournisseursPage />} />
         <Route path="depenses"       element={<DepensesPage />} />
-        <Route path="reporting"      element={<ReportingPage />} />
-        <Route path="syscohada"      element={<SyscohadaPage />} />
+        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
         <Route path="configuration"  element={<ConfigPage />} />
         <Route path="journal-audit"  element={<AuditPage />} />
         <Route path="abonnement"     element={<AbonnementPage />} />

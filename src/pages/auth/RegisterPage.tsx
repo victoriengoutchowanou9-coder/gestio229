@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import SectorSelector, { ALL_SECTORS } from '../../components/auth/SectorSelector'
+import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
@@ -28,6 +29,13 @@ export const RegisterPage: React.FC = () => {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
+  const [trialDetails, setTrialDetails] = useState<{
+    planName: string
+    startDate: string
+    endDate: string
+    futurePrice: number
+    activityCount: number
+  } | null>(null)
 
   const [form, setForm] = useState({
     company_name: '',
@@ -84,7 +92,7 @@ export const RegisterPage: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const handleFinalSubmit = async () => {
+  const handleFinalSubmit = async (chosenPlanSlug: string = 'entreprise') => {
     if (form.selected_sectors.length === 0) {
       setError('Veuillez sélectionner au moins un secteur d’activité.')
       return
@@ -96,6 +104,14 @@ export const RegisterPage: React.FC = () => {
     try {
       const cleanEmail = form.email.trim().toLowerCase()
       const defaultSector = form.selected_sectors[0] || 'boutique'
+
+      // Calcul métier du forfait et de l'essai gratuit de 1 mois (30 jours)
+      const planCalc = calculateSubscriptionPrice(
+        form.selected_sectors.length,
+        chosenPlanSlug.includes('starter') ? 'starter' : 'entreprise'
+      )
+      const now = new Date()
+      const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
       // 1. Création du compte utilisateur Auth Supabase (avec URL de redirection)
       const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -125,7 +141,7 @@ export const RegisterPage: React.FC = () => {
         }
       }
 
-      // 2. Création ou liaison de l'entreprise (Company)
+      // 2. Création ou liaison de l'entreprise (Company) avec Essai Gratuit de 1 mois
       let company: any = null
       const { data: existingComp } = await supabase
         .from('companies')
@@ -145,7 +161,10 @@ export const RegisterPage: React.FC = () => {
             selected_sectors: form.selected_sectors,
             sectors: form.selected_sectors,
             onboarding_completed: true,
-            subscription_status: 'active',
+            subscription_status: 'trial',
+            subscription_plan: planCalc.slug,
+            plan: planCalc.slug,
+            trial_ends_at: trialEndsDate.toISOString(),
             updated_at: new Date().toISOString()
           })
           .eq('id', existingComp.id)
@@ -162,11 +181,12 @@ export const RegisterPage: React.FC = () => {
             active_sector: defaultSector,
             selected_sectors: form.selected_sectors,
             sectors: form.selected_sectors,
-            subscription_status: 'active',
+            subscription_status: 'trial',
+            trial_ends_at: trialEndsDate.toISOString(),
             onboarding_completed: true,
             currency: 'FCFA',
-            subscription_plan: form.selected_sectors.length > 1 ? 'multiservices' : 'starter',
-            plan: form.selected_sectors.length > 1 ? 'multiservices' : 'starter'
+            subscription_plan: planCalc.slug,
+            plan: planCalc.slug
           })
           .select()
           .single()
@@ -174,6 +194,25 @@ export const RegisterPage: React.FC = () => {
         if (companyError) throw new Error(companyError.message)
         company = newComp
       }
+
+      // Enregistrer dans la table subscriptions (historique)
+      try {
+        await supabase.from('subscriptions').insert({
+          company_id: company.id,
+          status: 'trial',
+          started_at: now.toISOString(),
+          expires_at: trialEndsDate.toISOString(),
+          notes: `Période d'essai gratuit de 30 jours (0 FCFA) - Formule ${planCalc.name}`
+        })
+      } catch (e) {}
+
+      setTrialDetails({
+        planName: planCalc.name,
+        startDate: now.toLocaleDateString('fr-BJ'),
+        endDate: trialEndsDate.toLocaleDateString('fr-BJ'),
+        futurePrice: planCalc.priceMonthly,
+        activityCount: form.selected_sectors.length
+      })
 
       // 3. Liaison Multi-Secteurs & Abonnements (tolérant aux tables optionnelles)
       try {
@@ -303,7 +342,39 @@ export const RegisterPage: React.FC = () => {
             Vos <strong>{form.selected_sectors.length} secteurs d'activités</strong> ont été initialisés.
           </p>
 
-          <div className="mt-6 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-left">
+          {/* Bloc Essai Gratuit 1 Mois (CDC Section 7) */}
+          <div className="mt-5 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-left space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-emerald-600" />
+                <span>Période d'Essai Gratuit Activée</span>
+              </span>
+              <span className="text-[10px] font-black bg-emerald-200 text-emerald-900 px-2.5 py-0.5 rounded-full">
+                0 FCFA aujourd'hui
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
+              <div>
+                <span className="text-[10px] text-slate-500 block">Durée de l'essai :</span>
+                <span className="font-semibold">{trialDetails?.startDate} au {trialDetails?.endDate} (30 jours)</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-500 block">Formule choisie :</span>
+                <span className="font-semibold">{trialDetails?.planName} ({trialDetails?.activityCount} activité{trialDetails && trialDetails.activityCount > 1 ? 's' : ''})</span>
+              </div>
+              <div className="col-span-2 pt-1 border-t border-emerald-200/60 flex justify-between items-center">
+                <span className="text-[11px] text-slate-600">Montant après l'essai gratuit :</span>
+                <span className="font-black text-emerald-800 text-xs">
+                  {formatFCFA(trialDetails?.futurePrice || 0)} <span className="font-normal text-[10px] text-slate-500">/ mois</span>
+                </span>
+              </div>
+            </div>
+            <p className="text-[11px] text-emerald-700">
+              ✓ Aucun moyen de paiement n'a été demandé pour démarrer votre essai.
+            </p>
+          </div>
+
+          <div className="mt-4 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-left">
             <div className="flex items-center gap-2 text-amber-800 font-bold text-sm mb-1">
               <Mail className="w-4 h-4 text-amber-600" />
               <span>Confirmation obligatoire par email</span>

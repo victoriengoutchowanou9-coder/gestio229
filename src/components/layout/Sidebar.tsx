@@ -48,7 +48,7 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
           'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group',
           isActive
             ? 'bg-emerald-600 text-white shadow-sm'
-            : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+            : 'text-slate-600 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-slate-800 hover:text-emerald-700 dark:hover:text-emerald-400'
         )
       }
       title={collapsed ? label : undefined}
@@ -58,7 +58,7 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
           <span className="flex-shrink-0">
             <DynamicIcon
               name={icon}
-              className={clsx('w-5 h-5', isActive ? 'text-white' : 'text-slate-500 group-hover:text-emerald-600')}
+              className={clsx('w-5 h-5', isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400')}
             />
           </span>
           {!collapsed && (
@@ -90,7 +90,7 @@ const Sidebar: React.FC = () => {
     <>
       <aside
         className={clsx(
-          'flex flex-col bg-white border-r border-slate-200 transition-all duration-300 z-30',
+          'flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 z-30',
           // Desktop
           sidebarCollapsed ? 'w-16' : 'w-64',
           // Mobile
@@ -101,7 +101,7 @@ const Sidebar: React.FC = () => {
       >
         {/* ── Logo & Entreprise ──────────────────────────────────────── */}
         <div className={clsx(
-          'flex items-center border-b border-slate-100 flex-shrink-0',
+          'flex items-center border-b border-slate-100 dark:border-slate-800 flex-shrink-0',
           sidebarCollapsed ? 'p-3 justify-center' : 'p-4 gap-3'
         )}>
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center flex-shrink-0 shadow-sm">
@@ -109,26 +109,26 @@ const Sidebar: React.FC = () => {
           </div>
           {!sidebarCollapsed && (
             <div className="min-w-0">
-              <p className="text-sm font-bold text-slate-800 truncate">
+              <p className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
                 {company?.name ?? 'GESTIO 229'}
               </p>
-              <p className="text-xs text-emerald-600 font-medium">SaaS V3.0</p>
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">SaaS V3.0</p>
             </div>
           )}
         </div>
 
-        {/* ── Navigation avec filtrage des permissions ──────────────── */}
+        {/* ── Navigation avec filtrage des permissions et de l'abonnement ──────────────── */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
           {GROUP_ORDER.map((groupKey) => {
             const rawItems = grouped[groupKey] ?? []
-            // Filtrage selon les droits réels définis pour l'utilisateur
-            const items = rawItems.filter((item) => SectorLoader.canAccess(user, item.id))
+            // Filtrage selon les droits réels définis pour l'utilisateur et son abonnement
+            const items = rawItems.filter((item) => SectorLoader.canAccess(user, item.id, 'view', company))
             if (!items.length) return null
 
             return (
               <div key={groupKey} className="mb-2">
                 {!sidebarCollapsed && (
-                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 px-3 py-1.5">
+                  <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500 px-3 py-1.5">
                     {GROUP_LABELS[groupKey] ?? groupKey}
                   </p>
                 )}
@@ -149,11 +149,11 @@ const Sidebar: React.FC = () => {
         </nav>
 
         {/* ── User footer ────────────────────────────────────────────── */}
-        <div className="border-t border-slate-100 p-3 flex-shrink-0 space-y-1">
+        <div className="border-t border-slate-100 dark:border-slate-800 p-3 flex-shrink-0 space-y-1">
           {/* Bouton collapse desktop */}
           <button
             onClick={toggleSidebar}
-            className="hidden lg:flex w-full items-center justify-center p-2 rounded-xl text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
+            className="hidden lg:flex w-full items-center justify-center p-2 rounded-xl text-slate-400 dark:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-slate-300 transition"
             title={sidebarCollapsed ? 'Agrandir' : 'Réduire'}
           >
             {sidebarCollapsed
@@ -167,23 +167,23 @@ const Sidebar: React.FC = () => {
             onClick={() => setProfileModalOpen(true)}
             className={clsx(
               'flex items-center gap-2 w-full p-2 rounded-xl text-left transition',
-              'bg-slate-50 hover:bg-emerald-50 hover:border-emerald-200 border border-transparent group',
+              'bg-slate-50 dark:bg-slate-800/80 hover:bg-emerald-50 dark:hover:bg-slate-700/80 hover:border-emerald-200 border border-transparent group',
               sidebarCollapsed ? 'justify-center' : ''
             )}
             title="Modifier mes identifiants & mot de passe"
           >
-            <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-200">
-              <span className="text-emerald-700 font-bold text-xs">
+            <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/60 flex items-center justify-center flex-shrink-0 group-hover:bg-emerald-200">
+              <span className="text-emerald-700 dark:text-emerald-300 font-bold text-xs">
                 {user?.full_name?.charAt(0)?.toUpperCase() ?? 'U'}
               </span>
             </div>
             {!sidebarCollapsed && (
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-semibold text-slate-700 truncate group-hover:text-emerald-800">
+                <p className="text-xs font-semibold text-slate-700 dark:text-slate-200 truncate group-hover:text-emerald-800 dark:group-hover:text-emerald-300">
                   {user?.full_name ?? 'Utilisateur'}
                 </p>
                 <div className="flex items-center gap-1">
-                  <p className="text-[10px] text-slate-400 truncate capitalize">{user?.role ?? 'Utilisateur'}</p>
+                  <p className="text-[10px] text-slate-400 dark:text-slate-500 truncate capitalize">{user?.role ?? 'Utilisateur'}</p>
                   <KeyRound className="w-2.5 h-2.5 text-slate-400 group-hover:text-emerald-600 ml-auto" />
                 </div>
               </div>
@@ -194,7 +194,7 @@ const Sidebar: React.FC = () => {
           <button
             onClick={handleLogout}
             className={clsx(
-              'flex items-center gap-2 w-full p-2 rounded-xl text-sm text-slate-500 hover:bg-red-50 hover:text-red-600 transition',
+              'flex items-center gap-2 w-full p-2 rounded-xl text-sm text-slate-500 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 dark:hover:text-red-400 transition',
               sidebarCollapsed ? 'justify-center' : ''
             )}
             title="Se déconnecter"

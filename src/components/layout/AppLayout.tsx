@@ -25,7 +25,7 @@ const AppLayout: React.FC = () => {
   }, [location.pathname])
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 overflow-hidden">
       {/* Overlay mobile */}
       {sidebarMobileOpen && (
         <div

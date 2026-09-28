@@ -40,11 +40,11 @@ const Header: React.FC = () => {
   const pageInfo = PAGE_TITLES[activeRoute] ?? { title: 'Tableau de bord' }
 
   return (
-    <header className="flex-shrink-0 bg-white border-b border-slate-200 px-4 py-3 flex items-center gap-3">
+    <header className="flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center gap-3 transition-colors">
       {/* Burger mobile */}
       <button
         onClick={toggleMobileSidebar}
-        className="lg:hidden p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition"
+        className="lg:hidden p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition"
       >
         <Menu className="w-5 h-5" />
       </button>
@@ -52,7 +52,7 @@ const Header: React.FC = () => {
       {/* Bouton Retour au HUB Exigé par le CDC (visible PC, tablette et mobile) */}
       <Link
         to="/hub"
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-sm shrink-0"
+        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition shadow-sm shrink-0"
         title="Revenir au HUB multi-secteurs de GESTIO 229"
       >
         <ArrowLeft className="w-3.5 h-3.5" />
@@ -62,13 +62,13 @@ const Header: React.FC = () => {
 
       {/* Breadcrumb */}
       <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1.5 text-xs text-slate-400 mb-0.5">
-          <span className="truncate max-w-[120px] font-semibold text-slate-600">{company?.name ?? 'Entreprise'}</span>
+        <div className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 mb-0.5">
+          <span className="truncate max-w-[120px] font-semibold text-slate-600 dark:text-slate-300">{company?.name ?? 'Entreprise'}</span>
           <ChevronRight className="w-3 h-3 flex-shrink-0" />
-          <span className="text-slate-800 font-bold truncate">{pageInfo.title}</span>
+          <span className="text-slate-800 dark:text-slate-100 font-bold truncate">{pageInfo.title}</span>
         </div>
         {pageInfo.subtitle && (
-          <p className="text-xs text-slate-400 hidden md:block">{pageInfo.subtitle}</p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 hidden md:block">{pageInfo.subtitle}</p>
         )}
       </div>
 
@@ -77,13 +77,13 @@ const Header: React.FC = () => {
         {/* Sélecteur Thème Clair / Sombre */}
         <button
           onClick={toggleDarkMode}
-          className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition flex items-center gap-1.5 text-xs font-bold"
+          className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 transition flex items-center gap-1.5 text-xs font-bold"
           title={darkMode ? 'Basculer en Thème Clair' : 'Basculer en Thème Sombre'}
         >
           {darkMode ? (
             <>
-              <Sun className="w-4 h-4 text-amber-500" />
-              <span className="hidden lg:inline text-slate-700">Clair</span>
+              <Sun className="w-4 h-4 text-amber-400" />
+              <span className="hidden lg:inline text-slate-200">Clair</span>
             </>
           ) : (
             <>
@@ -98,10 +98,10 @@ const Header: React.FC = () => {
           <span className={clsx(
             'hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
             company.subscription_status === 'active'
-              ? 'bg-emerald-100 text-emerald-700'
+              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300'
               : company.subscription_status === 'trial'
-              ? 'bg-amber-100 text-amber-700'
-              : 'bg-red-100 text-red-700'
+              ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/80 dark:text-amber-300'
+              : 'bg-red-100 text-red-700 dark:bg-red-950/80 dark:text-red-300'
           )}>
             <span className={clsx(
               'w-1.5 h-1.5 rounded-full',
@@ -114,7 +114,7 @@ const Header: React.FC = () => {
         )}
 
         {/* Notifications */}
-        <button className="relative p-2 rounded-xl text-slate-500 hover:bg-slate-100 transition">
+        <button className="relative p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition">
           <Bell className="w-5 h-5" />
           {notifications.length > 0 && (
             <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />

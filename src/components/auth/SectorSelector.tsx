@@ -25,6 +25,8 @@ import {
   ArrowRight
 } from 'lucide-react'
 
+import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
+
 export interface SectorItem {
   id: string
   slug: string
@@ -173,7 +175,7 @@ export const ALL_SECTORS: SectorItem[] = [
 interface SectorSelectorProps {
   selected: string[]
   onToggle: (id: string) => void
-  onContinue: () => void
+  onContinue: (planSlug: string) => void
   onBack: () => void
   submitting?: boolean
 }
@@ -186,6 +188,7 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
   submitting = false
 }) => {
   const [searchTerm, setSearchTerm] = useState('')
+  const [planChoice, setPlanChoice] = useState<'starter' | 'entreprise'>('entreprise')
 
   const renderIcon = (iconName: string, isSelected: boolean) => {
     const props = { className: `w-6 h-6 transition-transform ${isSelected ? 'scale-110' : ''}` }
@@ -354,48 +357,78 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
         )}
       </div>
 
-      {/* Encart dynamique du forfait sélectionné & Tarifs */}
-      <div className="rounded-2xl border border-slate-200 bg-gradient-to-r from-slate-900 to-indigo-950 p-4 sm:p-5 text-white shadow-lg">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
+      {/* Encart dynamique du forfait sélectionné & Tarifs (CDC Section 3, 5 & 7) */}
+      <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-gradient-to-r from-slate-900 to-indigo-950 p-4 sm:p-5 text-white shadow-xl">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div className="flex-1">
+            <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
-                Secteurs choisis :
+                Secteurs sélectionnés :
               </span>
               <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-indigo-500 text-white">
                 {count} {count > 1 ? 'secteurs' : 'secteur'}
               </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-500 text-slate-900 uppercase tracking-wider">
+                🎁 1er Mois Gratuit
+              </span>
             </div>
 
-            <div className="mt-2">
-              {count === 0 && (
-                <p className="text-sm text-slate-300">
-                  ⚠️ Veuillez sélectionner au moins <strong>1 secteur</strong> d'activité pour continuer.
-                </p>
-              )}
+            {count === 0 ? (
+              <p className="text-sm text-amber-300">
+                ⚠️ Veuillez sélectionner au moins <strong>1 secteur</strong> d'activité pour continuer.
+              </p>
+            ) : count === 1 ? (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-300">Choisissez votre formule pour cette activité :</p>
+                <div className="flex flex-wrap items-center gap-3">
+                  <label className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition ${
+                    planChoice === 'starter'
+                      ? 'bg-indigo-600/40 border-indigo-400 text-white'
+                      : 'bg-white/10 border-white/20 text-slate-300 hover:bg-white/20'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="planChoice"
+                      checked={planChoice === 'starter'}
+                      onChange={() => setPlanChoice('starter')}
+                      className="accent-emerald-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold block">Plan Starter</span>
+                      <span className="text-[11px] text-emerald-300 font-black">5 000 FCFA / mois</span>
+                    </div>
+                  </label>
 
-              {isSolo && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-emerald-500/20 border border-emerald-400/30 text-emerald-300 text-xs font-bold">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Forfait Solo Activité
-                  </span>
-                  <span className="text-lg font-black text-white">
-                    10 000 FCFA <span className="text-xs font-normal text-slate-300">/ mois</span>
-                  </span>
+                  <label className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition ${
+                    planChoice === 'entreprise'
+                      ? 'bg-emerald-600/40 border-emerald-400 text-white'
+                      : 'bg-white/10 border-white/20 text-slate-300 hover:bg-white/20'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="planChoice"
+                      checked={planChoice === 'entreprise'}
+                      onChange={() => setPlanChoice('entreprise')}
+                      className="accent-emerald-500"
+                    />
+                    <div>
+                      <span className="text-xs font-bold block">Plan Entreprise (Tous modules)</span>
+                      <span className="text-[11px] text-emerald-300 font-black">10 000 FCFA / mois</span>
+                    </div>
+                  </label>
                 </div>
-              )}
-
-              {isMulti && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-xl bg-amber-500/20 border border-amber-400/30 text-amber-300 text-xs font-bold">
-                    <Sparkles className="w-3.5 h-3.5" /> Forfait Multiservices ({count} activités regroupées)
-                  </span>
-                  <span className="text-lg font-black text-white">
-                    25 000 FCFA <span className="text-xs font-normal text-slate-300">/ mois</span>
-                  </span>
-                </div>
-              )}
-            </div>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="text-xl font-black text-white">
+                  {formatFCFA(calculateSubscriptionPrice(count).priceMonthly)}
+                </span>
+                <span className="text-xs text-slate-300 font-medium">/ mois</span>
+                <span className="text-xs text-emerald-300 font-bold ml-2">
+                  (0 FCFA le premier mois · Essai gratuit de 30 jours)
+                </span>
+              </div>
+            )}
           </div>
 
           {/* Boutons d'action Étape 2 */}
@@ -411,7 +444,10 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
 
             <button
               type="button"
-              onClick={onContinue}
+              onClick={() => {
+                const finalPlanSlug = count === 1 ? planChoice : count === 2 ? 'duo' : count === 3 ? 'trio' : `multi_${count}`
+                onContinue(finalPlanSlug)
+              }}
               disabled={count === 0 || submitting}
               className={`px-6 py-3 text-sm font-extrabold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all ${
                 count === 0 || submitting
@@ -422,11 +458,11 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
               {submitting ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                  <span>Création en cours...</span>
+                  <span>Démarrage de l'essai gratuit...</span>
                 </>
               ) : (
                 <>
-                  <span>Valider &amp; Créer mon compte</span>
+                  <span>Démarrer l'Essai Gratuit 1 Mois</span>
                   <ArrowRight className="w-4 h-4" />
                 </>
               )}
