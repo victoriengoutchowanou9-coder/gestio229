@@ -13,21 +13,31 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
-import { PurchaseOrderModal, ReceiveBlModal, ModalPortal } from '../../../components/modals'
+import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
 
-interface Supplier {
+export interface Supplier {
   id: string
+  company_id?: string
   code: string
+  company_name: string
   name: string
+  contact_person?: string
+  ifu_number?: string
   phone: string
   email?: string
+  address?: string
   city?: string
+  country?: string
+  current_payable: number
   current_debt: number
+  payment_terms_days: number
   is_active: boolean
+  created_at?: string
+  updated_at?: string
 }
 
 type BCStatus = 'BROUILLON' | 'A_VALIDER' | 'VALIDE' | 'REJETE' | 'COMMANDE' | 'RECEPTIONNE'
@@ -79,6 +89,7 @@ export const FournisseursPage: React.FC = () => {
   const [search, setSearch] = useState('')
 
   // Modals
+  const [showNewSupplierModal, setShowNewSupplierModal] = useState(false)
   const [showPoModal, setShowPoModal] = useState(false)
   const [showReceiveModal, setShowReceiveModal] = useState(false)
   const [selectedPoForReceive, setSelectedPoForReceive] = useState<PurchaseOrder | null>(null)
@@ -93,7 +104,7 @@ export const FournisseursPage: React.FC = () => {
   const [paymentAmount, setPaymentAmount] = useState<number>(0)
   const [paymentMode, setPaymentMode] = useState<'especes' | 'momo' | 'banque'>('banque')
 
-  // Chargement réel depuis Supabase
+  // Chargement réel depuis Supabase (table suppliers & purchase_orders)
   const loadData = useCallback(async () => {
     if (!company?.id) return
     setLoading(true)
@@ -103,7 +114,7 @@ export const FournisseursPage: React.FC = () => {
           .from('suppliers')
           .select('*')
           .eq('company_id', company.id)
-          .order('name'),
+          .order('company_name'),
         supabase
           .from('purchase_orders')
           .select('*')
@@ -113,7 +124,28 @@ export const FournisseursPage: React.FC = () => {
 
       if (sErr) throw sErr
 
-      setSuppliers(sData || [])
+      const mappedSuppliers: Supplier[] = (sData || []).map((s: any) => ({
+        id: s.id,
+        company_id: s.company_id,
+        code: s.code || `FOURN-${s.id.slice(0, 4)}`,
+        company_name: s.company_name || s.name || 'Fournisseur inconnu',
+        name: s.company_name || s.name || 'Fournisseur inconnu',
+        contact_person: s.contact_person || '',
+        ifu_number: s.ifu_number || '',
+        phone: s.phone || '',
+        email: s.email || '',
+        address: s.address || '',
+        city: s.city || 'Cotonou',
+        country: s.country || 'Bénin',
+        current_payable: Number(s.current_payable || s.current_debt || 0),
+        current_debt: Number(s.current_payable || s.current_debt || 0),
+        payment_terms_days: Number(s.payment_terms_days || 30),
+        is_active: s.is_active ?? true,
+        created_at: s.created_at,
+        updated_at: s.updated_at
+      }))
+
+      setSuppliers(mappedSuppliers)
 
       if (poData && !poErr) {
         const mappedPo: PurchaseOrder[] = poData.map((p: any) => ({
@@ -250,36 +282,71 @@ export const FournisseursPage: React.FC = () => {
     }
   }
 
-  // Règlement dette fournisseur
+  // Callback après création d'un fournisseur via la modale
+  const handleSupplierCreated = (createdSup: any) => {
+    const mapped: Supplier = {
+      id: createdSup.id,
+      company_id: createdSup.company_id,
+      code: createdSup.code,
+      company_name: createdSup.company_name || createdSup.name,
+      name: createdSup.company_name || createdSup.name,
+      contact_person: createdSup.contact_person || '',
+      ifu_number: createdSup.ifu_number || '',
+      phone: createdSup.phone || '',
+      email: createdSup.email || '',
+      address: createdSup.address || '',
+      city: createdSup.city || 'Cotonou',
+      country: createdSup.country || 'Bénin',
+      current_payable: Number(createdSup.current_payable || 0),
+      current_debt: Number(createdSup.current_payable || 0),
+      payment_terms_days: Number(createdSup.payment_terms_days || 30),
+      is_active: createdSup.is_active ?? true,
+      created_at: createdSup.created_at,
+      updated_at: createdSup.updated_at
+    }
+    setSuppliers((prev) => [mapped, ...prev])
+    setActiveTab('fournisseurs')
+  }
+
+  // Règlement dette fournisseur (colonne réelle current_payable)
   const handleProcessPayment = async () => {
     if (!selectedSupplierForPay || paymentAmount <= 0) return
     try {
-      const updatedDebt = Math.max(0, (selectedSupplierForPay.current_debt || 0) - paymentAmount)
+      const currentDebt = Number(selectedSupplierForPay.current_payable ?? selectedSupplierForPay.current_debt ?? 0)
+      const updatedDebt = Math.max(0, currentDebt - paymentAmount)
       await supabase
         .from('suppliers')
-        .update({ current_debt: updatedDebt })
+        .update({ current_payable: updatedDebt, updated_at: new Date().toISOString() })
         .eq('id', selectedSupplierForPay.id)
 
       setSuppliers((prev) =>
-        prev.map((s) => (s.id === selectedSupplierForPay.id ? { ...s, current_debt: updatedDebt } : s))
+        prev.map((s) => (s.id === selectedSupplierForPay.id ? { ...s, current_payable: updatedDebt, current_debt: updatedDebt } : s))
       )
 
       setShowPaymentModal(false)
-      toast.success('Règlement effectué', `${fmt(paymentAmount)} payés à ${selectedSupplierForPay.name}.`)
+      toast.success(
+        'Règlement effectué',
+        `${fmt(paymentAmount)} payés à ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}.`
+      )
     } catch (err: any) {
       toast.error('Erreur règlement', err.message)
     }
   }
 
-  // Filtrages
+  // Filtrages multi-critères
   const filteredSuppliers = suppliers.filter(
     (s) =>
       !search ||
-      s.name.toLowerCase().includes(search.toLowerCase()) ||
-      s.code.toLowerCase().includes(search.toLowerCase())
+      (s.company_name && s.company_name.toLowerCase().includes(search.toLowerCase())) ||
+      (s.name && s.name.toLowerCase().includes(search.toLowerCase())) ||
+      (s.code && s.code.toLowerCase().includes(search.toLowerCase())) ||
+      (s.phone && s.phone.toLowerCase().includes(search.toLowerCase())) ||
+      (s.ifu_number && s.ifu_number.includes(search)) ||
+      (s.contact_person && s.contact_person.toLowerCase().includes(search.toLowerCase())) ||
+      (s.city && s.city.toLowerCase().includes(search.toLowerCase()))
   )
 
-  const totalSupplierDebt = suppliers.reduce((sum, s) => sum + (s.current_debt || 0), 0)
+  const totalSupplierDebt = suppliers.reduce((sum, s) => sum + (s.current_payable || s.current_debt || 0), 0)
 
   return (
     <div className="space-y-4">
@@ -296,6 +363,16 @@ export const FournisseursPage: React.FC = () => {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Bouton Clairement Visible : + Nouveau Fournisseur */}
+          <button
+            onClick={() => setShowNewSupplierModal(true)}
+            className="px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm shadow-emerald-600/20 active:scale-95"
+            title="Créer et enregistrer un fournisseur avec la structure réelle Supabase"
+          >
+            <Plus className="w-4 h-4 stroke-[3]" />
+            <span>+ Nouveau Fournisseur</span>
+          </button>
+
           <button
             onClick={() => setActiveTab('bc')}
             className={clsx(
@@ -596,15 +673,33 @@ export const FournisseursPage: React.FC = () => {
         /* ── TAB 3 : RÉPERTOIRE FOURNISSEURS & CRÉANCES ───────────────────────── */
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                placeholder="Rechercher fournisseur..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
-              />
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                <Truck className="w-4 h-4 text-indigo-600" />
+                Répertoire des Fournisseurs ({suppliers.length})
+              </h3>
+              <p className="text-xs text-slate-500">
+                Gestion des coordonnées, numéro IFU, délais de paiement et suivi des dettes
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="relative w-64">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="Rechercher nom, code, IFU, tél..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <button
+                onClick={() => setShowNewSupplierModal(true)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm whitespace-nowrap active:scale-95"
+              >
+                <Plus className="w-4 h-4 stroke-[3]" />
+                <span>+ Nouveau Fournisseur</span>
+              </button>
             </div>
           </div>
 
@@ -612,49 +707,110 @@ export const FournisseursPage: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                 <tr>
-                  <th className="p-3">Code</th>
-                  <th className="p-3">Nom du Fournisseur</th>
-                  <th className="p-3">Contact</th>
-                  <th className="p-3">Ville</th>
-                  <th className="p-3 text-right">Dette Restante (FCFA)</th>
+                  <th className="p-3">Code & Statut</th>
+                  <th className="p-3">Raison Sociale / Fournisseur</th>
+                  <th className="p-3">Numéro IFU</th>
+                  <th className="p-3">Contact Direct</th>
+                  <th className="p-3">Ville & Localisation</th>
+                  <th className="p-3 text-center">Délai Règlement</th>
+                  <th className="p-3 text-right">Dette Due (FCFA)</th>
                   <th className="p-3 text-center">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
                 {filteredSuppliers.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-400 font-sans">
-                      Aucun fournisseur enregistré. Créez-en un lors de la création d'un Bon de Commande.
+                    <td colSpan={8} className="p-8 text-center text-slate-400 font-sans">
+                      <div className="flex flex-col items-center justify-center gap-2 py-4">
+                        <Truck className="w-10 h-10 text-slate-300 stroke-1" />
+                        <p className="font-semibold text-slate-600">Aucun fournisseur trouvé</p>
+                        <p className="text-xs text-slate-400">
+                          {search
+                            ? 'Aucun résultat ne correspond à vos filtres.'
+                            : 'Enregistrez votre premier fournisseur pour passer des commandes.'}
+                        </p>
+                        <button
+                          onClick={() => setShowNewSupplierModal(true)}
+                          className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm active:scale-95"
+                        >
+                          <Plus className="w-4 h-4 stroke-[3]" /> + Nouveau Fournisseur
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ) : (
                   filteredSuppliers.map((s) => (
                     <tr key={s.id} className="hover:bg-slate-50/80 transition font-sans">
-                      <td className="p-3 font-mono font-bold text-slate-900">{s.code}</td>
-                      <td className="p-3 font-bold text-slate-800">{s.name}</td>
-                      <td className="p-3 text-slate-600 font-mono">{s.phone}</td>
-                      <td className="p-3 text-slate-600">{s.city || 'Cotonou'}</td>
+                      <td className="p-3 font-mono">
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-bold text-slate-900">{s.code}</span>
+                          <span
+                            className={clsx(
+                              'w-2 h-2 rounded-full inline-block',
+                              s.is_active ? 'bg-emerald-500' : 'bg-slate-300'
+                            )}
+                            title={s.is_active ? 'Fournisseur actif' : 'Fournisseur inactif'}
+                          />
+                        </div>
+                      </td>
+                      <td className="p-3">
+                        <p className="font-bold text-slate-900">{s.company_name || s.name}</p>
+                        {s.contact_person && (
+                          <p className="text-[11px] text-slate-500 flex items-center gap-1 mt-0.5">
+                            <span className="text-slate-400 font-normal">Contact :</span>
+                            <span className="font-medium text-slate-700">{s.contact_person}</span>
+                          </p>
+                        )}
+                      </td>
+                      <td className="p-3 font-mono">
+                        {s.ifu_number ? (
+                          <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200/60 rounded text-[11px] font-bold">
+                            {s.ifu_number}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-[11px] italic">Non renseigné</span>
+                        )}
+                      </td>
+                      <td className="p-3 text-slate-700 font-mono">
+                        <div>
+                          <p className="font-bold text-slate-900">{s.phone}</p>
+                          {s.email && <p className="text-[11px] text-slate-500 lowercase font-sans">{s.email}</p>}
+                        </div>
+                      </td>
+                      <td className="p-3 text-slate-600">
+                        <p className="font-semibold text-slate-800">{s.city || 'Cotonou'}</p>
+                        {s.address && (
+                          <p className="text-[10px] text-slate-400 truncate max-w-xs">{s.address}</p>
+                        )}
+                      </td>
+                      <td className="p-3 text-center font-mono">
+                        <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[11px]">
+                          {s.payment_terms_days ? `${s.payment_terms_days} j` : 'Comptant'}
+                        </span>
+                      </td>
                       <td className="p-3 text-right font-black font-mono">
-                        {s.current_debt > 0 ? (
-                          <span className="text-rose-600 bg-rose-50 px-2 py-0.5 rounded">
-                            {fmt(s.current_debt)}
+                        {(s.current_payable || s.current_debt || 0) > 0 ? (
+                          <span className="text-rose-600 bg-rose-50 px-2 py-0.5 rounded font-black">
+                            {fmt(s.current_payable || s.current_debt || 0)}
                           </span>
                         ) : (
                           <span className="text-emerald-600">0 FCFA</span>
                         )}
                       </td>
                       <td className="p-3 text-center">
-                        {s.current_debt > 0 && (
+                        {(s.current_payable || s.current_debt || 0) > 0 ? (
                           <button
                             onClick={() => {
                               setSelectedSupplierForPay(s)
-                              setPaymentAmount(s.current_debt)
+                              setPaymentAmount(s.current_payable || s.current_debt || 0)
                               setShowPaymentModal(true)
                             }}
-                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold"
+                            className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm"
                           >
                             Régler
                           </button>
+                        ) : (
+                          <span className="text-slate-400 text-[11px]">—</span>
                         )}
                       </td>
                     </tr>
@@ -823,7 +979,84 @@ export const FournisseursPage: React.FC = () => {
         </div>
       </ModalPortal>
 
+      {/* ── MODAL RÈGLEMENT FOURNISSEUR ────────────────────────────────────────── */}
+      <ModalPortal isOpen={showPaymentModal && !!selectedSupplierForPay} onClose={() => setShowPaymentModal(false)} id="modal-supplier-pay">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-emerald-600" />
+              Règlement Dette Fournisseur
+            </h3>
+            <button onClick={() => setShowPaymentModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="space-y-4 text-xs">
+            <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+              <p className="text-slate-500 text-[11px]">Fournisseur bénéficiaire :</p>
+              <p className="font-bold text-sm text-slate-900">{selectedSupplierForPay?.company_name || selectedSupplierForPay?.name}</p>
+              <div className="flex justify-between mt-2 pt-2 border-t border-slate-200 text-xs">
+                <span className="text-slate-500">Dette exigible actuelle :</span>
+                <span className="font-black font-mono text-rose-600">
+                  {fmt(selectedSupplierForPay?.current_payable || selectedSupplierForPay?.current_debt || 0)}
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Montant à régler (FCFA)</label>
+              <input
+                type="number"
+                min={1}
+                max={selectedSupplierForPay?.current_payable || selectedSupplierForPay?.current_debt || 0}
+                value={paymentAmount}
+                onChange={(e) => setPaymentAmount(parseFloat(e.target.value) || 0)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-bold text-sm text-indigo-900 focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Mode de règlement</label>
+              <select
+                value={paymentMode}
+                onChange={(e) => setPaymentMode(e.target.value as any)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="banque">Virement Bancaire / Chèque</option>
+                <option value="momo">Mobile Money (MTN / Moov / Celtiis)</option>
+                <option value="especes">Espèces (Caisse)</option>
+              </select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowPaymentModal(false)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl font-semibold hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleProcessPayment}
+                disabled={paymentAmount <= 0}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                <Check className="w-4 h-4" /> Confirmer le Règlement
+              </button>
+            </div>
+          </div>
+        </div>
+      </ModalPortal>
+
       {/* Modals de création et réception */}
+      <NewSupplierModal
+        isOpen={showNewSupplierModal}
+        onClose={() => setShowNewSupplierModal(false)}
+        onSuccess={handleSupplierCreated}
+        nextSupplierIndex={suppliers.length + 1}
+      />
       <PurchaseOrderModal
         isOpen={showPoModal}
         onClose={() => setShowPoModal(false)}

@@ -42,15 +42,23 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     // Charger fournisseurs et produits réels
     const fetchResources = async () => {
       const [{ data: sData }, { data: pData }] = await Promise.all([
-        supabase.from('suppliers').select('id, name, phone, city').eq('company_id', company.id).order('name'),
+        supabase.from('suppliers').select('id, company_name, phone, city').eq('company_id', company.id).order('company_name'),
         supabase.from('products').select('id, code, name, ucd, unit, cost_price').eq('company_id', company.id).order('name')
       ])
 
-      setSuppliers(sData || [])
+      const mappedSuppliers = (sData || []).map((s: any) => ({
+        id: s.id,
+        name: s.company_name || s.name,
+        company_name: s.company_name || s.name,
+        phone: s.phone,
+        city: s.city
+      }))
+
+      setSuppliers(mappedSuppliers)
       setProducts(pData || [])
 
-      if (sData && sData.length > 0 && !selectedSupplierId) {
-        setSelectedSupplierId(sData[0].id)
+      if (mappedSuppliers.length > 0 && !selectedSupplierId) {
+        setSelectedSupplierId(mappedSuppliers[0].id)
       }
       if (pData && pData.length > 0 && !selectedProductId) {
         setSelectedProductId(pData[0].id)
@@ -80,17 +88,21 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       const { data, error } = await supabase.from('suppliers').insert({
         company_id: company.id,
         code: autoCode,
-        name: newSupName.trim(),
+        company_name: newSupName.trim(),
         phone: newSupPhone.trim(),
         city: newSupCity.trim(),
-        current_debt: 0,
+        current_payable: 0,
         is_active: true
       }).select().single()
 
       if (error) throw error
 
-      setSuppliers([...suppliers, data])
-      setSelectedSupplierId(data.id)
+      const mapped = {
+        ...data,
+        name: data.company_name || newSupName.trim()
+      }
+      setSuppliers([...suppliers, mapped])
+      setSelectedSupplierId(mapped.id)
       setShowNewSupplierInline(false)
       setNewSupName('')
       setNewSupPhone('')
