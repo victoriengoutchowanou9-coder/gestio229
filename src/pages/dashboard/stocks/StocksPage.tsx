@@ -44,6 +44,16 @@ interface InventoryItem {
   stockPhysique: number
   ecart: number
   valeurEcart: number
+  observation?: string
+}
+
+export interface InventoryHistoryRecord {
+  id: string
+  date: string
+  validated_by: string
+  items_count: number
+  total_ecart_valeur: number
+  items: InventoryItem[]
 }
 
 interface DailyStockRow {
@@ -60,7 +70,7 @@ interface DailyStockRow {
 }
 
 export const StocksPage: React.FC = () => {
-  const { company } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
 
   const [activeTab, setActiveTab] = useState<'double_stock' | 'inventaire' | 'fiche_journaliere'>('double_stock')
@@ -75,13 +85,23 @@ export const StocksPage: React.FC = () => {
   const [showTransferModal, setShowTransferModal] = useState(false)
   const [showValuationModal, setShowValuationModal] = useState(false)
 
-  // État Transfert de Stock (Magasin -> Vente)
+  // État Transfert Individuel (Magasin -> Vente)
   const [transferProdId, setTransferProdId] = useState('')
   const [transferQty, setTransferQty] = useState<number>(0)
   const [transferMotif, setTransferMotif] = useState('Réapprovisionnement Rayon Vente POS')
 
-  // État Inventaire Physique
+  // État Transfert en Masse (Magasin -> Vente)
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([])
+  const [showBulkTransferModal, setShowBulkTransferModal] = useState(false)
+  const [bulkTransferQtys, setBulkTransferQtys] = useState<Record<string, number>>({})
+  const [bulkTransferMotif, setBulkTransferMotif] = useState('Réapprovisionnement Rayon Vente POS')
+  const [isProcessingBulkTransfer, setIsProcessingBulkTransfer] = useState(false)
+
+  // État Inventaire Physique & Historique
   const [inventoryList, setInventoryList] = useState<InventoryItem[]>([])
+  const [inventoryHistory, setInventoryHistory] = useState<InventoryHistoryRecord[]>([])
+  const [selectedHistoryForPrint, setSelectedHistoryForPrint] = useState<InventoryHistoryRecord | null>(null)
+  const [showHistoryPrintModal, setShowHistoryPrintModal] = useState(false)
 
   // ─── Chargement réel depuis Supabase (zéro donnée fictive) ──────────────────
 
@@ -126,6 +146,17 @@ export const StocksPage: React.FC = () => {
     loadData()
   }, [loadData])
 
+  // Charger l'historique des inventaires
+  useEffect(() => {
+    if (!company?.id) return
+    const storedHistory = localStorage.getItem(`gestio_inventory_history_${company.id}`)
+    if (storedHistory) {
+      try {
+        setInventoryHistory(JSON.parse(storedHistory))
+      } catch (e) {}
+    }
+  }, [company?.id])
+
   // Synchroniser la grille d'inventaire quand les produits réels changent
   useEffect(() => {
     setInventoryList(
@@ -139,7 +170,8 @@ export const StocksPage: React.FC = () => {
           stockTheorique: totalTheo,
           stockPhysique: totalTheo,
           ecart: 0,
-          valeurEcart: 0
+          valeurEcart: 0,
+          observation: ''
         }
       })
     )
@@ -194,6 +226,90 @@ export const StocksPage: React.FC = () => {
     }
   }
 
+  // ─── Actions Double Stock : Transfert en Masse (Plusieurs Produits) ────────
+
+  const handleToggleSelectProduct = (productId: string) => {
+    setSelectedProductIds((prev) =>
+      prev.includes(productId) ? prev.filter((id) => id !== productId) : [...prev, productId]
+    )
+  }
+
+  const handleSelectAllProducts = () => {
+    const available = products.filter((p) => p.stock_magasin > 0).map((p) => p.id)
+    if (selectedProductIds.length === available.length && available.length > 0) {
+      setSelectedProductIds([])
+    } else {
+      setSelectedProductIds(available)
+    }
+  }
+
+  const handleOpenBulkTransferModal = () => {
+    const initialQtys: Record<string, number> = {}
+    selectedProductIds.forEach((id) => {
+      const prod = products.find((p) => p.id === id)
+      // Par défaut proposer 1 ou la totalité si < 1
+      initialQtys[id] = prod && prod.stock_magasin >= 1 ? 1 : (prod?.stock_magasin || 0)
+    })
+    setBulkTransferQtys(initialQtys)
+    setShowBulkTransferModal(true)
+  }
+
+  const handleExecuteBulkTransfer = async () => {
+    const itemsToTransfer = selectedProductIds
+      .map((id) => {
+        const prod = products.find((p) => p.id === id)
+        const qty = Number(bulkTransferQtys[id]) || 0
+        return { prod, qty }
+      })
+      .filter((item) => item.prod && item.qty > 0)
+
+    if (itemsToTransfer.length === 0) {
+      toast.error('Quantité requise', 'Veuillez saisir au moins une quantité supérieure à 0.')
+      return
+    }
+
+    for (const item of itemsToTransfer) {
+      if (item.qty > (item.prod?.stock_magasin || 0)) {
+        toast.error(
+          'Stock insuffisant',
+          `Quantité pour ${item.prod?.name} (${item.qty}) dépasse le stock magasin disponible (${item.prod?.stock_magasin}).`
+        )
+        return
+      }
+    }
+
+    setIsProcessingBulkTransfer(true)
+    try {
+      for (const item of itemsToTransfer) {
+        if (!item.prod) continue
+        const newMagasin = Math.round((item.prod.stock_magasin - item.qty) * 1000) / 1000
+        const newVente = Math.round((item.prod.stock_vente + item.qty) * 1000) / 1000
+
+        const { error } = await supabase
+          .from('products')
+          .update({
+            stock_magasin: newMagasin,
+            stock_vente: newVente
+          })
+          .eq('id', item.prod.id)
+
+        if (error) throw error
+      }
+
+      await loadData()
+      setSelectedProductIds([])
+      setShowBulkTransferModal(false)
+      toast.success(
+        'Transfert en masse validé !',
+        `${itemsToTransfer.length} produit(s) transféré(s) en 1 clic vers le Stock Vente POS.`
+      )
+    } catch (err: any) {
+      toast.error('Erreur transfert groupé', err.message)
+    } finally {
+      setIsProcessingBulkTransfer(false)
+    }
+  }
+
   // ─── Actions Inventaire Physique ──────────────────────────────────────────
 
   const handlePhysicalStockChange = (productId: string, val: number) => {
@@ -216,6 +332,12 @@ export const StocksPage: React.FC = () => {
     )
   }
 
+  const handleObservationChange = (productId: string, val: string) => {
+    setInventoryList((prev) =>
+      prev.map((item) => (item.productId === productId ? { ...item, observation: val } : item))
+    )
+  }
+
   const handleValidateInventory = async () => {
     try {
       // Mettre à jour chaque produit réaligné
@@ -234,9 +356,25 @@ export const StocksPage: React.FC = () => {
 
       await loadData()
       const totalEcarts = inventoryList.reduce((s, i) => s + i.valeurEcart, 0)
+
+      // Archiver la fiche d'inventaire dans l'historique
+      const newRecord: InventoryHistoryRecord = {
+        id: `inv-${Date.now()}`,
+        date: new Date().toISOString(),
+        validated_by: user?.full_name || 'Responsable Stock',
+        items_count: inventoryList.length,
+        total_ecart_valeur: totalEcarts,
+        items: JSON.parse(JSON.stringify(inventoryList))
+      }
+      const updatedHistory = [newRecord, ...inventoryHistory]
+      setInventoryHistory(updatedHistory)
+      if (company?.id) {
+        localStorage.setItem(`gestio_inventory_history_${company.id}`, JSON.stringify(updatedHistory))
+      }
+
       toast.success(
         'Inventaire validé !',
-        `Stock réaligné avec succès. Écart net valorisé : ${fmt(totalEcarts)}`
+        `Stock réaligné avec succès. Écart net valorisé : ${fmt(totalEcarts)}. Fiche archivée avec observations.`
       )
     } catch (err: any) {
       toast.error('Erreur inventaire', err.message)
@@ -408,6 +546,14 @@ export const StocksPage: React.FC = () => {
               />
             </div>
             <div className="flex items-center gap-2">
+              {selectedProductIds.length > 0 && (
+                <button
+                  onClick={handleOpenBulkTransferModal}
+                  className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm animate-in fade-in"
+                >
+                  <ArrowRightLeft className="w-3.5 h-3.5" /> Transférer la sélection ({selectedProductIds.length})
+                </button>
+              )}
               <button
                 onClick={() => setShowNewProductModal(true)}
                 className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
@@ -428,6 +574,18 @@ export const StocksPage: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                 <tr>
+                  <th className="p-3 text-center w-10">
+                    <input
+                      type="checkbox"
+                      checked={
+                        selectedProductIds.length > 0 &&
+                        selectedProductIds.length === products.filter((p) => p.stock_magasin > 0).length
+                      }
+                      onChange={handleSelectAllProducts}
+                      title="Tout sélectionner pour le transfert groupé"
+                      className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                    />
+                  </th>
                   <th className="p-3">Réf</th>
                   <th className="p-3">Désignation</th>
                   <th className="p-3">Unité</th>
@@ -441,13 +599,29 @@ export const StocksPage: React.FC = () => {
               <tbody className="divide-y divide-slate-100 font-mono">
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="p-8 text-center text-slate-400 font-sans">
+                    <td colSpan={9} className="p-8 text-center text-slate-400 font-sans">
                       {loading ? 'Chargement...' : 'Aucun produit trouvé dans cette entreprise.'}
                     </td>
                   </tr>
                 ) : (
                   filteredProducts.map((p) => (
-                    <tr key={p.id} className="hover:bg-slate-50/80 transition">
+                    <tr
+                      key={p.id}
+                      className={clsx(
+                        'hover:bg-slate-50/80 transition',
+                        selectedProductIds.includes(p.id) && 'bg-indigo-50/40'
+                      )}
+                    >
+                      <td className="p-3 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedProductIds.includes(p.id)}
+                          onChange={() => handleToggleSelectProduct(p.id)}
+                          disabled={p.stock_magasin <= 0}
+                          title={p.stock_magasin <= 0 ? 'Stock magasin vide' : 'Sélectionner pour transfert'}
+                          className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-30"
+                        />
+                      </td>
                       <td className="p-3 font-bold text-slate-900">{p.code}</td>
                       <td className="p-3 font-sans font-semibold text-slate-800">{p.name}</td>
                       <td className="p-3 font-sans text-slate-500">{p.unit}</td>
@@ -502,6 +676,7 @@ export const StocksPage: React.FC = () => {
                   <th className="p-3 text-center bg-amber-50/70 text-amber-900">Stock Physique Compté</th>
                   <th className="p-3 text-center">Écart (Qté)</th>
                   <th className="p-3 text-right">Valeur Écart (FCFA)</th>
+                  <th className="p-3">Observation</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
@@ -532,11 +707,74 @@ export const StocksPage: React.FC = () => {
                     <td className={clsx('p-3 text-right font-bold', item.valeurEcart < 0 ? 'text-red-600' : item.valeurEcart > 0 ? 'text-emerald-600' : 'text-slate-500')}>
                       {fmt(item.valeurEcart)}
                     </td>
+                    <td className="p-3 font-sans">
+                      <input
+                        type="text"
+                        placeholder="Remarque (perte, casse, vol, périmé...)"
+                        value={item.observation || ''}
+                        onChange={(e) => handleObservationChange(item.productId, e.target.value)}
+                        className="w-full min-w-[160px] p-1.5 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-emerald-500 bg-white"
+                      />
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+
+          {/* ── HISTORIQUE DES INVENTAIRES PASSÉS AVEC OPTION IMPRIMER ── */}
+          {inventoryHistory.length > 0 && (
+            <div className="pt-6 border-t border-slate-200 mt-6 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                    <ClipboardCheck className="w-4 h-4 text-emerald-600" />
+                    Historique des Inventaires Passés ({inventoryHistory.length})
+                  </h4>
+                  <p className="text-xs text-slate-500">Archives des contrôles physiques de stocks et observations consignées</p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5">Date & Heure</th>
+                      <th className="p-2.5">Responsable</th>
+                      <th className="p-2.5 text-center">Articles contrôlés</th>
+                      <th className="p-2.5 text-right">Écart Net Valorisé</th>
+                      <th className="p-2.5 text-center">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 font-sans">
+                    {inventoryHistory.map((hist) => (
+                      <tr key={hist.id} className="hover:bg-slate-50 transition">
+                        <td className="p-2.5 font-mono font-semibold text-slate-900">
+                          {new Date(hist.date).toLocaleString('fr-BJ')}
+                        </td>
+                        <td className="p-2.5 text-slate-600">{hist.validated_by}</td>
+                        <td className="p-2.5 text-center font-mono font-bold text-slate-700">{hist.items_count} réf</td>
+                        <td className={clsx(
+                          'p-2.5 text-right font-mono font-bold',
+                          hist.total_ecart_valeur < 0 ? 'text-red-600' : hist.total_ecart_valeur > 0 ? 'text-emerald-600' : 'text-slate-500'
+                        )}>
+                          {fmt(hist.total_ecart_valeur)}
+                        </td>
+                        <td className="p-2.5 text-center">
+                          <button
+                            onClick={() => { setSelectedHistoryForPrint(hist); setShowHistoryPrintModal(true); }}
+                            className="px-3 py-1 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-[11px] font-bold transition flex items-center gap-1 mx-auto shadow-sm"
+                          >
+                            <Printer className="w-3 h-3" /> Imprimer
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -728,6 +966,206 @@ export const StocksPage: React.FC = () => {
               </tfoot>
             </table>
           </div>
+        </div>
+      </ModalPortal>
+
+      {/* ── MODAL TRANSFERT EN MASSE (PLUSIEURS PRODUITS) ──────────────────── */}
+      <ModalPortal isOpen={showBulkTransferModal} onClose={() => setShowBulkTransferModal(false)} id="modal-bulk-transfer">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-2xl w-full border border-slate-200 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <div>
+              <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                <ArrowRightLeft className="w-5 h-5 text-indigo-600" />
+                Transfert en Masse : Magasin ➔ Rayon Vente POS
+              </h3>
+              <p className="text-xs text-slate-500">
+                Transférez {selectedProductIds.length} produit(s) sélectionné(s) en 1 seul clic
+              </p>
+            </div>
+            <button onClick={() => setShowBulkTransferModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="space-y-4 text-xs">
+            <div>
+              <label className="font-bold text-slate-700 block mb-1">Motif commun du transfert</label>
+              <input
+                type="text"
+                value={bulkTransferMotif}
+                onChange={(e) => setBulkTransferMotif(e.target.value)}
+                placeholder="Ex: Réapprovisionnement Rayon Vente POS..."
+                className="w-full p-2 border border-slate-200 rounded-xl text-xs bg-slate-50"
+              />
+            </div>
+
+            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-2.5">Article</th>
+                    <th className="p-2.5 text-center">Dispo Magasin</th>
+                    <th className="p-2.5 text-center">Rayon Actuel</th>
+                    <th className="p-2.5 text-center bg-indigo-50/70 text-indigo-900">Qté à Transférer</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {selectedProductIds.map((id) => {
+                    const prod = products.find((p) => p.id === id)
+                    if (!prod) return null
+                    const val = bulkTransferQtys[id] ?? 0
+                    return (
+                      <tr key={id} className="hover:bg-slate-50">
+                        <td className="p-2.5 font-sans font-medium text-slate-800">
+                          {prod.name} <span className="text-slate-400 font-mono text-[11px]">({prod.code})</span>
+                        </td>
+                        <td className="p-2.5 text-center font-bold text-indigo-800">
+                          {prod.stock_magasin} {prod.unit}
+                        </td>
+                        <td className="p-2.5 text-center font-bold text-emerald-800">
+                          {prod.stock_vente} {prod.unit}
+                        </td>
+                        <td className="p-2.5 text-center bg-indigo-50/40">
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            max={prod.stock_magasin}
+                            value={val || ''}
+                            onChange={(e) =>
+                              setBulkTransferQtys((prev) => ({
+                                ...prev,
+                                [id]: Number(e.target.value)
+                              }))
+                            }
+                            placeholder="0"
+                            className="w-24 p-1.5 text-center font-bold font-mono border border-indigo-200 rounded-lg text-xs bg-white focus:ring-2 focus:ring-indigo-500"
+                          />
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex gap-2 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowBulkTransferModal(false)}
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold hover:bg-slate-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleExecuteBulkTransfer}
+                disabled={isProcessingBulkTransfer}
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md shadow-indigo-600/20 disabled:opacity-50"
+              >
+                <Check className="w-4 h-4" />
+                {isProcessingBulkTransfer ? 'Transfert en cours...' : `Valider tous les transferts (${selectedProductIds.length})`}
+              </button>
+            </div>
+          </div>
+        </div>
+      </ModalPortal>
+
+      {/* ── MODAL IMPRESSION FICHE D'INVENTAIRE OFFICIELLE ────────────────────── */}
+      <ModalPortal isOpen={showHistoryPrintModal} onClose={() => setShowHistoryPrintModal(false)} id="modal-inventory-print">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-3xl w-full border border-slate-200 max-h-[92vh] overflow-y-auto">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <div>
+              <h3 className="font-black text-slate-900 text-base">Fiche d'Inventaire Physique avec Observations</h3>
+              <p className="text-xs text-slate-500">Document d'audit et régularisation conforme SYSCOHADA</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => window.print()}
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm"
+              >
+                <Printer className="w-3.5 h-3.5" /> Imprimer
+              </button>
+              <button onClick={() => setShowHistoryPrintModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          </div>
+
+          {selectedHistoryForPrint && (
+            <div className="p-5 bg-white border border-slate-200 rounded-2xl space-y-4 text-xs font-sans">
+              <div className="flex justify-between border-b border-slate-200 pb-3">
+                <div>
+                  <h2 className="font-black uppercase text-base text-slate-900">{company?.name || 'ENTREPRISE'}</h2>
+                  <p className="text-slate-500">IFU : {company?.ifu_number || 'Non renseigné'}</p>
+                  <p className="text-slate-500">{company?.address || 'Bénin'}</p>
+                </div>
+                <div className="text-right">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
+                    FICHE D'INVENTAIRE PHYSIQUE
+                  </span>
+                  <p className="font-bold text-slate-800 mt-1">Date : {new Date(selectedHistoryForPrint.date).toLocaleString('fr-BJ')}</p>
+                  <p className="text-slate-500">Responsable : {selectedHistoryForPrint.validated_by}</p>
+                </div>
+              </div>
+
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 font-bold text-slate-800 border-b border-slate-200">
+                  <tr>
+                    <th className="p-2">Code</th>
+                    <th className="p-2">Désignation</th>
+                    <th className="p-2 text-center">Théorique</th>
+                    <th className="p-2 text-center">Compté</th>
+                    <th className="p-2 text-center">Écart</th>
+                    <th className="p-2 text-right">Valeur Écart</th>
+                    <th className="p-2">Observation / Motif</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {selectedHistoryForPrint.items.map((it, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50">
+                      <td className="p-2 font-bold text-slate-800">{it.code}</td>
+                      <td className="p-2 font-sans font-medium text-slate-800">{it.name}</td>
+                      <td className="p-2 text-center text-slate-600">{it.stockTheorique}</td>
+                      <td className="p-2 text-center font-bold text-slate-900">{it.stockPhysique}</td>
+                      <td className="p-2 text-center font-bold">
+                        <span className={clsx(
+                          'px-1.5 py-0.5 rounded text-[11px]',
+                          it.ecart === 0 ? 'text-slate-500' : it.ecart > 0 ? 'text-emerald-700' : 'text-red-700'
+                        )}>
+                          {it.ecart > 0 ? `+${it.ecart}` : it.ecart}
+                        </span>
+                      </td>
+                      <td className={clsx('p-2 text-right font-bold', it.valeurEcart < 0 ? 'text-red-600' : it.valeurEcart > 0 ? 'text-emerald-600' : 'text-slate-500')}>
+                        {fmt(it.valeurEcart)}
+                      </td>
+                      <td className="p-2 font-sans text-slate-600 italic">
+                        {it.observation || '—'}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300">
+                  <tr>
+                    <td colSpan={5} className="p-2 text-right uppercase">Écart Net Global :</td>
+                    <td className="p-2 text-right font-mono">{fmt(selectedHistoryForPrint.total_ecart_valeur)}</td>
+                    <td className="p-2 text-slate-500 font-sans text-[11px]">{selectedHistoryForPrint.items_count} références</td>
+                  </tr>
+                </tfoot>
+              </table>
+
+              <div className="grid grid-cols-2 gap-8 pt-8 border-t border-slate-200 text-center">
+                <div className="space-y-12">
+                  <p className="font-bold text-slate-700">Le Responsable d'Inventaire</p>
+                  <p className="text-slate-400 italic text-[11px]">Signature & Date</p>
+                </div>
+                <div className="space-y-12">
+                  <p className="font-bold text-slate-700">La Direction / Gérant</p>
+                  <p className="text-slate-400 italic text-[11px]">Signature & Cachet</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </ModalPortal>
 

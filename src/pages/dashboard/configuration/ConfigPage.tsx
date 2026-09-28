@@ -30,6 +30,7 @@ export const ConfigPage: React.FC = () => {
     city: 'Cotonou',
     phone: '',
     email: '',
+    logo_url: '',
     currency: 'FCFA',
     tva_default_rate: 18,
     aib_default_rate: 1,
@@ -91,6 +92,7 @@ export const ConfigPage: React.FC = () => {
         city: company.city || 'Cotonou',
         phone: company.phone || '',
         email: company.email || '',
+        logo_url: company.logo_url || '',
         currency: company.currency || 'FCFA',
         tva_default_rate: company.tva_default_rate ?? 18,
         aib_default_rate: company.aib_default_rate ?? 1,
@@ -149,6 +151,13 @@ export const ConfigPage: React.FC = () => {
         .eq('id', company.id)
 
       if (error) throw error
+
+      // Persistance locale des adresses emails de clôture
+      localStorage.setItem(
+        `gestio_closure_emails_${company.id}`,
+        JSON.stringify([form.closure_email_1, form.closure_email_2, form.closure_email_3].filter(Boolean))
+      )
+
       toast.success('Configuration sauvegardée avec succès')
       await refreshTenantContext()
     } catch (err: any) {
@@ -396,6 +405,33 @@ export const ConfigPage: React.FC = () => {
                   <option value="SA">SA (Société Anonyme)</option>
                   <option value="GIE">GIE (Groupement d'Intérêt Économique)</option>
                 </select>
+              </div>
+            </div>
+
+            {/* Logo de l'Entreprise */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-600 mb-1">
+                Logo de l'Entreprise (s'affiche sur les factures A4 et les tickets de caisse)
+              </label>
+              <div className="flex items-center gap-3">
+                {form.logo_url ? (
+                  <img
+                    src={form.logo_url}
+                    alt="Aperçu logo"
+                    className="w-12 h-12 object-contain rounded-xl border border-slate-200 p-1 bg-white flex-shrink-0"
+                  />
+                ) : (
+                  <div className="w-12 h-12 rounded-xl bg-slate-100 border border-dashed border-slate-300 flex items-center justify-center text-slate-400 text-[10px] font-bold flex-shrink-0">
+                    Logo
+                  </div>
+                )}
+                <input
+                  type="text"
+                  value={form.logo_url}
+                  onChange={(e) => setForm({ ...form, logo_url: e.target.value })}
+                  placeholder="Lien ou URL directe vers l'image du logo (ex: https://...)"
+                  className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
+                />
               </div>
             </div>
 

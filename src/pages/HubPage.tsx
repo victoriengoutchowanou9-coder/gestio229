@@ -38,16 +38,17 @@ const SECTOR_ROUTE_MAP: Record<string, string> = {
 
 const HubPage: React.FC = () => {
   const navigate = useNavigate()
-  const { company, tenantCtx } = useAuthStore()
+  const { company, tenantCtx, logout } = useAuthStore()
 
   // ─── Auto-sync : reconstruire les activités depuis Supabase si localStorage vide ───
   useEffect(() => {
+    localStorage.removeItem('gestio229_test_dataset_active')
     const existing = localStorage.getItem(STORAGE_KEY)
     if (existing) {
-      // Vérifier que les données sont valides (non vides)
       try {
         const parsed = JSON.parse(existing)
-        if (Array.isArray(parsed) && parsed.length > 0) return
+        const valid = Array.isArray(parsed) && parsed.filter((a: any) => !a.id.startsWith('test-act-'))
+        if (valid && valid.length > 0) return
       } catch {
         // Données corrompues → reconstruire
       }
@@ -124,12 +125,23 @@ const HubPage: React.FC = () => {
     navigate('/dashboard/configuration')
   }
 
+  const handleLogout = async () => {
+    await logout()
+    navigate('/login')
+  }
+
+  const handleOpenSubscription = () => {
+    navigate('/dashboard/abonnement')
+  }
+
   return (
     <MultiservicesHub
       companyName={company?.name}
       companyIfu={(company as any)?.ifu_number}
       onSelectSector={handleSelectSector}
       onOpenOnboarding={handleOpenOnboarding}
+      onLogout={handleLogout}
+      onOpenSubscription={handleOpenSubscription}
     />
   )
 }

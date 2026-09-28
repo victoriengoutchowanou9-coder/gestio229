@@ -22,6 +22,7 @@ import {
   Archive,
   AlertTriangle,
   RotateCcw as RestoreIcon,
+  LogOut,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 
@@ -59,63 +60,15 @@ export interface MultiservicesHubProps {
   companyRegime?: string;
   onSelectSector?: (sectorSlug: string, activityId: string, activityName?: string, location?: string) => void;
   onOpenOnboarding?: (sectorSlug: string) => void;
+  onLogout?: () => void;
+  onOpenSubscription?: () => void;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES & JEU DE TEST (VALEURS DU CAHIER DE CHARGES)
+// CONSTANTES (SANS DONNÉES FICTIVES)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'gestio229_hub_sectors_v3';
-const TEST_FLAG_KEY = 'gestio229_test_dataset_active';
-
-/**
- * Données de test issues fidèlement du cahier des charges (Partie 3, 4 et 5).
- * Ces données sont injectées UNIQUEMENT pour valider les tests et peuvent être purgées à 100%.
- */
-const TEST_DATASET: ActivityEntry[] = [
-  {
-    id: 'test-act-1',
-    sectorSlug: 'poissonnerie',
-    sectorLabel: 'Poissonnerie & Surgelés',
-    sectorIcon: '🐟',
-    sectorColor: '#06B6D4',
-    name: 'POISSONNERIE DIEU FERA',
-    location: 'Calavi',
-    manager: 'Adjoua Kossou',
-    status: 'ACTIVE',
-    isConfigured: true,
-    // Valeurs Jour (Partie 5 : CA 850 000 / Dépenses 120 000 / Marge 210 000 F CFA)
-    revenue: 850000,
-    expenses: 120000,
-    netMargin: 210000,
-    // Valeurs Mois (Partie 4 : CA mois 13 200 000 / Dépenses 4 100 000 / Marge 3 350 000 F CFA)
-    monthRevenue: 13200000,
-    monthExpenses: 4100000,
-    monthNetMargin: 3350000,
-  },
-  {
-    id: 'test-act-2',
-    sectorSlug: 'quincaillerie',
-    sectorLabel: 'Quincaillerie & Matériaux BTP',
-    sectorIcon: '🔧',
-    sectorColor: '#3B82F6',
-    name: 'QUINCAILLERIE MODERNE',
-    location: 'Cotonou - Sainte Rita',
-    manager: 'Marc Agossou',
-    status: 'ACTIVE',
-    isConfigured: true,
-    // Valeurs Jour (CA 1 000 000 / Dépenses 300 000 / Marge 420 000 F CFA)
-    revenue: 1000000,
-    expenses: 300000,
-    netMargin: 420000,
-    // Valeurs Mois (CA mois 12 200 000 / Dépenses 4 100 000 / Marge 3 100 000 F CFA)
-    monthRevenue: 12200000,
-    monthExpenses: 4100000,
-    monthNetMargin: 3100000,
-  },
-];
-// Totaux Jour attendus : CA = 1 850 000 / Dépenses = 420 000 / Marge = 630 000 F CFA
-// Totaux Mois attendus (PARTIE 4) : CA = 25 400 000 / Dépenses = 8 200 000 / Marge = 6 450 000 F CFA
 
 const EMPTY_FORM = {
   sectorSlug: '',
@@ -146,10 +99,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   companyRegime = 'Réel Normal',
   onSelectSector,
   onOpenOnboarding,
+  onLogout,
+  onOpenSubscription,
 }) => {
   // ── State ──────────────────────────────────────────────────────────────────
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
-  const [isTestDataActive, setIsTestDataActive] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -182,13 +136,17 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   useEffect(() => {
     const loadFromStorage = () => {
       try {
+        localStorage.removeItem('gestio229_test_dataset_active');
         const raw = localStorage.getItem(STORAGE_KEY);
         if (raw) {
           const parsed: ActivityEntry[] = JSON.parse(raw);
-          setActivities(parsed);
+          // Purger toute ancienne donnée de test si présente
+          const realOnly = parsed.filter((a) => !a.id.startsWith('test-act-'));
+          if (realOnly.length !== parsed.length) {
+            localStorage.setItem(STORAGE_KEY, JSON.stringify(realOnly));
+          }
+          setActivities(realOnly);
         }
-        const testFlag = localStorage.getItem(TEST_FLAG_KEY) === 'true';
-        setIsTestDataActive(testFlag);
       } catch {
         // ignore
       }
@@ -206,19 +164,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     setActivities(data);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   }, []);
-
-  // ── Dataset test & purge ───────────────────────────────────────────────────
-  const injectTestDataset = () => {
-    persist(TEST_DATASET);
-    setIsTestDataActive(true);
-    localStorage.setItem(TEST_FLAG_KEY, 'true');
-  };
-
-  const purgeTestDataset = () => {
-    persist([]);
-    setIsTestDataActive(false);
-    localStorage.removeItem(TEST_FLAG_KEY);
-  };
 
   // ── Filtrage des activités actives vs archivées (PARTIE 9) ─────────────────
   const activeActivities = useMemo(
@@ -373,12 +318,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                 HUB CENTRAL MULTISERVICES — GESTIO 229
               </span>
               <span className="text-xs text-slate-400 font-mono">Bénin • UEMOA (FCFA)</span>
-              {isTestDataActive && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-500/20 text-amber-400 border border-amber-500/40">
-                  <FlaskConical size={11} />
-                  DONNÉES TEST DU CAHIER ACTIVES
-                </span>
-              )}
             </div>
 
             {companyName ? (
@@ -424,32 +363,26 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               <Settings size={14} /> Entreprise
             </button>
             <button
-              onClick={() => setShowSubscriptionModal(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+              onClick={onOpenSubscription || (() => setShowSubscriptionModal(true))}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition-colors shadow-sm shadow-indigo-600/20"
             >
-              <CreditCard size={14} /> Licence
+              <CreditCard size={14} /> Abonnement
             </button>
-            {isTestDataActive ? (
-              <button
-                onClick={purgeTestDataset}
-                className="flex items-center gap-1.5 px-3 py-2 bg-rose-900/40 hover:bg-rose-800/60 border border-rose-600/50 rounded-xl text-xs font-bold text-rose-400 hover:text-rose-300 transition-colors"
-              >
-                <RotateCcw size={13} /> Purger données test
-              </button>
-            ) : (
-              <button
-                onClick={injectTestDataset}
-                className="flex items-center gap-1.5 px-3 py-2 bg-amber-900/30 hover:bg-amber-800/40 border border-amber-600/40 rounded-xl text-xs font-bold text-amber-400 hover:text-amber-300 transition-colors"
-              >
-                <FlaskConical size={13} /> Injecter données test
-              </button>
-            )}
             <button
               onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}
               className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white transition-colors shadow-md shadow-emerald-500/20"
             >
               <Plus size={14} /> Ajouter une activité
             </button>
+            {onLogout && (
+              <button
+                onClick={onLogout}
+                title="Se déconnecter de la session"
+                className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/50 rounded-xl text-xs font-semibold text-slate-300 hover:text-rose-300 transition-colors"
+              >
+                <LogOut size={14} /> Déconnexion
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -577,12 +510,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                 className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-bold text-white transition-colors"
               >
                 <Plus size={16} /> Ajouter une activité
-              </button>
-              <button
-                onClick={injectTestDataset}
-                className="flex items-center gap-2 px-5 py-2.5 bg-amber-900/30 hover:bg-amber-800/40 border border-amber-600/40 rounded-xl text-sm font-bold text-amber-400 transition-colors"
-              >
-                <FlaskConical size={15} /> Charger l'exemple du cahier
               </button>
             </div>
           </div>

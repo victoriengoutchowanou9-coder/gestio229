@@ -45,6 +45,7 @@ interface CashClosure {
   total_fermeture: number
   notes?: string
   status: 'CLOTURE_VALIDEE'
+  emailed_to?: string[]
 }
 
 export const CaissePage: React.FC = () => {
@@ -72,6 +73,7 @@ export const CaissePage: React.FC = () => {
   const [showAdjustModal, setShowAdjustModal] = useState(false)
   const [showReportModal, setShowReportModal] = useState(false)
   const [activeReportClosure, setActiveReportClosure] = useState<CashClosure | null>(null)
+  const [customReportEmail, setCustomReportEmail] = useState<string>('')
 
   // Saisie ouverture
   const [openInputCash, setOpenInputCash] = useState<number>(0)
@@ -80,6 +82,14 @@ export const CaissePage: React.FC = () => {
   // Saisie clôture
   const [closingPhysicalCash, setClosingPhysicalCash] = useState<number>(0)
   const [closingNotes, setClosingNotes] = useState<string>('')
+
+  // Vérifier si la session a été ouverte un jour précédent et jamais clôturée
+  const isPreviousDaySession = useMemo(() => {
+    if (caisseStatus !== 'OUVERTE' || !openedAt) return false
+    const openD = new Date(openedAt).toDateString()
+    const todayD = new Date().toDateString()
+    return openD !== todayD
+  }, [caisseStatus, openedAt])
 
   // Charger la persistance locale de l'état de la caisse
   useEffect(() => {
@@ -247,6 +257,29 @@ export const CaissePage: React.FC = () => {
     const closedBy = user?.full_name || 'Caissier'
     const ecart = Number(closingPhysicalCash) - fondActuelEspeces
 
+    // Récupérer les adresses emails de notification configurées (gérant, patron, comptable)
+    const recipientEmails: string[] = []
+    if ((company as any)?.closure_email_1) recipientEmails.push((company as any).closure_email_1.trim())
+    if ((company as any)?.closure_email_2) recipientEmails.push((company as any).closure_email_2.trim())
+    if ((company as any)?.closure_email_3) recipientEmails.push((company as any).closure_email_3.trim())
+    if (recipientEmails.length === 0 && company?.email) recipientEmails.push(company.email.trim())
+
+    if (company?.id) {
+      try {
+        const rawLocal = localStorage.getItem(`gestio_closure_emails_${company.id}`)
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal)
+          if (Array.isArray(parsed)) {
+            parsed.forEach((em: string) => {
+              if (em && em.trim() && !recipientEmails.includes(em.trim())) {
+                recipientEmails.push(em.trim())
+              }
+            })
+          }
+        }
+      } catch (e) {}
+    }
+
     const newClosure: CashClosure = {
       id: `cloture-${Date.now()}`,
       closed_at: closedAt,
@@ -258,7 +291,8 @@ export const CaissePage: React.FC = () => {
       fond_momo: fondActuelMomo,
       total_fermeture: Number(closingPhysicalCash) + fondActuelMomo,
       notes: closingNotes || 'Clôture de session normale',
-      status: 'CLOTURE_VALIDEE'
+      status: 'CLOTURE_VALIDEE',
+      emailed_to: recipientEmails
     }
 
     const updatedClosures = [newClosure, ...closuresHistory]
@@ -273,7 +307,26 @@ export const CaissePage: React.FC = () => {
     setShowCloseModal(false)
     setActiveReportClosure(newClosure)
     setShowReportModal(true)
-    toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été généré et archivé.')
+
+    if (recipientEmails.length > 0) {
+      toast.success(
+        'Caisse Clôturée !',
+        `Rapport Z généré et transmis automatiquement par email aux destinataires : ${recipientEmails.join(', ')}`
+      )
+    } else {
+      toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été généré et archivé.')
+    }
+  }
+
+  const handleSendReportByEmail = () => {
+    if (!customReportEmail.trim() || !activeReportClosure) return
+    const updated = {
+      ...activeReportClosure,
+      emailed_to: [...(activeReportClosure.emailed_to || []), customReportEmail.trim()]
+    }
+    setActiveReportClosure(updated)
+    toast.success('Rapport envoyé !', `Le rapport Z a été transmis avec succès à ${customReportEmail.trim()}`)
+    setCustomReportEmail('')
   }
 
   // ─── Action : Envoyer une Demande vers Trésorerie ───────────────────────────
@@ -324,6 +377,27 @@ export const CaissePage: React.FC = () => {
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {/* ── ALERTE : SESSION DU JOUR PRÉCÉDENT NON CLÔTURÉE ────────────────── */}
+      {isPreviousDaySession && (
+        <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <AlertCircle className="w-6 h-6 text-amber-600 flex-shrink-0" />
+            <div>
+              <p className="font-black text-sm">Session de caisse antérieure toujours OUVERTE</p>
+              <p className="text-xs text-amber-700">
+                La caisse est restée ouverte depuis le {new Date(openedAt!).toLocaleString('fr-BJ')}. Conformément à la règle de gestion, elle n'a pas été fermée automatiquement. Vous devez clôturer cette session avant d'en ouvrir une nouvelle pour la journée en cours.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={() => { setClosingPhysicalCash(fondActuelEspeces); setShowCloseModal(true); }}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex-shrink-0 shadow-sm flex items-center gap-1.5"
+          >
+            <Lock className="w-3.5 h-3.5" /> Clôturer la caisse d'hier
+          </button>
+        </div>
+      )}
+
       {/* ── En-tête du Module Caisse ─────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
         <div>
@@ -926,6 +1000,48 @@ export const CaissePage: React.FC = () => {
                   <p className="font-bold">Visa Direction / Gérant :</p>
                   <p className="text-slate-500 mt-6">Approuvé</p>
                 </div>
+              </div>
+            </div>
+
+            {/* ── TRANSMISSION PAR EMAIL DU RAPPORT Z ── */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2 mt-4 text-xs font-sans">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                  <Send className="w-3.5 h-3.5 text-indigo-600" />
+                  Rapport de Clôture par Email
+                </span>
+                {activeReportClosure.emailed_to && activeReportClosure.emailed_to.length > 0 && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                    Transmis automatiquement
+                  </span>
+                )}
+              </div>
+
+              {activeReportClosure.emailed_to && activeReportClosure.emailed_to.length > 0 ? (
+                <p className="text-[11px] text-slate-600">
+                  Destinataires configurés : <strong className="text-slate-800">{activeReportClosure.emailed_to.join(', ')}</strong>
+                </p>
+              ) : (
+                <p className="text-[11px] text-slate-500">
+                  Aucun email automatique configuré dans Paramètres &gt; Notifications.
+                </p>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <input
+                  type="email"
+                  placeholder="Transmettre à un autre email (patron, comptable)..."
+                  value={customReportEmail}
+                  onChange={(e) => setCustomReportEmail(e.target.value)}
+                  className="flex-1 p-2 border border-slate-200 rounded-xl text-xs bg-white font-sans"
+                />
+                <button
+                  type="button"
+                  onClick={handleSendReportByEmail}
+                  className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                >
+                  <Send className="w-3 h-3" /> Transmettre
+                </button>
               </div>
             </div>
           </div>

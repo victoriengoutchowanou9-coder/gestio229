@@ -28,7 +28,9 @@ interface Expense {
   payment_method?: string
   expense_date: string
   notes?: string
+  created_by?: string
   created_at?: string
+  user_name?: string
 }
 
 export const CATEGORIES = [
@@ -49,15 +51,17 @@ export const DepensesPage: React.FC = () => {
   const { toast } = useUIStore()
 
   const [expenses, setExpenses] = useState<Expense[]>([])
+  const [usersList, setUsersList] = useState<{ id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
 
-  // Filtres Spécifiés au Point 13 : Période (Date début -> Date fin) et Catégorie
+  // Filtres : Période (Date début -> Date fin), Catégorie et Utilisateur
   const [startDate, setStartDate] = useState<string>('')
   const [endDate, setEndDate] = useState<string>('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
+  const [selectedUser, setSelectedUser] = useState<string>('all')
 
   const [form, setForm] = useState({
     title: '',
@@ -68,20 +72,40 @@ export const DepensesPage: React.FC = () => {
     notes: ''
   })
 
-  // Charger les dépenses réelles enregistrées dans Supabase
+  // Charger les dépenses réelles et les utilisateurs enregistrés dans Supabase
   const loadExpenses = useCallback(async () => {
     if (!company?.id) return
     setLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('expenses')
-        .select('*')
-        .eq('company_id', company.id)
-        .order('expense_date', { ascending: false })
+      const [{ data, error }, { data: profiles }] = await Promise.all([
+        supabase
+          .from('expenses')
+          .select('*')
+          .eq('company_id', company.id)
+          .order('expense_date', { ascending: false }),
+        supabase
+          .from('user_profiles')
+          .select('id, full_name, username')
+          .eq('company_id', company.id)
+      ])
 
       if (error) throw error
+
+      const userMap = new Map<string, string>()
+      if (profiles) {
+        profiles.forEach((p: any) => {
+          userMap.set(p.id, p.full_name || p.username || 'Utilisateur')
+        })
+        setUsersList(profiles.map((p: any) => ({ id: p.id, name: p.full_name || p.username || 'Utilisateur' })))
+      }
+
+      const mapped = (data || []).map((exp: any) => ({
+        ...exp,
+        user_name: exp.created_by ? userMap.get(exp.created_by) || 'Utilisateur' : 'Non précisé'
+      }))
+
       // AUCUNE donnée fictive en fallback
-      setExpenses(data || [])
+      setExpenses(mapped)
     } catch (err: any) {
       console.error('Erreur chargement dépenses :', err)
       setExpenses([])
@@ -113,7 +137,25 @@ export const DepensesPage: React.FC = () => {
       })
 
       if (error) throw error
-      toast.success('Dépense enregistrée avec succès !')
+
+      // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse
+      if (form.payment_method === 'especes' && company?.id) {
+        try {
+          const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+          if (cashStateRaw) {
+            const cState = JSON.parse(cashStateRaw)
+            cState.initialCash = Math.max(0, (Number(cState.initialCash) || 0) - numAmount)
+            localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
+          }
+        } catch (e) {}
+      }
+
+      toast.success(
+        'Dépense enregistrée avec succès !',
+        form.payment_method === 'especes'
+          ? `${fmt(numAmount)} déduits de la caisse opérationnelle.`
+          : undefined
+      )
       setShowModal(false)
       setForm({
         title: '',
@@ -131,7 +173,7 @@ export const DepensesPage: React.FC = () => {
     }
   }
 
-  // ─── Filtrage Réactif et Immédiat (Point 13) ──────────────────────────────
+  // ─── Filtrage Réactif et Immédiat (Date, Catégorie, Utilisateur, Mot-clé) ──
   const filteredExpenses = useMemo(() => {
     return expenses.filter((e) => {
       // 1. Filtre par recherche texte
@@ -147,7 +189,12 @@ export const DepensesPage: React.FC = () => {
         return false
       }
 
-      // 3. Filtre par période (Date début -> Date fin)
+      // 3. Filtre par utilisateur / auteur
+      if (selectedUser !== 'all' && e.created_by !== selectedUser) {
+        return false
+      }
+
+      // 4. Filtre par période (Date début -> Date fin)
       const expDate = e.expense_date || (e.created_at ? e.created_at.split('T')[0] : '')
       if (startDate && expDate < startDate) {
         return false
@@ -158,7 +205,7 @@ export const DepensesPage: React.FC = () => {
 
       return true
     })
-  }, [expenses, search, selectedCategory, startDate, endDate])
+  }, [expenses, search, selectedCategory, selectedUser, startDate, endDate])
 
   // Recalcul immédiat du total selon les filtres
   const totalFilteredExpenses = useMemo(() => {
@@ -169,6 +216,7 @@ export const DepensesPage: React.FC = () => {
     setStartDate('')
     setEndDate('')
     setSelectedCategory('all')
+    setSelectedUser('all')
     setSearch('')
   }
 
@@ -205,14 +253,14 @@ export const DepensesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Barre de Filtres Complète Exigée (Point 13) ──────────────────────── */}
+      {/* ── Barre de Filtres Complète Exigée : Date, Catégorie, Utilisateur ── */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
           <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5 uppercase tracking-wider">
             <Filter className="w-3.5 h-3.5 text-rose-600" />
-            Filtres de Période & Catégorie
+            Filtres de Période, Catégorie & Utilisateur
           </span>
-          {(startDate || endDate || selectedCategory !== 'all' || search) && (
+          {(startDate || endDate || selectedCategory !== 'all' || selectedUser !== 'all' || search) && (
             <button
               onClick={handleResetFilters}
               className="text-xs text-rose-600 hover:text-rose-800 font-bold"
@@ -222,7 +270,7 @@ export const DepensesPage: React.FC = () => {
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
           {/* Période : Date début */}
           <div>
             <label className="block text-slate-500 font-bold mb-1">Du (Date Début)</label>
@@ -261,6 +309,23 @@ export const DepensesPage: React.FC = () => {
               {CATEGORIES.map((cat) => (
                 <option key={cat} value={cat}>
                   {cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Utilisateur / Caissier */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-1">Utilisateur</label>
+            <select
+              value={selectedUser}
+              onChange={(e) => setSelectedUser(e.target.value)}
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+            >
+              <option value="all">Tous les utilisateurs</option>
+              {usersList.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
                 </option>
               ))}
             </select>
@@ -365,6 +430,7 @@ export const DepensesPage: React.FC = () => {
                   <th className="p-4">Date</th>
                   <th className="p-4">Libellé de la Dépense</th>
                   <th className="p-4">Catégorie</th>
+                  <th className="p-4">Utilisateur</th>
                   <th className="p-4 text-center">Mode Règlement</th>
                   <th className="p-4 text-right">Montant (FCFA)</th>
                   <th className="p-4">Notes / Réf</th>
@@ -385,6 +451,9 @@ export const DepensesPage: React.FC = () => {
                       <span className="px-2.5 py-1 bg-slate-100 text-slate-700 font-medium rounded-full text-[11px]">
                         {exp.category}
                       </span>
+                    </td>
+                    <td className="p-4 text-slate-600 text-xs font-medium">
+                      {exp.user_name || 'Utilisateur'}
                     </td>
                     <td className="p-4 text-center">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 capitalize">
