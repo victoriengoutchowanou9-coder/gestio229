@@ -1,6 +1,13 @@
-﻿import React, { useState } from 'react'
-import { PackageCheck, Check, X } from 'lucide-react'
+// =============================================================================
+// GESTIO 229 SaaS — Modale Réception Bon de Livraison Fournisseur (BL)
+// Règle B.1 : Seule la quantité réellement reçue alimente le Stock Magasin (UCD)
+// Contrôle des écarts de livraison et conformité
+// =============================================================================
+
+import React, { useState } from 'react'
+import { PackageCheck, Check, X, Printer, AlertTriangle } from 'lucide-react'
 import ModalPortal from './ModalPortal'
+import { formatFCFA } from '../../utils/tax'
 
 interface ReceiveBlModalProps {
   isOpen: boolean
@@ -11,13 +18,35 @@ interface ReceiveBlModalProps {
 
 export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose, po, onSuccess }) => {
   const [blRef, setBlRef] = useState('BL-FOURN-' + Math.floor(1000 + Math.random() * 9000))
-  const [receivedQty, setReceivedQty] = useState(po?.qtyUcd || 20)
+  const [receivedQty, setReceivedQty] = useState<number>(po?.qtyOrderedUcd || 1)
   const [conform, setConform] = useState(true)
+  const [receptionNotes, setReceptionNotes] = useState('')
+
+  const qtyOrdered = Number(po?.qtyOrderedUcd) || 0
+  const ecart = Math.round((receivedQty - qtyOrdered) * 1000) / 1000
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (onSuccess) onSuccess({ blRef, receivedQty, conform, poId: po?.id })
-    alert(`✅ Réception BL confirmée !\n\n- BL Fournisseur : ${blRef}\n- Quantité réceptionnée : ${receivedQty} UCD\n\nLe stock Magasin a été incrémenté avec succès.`)
+    if (receivedQty <= 0) {
+      alert('La quantité reçue doit être supérieure à 0.')
+      return
+    }
+
+    if (onSuccess) {
+      onSuccess({
+        blRef,
+        qtyOrdered,
+        receivedQty,
+        ecart,
+        conform,
+        notes: receptionNotes,
+        poId: po?.id,
+        productId: po?.productId,
+        productName: po?.productName,
+        supplierName: po?.supplierName
+      })
+    }
+
     onClose()
   }
 
@@ -31,7 +60,7 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
             </div>
             <div>
               <h3 className="font-extrabold text-sm text-white">📦 Réceptionner Bon de Livraison (BL)</h3>
-              <p className="text-[10px] text-emerald-400">Contrôle de conformité et intégration en Stock Magasin (UCD)</p>
+              <p className="text-[10px] text-emerald-400">Règle B.1 : Seule la quantité reçue entre au Stock Magasin</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-1">
@@ -43,11 +72,13 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
           <div className="bg-emerald-50 p-3.5 rounded-2xl border border-emerald-200 flex justify-between items-center">
             <div>
               <span className="text-[10px] text-emerald-800 font-bold uppercase">Bon de Commande Lié :</span>
-              <p className="font-mono font-black text-slate-900 text-sm">{po?.id || 'BC-2026-0012'}</p>
+              <p className="font-mono font-black text-slate-900 text-sm">{po?.reference || 'BC-2026'}</p>
+              <p className="text-slate-600 text-[11px]">{po?.productName}</p>
             </div>
             <div className="text-right">
               <span className="text-[10px] text-emerald-800 font-bold uppercase">Fournisseur :</span>
-              <p className="font-bold text-slate-900">{po?.supplier || 'SOBEBRA SA'}</p>
+              <p className="font-bold text-slate-900">{po?.supplierName || 'Fournisseur'}</p>
+              <p className="text-emerald-700 font-mono font-bold">Commandé : {qtyOrdered} {po?.ucdUnit || 'UCD'}</p>
             </div>
           </div>
 
@@ -62,17 +93,44 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
                 className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
               />
             </div>
+
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Quantité UCD Reçue *</label>
+              <label className="block font-bold text-slate-700 mb-1">
+                Quantité Réellement Reçue ({po?.ucdUnit || 'UCD'}) *
+              </label>
               <input
                 type="number"
+                step="any"
                 required
-                min="1"
+                min="0.001"
                 value={receivedQty}
                 onChange={(e) => setReceivedQty(Number(e.target.value))}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                className="w-full p-2.5 bg-white border border-emerald-300 focus:ring-2 focus:ring-emerald-500 rounded-xl font-mono font-black text-emerald-800 text-sm text-center"
               />
             </div>
+          </div>
+
+          {/* Écart de livraison si présent */}
+          {ecart !== 0 && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2 text-amber-900">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+              <p className="text-[11px]">
+                <strong>Attention Écart constaté :</strong> Quantité commandée : {qtyOrdered} vs Quantité reçue : {receivedQty}.
+                Écart de <strong>{ecart > 0 ? `+${ecart}` : ecart} {po?.ucdUnit || 'UCD'}</strong>.
+                Seule la quantité de <strong>{receivedQty}</strong> sera créditée en Stock Magasin.
+              </p>
+            </div>
+          )}
+
+          <div>
+            <label className="block font-bold text-slate-700 mb-1">Observations / Contrôle Qualité</label>
+            <input
+              type="text"
+              placeholder="Ex: Emballage intact, date de péremption vérifiée..."
+              value={receptionNotes}
+              onChange={(e) => setReceptionNotes(e.target.value)}
+              className="w-full p-2.5 border border-slate-200 rounded-xl"
+            />
           </div>
 
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 flex items-center space-x-2">
@@ -81,10 +139,10 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
               id="chk-conform"
               checked={conform}
               onChange={(e) => setConform(e.target.checked)}
-              className="w-4 h-4 text-emerald-600 rounded"
+              className="w-4 h-4 accent-emerald-600 rounded"
             />
             <label htmlFor="chk-conform" className="font-bold text-slate-800 text-xs cursor-pointer">
-              Marchandise vérifiée et 100% conforme à la commande
+              Contrôle de conformité visuel validé
             </label>
           </div>
 
@@ -101,7 +159,7 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
               className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md flex items-center space-x-1.5"
             >
               <Check className="w-4 h-4" />
-              <span>Valider la Réception en Stock</span>
+              <span>Valider Entrée Stock Magasin</span>
             </button>
           </div>
         </form>

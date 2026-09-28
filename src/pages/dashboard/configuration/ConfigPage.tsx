@@ -16,7 +16,7 @@ export const ConfigPage: React.FC = () => {
   const { company, user, refreshTenantContext } = useAuthStore()
   const { toast } = useUIStore()
 
-  const [activeTab, setActiveTab] = useState<'etablissement' | 'utilisateurs'>('etablissement')
+  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs'>('etablissement')
 
   // ─── États Établissement ──────────────────────────────────────────────────
   const [saving, setSaving] = useState(false)
@@ -33,8 +33,15 @@ export const ConfigPage: React.FC = () => {
     currency: 'FCFA',
     tva_default_rate: 18,
     aib_default_rate: 1,
-    e_mecef_active: true,
+    e_mecef_active: false,
+    e_mecef_connected: false,
     e_mecef_nim: '',
+    e_mecef_token: '',
+    e_mecef_api_url: '',
+    closure_email_1: '',
+    closure_email_2: '',
+    closure_email_3: '',
+    auto_send_closure_pdf: true,
   })
 
   // ─── États Équipe & Utilisateurs Internes ──────────────────────────────────
@@ -87,8 +94,15 @@ export const ConfigPage: React.FC = () => {
         currency: company.currency || 'FCFA',
         tva_default_rate: company.tva_default_rate ?? 18,
         aib_default_rate: company.aib_default_rate ?? 1,
-        e_mecef_active: company.e_mecef_active ?? true,
-        e_mecef_nim: company.e_mecef_nim || 'BENIN-DGI-EMEF-2026-001',
+        e_mecef_active: company.e_mecef_active ?? false,
+        e_mecef_connected: (company as any).e_mecef_connected ?? false,
+        e_mecef_nim: company.e_mecef_nim || '',
+        e_mecef_token: (company as any).e_mecef_token || '',
+        e_mecef_api_url: (company as any).e_mecef_api_url || '',
+        closure_email_1: (company as any).closure_email_1 || (company as any).email || '',
+        closure_email_2: (company as any).closure_email_2 || '',
+        closure_email_3: (company as any).closure_email_3 || '',
+        auto_send_closure_pdf: (company as any).auto_send_closure_pdf ?? true,
       })
     }
   }, [company])
@@ -294,47 +308,68 @@ export const ConfigPage: React.FC = () => {
         <div>
           <h1 className="text-2xl font-black text-slate-800 tracking-tight">Paramètres de Gestion</h1>
           <p className="text-slate-500 text-xs mt-1">
-            Configuration juridique, fiscale et gestion de l'équipe
+            Configuration juridique, fiscale, alertes de clôture et gestion de l'équipe
           </p>
         </div>
 
         {/* Onglets */}
-        <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1">
+        <div className="flex bg-slate-200/80 p-1 rounded-2xl gap-1 overflow-x-auto">
           <button
             onClick={() => setActiveTab('etablissement')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
               activeTab === 'etablissement'
                 ? 'bg-white text-slate-900 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Building2 className="w-4 h-4 text-emerald-600" />
-            <span>Établissement & Fiscalité</span>
+            <span>Établissement</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('fiscalite')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+              activeTab === 'fiscalite'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+            <span>Fiscalité & e-MECeF</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('notifications')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+              activeTab === 'notifications'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Store className="w-4 h-4 text-emerald-600" />
+            <span>Clôtures & Emails</span>
           </button>
           <button
             onClick={() => setActiveTab('utilisateurs')}
-            className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold transition ${
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
               activeTab === 'utilisateurs'
                 ? 'bg-white text-slate-900 shadow-sm'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             <Users className="w-4 h-4 text-emerald-600" />
-            <span>Équipe & Utilisateurs Internes</span>
+            <span>Équipe & Accès</span>
           </button>
         </div>
       </div>
 
       {/* =================================================================== */}
-      {/* ONGLET 1 : ÉTABLISSEMENT & FISCALITÉ DGI                            */}
+      {/* ONGLET 1 : ÉTABLISSEMENT                                            */}
       {/* =================================================================== */}
       {activeTab === 'etablissement' && (
         <form onSubmit={handleSaveCompany} className="space-y-6 animate-fadeIn">
-          {/* Identité Entreprise */}
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
               <Building2 className="w-5 h-5 text-emerald-600" />
-              <span>Identité & Coordonnées</span>
+              <span>Identité de l'Entreprise</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -345,7 +380,7 @@ export const ConfigPage: React.FC = () => {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-900"
                 />
               </div>
               <div>
@@ -355,10 +390,11 @@ export const ConfigPage: React.FC = () => {
                   onChange={(e) => setForm({ ...form, legal_form: e.target.value })}
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
                 >
-                  <option value="SARL">SARL</option>
-                  <option value="SAS">SAS</option>
-                  <option value="Ets">Établissement Individuel</option>
-                  <option value="SA">Société Anonyme (SA)</option>
+                  <option value="SARL">SARL (Société à Responsabilité Limitée)</option>
+                  <option value="SAS">SAS (Société par Actions Simplifiée)</option>
+                  <option value="Ets">Établissement Individuel / Profession libérale</option>
+                  <option value="SA">SA (Société Anonyme)</option>
+                  <option value="GIE">GIE (Groupement d'Intérêt Économique)</option>
                 </select>
               </div>
             </div>
@@ -370,6 +406,7 @@ export const ConfigPage: React.FC = () => {
                   type="tel"
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="+229 01 00 00 00"
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
                 />
               </div>
@@ -379,6 +416,7 @@ export const ConfigPage: React.FC = () => {
                   type="email"
                   value={form.email}
                   onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  placeholder="contact@entreprise.bj"
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
                 />
               </div>
@@ -386,12 +424,12 @@ export const ConfigPage: React.FC = () => {
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Adresse Siège</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Adresse Géographique</label>
                 <input
                   type="text"
                   value={form.address}
                   onChange={(e) => setForm({ ...form, address: e.target.value })}
-                  placeholder="Quartier, Rue..."
+                  placeholder="Quartier, Carré, Rue, Immeuble..."
                   className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
                 />
               </div>
@@ -405,13 +443,54 @@ export const ConfigPage: React.FC = () => {
                 />
               </div>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">N° RCCM</label>
+                <input
+                  type="text"
+                  value={form.rccm_number}
+                  onChange={(e) => setForm({ ...form, rccm_number: e.target.value })}
+                  placeholder="RB/COT/2026/B..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Devise Principale</label>
+                <input
+                  type="text"
+                  value={form.currency}
+                  readOnly
+                  className="w-full px-3 py-2 border border-slate-200 bg-slate-50 rounded-xl text-sm font-bold text-slate-700 cursor-not-allowed"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Zone UEMOA (FCFA - XOF)</p>
+              </div>
+            </div>
           </div>
 
-          {/* Fiscalité & e-MECeF */}
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex items-center gap-2 bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-md shadow-emerald-200 transition"
+            >
+              <Save className="w-4 h-4" />
+              <span>{saving ? 'Enregistrement en cours...' : 'Enregistrer les informations'}</span>
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET 2 : FISCALITÉ DGI BÉNIN & e-MECeF                            */}
+      {/* =================================================================== */}
+      {activeTab === 'fiscalite' && (
+        <form onSubmit={handleSaveCompany} className="space-y-6 animate-fadeIn">
+          {/* Identifiants Fiscaux */}
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
               <ShieldCheck className="w-5 h-5 text-emerald-600" />
-              <span>Paramètres Fiscaux & DGI Bénin (e-MECeF)</span>
+              <span>Régime Fiscal & IFU Bénin</span>
             </h3>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -427,18 +506,20 @@ export const ConfigPage: React.FC = () => {
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">N° RCCM</label>
-                <input
-                  type="text"
-                  value={form.rccm_number}
-                  onChange={(e) => setForm({ ...form, rccm_number: e.target.value })}
-                  placeholder="RB/COT/..."
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
-                />
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Régime d'Imposition</label>
+                <select
+                  value={form.regime_fiscal}
+                  onChange={(e) => setForm({ ...form, regime_fiscal: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-medium"
+                >
+                  <option value="Régime Réel Simplifié (RRS)">Régime Réel Simplifié (RRS)</option>
+                  <option value="Régime Réel Normal (RRN)">Régime Réel Normal (RRN)</option>
+                  <option value="Régime de la TPS">Régime de la TPS (Non assujetti TVA)</option>
+                </select>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Taux TVA par Défaut</label>
                 <div className="relative">
@@ -450,9 +531,10 @@ export const ConfigPage: React.FC = () => {
                   />
                   <span className="absolute right-3 top-2 text-xs text-slate-400 font-bold">%</span>
                 </div>
+                <p className="text-[10px] text-slate-500 mt-1">18% pour les assujettis TVA, 0% pour TPS / exonérés.</p>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Acompte AIB</label>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Taux Acompte AIB</label>
                 <div className="relative">
                   <input
                     type="number"
@@ -462,20 +544,120 @@ export const ConfigPage: React.FC = () => {
                   />
                   <span className="absolute right-3 top-2 text-xs text-slate-400 font-bold">%</span>
                 </div>
-              </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">NIM e-MECeF</label>
-                <input
-                  type="text"
-                  value={form.e_mecef_nim}
-                  onChange={(e) => setForm({ ...form, e_mecef_nim: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
-                />
+                <p className="text-[10px] text-slate-500 mt-1">1% (entreprises immatriculées) ou 5% (prestataires/non immatriculés). Calculé strictement sur le HT.</p>
               </div>
             </div>
           </div>
 
-          {/* Bouton de sauvegarde */}
+          {/* Module e-MECeF DGI */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                  <Shield className="w-5 h-5 text-emerald-600" />
+                  <span>Module e-MECeF (Facture Normalisée DGI Bénin)</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Gestion des deux modes légaux d'émission des factures et tickets
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={`text-xs font-bold px-3 py-1 rounded-full ${
+                  form.e_mecef_connected
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : 'bg-slate-100 text-slate-700 border border-slate-200'
+                }`}>
+                  {form.e_mecef_connected ? '● État 2 : Connecté DGI' : '○ État 1 : Facture Standard'}
+                </span>
+              </div>
+            </div>
+
+            {/* Explications des deux états */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className={`p-4 rounded-2xl border text-xs leading-relaxed ${
+                !form.e_mecef_connected ? 'bg-emerald-50/50 border-emerald-300 text-slate-700' : 'bg-slate-50 border-slate-200 text-slate-500'
+              }`}>
+                <h4 className="font-black text-slate-800 mb-1 flex items-center gap-1.5">
+                  <span>État 1 : Facture Commerciale Standard</span>
+                  {!form.e_mecef_connected && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
+                </h4>
+                <p>
+                  Par défaut, l'application émet des <strong>Factures Commerciales Standards</strong> parfaitement valides avec toutes les mentions commerciales et légales, <strong>sans QR code factice ni faux NIM</strong>.
+                </p>
+              </div>
+
+              <div className={`p-4 rounded-2xl border text-xs leading-relaxed ${
+                form.e_mecef_connected ? 'bg-emerald-50/50 border-emerald-300 text-slate-700' : 'bg-slate-50 border-slate-200 text-slate-500'
+              }`}>
+                <h4 className="font-black text-slate-800 mb-1 flex items-center gap-1.5">
+                  <span>État 2 : e-MECeF Certifié & Connecté</span>
+                  {form.e_mecef_connected && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
+                </h4>
+                <p>
+                  Activation dès que l'entreprise dispose de son NIM officiel et de ses jetons API e-MECeF DGI. Chaque vente génère le QR code officiel et les compteurs fiscaux certifiés.
+                </p>
+              </div>
+            </div>
+
+            {/* Toggle activation e-MECeF */}
+            <div className="pt-2">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.e_mecef_connected}
+                  onChange={(e) => setForm({ ...form, e_mecef_connected: e.target.checked, e_mecef_active: e.target.checked })}
+                  className="w-5 h-5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                />
+                <div>
+                  <span className="text-xs font-bold text-slate-800">
+                    Activer la certification e-MECeF DGI en direct
+                  </span>
+                  <p className="text-[11px] text-slate-500">
+                    Cochez cette case uniquement si votre machine ou API e-MECeF est enregistrée auprès de la DGI Bénin.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {form.e_mecef_connected && (
+              <div className="p-4 bg-emerald-50/40 border border-emerald-200 rounded-2xl space-y-4 animate-fadeIn">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">NIM e-MECeF Officiel *</label>
+                    <input
+                      type="text"
+                      value={form.e_mecef_nim}
+                      onChange={(e) => setForm({ ...form, e_mecef_nim: e.target.value })}
+                      placeholder="Ex: BENIN-DGI-EMEF-2026-001"
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">URL API Serveur e-MECeF</label>
+                    <input
+                      type="text"
+                      value={form.e_mecef_api_url}
+                      onChange={(e) => setForm({ ...form, e_mecef_api_url: e.target.value })}
+                      placeholder="https://emef.dgi.bj/api/..."
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Jeton d'autorisation (Token API DGI)</label>
+                  <input
+                    type="password"
+                    value={form.e_mecef_token}
+                    onChange={(e) => setForm({ ...form, e_mecef_token: e.target.value })}
+                    placeholder="Clé secrète / Token JWT fourni par la DGI"
+                    className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono"
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex justify-end">
             <button
               type="submit"
@@ -483,14 +665,102 @@ export const ConfigPage: React.FC = () => {
               className="flex items-center gap-2 bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-md shadow-emerald-200 transition"
             >
               <Save className="w-4 h-4" />
-              <span>{saving ? 'Enregistrement en cours...' : 'Mettre à jour les paramètres'}</span>
+              <span>{saving ? 'Enregistrement en cours...' : 'Enregistrer la fiscalité'}</span>
             </button>
           </div>
         </form>
       )}
 
       {/* =================================================================== */}
-      {/* ONGLET 2 : ÉQUIPE & UTILISATEURS INTERNES                          */}
+      {/* ONGLET 3 : CLÔTURES DE CAISSE & NOTIFICATIONS EMAIL                */}
+      {/* =================================================================== */}
+      {activeTab === 'notifications' && (
+        <form onSubmit={handleSaveCompany} className="space-y-6 animate-fadeIn">
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <div className="border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <Store className="w-5 h-5 text-emerald-600" />
+                <span>Destinataires du Rapport de Clôture Quotidienne (Z de caisse)</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                À chaque clôture de caisse, un rapport récapitulatif détaillé en PDF est automatiquement généré et transmis à un minimum de 3 adresses emails configurées ci-dessous (Direction, Gérant, Comptable).
+              </p>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Email Destinataire 1 (Direction Générale / Propriétaire) *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={form.closure_email_1}
+                  onChange={(e) => setForm({ ...form, closure_email_1: e.target.value })}
+                  placeholder="directeur@entreprise.bj"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Email Destinataire 2 (Gérant / Responsable de Boutique) *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={form.closure_email_2}
+                  onChange={(e) => setForm({ ...form, closure_email_2: e.target.value })}
+                  placeholder="gerant@entreprise.bj"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-medium"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Email Destinataire 3 (Comptabilité / Auditeur Externe) *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={form.closure_email_3}
+                  onChange={(e) => setForm({ ...form, closure_email_3: e.target.value })}
+                  placeholder="comptable@entreprise.bj"
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-medium"
+                />
+              </div>
+            </div>
+
+            <div className="pt-2">
+              <label className="flex items-center gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={form.auto_send_closure_pdf}
+                  onChange={(e) => setForm({ ...form, auto_send_closure_pdf: e.target.checked })}
+                  className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                />
+                <span className="text-xs font-bold text-slate-800">
+                  Envoi automatique instantané du PDF de clôture lors de la validation du Z de caisse
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={saving}
+              className="flex items-center gap-2 bg-emerald-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-emerald-700 shadow-md shadow-emerald-200 transition"
+            >
+              <Save className="w-4 h-4" />
+              <span>{saving ? 'Enregistrement en cours...' : 'Enregistrer les alertes de clôture'}</span>
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET 4 : ÉQUIPE & UTILISATEURS INTERNES                          */}
       {/* =================================================================== */}
       {activeTab === 'utilisateurs' && (
         <div className="space-y-6 animate-fadeIn">
