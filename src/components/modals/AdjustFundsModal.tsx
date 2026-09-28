@@ -1,22 +1,53 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { ShieldAlert, Check, X } from 'lucide-react'
 import ModalPortal from './ModalPortal'
 
 interface AdjustFundsModalProps {
   isOpen: boolean
   onClose: () => void
-  onSuccess?: (funds: any) => void
+  currentCash?: number
+  currentMomo?: number
+  onSuccess?: (funds: {
+    cash: number
+    momo: number
+    reason: string
+    diffCash: number
+    diffMomo: number
+  }) => void
 }
 
-export const AdjustFundsModal: React.FC<AdjustFundsModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const [cash, setCash] = useState(50000)
-  const [momo, setMomo] = useState(100000)
-  const [reason, setReason] = useState('Dotation initiale de fond de caisse')
+export const AdjustFundsModal: React.FC<AdjustFundsModalProps> = ({
+  isOpen,
+  onClose,
+  currentCash = 0,
+  currentMomo = 0,
+  onSuccess
+}) => {
+  const [cash, setCash] = useState<number>(currentCash)
+  const [momo, setMomo] = useState<number>(currentMomo)
+  const [reason, setReason] = useState('')
+
+  // Mettre à jour si les props changent
+  React.useEffect(() => {
+    setCash(currentCash)
+    setMomo(currentMomo)
+  }, [currentCash, currentMomo])
+
+  const diffCash = cash - currentCash
+  const diffMomo = momo - currentMomo
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (onSuccess) onSuccess({ cash, momo, reason })
-    alert(`✅ Fond de caisse ajusté avec succès !\n\n- Espèces : ${cash} FCFA\n- MoMo : ${momo} FCFA`)
+    if (!reason.trim()) return
+    if (onSuccess) {
+      onSuccess({
+        cash,
+        momo,
+        reason: reason.trim(),
+        diffCash,
+        diffMomo
+      })
+    }
     onClose()
   }
 
@@ -29,7 +60,7 @@ export const AdjustFundsModal: React.FC<AdjustFundsModalProps> = ({ isOpen, onCl
               <ShieldAlert className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-extrabold text-sm text-white">⚙️ Ajuster Fonds Initial (Admin)</h3>
+              <h3 className="font-extrabold text-sm text-white">⚙️ Ajustement de Caisse (Audit Traçable)</h3>
               <p className="text-[10px] text-amber-300">Réservé Administrateur / Gérant</p>
             </div>
           </div>
@@ -40,13 +71,16 @@ export const AdjustFundsModal: React.FC<AdjustFundsModalProps> = ({ isOpen, onCl
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
           <div className="bg-amber-50 p-3.5 rounded-2xl border border-amber-200">
-            <p className="text-amber-900 font-medium">
-              Cette action modifie le solde initial d'ouverture de caisse et recalcule automatiquement les écarts de trésorerie.
+            <p className="text-amber-900 font-medium leading-relaxed">
+              Tout ajustement est consigné dans l'historique d'audit avec l'ancienne valeur, la nouvelle valeur, la différence et le motif obligatoire.
             </p>
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">Fond Caisse Espèces (FCFA) *</label>
+            <div className="flex justify-between items-center mb-1">
+              <label className="font-bold text-slate-700">Fond Actuel Espèces (FCFA) *</label>
+              <span className="text-[11px] text-slate-500">Actuel : <strong>{currentCash.toLocaleString('fr-BJ')} FCFA</strong></span>
+            </div>
             <input
               type="number"
               required
@@ -54,10 +88,18 @@ export const AdjustFundsModal: React.FC<AdjustFundsModalProps> = ({ isOpen, onCl
               onChange={(e) => setCash(Number(e.target.value))}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-sm"
             />
+            {diffCash !== 0 && (
+              <p className={`text-[11px] font-bold mt-1 font-mono ${diffCash > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                Différence : {diffCash > 0 ? '+' : ''}{diffCash.toLocaleString('fr-BJ')} FCFA
+              </p>
+            )}
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">Fond Mobile Money MoMo (FCFA) *</label>
+            <div className="flex justify-between items-center mb-1">
+              <label className="font-bold text-slate-700">Fond Actuel Mobile Money (FCFA) *</label>
+              <span className="text-[11px] text-slate-500">Actuel : <strong>{currentMomo.toLocaleString('fr-BJ')} FCFA</strong></span>
+            </div>
             <input
               type="number"
               required
@@ -65,13 +107,19 @@ export const AdjustFundsModal: React.FC<AdjustFundsModalProps> = ({ isOpen, onCl
               onChange={(e) => setMomo(Number(e.target.value))}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-sm"
             />
+            {diffMomo !== 0 && (
+              <p className={`text-[11px] font-bold mt-1 font-mono ${diffMomo > 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                Différence : {diffMomo > 0 ? '+' : ''}{diffMomo.toLocaleString('fr-BJ')} FCFA
+              </p>
+            )}
           </div>
 
           <div>
-            <label className="block font-bold text-slate-700 mb-1">Motif de l'ajustement *</label>
+            <label className="block font-bold text-slate-700 mb-1">Motif obligatoire de l'ajustement *</label>
             <textarea
               required
               rows={2}
+              placeholder="Ex : Correction solde tiroir suite à comptage physique"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"

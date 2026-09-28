@@ -8,7 +8,7 @@ import {
   ShoppingCart, Package, Landmark, Users, Truck, Receipt,
   BarChart3, ClipboardList, Shield, CreditCard, Settings,
   BookOpen, ChevronLeft, ChevronRight, LogOut, Store,
-  Wallet, Building2, KeyRound
+  Wallet, Building2, KeyRound, LayoutDashboard
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
@@ -20,7 +20,7 @@ import clsx from 'clsx'
 // ─── Map icônes ─────────────────────────────────────────────────────────────
 
 const ICON_MAP: Record<string, React.FC<any>> = {
-  ShoppingCart, Package, Landmark, Users, Truck, Receipt,
+  LayoutDashboard, ShoppingCart, Package, Landmark, Users, Truck, Receipt,
   BarChart3, ClipboardList, Shield, CreditCard, Settings,
   BookOpen, Wallet, Building2, Store,
 }

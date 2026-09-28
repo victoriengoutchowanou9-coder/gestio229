@@ -55,7 +55,7 @@ export const useUIStore = create<UIState>()((set, get) => ({
   sidebarMobileOpen: false,
   activeModuleId: null,
   notifications: [],
-  darkMode: false,
+  darkMode: typeof window !== 'undefined' && localStorage.getItem('gestio_theme') === 'dark',
 
   setActiveModule: (moduleId) => set({ activeModuleId: moduleId }),
 
@@ -99,7 +99,10 @@ export const useUIStore = create<UIState>()((set, get) => ({
   toggleDarkMode: () => {
     set((s) => {
       const next = !s.darkMode
-      document.documentElement.classList.toggle('dark', next)
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('gestio_theme', next ? 'dark' : 'light')
+        document.documentElement.classList.toggle('dark', next)
+      }
       return { darkMode: next }
     })
   },

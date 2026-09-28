@@ -14,7 +14,8 @@ const LoginPage     = lazy(() => import('./pages/auth/LoginPage'))
 const RegisterPage  = lazy(() => import('./pages/auth/RegisterPage'))
 
 // Dashboard
-const POSPage            = lazy(() => import('./pages/dashboard/vente-pos/POSPage'))
+const DashboardPage   = lazy(() => import('./pages/dashboard/DashboardPage'))
+const POSPage         = lazy(() => import('./pages/dashboard/vente-pos/POSPage'))
 const StocksPage         = lazy(() => import('./pages/dashboard/stocks/StocksPage'))
 const CaissePage         = lazy(() => import('./pages/dashboard/caisse/CaissePage'))
 const TresoreriePage     = lazy(() => import('./pages/dashboard/tresorerie/TresoreriePage'))
@@ -128,7 +129,9 @@ const AppRoutes: React.FC = () => {
         path="/dashboard"
         element={<ProtectedRoute><AppLayout /></ProtectedRoute>}
       >
-        <Route index element={<Navigate to="/dashboard/vente-pos" replace />} />
+        <Route index element={<Navigate to="/dashboard/tableau-bord" replace />} />
+        <Route path="tableau-bord"   element={<DashboardPage />} />
+        <Route path="dashboard"      element={<DashboardPage />} />
         <Route path="vente"          element={<POSPage />} />
         <Route path="vente-pos"      element={<POSPage />} />
         <Route path="stocks"         element={<StocksPage />} />

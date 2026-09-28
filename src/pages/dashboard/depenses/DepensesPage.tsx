@@ -1,16 +1,22 @@
-﻿// =============================================================================
-// GESTIO 229 SaaS — Dépenses & Charges
+// =============================================================================
+// GESTIO 229 SaaS — Dépenses & Charges d'Exploitation
+// =============================================================================
+// Nettoyé de toute donnée fictive — Uniquement les dépenses réelles
+// Filtres par période (Du ... au ...) et par Catégorie avec recalcul immédiat
 // =============================================================================
 
-import React, { useState, useEffect, useCallback } from 'react'
-import { Receipt, Plus, Search, Calendar, Tag, RefreshCw, X, ArrowDownRight } from 'lucide-react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import {
+  Receipt, Plus, Search, Calendar, Tag, RefreshCw, X, ArrowDownRight,
+  Filter, CheckCircle2, DollarSign
+} from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { ModalPortal } from '../../../components/modals'
-import clsx from 'clsx'
 
-const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
+const fmt = (n: number) =>
+  new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
 
 interface Expense {
   id: string
@@ -22,9 +28,10 @@ interface Expense {
   payment_method?: string
   expense_date: string
   notes?: string
+  created_at?: string
 }
 
-const CATEGORIES = [
+export const CATEGORIES = [
   'Loyer commercial',
   'Électricité (SBEE)',
   'Eau (SONEB)',
@@ -37,7 +44,7 @@ const CATEGORIES = [
   'Autres charges'
 ]
 
-const DepensesPage: React.FC = () => {
+export const DepensesPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
 
@@ -47,15 +54,21 @@ const DepensesPage: React.FC = () => {
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
 
+  // Filtres Spécifiés au Point 13 : Période (Date début -> Date fin) et Catégorie
+  const [startDate, setStartDate] = useState<string>('')
+  const [endDate, setEndDate] = useState<string>('')
+  const [selectedCategory, setSelectedCategory] = useState<string>('all')
+
   const [form, setForm] = useState({
     title: '',
     category: CATEGORIES[0],
-    amount: 0,
+    amount: '' as any,
     payment_method: 'especes',
     expense_date: new Date().toISOString().split('T')[0],
     notes: ''
   })
 
+  // Charger les dépenses réelles enregistrées dans Supabase
   const loadExpenses = useCallback(async () => {
     if (!company?.id) return
     setLoading(true)
@@ -67,14 +80,11 @@ const DepensesPage: React.FC = () => {
         .order('expense_date', { ascending: false })
 
       if (error) throw error
+      // AUCUNE donnée fictive en fallback
       setExpenses(data || [])
-    } catch {
-      // Fallback mock expenses
-      setExpenses([
-        { id: '1', title: 'Facture SBEE Akpakpa', category: 'Électricité (SBEE)', amount: 45000, payment_method: 'especes', expense_date: '2026-09-05' },
-        { id: '2', title: 'Carburant livraison', category: 'Transport & Déplacements', amount: 15000, payment_method: 'momo', expense_date: '2026-09-08' },
-        { id: '3', title: 'Recharge Forfait MTN Internet', category: 'Communication & Internet', amount: 20000, payment_method: 'momo', expense_date: '2026-09-10' },
-      ])
+    } catch (err: any) {
+      console.error('Erreur chargement dépenses :', err)
+      setExpenses([])
     } finally {
       setLoading(false)
     }
@@ -84,213 +94,428 @@ const DepensesPage: React.FC = () => {
     loadExpenses()
   }, [loadExpenses])
 
+  // Enregistrement d'une nouvelle dépense réelle
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!company?.id || !form.title || !form.amount) return
+    const numAmount = Number(form.amount)
+    if (!company?.id || !form.title.trim() || !numAmount || numAmount <= 0) return
     setSaving(true)
     try {
       const { error } = await supabase.from('expenses').insert({
-        ...form,
         company_id: company.id,
+        title: form.title.trim(),
+        category: form.category,
+        amount: numAmount,
+        payment_method: form.payment_method,
+        expense_date: form.expense_date,
+        notes: form.notes.trim() || null,
         created_by: user?.id
       })
+
       if (error) throw error
-      toast.success('Dépense enregistrée avec succès')
+      toast.success('Dépense enregistrée avec succès !')
       setShowModal(false)
       setForm({
         title: '',
         category: CATEGORIES[0],
-        amount: 0,
+        amount: '',
         payment_method: 'especes',
         expense_date: new Date().toISOString().split('T')[0],
         notes: ''
       })
-      loadExpenses()
+      await loadExpenses()
     } catch (err: any) {
-      setExpenses([
-        { id: String(Date.now()), ...form },
-        ...expenses
-      ])
-      setShowModal(false)
+      toast.error('Erreur lors de l’enregistrement de la dépense', err.message)
     } finally {
       setSaving(false)
     }
   }
 
-  const filtered = expenses.filter((e) =>
-    !search ||
-    e.title?.toLowerCase().includes(search.toLowerCase()) ||
-    e.category?.toLowerCase().includes(search.toLowerCase())
-  )
+  // ─── Filtrage Réactif et Immédiat (Point 13) ──────────────────────────────
+  const filteredExpenses = useMemo(() => {
+    return expenses.filter((e) => {
+      // 1. Filtre par recherche texte
+      if (search.trim()) {
+        const q = search.toLowerCase()
+        const matchTitle = e.title?.toLowerCase().includes(q)
+        const matchCat = e.category?.toLowerCase().includes(q)
+        if (!matchTitle && !matchCat) return false
+      }
 
-  const totalExpenses = expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0)
+      // 2. Filtre par catégorie
+      if (selectedCategory !== 'all' && e.category !== selectedCategory) {
+        return false
+      }
+
+      // 3. Filtre par période (Date début -> Date fin)
+      const expDate = e.expense_date || (e.created_at ? e.created_at.split('T')[0] : '')
+      if (startDate && expDate < startDate) {
+        return false
+      }
+      if (endDate && expDate > endDate) {
+        return false
+      }
+
+      return true
+    })
+  }, [expenses, search, selectedCategory, startDate, endDate])
+
+  // Recalcul immédiat du total selon les filtres
+  const totalFilteredExpenses = useMemo(() => {
+    return filteredExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
+  }, [filteredExpenses])
+
+  const handleResetFilters = () => {
+    setStartDate('')
+    setEndDate('')
+    setSelectedCategory('all')
+    setSearch('')
+  }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="space-y-6 animate-fadeIn">
+      {/* ── En-tête Dépenses ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
         <div>
-          <h1 className="text-2xl font-bold text-slate-800">Dépenses & Charges</h1>
-          <p className="text-slate-500 text-sm mt-1">Enregistrement et suivi des sorties de fonds</p>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+            <Receipt className="w-6 h-6 text-rose-600" />
+            Dépenses & Charges
+          </h1>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Suivi des charges d'exploitation, factures réelles et sorties de caisse
+          </p>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center justify-center gap-2 bg-rose-600 text-white px-4 py-2.5 rounded-xl font-semibold text-sm hover:bg-rose-700 transition shadow-sm"
-        >
-          <Plus className="w-4 h-4" /> + Nouvelle Dépense
-        </button>
+
+        <div className="flex items-center gap-2">
+          <button
+            onClick={loadExpenses}
+            disabled={loading}
+            className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1"
+            title="Rafraîchir"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-rose-600' : ''}`} />
+          </button>
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center justify-center gap-2 bg-rose-600 text-white px-4 py-2.5 rounded-xl font-bold text-xs hover:bg-rose-700 transition shadow-md shadow-rose-200"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Nouvelle Dépense</span>
+          </button>
+        </div>
       </div>
 
-      {/* Stats */}
+      {/* ── Barre de Filtres Complète Exigée (Point 13) ──────────────────────── */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+          <span className="text-xs font-bold text-slate-700 flex items-center gap-1.5 uppercase tracking-wider">
+            <Filter className="w-3.5 h-3.5 text-rose-600" />
+            Filtres de Période & Catégorie
+          </span>
+          {(startDate || endDate || selectedCategory !== 'all' || search) && (
+            <button
+              onClick={handleResetFilters}
+              className="text-xs text-rose-600 hover:text-rose-800 font-bold"
+            >
+              Réinitialiser les filtres
+            </button>
+          )}
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+          {/* Période : Date début */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-1">Du (Date Début)</label>
+            <div className="relative">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+              />
+            </div>
+          </div>
+
+          {/* Période : Date fin */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-1">Au (Date Fin)</label>
+            <div className="relative">
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+              />
+            </div>
+          </div>
+
+          {/* Catégorie */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-1">Catégorie</label>
+            <select
+              value={selectedCategory}
+              onChange={(e) => setSelectedCategory(e.target.value)}
+              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+            >
+              <option value="all">Toutes les catégories</option>
+              {CATEGORIES.map((cat) => (
+                <option key={cat} value={cat}>
+                  {cat}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Recherche textuelle */}
+          <div>
+            <label className="block text-slate-500 font-bold mb-1">Mot-clé / Réf</label>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Rechercher libellé..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs"
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* ── KPIs Recalculés selon les Filtres ─────────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-rose-50 rounded-xl flex items-center justify-center">
+            <div className="w-10 h-10 bg-rose-50 rounded-2xl flex items-center justify-center">
               <ArrowDownRight className="w-5 h-5 text-rose-600" />
             </div>
-            <span className="text-sm font-medium text-slate-500">Total Dépenses Enregistrées</span>
-          </div>
-          <p className="text-2xl font-black text-rose-600">{fmt(totalExpenses)}</p>
-        </div>
-
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <div className="flex items-center gap-3 mb-2">
-            <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center">
-              <Receipt className="w-5 h-5 text-slate-600" />
+            <div>
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                Total des Dépenses Filtrées
+              </span>
+              <span className="text-[10px] text-slate-400">
+                {startDate || endDate ? `Période sélectionnée` : `Toutes dates confondues`}
+              </span>
             </div>
-            <span className="text-sm font-medium text-slate-500">Nombre de Justificatifs</span>
           </div>
-          <p className="text-2xl font-black text-slate-800">{expenses.length}</p>
+          <p className="text-2xl font-black text-rose-600 font-mono mt-1">
+            {fmt(totalFilteredExpenses)}
+          </p>
+        </div>
+
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-10 h-10 bg-slate-50 rounded-2xl flex items-center justify-center">
+              <Receipt className="w-5 h-5 text-slate-700" />
+            </div>
+            <div>
+              <span className="text-xs font-bold text-slate-500 uppercase tracking-wider block">
+                Justificatifs Comptabilisés
+              </span>
+              <span className="text-[10px] text-slate-400">
+                {filteredExpenses.length} dépense(s) répondant aux critères
+              </span>
+            </div>
+          </div>
+          <p className="text-2xl font-black text-slate-800 font-mono mt-1">
+            {filteredExpenses.length}
+          </p>
         </div>
       </div>
 
-      {/* Liste des Dépenses */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <h3 className="font-bold text-sm text-slate-900">Journal des Dépenses</h3>
-          <div className="w-64">
-            <input
-              type="text"
-              placeholder="Rechercher dépense..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="w-full text-xs p-2 bg-slate-50 border border-slate-200 rounded-lg"
-            />
-          </div>
+      {/* ── Tableau du Journal des Dépenses Réelles ─────────────────────────── */}
+      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
+            <Receipt className="w-4 h-4 text-rose-600" />
+            <span>Journal des Dépenses Réelles</span>
+          </h3>
+          <span className="text-xs text-slate-400 font-mono">{filteredExpenses.length} ligne(s)</span>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-700 font-bold">
-              <tr>
-                <th className="p-3">Date</th>
-                <th className="p-3">Motif</th>
-                <th className="p-3">Catégorie</th>
-                <th className="p-3">Règlement</th>
-                <th className="p-3 text-right">Montant</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((e) => (
-                <tr key={e.id} className="hover:bg-slate-50/50">
-                  <td className="p-3 font-mono text-slate-500">{e.expense_date}</td>
-                  <td className="p-3 font-bold text-slate-900">{e.title}</td>
-                  <td className="p-3 text-slate-600">{e.category}</td>
-                  <td className="p-3 font-medium uppercase text-[10px] text-slate-500">{e.payment_method}</td>
-                  <td className="p-3 text-right font-black text-rose-600 font-mono">-{fmt(e.amount)}</td>
+        {loading ? (
+          <div className="p-12 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+            <RefreshCw className="w-4 h-4 animate-spin text-rose-600" />
+            <span>Chargement des dépenses réelles...</span>
+          </div>
+        ) : filteredExpenses.length === 0 ? (
+          <div className="p-12 text-center text-slate-400 space-y-2">
+            <p className="text-sm font-bold text-slate-600">Aucune dépense enregistrée</p>
+            <p className="text-xs max-w-sm mx-auto text-slate-400">
+              {expenses.length === 0
+                ? "Aucune charge ou dépense d'exploitation n'a été saisie pour le moment. Cliquez sur [Nouvelle Dépense] pour en ajouter une."
+                : "Aucune dépense ne correspond aux critères de filtre sélectionnés (période ou catégorie)."}
+            </p>
+            {expenses.length === 0 && (
+              <div className="pt-2">
+                <button
+                  onClick={() => setShowModal(true)}
+                  className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition"
+                >
+                  + Enregistrer une dépense
+                </button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 uppercase font-semibold">
+                <tr>
+                  <th className="p-4">Date</th>
+                  <th className="p-4">Libellé de la Dépense</th>
+                  <th className="p-4">Catégorie</th>
+                  <th className="p-4 text-center">Mode Règlement</th>
+                  <th className="p-4 text-right">Montant (FCFA)</th>
+                  <th className="p-4">Notes / Réf</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-mono">
+                {filteredExpenses.map((exp) => (
+                  <tr key={exp.id} className="hover:bg-slate-50/80 transition font-sans">
+                    <td className="p-4 text-slate-500 font-mono text-xs">
+                      {exp.expense_date
+                        ? new Date(exp.expense_date).toLocaleDateString('fr-BJ')
+                        : 'N/A'}
+                    </td>
+                    <td className="p-4 font-bold text-slate-800">
+                      {exp.title}
+                    </td>
+                    <td className="p-4">
+                      <span className="px-2.5 py-1 bg-slate-100 text-slate-700 font-medium rounded-full text-[11px]">
+                        {exp.category}
+                      </span>
+                    </td>
+                    <td className="p-4 text-center">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-slate-700 capitalize">
+                        {exp.payment_method === 'especes' ? 'Espèces' :
+                         exp.payment_method === 'momo' ? 'Mobile Money' :
+                         exp.payment_method === 'cheque' ? 'Chèque' :
+                         exp.payment_method || 'Espèces'}
+                      </span>
+                    </td>
+                    <td className="p-4 text-right font-mono font-black text-rose-600 text-sm">
+                      {fmt(exp.amount)}
+                    </td>
+                    <td className="p-4 text-slate-400 text-xs truncate max-w-xs">
+                      {exp.notes || '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Modal Form via ModalPortal */}
-      <ModalPortal isOpen={showModal} onClose={() => setShowModal(false)} id="modal-portal-expense">
-        <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md p-6 border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-            <h3 className="text-base font-bold text-slate-800">+ Saisir une dépense</h3>
-            <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
+      {/* ── MODAL CRÉATION DE DÉPENSE ────────────────────────────────────────── */}
+      <ModalPortal isOpen={showModal} onClose={() => setShowModal(false)} id="modal-new-expense">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+              <Plus className="w-5 h-5 text-rose-600" />
+              Enregistrer une Dépense Réelle
+            </h3>
+            <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
               <X className="w-5 h-5" />
             </button>
           </div>
 
           <form onSubmit={handleSave} className="space-y-4 text-xs">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Motif / Justification *</label>
+              <label className="block font-bold text-slate-700 mb-1">Libellé / Objet de la dépense *</label>
               <input
                 type="text"
                 required
+                placeholder="Ex : Facture électricité SBEE boutique"
                 value={form.title}
                 onChange={(e) => setForm({ ...form, title: e.target.value })}
-                placeholder="Ex: Facture électricité SBEE Avril"
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm"
               />
-            </div>
-
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">Catégorie de Charge *</label>
-              <select
-                value={form.category}
-                onChange={(e) => setForm({ ...form, category: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl"
-              >
-                {CATEGORIES.map((c) => (
-                  <option key={c} value={c}>{c}</option>
-                ))}
-              </select>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Montant (FCFA) *</label>
+                <label className="block font-bold text-slate-700 mb-1">Catégorie *</label>
+                <select
+                  value={form.category}
+                  onChange={(e) => setForm({ ...form, category: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                >
+                  {CATEGORIES.map((cat) => (
+                    <option key={cat} value={cat}>
+                      {cat}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mode de Paiement *</label>
+                <select
+                  value={form.payment_method}
+                  onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                >
+                  <option value="especes">Espèces (Tiroir Caisse)</option>
+                  <option value="momo">Mobile Money (MTN / Moov)</option>
+                  <option value="virement">Virement Bancaire</option>
+                  <option value="cheque">Chèque Bancaire</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Montant Payé (FCFA) *</label>
                 <input
                   type="number"
                   required
                   min="1"
+                  placeholder="0"
                   value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: Number(e.target.value) })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl font-bold font-mono text-rose-600"
+                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-sm"
                 />
               </div>
+
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Date *</label>
+                <label className="block font-bold text-slate-700 mb-1">Date du Décaissement *</label>
                 <input
                   type="date"
                   required
                   value={form.expense_date}
                   onChange={(e) => setForm({ ...form, expense_date: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
                 />
               </div>
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Règlement via</label>
-              <select
-                value={form.payment_method}
-                onChange={(e) => setForm({ ...form, payment_method: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-200 rounded-xl"
-              >
-                <option value="especes">💵 Espèces (Caisse)</option>
-                <option value="momo">📱 MTN / Moov Money</option>
-                <option value="banque">🏦 Virement Bancaire</option>
-              </select>
+              <label className="block font-bold text-slate-700 mb-1">Notes / Référence du justificatif</label>
+              <textarea
+                rows={2}
+                placeholder="Ex : N° de quittance ou reçu remis par le fournisseur"
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+              />
             </div>
 
-            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-100">
+            <div className="flex gap-2 pt-3 border-t border-slate-100">
               <button
                 type="button"
                 onClick={() => setShowModal(false)}
-                className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold hover:bg-slate-50"
               >
                 Annuler
               </button>
               <button
                 type="submit"
                 disabled={saving}
-                className="px-5 py-2.5 bg-rose-600 text-white rounded-xl font-bold hover:bg-rose-700 shadow-sm"
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-md disabled:opacity-50"
               >
-                {saving ? 'Validation...' : 'Valider la dépense'}
+                {saving ? 'Enregistrement...' : 'Enregistrer la Dépense'}
               </button>
             </div>
           </form>

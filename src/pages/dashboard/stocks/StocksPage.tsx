@@ -1,5 +1,5 @@
 // =============================================================================
-// GESTIO 229 SaaS — Module 2 : Gestion des Stocks & Inventaire (Norme Bénin/UEMOA)
+// GESTIO 229 SaaS — Gestion des Stocks & Inventaire (Norme Bénin/UEMOA)
 // Double Stock (Magasin UCD & Vente UV), Transferts avec traçabilité,
 // Inventaire physique avec calcul automatique des écarts, Valorisation Achat & Vente
 // =============================================================================
@@ -291,7 +291,7 @@ export const StocksPage: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Package className="w-5 h-5 text-emerald-600" />
-            Module 2 : Gestion des Stocks & Inventaire
+            Stocks & Inventaire
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Double Stock (Magasin UCD & Vente UV), Transferts, Inventaire avec écarts et Valorisation Achat/Vente

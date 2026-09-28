@@ -1,5 +1,5 @@
 // =============================================================================
-// GESTIO 229 SaaS — Module 1 : Ventes & Point de Vente (POS)
+// GESTIO 229 SaaS — Ventes & Point de Vente (POS)
 // Multi-paiements stricts, Vente différée, Modale Détail Produit avec décimales,
 // Facture Commerciale Standard sans faux e-MECeF, Historique et Avoirs
 // =============================================================================
@@ -485,7 +485,7 @@ export const POSPage: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <ShoppingCart className="w-5 h-5 text-emerald-600" />
-            Module 1 : Ventes & Caisse POS
+            Vente & POS
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Saisie TTC, Décomposition fiscale automatique HT & TVA, Multi-règlements et Facturation

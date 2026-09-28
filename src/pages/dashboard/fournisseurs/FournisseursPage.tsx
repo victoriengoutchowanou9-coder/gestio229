@@ -1,5 +1,5 @@
 // =============================================================================
-// GESTIO 229 SaaS — Module 3 : Achats, Fournisseurs & Approvisionnements
+// GESTIO 229 SaaS — Achats, Fournisseurs & Approvisionnements
 // Bons de Commande (Brouillon -> À valider -> Validé -> Rejeté -> Commandé -> Réceptionné)
 // Réception BL (Règle B.1 : Entrée Stock Magasin), Impression BL et Suivi des dettes
 // =============================================================================
@@ -288,7 +288,7 @@ export const FournisseursPage: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Truck className="w-5 h-5 text-indigo-600" />
-            Module 3 : Achats, Fournisseurs & Approvisionnements
+            Achats & Fournisseurs
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Bons de Commande (Brouillon → Validé → Commandé → Réceptionné) & Règle B.1 Entrée Stock Magasin

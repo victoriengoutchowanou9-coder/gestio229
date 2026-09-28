@@ -313,7 +313,7 @@ export const SectorLoader = {
 
   getDefaultNav(): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const commonModuleIds = [
-      'ventes', 'stock', 'caisse', 'finances', 'clients',
+      'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',
       'fournisseurs', 'depenses', 'rapports', 'syscohada',
       'configuration', 'utilisateurs', 'audit', 'abonnement',
     ]
@@ -326,7 +326,7 @@ export const SectorLoader = {
           id: mod.id,
           label: mod.label,
           icon: mod.icon,
-          href: `/dashboard/${id === 'ventes' ? 'vente-pos' : id === 'stock' ? 'stocks' : id === 'finances' ? 'tresorerie' : id === 'rapports' ? 'reporting' : id === 'audit' ? 'journal-audit' : mod.path}`,
+          href: `/dashboard/${id === 'dashboard' ? 'tableau-bord' : id === 'ventes' ? 'vente-pos' : id === 'stock' ? 'stocks' : id === 'finances' ? 'tresorerie' : id === 'rapports' ? 'reporting' : id === 'audit' ? 'journal-audit' : mod.path}`,
           group: mod.group,
         } as NavItem
       })
@@ -342,6 +342,7 @@ export const SectorLoader = {
     if (!user) return false
     if (user.is_super_admin) return true
     if (user.role === 'administrateur' || user.role === 'admin' || user.role === 'gerant') return true
+    if (moduleId === 'dashboard') return true
 
     // Permissions fines
     const perms = (user.permissions as any) || {}

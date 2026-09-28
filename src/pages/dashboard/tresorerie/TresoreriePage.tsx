@@ -1,22 +1,24 @@
 // =============================================================================
-// GESTIO 229 SaaS — Module 4.2 : Trésorerie Centrale (Banques, MoMo & Caisses)
-// Approbation des Demandes de Retrait, Décaissements Fournisseurs & Alertes Cash
+// GESTIO 229 SaaS — Trésorerie Centrale (Banques, MoMo & Liquidités)
+// =============================================================================
+// Séparation stricte de la Caisse
+// Gestion des comptes réels, approbation des versements de caisse et décaissements
+// Nettoyé de toute valeur fictive — Zéro donnée fictive
 // =============================================================================
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Landmark, Plus, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Building2, RefreshCw, Smartphone, Check, X, ShieldAlert,
-  Printer, ArrowRightLeft, CheckCircle2, AlertCircle
+  Printer, ArrowRightLeft, CheckCircle2, AlertCircle, Trash2, Eye
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { TreasuryDisbursementModal, ModalPortal } from '../../../components/modals'
-import clsx from 'clsx'
 
 const fmt = (n: number) =>
-  new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
+  new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
 
 interface TreasuryAccount {
   id: string
@@ -25,169 +27,345 @@ interface TreasuryAccount {
   institution: string
   account_number: string
   balance: number
-  alert_threshold: number
+  alert_threshold?: number
 }
 
 interface PendingTransfer {
   id: string
-  sourceCaisse: string
+  created_at: string
+  requested_by: string
+  type: string
   amount: number
-  type: 'especes' | 'momo'
-  requestedBy: string
-  requestedAt: string
-  status: 'PENDING' | 'APPROVED'
+  motif: string
+  status: 'EN_ATTENTE' | 'APPROVED' | 'REJECTED'
 }
 
 export const TresoreriePage: React.FC = () => {
-  const { company } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
 
-  // Comptes de trésorerie
-  const [accounts, setAccounts] = useState<TreasuryAccount[]>([
-    { id: '1', name: 'Compte Principal Entreprise', type: 'bank', institution: 'Ecobank Bénin', account_number: 'BJ061 01001 00123456789 22', balance: 5450000, alert_threshold: 500000 },
-    { id: '2', name: 'Compte MoMo Marchand MTN', type: 'mobile_money', institution: 'MTN Mobile Money', account_number: '+229 97 00 11 22', balance: 780000, alert_threshold: 100000 },
-    { id: '3', name: 'Compte Flooz Marchand Moov', type: 'mobile_money', institution: 'Moov Africa Bénin', account_number: '+229 95 33 44 55', balance: 420000, alert_threshold: 100000 },
-    { id: '4', name: 'Coffre-Fort Trésorerie (Espèces)', type: 'vault', institution: 'Siège Central', account_number: 'COFFRE-01', balance: 850000, alert_threshold: 200000 },
-  ])
+  const [accounts, setAccounts] = useState<TreasuryAccount[]>([])
+  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([])
+  const [loading, setLoading] = useState(true)
 
-  // Demandes de versements en attente envoyées par la caisse
-  const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([
-    {
-      id: 'req-01',
-      sourceCaisse: 'Caisse POS Rayon 1',
-      amount: 200000,
-      type: 'especes',
-      requestedBy: 'Albert SOSSOU (Caissier)',
-      requestedAt: new Date(Date.now() - 3600000).toISOString(),
-      status: 'PENDING'
-    }
-  ])
-
+  // Modals
+  const [showAddAccountModal, setShowAddAccountModal] = useState(false)
   const [showDisbursementModal, setShowDisbursementModal] = useState(false)
 
-  // Approuver et encaisser un transfert de caisse vers la trésorerie
-  const handleApproveTransfer = (transfer: PendingTransfer) => {
-    // Créditer le coffre ou le compte MoMo selon le type
-    const targetAccountId = transfer.type === 'especes' ? '4' : '2'
-    setAccounts((prev) =>
-      prev.map((acc) =>
-        acc.id === targetAccountId
-          ? { ...acc, balance: acc.balance + transfer.amount }
-          : acc
-      )
-    )
+  // Formulaire nouveau compte trésorerie
+  const [newAccForm, setNewAccForm] = useState({
+    name: '',
+    type: 'bank' as 'bank' | 'mobile_money' | 'vault',
+    institution: '',
+    account_number: '',
+    initial_balance: 0,
+    alert_threshold: 50000
+  })
 
-    setPendingTransfers((prev) =>
-      prev.map((t) => (t.id === transfer.id ? { ...t, status: 'APPROVED' } : t))
+  // Charger les comptes trésorerie réels
+  const loadTreasuryData = useCallback(async () => {
+    if (!company?.id) return
+    setLoading(true)
+    try {
+      // 1. Charger depuis Supabase si table existante
+      const { data: dbAccounts, error } = await supabase
+        .from('treasury_accounts')
+        .select('*')
+        .eq('company_id', company.id)
+
+      if (!error && dbAccounts && dbAccounts.length > 0) {
+        setAccounts(dbAccounts)
+      } else {
+        // Fallback local tenant (uniquement les comptes enregistrés pour ce tenant)
+        const stored = localStorage.getItem(`gestio_treasury_accounts_${company.id}`)
+        if (stored) {
+          try {
+            setAccounts(JSON.parse(stored))
+          } catch (e) {
+            setAccounts([])
+          }
+        } else {
+          // Aucun compte par défaut : affiche état vide professionnel
+          setAccounts([])
+        }
+      }
+
+      // 2. Charger les demandes de versements caisse en attente
+      const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
+      if (storedRequests) {
+        try {
+          const reqs = JSON.parse(storedRequests)
+          setPendingTransfers(reqs)
+        } catch (e) {
+          setPendingTransfers([])
+        }
+      } else {
+        setPendingTransfers([])
+      }
+    } catch (err: any) {
+      console.error('Erreur chargement trésorerie :', err)
+      setAccounts([])
+      setPendingTransfers([])
+    } finally {
+      setLoading(false)
+    }
+  }, [company?.id])
+
+  useEffect(() => {
+    loadTreasuryData()
+  }, [loadTreasuryData])
+
+  // Sauvegarder les comptes localement
+  const saveAccounts = (updated: TreasuryAccount[]) => {
+    setAccounts(updated)
+    if (company?.id) {
+      localStorage.setItem(`gestio_treasury_accounts_${company.id}`, JSON.stringify(updated))
+    }
+  }
+
+  // Ajouter un nouveau compte réel
+  const handleCreateAccount = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newAccForm.name.trim()) return
+
+    const newAccount: TreasuryAccount = {
+      id: `acc-${Date.now()}`,
+      name: newAccForm.name.trim(),
+      type: newAccForm.type,
+      institution: newAccForm.institution.trim() || 'Établissement Financier',
+      account_number: newAccForm.account_number.trim() || 'N/A',
+      balance: Number(newAccForm.initial_balance) || 0,
+      alert_threshold: Number(newAccForm.alert_threshold) || 50000
+    }
+
+    const updated = [...accounts, newAccount]
+    saveAccounts(updated)
+
+    // Tenter également insertion Supabase
+    if (company?.id) {
+      try {
+        await supabase.from('treasury_accounts').insert({
+          company_id: company.id,
+          name: newAccount.name,
+          type: newAccount.type,
+          institution: newAccount.institution,
+          account_number: newAccount.account_number,
+          balance: newAccount.balance,
+          alert_threshold: newAccount.alert_threshold
+        })
+      } catch (e) {}
+    }
+
+    toast.success('Compte de trésorerie créé avec succès !')
+    setShowAddAccountModal(false)
+    setNewAccForm({
+      name: '',
+      type: 'bank',
+      institution: '',
+      account_number: '',
+      initial_balance: 0,
+      alert_threshold: 50000
+    })
+  }
+
+  // Approuver une demande de versement envoyée par la caisse
+  const handleApproveTransfer = (transfer: PendingTransfer) => {
+    // Trouver le compte de destination correspondant (ex: coffre pour espèces, momo pour momo)
+    const target = accounts.find((a) =>
+      transfer.type === 'Espèces' ? a.type === 'vault' : a.type === 'mobile_money'
+    ) || accounts[0]
+
+    if (target) {
+      const updatedAccounts = accounts.map((a) =>
+        a.id === target.id ? { ...a, balance: a.balance + Number(transfer.amount) } : a
+      )
+      saveAccounts(updatedAccounts)
+    }
+
+    const updatedTransfers: PendingTransfer[] = pendingTransfers.map((t) =>
+      t.id === transfer.id ? { ...t, status: 'APPROVED' } : t
     )
+    setPendingTransfers(updatedTransfers)
+    if (company?.id) {
+      localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
+    }
 
     toast.success(
       'Fonds Encaissés en Trésorerie !',
-      `Versement de ${fmt(transfer.amount)} validé et crédité sur les comptes centraux.`
+      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité.`
     )
   }
 
-  // Solde global consolidé
-  const totalTreasuryBalance = accounts.reduce((sum, a) => sum + a.balance, 0)
-  const totalBankBalance = accounts.filter((a) => a.type === 'bank').reduce((sum, a) => sum + a.balance, 0)
-  const totalMomoBalance = accounts.filter((a) => a.type === 'mobile_money').reduce((sum, a) => sum + a.balance, 0)
-  const totalVaultBalance = accounts.filter((a) => a.type === 'vault').reduce((sum, a) => sum + a.balance, 0)
+  // Rejeter une demande
+  const handleRejectTransfer = (transferId: string) => {
+    const updatedTransfers: PendingTransfer[] = pendingTransfers.map((t) =>
+      t.id === transferId ? { ...t, status: 'REJECTED' } : t
+    )
+    setPendingTransfers(updatedTransfers)
+    if (company?.id) {
+      localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
+    }
+    toast.info('Demande rejetée', 'Le caissier a été notifié.')
+  }
+
+  // Totaux calculés à partir des comptes réels
+  const totalTreasuryBalance = useMemo(() => accounts.reduce((sum, a) => sum + (Number(a.balance) || 0), 0), [accounts])
+  const totalBankBalance = useMemo(() => accounts.filter((a) => a.type === 'bank').reduce((sum, a) => sum + (Number(a.balance) || 0), 0), [accounts])
+  const totalMomoBalance = useMemo(() => accounts.filter((a) => a.type === 'mobile_money').reduce((sum, a) => sum + (Number(a.balance) || 0), 0), [accounts])
+  const totalVaultBalance = useMemo(() => accounts.filter((a) => a.type === 'vault').reduce((sum, a) => sum + (Number(a.balance) || 0), 0), [accounts])
+
+  const pendingRequestsList = useMemo(() => pendingTransfers.filter((t) => t.status === 'EN_ATTENTE'), [pendingTransfers])
 
   return (
-    <div className="space-y-4">
-      {/* ── En-tête ─────────────────────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+    <div className="space-y-6 animate-fadeIn">
+      {/* ── En-tête Trésorerie ─────────────────────────────────────────────────── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <Landmark className="w-5 h-5 text-indigo-600" />
-            Module 4.2 : Trésorerie Centrale & Liquidités
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
+            <Landmark className="w-6 h-6 text-indigo-600" />
+            Trésorerie Centrale
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Suivi des comptes Banques, MoMo, validation des versements et décaissements
+            Comptes bancaires, comptes marchands MoMo, coffre-fort et validation des versements
           </p>
         </div>
 
-        <button
-          onClick={() => setShowDisbursementModal(true)}
-          className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
-        >
-          <ArrowDownRight className="w-3.5 h-3.5" /> Nouveau Décaissement Externe
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setShowAddAccountModal(true)}
+            className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Ajouter un compte</span>
+          </button>
+          <button
+            onClick={() => setShowDisbursementModal(true)}
+            disabled={accounts.length === 0}
+            className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+          >
+            <ArrowDownRight className="w-3.5 h-3.5" />
+            <span>Nouveau Décaissement</span>
+          </button>
+        </div>
       </div>
 
-      {/* ── KPIs Trésorerie ─────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-        <div className="bg-gradient-to-br from-indigo-900 to-slate-900 text-white rounded-2xl p-4 shadow-sm flex flex-col justify-between">
-          <span className="text-[11px] font-bold text-indigo-200 uppercase">Trésorerie Consolidée</span>
-          <p className="text-2xl font-black text-emerald-400 font-mono my-1">{fmt(totalTreasuryBalance)}</p>
-          <span className="text-[10px] text-slate-300">Total Liquidités Disponibles</span>
+      {/* ── KPIs Trésorerie Réels ─────────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-indigo-950 via-slate-900 to-indigo-900 text-white rounded-3xl p-5 shadow-sm flex flex-col justify-between">
+          <span className="text-xs font-bold text-indigo-200 uppercase tracking-wider">
+            Trésorerie Consolidée
+          </span>
+          <p className="text-2xl font-black text-emerald-400 font-mono my-2">
+            {fmt(totalTreasuryBalance)}
+          </p>
+          <span className="text-[10px] text-slate-400 border-t border-slate-700/80 pt-1.5">
+            {accounts.length} compte(s) actif(s)
+          </span>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-bold text-slate-500 uppercase">Comptes Bancaires</span>
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Comptes Bancaires
+            </span>
             <Building2 className="w-4 h-4 text-indigo-600" />
           </div>
-          <p className="text-xl font-black text-slate-900 font-mono">{fmt(totalBankBalance)}</p>
-          <span className="text-[10px] text-slate-400">Ecobank & Autres</span>
+          <p className="text-xl font-black text-slate-900 font-mono">
+            {fmt(totalBankBalance)}
+          </p>
+          <span className="text-[10px] text-slate-400 border-t border-slate-100 pt-1.5">
+            {accounts.filter((a) => a.type === 'bank').length} banque(s)
+          </span>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-bold text-slate-500 uppercase">MoMo Marchands</span>
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              MoMo Marchands
+            </span>
             <Smartphone className="w-4 h-4 text-amber-600" />
           </div>
-          <p className="text-xl font-black text-amber-800 font-mono">{fmt(totalMomoBalance)}</p>
-          <span className="text-[10px] text-slate-400">MTN & Moov Africa</span>
+          <p className="text-xl font-black text-amber-800 font-mono">
+            {fmt(totalMomoBalance)}
+          </p>
+          <span className="text-[10px] text-slate-400 border-t border-slate-100 pt-1.5">
+            {accounts.filter((a) => a.type === 'mobile_money').length} ligne(s) marchandes
+          </span>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
-          <div className="flex items-center justify-between mb-1">
-            <span className="text-[11px] font-bold text-slate-500 uppercase">Coffre-Fort Espèces</span>
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm flex flex-col justify-between">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Coffre-Fort (Espèces)
+            </span>
             <Wallet className="w-4 h-4 text-emerald-600" />
           </div>
-          <p className="text-xl font-black text-emerald-800 font-mono">{fmt(totalVaultBalance)}</p>
-          <span className="text-[10px] text-slate-400">Liquidités en coffre</span>
+          <p className="text-xl font-black text-emerald-800 font-mono">
+            {fmt(totalVaultBalance)}
+          </p>
+          <span className="text-[10px] text-slate-400 border-t border-slate-100 pt-1.5">
+            Liquidités centrales
+          </span>
         </div>
       </div>
 
-      {/* ── Section Demandes de Retrait Caisse en Attente ───────────────────── */}
-      {pendingTransfers.some((t) => t.status === 'PENDING') && (
-        <div className="bg-amber-50/70 border border-amber-200 rounded-2xl p-4 space-y-3">
-          <div className="flex items-center gap-2">
-            <AlertCircle className="w-5 h-5 text-amber-600" />
-            <h3 className="font-bold text-sm text-amber-900">
-              Demandes de Versement Caisse vers Trésorerie en Attente
+      {/* ── Demandes de Versement Caisse en Attente ──────────────────────────── */}
+      {pendingRequestsList.length > 0 && (
+        <div className="bg-amber-50/70 border border-amber-200 rounded-3xl p-5 shadow-sm space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-sm text-amber-950 flex items-center gap-2">
+              <AlertCircle className="w-5 h-5 text-amber-600" />
+              <span>Demandes de Versement Caisse en Attente ({pendingRequestsList.length})</span>
             </h3>
+            <span className="text-xs text-amber-800 font-semibold">Validation requise</span>
           </div>
 
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs bg-white rounded-xl shadow-sm overflow-hidden">
+          <div className="overflow-x-auto bg-white rounded-2xl border border-amber-100">
+            <table className="w-full text-left text-xs">
               <thead className="bg-amber-100/60 text-amber-900 font-bold border-b border-amber-200">
                 <tr>
-                  <th className="p-3">Origine Caisse</th>
                   <th className="p-3">Demandeur</th>
                   <th className="p-3">Date / Heure</th>
+                  <th className="p-3 text-center">Canal</th>
                   <th className="p-3 text-right">Montant</th>
-                  <th className="p-3 text-center">Type</th>
-                  <th className="p-3 text-center">Action Approbation</th>
+                  <th className="p-3">Motif</th>
+                  <th className="p-3 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {pendingTransfers.filter((t) => t.status === 'PENDING').map((transfer) => (
+                {pendingRequestsList.map((transfer) => (
                   <tr key={transfer.id}>
-                    <td className="p-3 font-sans font-bold text-slate-800">{transfer.sourceCaisse}</td>
-                    <td className="p-3 font-sans text-slate-600">{transfer.requestedBy}</td>
-                    <td className="p-3 font-sans text-slate-500">{new Date(transfer.requestedAt).toLocaleTimeString('fr-BJ')}</td>
-                    <td className="p-3 text-right font-black text-emerald-700">{fmt(transfer.amount)}</td>
-                    <td className="p-3 text-center font-sans font-bold text-slate-700 uppercase">{transfer.type}</td>
+                    <td className="p-3 font-sans font-bold text-slate-800">{transfer.requested_by}</td>
+                    <td className="p-3 font-sans text-slate-500">
+                      {new Date(transfer.created_at).toLocaleString('fr-BJ', {
+                        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+                      })}
+                    </td>
                     <td className="p-3 text-center font-sans">
-                      <button
-                        onClick={() => handleApproveTransfer(transfer)}
-                        className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition flex items-center gap-1 mx-auto"
-                      >
-                        <Check className="w-3.5 h-3.5" /> Encaisser en Trésorerie
-                      </button>
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        transfer.type === 'Espèces' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {transfer.type}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right font-black text-slate-900">{fmt(transfer.amount)}</td>
+                    <td className="p-3 font-sans text-slate-600">{transfer.motif}</td>
+                    <td className="p-3 text-center font-sans">
+                      <div className="flex items-center justify-center gap-1.5">
+                        <button
+                          onClick={() => handleApproveTransfer(transfer)}
+                          className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold transition flex items-center gap-1"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>Encaisser</span>
+                        </button>
+                        <button
+                          onClick={() => handleRejectTransfer(transfer.id)}
+                          className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-[11px] font-bold transition"
+                        >
+                          Rejeter
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -197,48 +375,177 @@ export const TresoreriePage: React.FC = () => {
         </div>
       )}
 
-      {/* ── Liste des Comptes de Trésorerie ─────────────────────────────────── */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
-        <h3 className="font-bold text-sm text-slate-900">Détail des Comptes de Trésorerie</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {accounts.map((acc) => (
-            <div key={acc.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h4 className="font-bold text-slate-800 text-sm">{acc.name}</h4>
-                  <p className="text-xs text-slate-500">{acc.institution} • {acc.account_number}</p>
+      {/* ── Liste des Comptes de Trésorerie Réels ────────────────────────────── */}
+      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Landmark className="w-5 h-5 text-indigo-600" />
+            <h3 className="text-sm font-bold text-slate-800">
+              Comptes & Coffres Actifs ({accounts.length})
+            </h3>
+          </div>
+          <span className="text-xs text-slate-400">Soldes réels validés</span>
+        </div>
+
+        {accounts.length === 0 ? (
+          <div className="p-12 text-center text-slate-400 space-y-3">
+            <p className="text-sm font-bold text-slate-600">Aucune donnée disponible</p>
+            <p className="text-xs max-w-sm mx-auto text-slate-400">
+              Aucun compte bancaire ou compte Mobile Money n'a encore été configuré pour cet établissement.
+            </p>
+            <button
+              onClick={() => setShowAddAccountModal(true)}
+              className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition"
+            >
+              + Enregistrer le premier compte
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-slate-100">
+            {accounts.map((acc) => (
+              <div key={acc.id} className="p-4 flex items-center justify-between gap-4 hover:bg-slate-50/80 transition">
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-sm ${
+                    acc.type === 'bank' ? 'bg-indigo-100 text-indigo-700' :
+                    acc.type === 'mobile_money' ? 'bg-amber-100 text-amber-700' :
+                    'bg-emerald-100 text-emerald-700'
+                  }`}>
+                    {acc.type === 'bank' ? <Building2 className="w-5 h-5" /> :
+                     acc.type === 'mobile_money' ? <Smartphone className="w-5 h-5" /> :
+                     <Wallet className="w-5 h-5" />}
+                  </div>
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">{acc.name}</p>
+                    <p className="text-xs text-slate-500 font-mono mt-0.5">
+                      {acc.institution} • {acc.account_number}
+                    </p>
+                  </div>
                 </div>
-                <span className={clsx(
-                  'px-2 py-0.5 rounded-full text-[10px] font-bold uppercase',
-                  acc.type === 'bank' ? 'bg-indigo-100 text-indigo-800' :
-                  acc.type === 'mobile_money' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
-                )}>
-                  {acc.type}
-                </span>
+
+                <div className="text-right">
+                  <p className="text-base font-black font-mono text-slate-900">{fmt(acc.balance)}</p>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                    acc.balance > (acc.alert_threshold || 50000)
+                      ? 'bg-emerald-50 text-emerald-700'
+                      : 'bg-rose-50 text-rose-700'
+                  }`}>
+                    {acc.balance > (acc.alert_threshold || 50000) ? 'Solde suffisant' : 'Alerte solde bas'}
+                  </span>
+                </div>
               </div>
-              <div className="flex justify-between items-baseline pt-2 border-t border-slate-200">
-                <span className="text-xs text-slate-500 font-medium">Solde Actuel :</span>
-                <span className="text-lg font-black text-slate-900 font-mono">{fmt(acc.balance)}</span>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* ── MODAL AJOUT DE COMPTE TRÉSORERIE ─────────────────────────────────── */}
+      <ModalPortal isOpen={showAddAccountModal} onClose={() => setShowAddAccountModal(false)} id="modal-add-treasury-acc">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+              <Plus className="w-5 h-5 text-indigo-600" />
+              Ajouter un Compte de Trésorerie
+            </h3>
+            <button onClick={() => setShowAddAccountModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleCreateAccount} className="space-y-4 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Type de Compte *</label>
+              <select
+                value={newAccForm.type}
+                onChange={(e) => setNewAccForm({ ...newAccForm, type: e.target.value as any })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-medium"
+              >
+                <option value="bank">Compte Bancaire (Ecobank, BOA, UBA, etc.)</option>
+                <option value="mobile_money">Compte Marchand Mobile Money (MTN / Moov)</option>
+                <option value="vault">Coffre-Fort Central (Espèces)</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Libellé du Compte *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: Compte Courant Principal"
+                value={newAccForm.name}
+                onChange={(e) => setNewAccForm({ ...newAccForm, name: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Établissement / Réseau *</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: Ecobank Bénin"
+                  value={newAccForm.institution}
+                  onChange={(e) => setNewAccForm({ ...newAccForm, institution: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">N° de Compte / RIB</label>
+                <input
+                  type="text"
+                  placeholder="Ex: BJ061..."
+                  value={newAccForm.account_number}
+                  onChange={(e) => setNewAccForm({ ...newAccForm, account_number: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                />
               </div>
             </div>
-          ))}
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Solde Réel Initial (FCFA) *</label>
+              <input
+                type="number"
+                required
+                min="0"
+                value={newAccForm.initial_balance}
+                onChange={(e) => setNewAccForm({ ...newAccForm, initial_balance: Number(e.target.value) })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-sm"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">Solde effectif disponible à ce jour sur le relevé.</p>
+            </div>
+
+            <div className="flex gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowAddAccountModal(false)}
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition shadow-md"
+              >
+                Créer le Compte
+              </button>
+            </div>
+          </form>
         </div>
-      </div>
+      </ModalPortal>
 
       {/* Modal Décaissement */}
       <TreasuryDisbursementModal
         isOpen={showDisbursementModal}
         onClose={() => setShowDisbursementModal(false)}
-        accounts={accounts}
-        onDisbursed={(disb) => {
-          setAccounts((prev) =>
-            prev.map((acc) =>
-              acc.id === disb.account_id
-                ? { ...acc, balance: Math.max(0, acc.balance - disb.amount) }
-                : acc
+        onSuccess={(d) => {
+          // Déduire du premier compte bancaire ou coffre
+          if (accounts.length > 0) {
+            const updated = accounts.map((a, i) =>
+              i === 0 ? { ...a, balance: Math.max(0, a.balance - Number(d.amount || 0)) } : a
             )
-          )
-          toast.success('Décaissement Effectué !', `Montant : ${fmt(disb.amount)} retiré de ${disb.account_name}`)
+            saveAccounts(updated)
+          }
+          toast.success('Décaissement enregistré avec succès')
         }}
       />
     </div>

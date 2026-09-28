@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { ArrowUpRight, Check, X } from 'lucide-react'
 import ModalPortal from './ModalPortal'
 
@@ -9,19 +9,20 @@ interface WithdrawalRequestModalProps {
 }
 
 export const WithdrawalRequestModal: React.FC<WithdrawalRequestModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const [type, setType] = useState('Espèces')
-  const [amount, setAmount] = useState(25000)
-  const [reason, setReason] = useState('Versement en banque')
+  const [type, setType] = useState<'Espèces' | 'MoMo'>('Espèces')
+  const [amount, setAmount] = useState<number | ''>('')
+  const [reason, setReason] = useState('')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!amount || amount <= 0) {
-      alert('Veuillez entrer un montant valide.')
+    const numAmount = Number(amount)
+    if (!numAmount || numAmount <= 0) {
       return
     }
-    if (onSuccess) onSuccess({ type, amount, reason })
-    alert(`✅ Demande de retrait de ${amount} FCFA (${type}) enregistrée avec succès !`)
+    if (onSuccess) onSuccess({ type, amount: numAmount, reason })
     onClose()
+    setAmount('')
+    setReason('')
   }
 
   return (

@@ -74,23 +74,25 @@ interface NewUserForm {
 const DEFAULT_ROLES = [
   { value: 'gerant', label: 'Gérant' },
   { value: 'caissier', label: 'Caissier / Caissière' },
-  { value: 'magasinier', label: 'Magasinier / Gestionnaire Stock' },
+  { value: 'magasinier', label: 'Magasinier' },
+  { value: 'gestionnaire', label: 'Gestionnaire' },
   { value: 'comptable', label: 'Comptable' },
+  { value: 'administrateur', label: 'Administrateur' },
   { value: 'vendeur', label: 'Vendeur / Commercial' },
   { value: 'responsable_secteur', label: 'Responsable de Secteur' },
-  { value: 'employe', label: 'Employé Général' },
 ]
 
 const ALL_MODULES = [
-  { id: 'ventes', label: 'Ventes / POS' },
-  { id: 'stock', label: 'Stock / Inventaire' },
   { id: 'caisse', label: 'Caisse' },
-  { id: 'finances', label: 'Trésorerie / Finances' },
-  { id: 'clients', label: 'Clients / Créances' },
-  { id: 'fournisseurs', label: 'Fournisseurs / Achats' },
+  { id: 'stock', label: 'Stocks' },
+  { id: 'ventes', label: 'Vente & POS' },
+  { id: 'clients', label: 'Clients & Créances' },
   { id: 'depenses', label: 'Dépenses' },
-  { id: 'reporting', label: 'Rapports' },
-  { id: 'audit', label: 'Journal / Audit' },
+  { id: 'finances', label: 'Trésorerie' },
+  { id: 'fournisseurs', label: 'Fournisseurs & Achats' },
+  { id: 'reporting', label: 'Rapports & Analyse' },
+  { id: 'syscohada', label: 'Comptabilité' },
+  { id: 'utilisateurs', label: 'Gestion Utilisateurs' },
   { id: 'configuration', label: 'Configuration' },
 ]
 
@@ -501,18 +503,20 @@ const UtilisateursPage: React.FC = () => {
                       <thead className="bg-slate-50 font-bold text-slate-600">
                         <tr>
                           <th className="text-left px-3 py-2">Module</th>
-                          <th className="px-3 py-2 text-center">Voir</th>
-                          <th className="px-3 py-2 text-center">Créer</th>
-                          <th className="px-3 py-2 text-center">Modifier</th>
-                          <th className="px-3 py-2 text-center">Supprimer</th>
+                          <th className="px-2 py-2 text-center">Voir</th>
+                          <th className="px-2 py-2 text-center">Créer</th>
+                          <th className="px-2 py-2 text-center">Modifier</th>
+                          <th className="px-2 py-2 text-center">Valider</th>
+                          <th className="px-2 py-2 text-center">Supprimer</th>
+                          <th className="px-2 py-2 text-center">Administrer</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
                         {ALL_MODULES.map((mod) => (
                           <tr key={mod.id} className="hover:bg-slate-50">
                             <td className="px-3 py-2 font-medium text-slate-800">{mod.label}</td>
-                            {['view', 'create', 'edit', 'delete'].map((action) => (
-                              <td key={action} className="px-3 py-2 text-center">
+                            {['view', 'create', 'edit', 'validate', 'delete', 'admin'].map((action) => (
+                              <td key={action} className="px-2 py-2 text-center">
                                 <input
                                   type="checkbox"
                                   checked={form.permissions[mod.id]?.[action] ?? false}

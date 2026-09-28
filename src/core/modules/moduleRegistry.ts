@@ -34,11 +34,21 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
   // MODULES COMMUNS (activables dans tout secteur)
   // ══════════════════════════════════════════════════════════════════════
 
+  'dashboard': {
+    id: 'dashboard',
+    label: 'Tableau de bord',
+    icon: 'LayoutDashboard',
+    path: 'tableau-bord',
+    isCommon: true,
+    defaultEnabled: true,
+    group: 'apercu',
+  },
+
   'ventes': {
     id: 'ventes',
-    label: 'Ventes & Caisse POS',
+    label: 'Vente & POS',
     icon: 'ShoppingCart',
-    path: 'ventes',
+    path: 'vente-pos',
     isCommon: true,
     defaultEnabled: true,
     group: 'commercial',
@@ -46,19 +56,29 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
 
   'stock': {
     id: 'stock',
-    label: 'Stock & Inventaire',
+    label: 'Stocks',
     icon: 'Package',
-    path: 'stock',
+    path: 'stocks',
     isCommon: true,
     defaultEnabled: true,
-    group: 'gestion',
+    group: 'commercial',
+  },
+
+  'caisse': {
+    id: 'caisse',
+    label: 'Caisse',
+    icon: 'Wallet',
+    path: 'caisse',
+    isCommon: true,
+    defaultEnabled: true,
+    group: 'commercial',
   },
 
   'finances': {
     id: 'finances',
-    label: 'Trésorerie & Caisses',
+    label: 'Trésorerie',
     icon: 'Landmark',
-    path: 'finances',
+    path: 'tresorerie',
     isCommon: true,
     defaultEnabled: true,
     group: 'finance',
@@ -71,7 +91,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     path: 'clients',
     isCommon: true,
     defaultEnabled: true,
-    group: 'commercial',
+    group: 'finance',
   },
 
   'fournisseurs': {
@@ -639,12 +659,13 @@ export function groupNavItems(
 }
 
 // Ordre d'affichage des groupes dans la sidebar
-export const GROUP_ORDER = ['commercial', 'gestion', 'finance', 'admin']
+export const GROUP_ORDER = ['apercu', 'commercial', 'finance', 'gestion', 'admin']
 
 export const GROUP_LABELS: Record<string, string> = {
-  commercial: 'Commercial',
-  gestion: 'Gestion',
-  finance: 'Finance',
+  apercu: "Vue d'Ensemble",
+  commercial: 'Activités & Ventes',
+  finance: 'Trésorerie & Finance',
+  gestion: 'Approvisionnements & Rapports',
   admin: 'Administration',
 }
 
