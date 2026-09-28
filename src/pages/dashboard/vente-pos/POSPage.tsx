@@ -15,6 +15,12 @@ import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { ModalPortal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
+import {
+  BatchPricingConfig,
+  calculateBatchLinePrice,
+  formatUvQty,
+  getBatchTiersList
+} from '../../../utils/batchPricing'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -28,12 +34,19 @@ interface Product {
   unit: string
   selling_price: number // Prix TTC
   cost_price: number    // Coût TTC
+  coef?: number
+  ucd?: string
+  uv?: string
   current_stock?: number
+  stock_vente?: number
+  stock_magasin?: number
   is_vat_subject?: boolean
   vat_rate?: number
   is_aib_subject?: boolean
   aib_rate?: number
   category?: { name: string }
+  batch_pricing?: BatchPricingConfig
+  sector_meta?: any
 }
 
 interface Customer {
@@ -52,6 +65,8 @@ interface CartItem {
   qty: number
   unitPrice: number // TTC
   discount: number
+  batchTierLabel?: string
+  isBatchTier?: boolean
 }
 
 interface PaymentLine {
@@ -157,7 +172,16 @@ export const POSPage: React.FC = () => {
       if (prodErr) throw prodErr
       if (custErr) throw custErr
 
-      setProducts(prods || [])
+      const mappedProds = (prods || []).map((p: any) => ({
+        ...p,
+        selling_price: Number(p.selling_price) || 0,
+        cost_price: Number(p.cost_price) || 0,
+        coef: Number(p.coef || p.sector_meta?.coef || 1),
+        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
+        uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
+        batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
+      }))
+      setProducts(mappedProds)
       setCustomers(custs || [])
 
       // Transformer les ventes réelles chargées
@@ -210,11 +234,31 @@ export const POSPage: React.FC = () => {
       return
     }
 
+    const match = calculateBatchLinePrice(
+      qty,
+      selectedProductForDetail.batch_pricing,
+      selectedProductForDetail.selling_price
+    )
+
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === selectedProductForDetail.id)
       if (existing) {
+        const combinedQty = Math.round((existing.qty + qty) * 1000) / 1000
+        const combinedMatch = calculateBatchLinePrice(
+          combinedQty,
+          selectedProductForDetail.batch_pricing,
+          selectedProductForDetail.selling_price
+        )
         return prev.map((i) =>
-          i.product.id === selectedProductForDetail.id ? { ...i, qty: i.qty + qty } : i
+          i.product.id === selectedProductForDetail.id
+            ? {
+                ...i,
+                qty: combinedQty,
+                unitPrice: combinedMatch.effectiveUnitPriceTtc,
+                batchTierLabel: combinedMatch.matchedTierLabel,
+                isBatchTier: combinedMatch.isMatched,
+              }
+            : i
         )
       }
       return [
@@ -222,8 +266,10 @@ export const POSPage: React.FC = () => {
         {
           product: selectedProductForDetail,
           qty,
-          unitPrice: selectedProductForDetail.selling_price,
+          unitPrice: match.effectiveUnitPriceTtc,
           discount: 0,
+          batchTierLabel: match.matchedTierLabel,
+          isBatchTier: match.isMatched,
         }
       ]
     })
@@ -237,8 +283,23 @@ export const POSPage: React.FC = () => {
       removeFromCart(productId)
       return
     }
+    const safeQty = Math.round(newQty * 1000) / 1000
     setCart((prev) =>
-      prev.map((i) => (i.product.id === productId ? { ...i, qty: Math.round(newQty * 1000) / 1000 } : i))
+      prev.map((i) => {
+        if (i.product.id !== productId) return i
+        const match = calculateBatchLinePrice(
+          safeQty,
+          i.product.batch_pricing,
+          i.product.selling_price
+        )
+        return {
+          ...i,
+          qty: safeQty,
+          unitPrice: match.effectiveUnitPriceTtc,
+          batchTierLabel: match.matchedTierLabel,
+          isBatchTier: match.isMatched,
+        }
+      })
     )
   }
 
@@ -413,6 +474,26 @@ export const POSPage: React.FC = () => {
         setCustomers((prev) =>
           prev.map((c) => (c.id === selectedCustomer.id ? { ...c, current_debt: newDebt } : c))
         )
+      }
+
+      // Déstockage strict selon la quantité UV réellement vendue (CDC)
+      for (const line of cart) {
+        if (line.product?.id) {
+          try {
+            const currentStock = Number(line.product.stock_vente ?? line.product.current_stock ?? 0)
+            const newStock = Math.max(0, currentStock - line.qty)
+            await supabase
+              .from('products')
+              .update({ stock_vente: newStock })
+              .eq('id', line.product.id)
+
+            setProducts((prev) =>
+              prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: newStock } : p))
+            )
+          } catch (err: any) {
+            console.warn('Erreur déstockage ligne vente :', err?.message)
+          }
+        }
       }
 
       setSalesHistory([newSale, ...salesHistory])
@@ -629,9 +710,16 @@ export const POSPage: React.FC = () => {
                     <div key={item.product.id} className="pt-2 first:pt-0 flex items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <p className="font-semibold text-xs text-slate-800 truncate">{item.product.name}</p>
-                        <p className="text-[10px] text-slate-400 font-mono">
-                          {fmt(item.unitPrice)} / {item.product.unit}
-                        </p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="text-[10px] text-slate-400 font-mono">
+                            {fmt(item.unitPrice)} / {item.product.unit}
+                          </p>
+                          {item.batchTierLabel && (
+                            <span className="text-[9px] bg-emerald-100 text-emerald-800 font-semibold px-1 rounded">
+                              {item.batchTierLabel}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
@@ -818,23 +906,66 @@ export const POSPage: React.FC = () => {
             </div>
 
             <div className="space-y-4">
-              <div className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-200">
-                <span className="text-xs text-slate-600 font-semibold">Prix Unitaire (TTC) :</span>
-                <span className="text-lg font-black text-emerald-700 font-mono">
+              <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
+                <span className="text-xs text-slate-600 dark:text-slate-400 font-semibold">Prix Unitaire de Base (TTC) :</span>
+                <span className="text-lg font-black text-emerald-700 dark:text-emerald-400 font-mono">
                   {fmt(selectedProductForDetail.selling_price)}
                 </span>
               </div>
 
+              {/* Paliers par lot préenregistrés (quantités UV) si configurés */}
+              {selectedProductForDetail.batch_pricing?.enabled && (
+                (() => {
+                  const tiers = getBatchTiersList(
+                    selectedProductForDetail.batch_pricing.coef,
+                    selectedProductForDetail.batch_pricing
+                  ).filter((t) => t.priceTtc > 0)
+
+                  if (tiers.length === 0) return null
+
+                  return (
+                    <div className="space-y-1.5 p-3 bg-emerald-50/70 dark:bg-emerald-950/40 rounded-2xl border border-emerald-200 dark:border-emerald-800">
+                      <span className="text-[11px] font-bold text-emerald-900 dark:text-emerald-200 block">
+                        Paliers par Lot Préenregistrés (Quantités en {selectedProductForDetail.unit}) :
+                      </span>
+                      <div className="flex flex-wrap gap-1.5">
+                        {tiers.map((t) => {
+                          const isSel = Math.abs(detailQty - t.uvQty) < 0.005
+                          return (
+                            <button
+                              key={t.key}
+                              type="button"
+                              onClick={() => setDetailQty(t.uvQty)}
+                              className={clsx(
+                                'px-2.5 py-1.5 rounded-xl text-xs font-bold transition border flex items-center gap-1.5 shadow-sm',
+                                isSel
+                                  ? 'bg-emerald-600 text-white border-emerald-600'
+                                  : 'bg-white dark:bg-slate-900 text-slate-800 dark:text-slate-200 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900'
+                              )}
+                            >
+                              <span className="font-mono">{formatUvQty(t.uvQty)} {selectedProductForDetail.unit}</span>
+                              <span className={clsx('text-[10px] font-mono', isSel ? 'text-emerald-100' : 'text-emerald-700 dark:text-emerald-400')}>
+                                ({fmt(t.priceTtc)})
+                              </span>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })()
+              )}
+
               {/* Sélecteur de quantité numérique décimale */}
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                  Quantité à Ajouter ({selectedProductForDetail.unit}) :
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
+                  Quantité à Vendre ({selectedProductForDetail.unit}) :
                 </label>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setDetailQty(Math.max(0.1, Math.round((detailQty - 1) * 100) / 100))}
-                    className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center transition"
+                    className="w-10 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-black text-lg flex items-center justify-center transition"
                   >
                     <Minus className="w-4 h-4" />
                   </button>
@@ -845,26 +976,45 @@ export const POSPage: React.FC = () => {
                     min="0.001"
                     value={detailQty}
                     onChange={(e) => setDetailQty(Math.max(0.001, Number(e.target.value)))}
-                    className="flex-1 p-2 text-center text-lg font-black font-mono border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    className="flex-1 p-2 text-center text-lg font-black font-mono border border-slate-300 dark:border-slate-600 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100"
                   />
 
                   <button
                     type="button"
                     onClick={() => setDetailQty(Math.round((detailQty + 1) * 100) / 100)}
-                    className="w-10 h-10 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl font-black text-lg flex items-center justify-center transition"
+                    className="w-10 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-black text-lg flex items-center justify-center transition"
                   >
                     <Plus className="w-4 h-4" />
                   </button>
                 </div>
               </div>
 
-              {/* Total Ligne = Qté * PU */}
-              <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 flex justify-between items-center">
-                <span className="text-xs font-bold text-emerald-900">Total de la Ligne :</span>
-                <span className="text-lg font-black text-emerald-700 font-mono">
-                  {fmt(Math.round(detailQty * selectedProductForDetail.selling_price))}
-                </span>
-              </div>
+              {/* Total Ligne = Calcul automatique selon palier ou tarif standard UV */}
+              {(() => {
+                const match = calculateBatchLinePrice(
+                  detailQty,
+                  selectedProductForDetail.batch_pricing,
+                  selectedProductForDetail.selling_price
+                )
+
+                return (
+                  <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl border border-emerald-200 dark:border-emerald-800 flex justify-between items-center">
+                    <div>
+                      <span className="text-xs font-bold text-emerald-900 dark:text-emerald-200 block">Total de la Ligne :</span>
+                      {selectedProductForDetail.batch_pricing?.enabled && (
+                        <span className="text-[10px] text-emerald-700 dark:text-emerald-400 font-semibold block mt-0.5">
+                          {match.isMatched
+                            ? `✓ ${match.matchedTierLabel} appliqué`
+                            : `Tarif standard UV (${formatUvQty(detailQty)} × ${fmt(match.effectiveUnitPriceTtc)})`}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-lg font-black text-emerald-700 dark:text-emerald-300 font-mono">
+                      {fmt(match.totalLineTtc)}
+                    </span>
+                  </div>
+                )
+              })()}
             </div>
 
             <div className="flex gap-2 pt-4 border-t border-slate-100 mt-5">

@@ -33,6 +33,8 @@ interface ProductStock {
   stock_vente: number   // Stock rayon / Point de vente (UV)
   min_stock_alert: number
   category?: { name: string }
+  batch_pricing?: any
+  sector_meta?: any
 }
 
 interface InventoryItem {
@@ -130,7 +132,9 @@ export const StocksPage: React.FC = () => {
         stock_magasin: Number(p.stock_magasin) || 0,
         stock_vente: Number(p.stock_vente) || 0,
         min_stock_alert: Number(p.min_stock_alert) || 5,
-        category: p.category
+        category: p.category,
+        batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
+        sector_meta: p.sector_meta,
       }))
 
       setProducts(mapped)
