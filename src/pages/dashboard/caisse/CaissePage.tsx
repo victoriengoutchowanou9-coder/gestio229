@@ -197,27 +197,34 @@ export const CaissePage: React.FC = () => {
       if (error) console.warn('Erreur chargement sales_orders :', error)
       const allSales = sales || []
 
-      // Filtrer strictement les ventes par secteur actif (isolation totale)
+      // Filtrer strictement les ventes par secteur actif (isolation totale inter-secteurs)
       const realSales = allSales.filter((s: any) => {
-        let saleSector = null
-        if (s.e_mecef_uid) {
+        let saleSector = s.sector_slug || null
+        let actId = null
+        if (!saleSector && s.e_mecef_uid) {
           try {
             if (s.e_mecef_uid.startsWith('{')) {
               const meta = JSON.parse(s.e_mecef_uid)
-              saleSector = meta.s || meta.sector
+              saleSector = meta.s || meta.sector_slug || meta.sector
+              actId = meta.act
             }
           } catch (e) {}
         }
         if (!saleSector && s.notes) {
           try {
             const nMeta = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
-            saleSector = nMeta.s || nMeta.sector
+            saleSector = nMeta.s || nMeta.sector_slug || nMeta.sector
+            if (!actId) actId = nMeta.act
           } catch (e) {}
         }
-        if (!saleSector) {
-          return currentSectorSlug === (company?.activity_sector || 'boutique')
+        if (saleSector) {
+          return saleSector === currentSectorSlug
         }
-        return saleSector === currentSectorSlug
+        if (actId && activeActivityId) {
+          return actId === activeActivityId
+        }
+        // Attribuer les ventes non identifiées uniquement au secteur par défaut de l'entreprise
+        return currentSectorSlug === (company?.activity_sector || 'boutique')
       })
 
       // Parser les paiements de chaque vente (depuis notes, e_mecef_uid ou payment_status)

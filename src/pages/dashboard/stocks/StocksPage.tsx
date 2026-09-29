@@ -74,8 +74,10 @@ interface DailyStockRow {
 }
 
 export const StocksPage: React.FC = () => {
-  const { company, user } = useAuthStore()
+  const { company, user, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
   const { toast } = useUIStore()
+
+  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
 
   const [activeTab, setActiveTab] = useState<'double_stock' | 'inventaire' | 'fiche_journaliere'>('double_stock')
 
@@ -140,7 +142,22 @@ export const StocksPage: React.FC = () => {
 
       if (error) throw error
 
-      const mapped: ProductStock[] = (data || []).map((p: any) => ({
+      // Filtrer strictement les produits par secteur actif (isolation totale inter-secteurs)
+      const filtered = (data || []).filter((p: any) => {
+        const meta = p.sector_meta || {}
+        const prodSector = p.sector_slug || meta.s || meta.sector_slug || meta.sector
+        if (prodSector) {
+          return prodSector === currentSectorSlug
+        }
+        if (meta.act && activeActivityId) {
+          return meta.act === activeActivityId
+        }
+        // Attribuer les produits non tagués/historiques uniquement au secteur par défaut de l'entreprise
+        const defaultSector = company?.activity_sector || 'boutique'
+        return currentSectorSlug === defaultSector
+      })
+
+      const mapped: ProductStock[] = filtered.map((p: any) => ({
         id: p.id,
         code: p.code,
         name: p.name,
@@ -165,7 +182,7 @@ export const StocksPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, toast])
+  }, [company?.id, company?.activity_sector, currentSectorSlug, activeActivityId, toast])
 
   useEffect(() => {
     loadData()
@@ -261,36 +278,53 @@ export const StocksPage: React.FC = () => {
         .gte('created_at', startIso)
         .lte('created_at', endIso)
 
+      // Filtrer les ventes selon le secteur actif (isolation stricte)
+      const filteredSales = (sales || []).filter((s: any) => {
+        let meta: any = {}
+        try {
+          meta = typeof s.notes === 'string' ? JSON.parse(s.notes) : (s.notes || {})
+        } catch (e) {
+          meta = {}
+        }
+        const saleSector = s.sector_slug || meta.s || meta.sector_slug || meta.sector
+        if (saleSector) {
+          return saleSector === currentSectorSlug
+        }
+        if (meta.act && activeActivityId) {
+          return meta.act === activeActivityId
+        }
+        const defaultSector = company?.activity_sector || 'boutique'
+        return currentSectorSlug === defaultSector
+      })
+
       const salesMap: Record<string, number> = {}
-      if (sales) {
-        sales.forEach((s: any) => {
-          if (s.items && Array.isArray(s.items) && s.items.length > 0) {
-            s.items.forEach((it: any) => {
-              const pId = it.product_id
-              if (pId) {
-                salesMap[pId] = (salesMap[pId] || 0) + (Number(it.quantity) || 0)
-              }
-            })
-          } else if (s.notes) {
-            try {
-              const parsed = JSON.parse(s.notes)
-              if (Array.isArray(parsed.lines)) {
-                parsed.lines.forEach((l: any) => {
-                  const pId = l.product?.id || l.productId
-                  if (pId) {
-                    salesMap[pId] = (salesMap[pId] || 0) + (Number(l.qty) || 0)
-                  }
-                })
-              }
-            } catch (e) {}
-          }
-        })
-      }
+      filteredSales.forEach((s: any) => {
+        if (s.items && Array.isArray(s.items) && s.items.length > 0) {
+          s.items.forEach((it: any) => {
+            const pId = it.product_id
+            if (pId) {
+              salesMap[pId] = (salesMap[pId] || 0) + (Number(it.quantity) || 0)
+            }
+          })
+        } else if (s.notes) {
+          try {
+            const parsed = JSON.parse(s.notes)
+            if (Array.isArray(parsed.lines)) {
+              parsed.lines.forEach((l: any) => {
+                const pId = l.product?.id || l.productId
+                if (pId) {
+                  salesMap[pId] = (salesMap[pId] || 0) + (Number(l.qty) || 0)
+                }
+              })
+            }
+          } catch (e) {}
+        }
+      })
       setPeriodSalesItems(salesMap)
     } catch (e) {
       console.warn('Erreur chargement activite periode stock', e)
     }
-  }, [company?.id, dateFilterMode, customDate, startDate, endDate])
+  }, [company?.id, company?.activity_sector, currentSectorSlug, activeActivityId, dateFilterMode, customDate, startDate, endDate])
 
   useEffect(() => {
     if (activeTab === 'fiche_journaliere') {
@@ -750,6 +784,11 @@ export const StocksPage: React.FC = () => {
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Package className="w-5 h-5 text-emerald-600" />
             Stocks & Inventaire
+            {(activeActivityName || currentSectorSlug) && (
+              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold border border-emerald-200">
+                {activeActivityName || currentSectorSlug.toUpperCase()}
+              </span>
+            )}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Double Stock (Magasin UCD & Vente UV), Transferts, Inventaire avec écarts et Valorisation Achat/Vente

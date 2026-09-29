@@ -40,7 +40,8 @@ export const UV_UNITS = [
 ]
 
 export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const { company } = useAuthStore()
+  const { company, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
+  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
 
   // Formulaire Produit sans valeurs fictives (vides ou 0 réels)
   const [form, setForm] = useState({
@@ -223,6 +224,9 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         : null
 
       const sectorMeta = {
+        s: currentSectorSlug,
+        sector_slug: currentSectorSlug,
+        act: activeActivityId,
         ucd: form.ucd,
         packaging: form.packaging,
         uv: form.uv,
@@ -247,6 +251,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
       // 3. Préparation du payload pour Supabase
       const insertPayload: any = {
         company_id: company.id,
+        sector_slug: currentSectorSlug,
         code: finalCode,
         name: form.name.trim(),
         unit: form.uv,

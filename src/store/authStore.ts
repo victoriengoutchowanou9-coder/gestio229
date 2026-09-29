@@ -67,14 +67,17 @@ export const useAuthStore = create<AuthState>()(
         try {
           localStorage.setItem('gestio229_active_sector', slug)
           if (activityId) localStorage.setItem('gestio229_active_activity_id', activityId)
+          else localStorage.removeItem('gestio229_active_activity_id')
           if (activityName) localStorage.setItem('gestio229_active_activity_name', activityName)
+          else localStorage.removeItem('gestio229_active_activity_name')
           if (location) localStorage.setItem('gestio229_active_activity_location', location)
+          else localStorage.removeItem('gestio229_active_activity_location')
         } catch (e) {}
         set({
           activeSectorSlug: slug,
-          activeActivityId: activityId ?? get().activeActivityId,
-          activeActivityName: activityName ?? get().activeActivityName,
-          activeActivityLocation: location ?? get().activeActivityLocation,
+          activeActivityId: activityId || null,
+          activeActivityName: activityName || null,
+          activeActivityLocation: location || null,
         })
       },
 

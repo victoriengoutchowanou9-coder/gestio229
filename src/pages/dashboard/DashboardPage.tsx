@@ -138,17 +138,21 @@ export const DashboardPage: React.FC = () => {
         }
       })
 
-      // 1. Filtrer STRICTEMENT les ventes du jour par secteur actif
+      // 1. Filtrer STRICTEMENT les ventes du jour par secteur actif (Zéro contamination inter-secteurs)
       const sectorSales = (mappedSales || []).filter((sale) => {
         const meta = sale.notes || {}
-        if (meta.s) return meta.s === currentSectorSlug
-        if (meta.sector_slug) return meta.sector_slug === currentSectorSlug
-        if (meta.act && activeActivityId) return meta.act === activeActivityId
-        return true
+        const saleSector = meta.s || meta.sector_slug || meta.sector
+        if (saleSector) {
+          return saleSector === currentSectorSlug
+        }
+        if (meta.act && activeActivityId) {
+          return meta.act === activeActivityId
+        }
+        return currentSectorSlug === (company?.activity_sector || 'boutique')
       })
       setSalesToday(sectorSales)
 
-      // 2. Produits actifs réels filtrés par secteur actif
+      // 2. Produits actifs réels filtrés STRICTEMENT par secteur actif
       const { data: prodData, error: prodErr } = await supabase
         .from('products')
         .select('*')
@@ -158,10 +162,14 @@ export const DashboardPage: React.FC = () => {
       if (prodErr) throw prodErr
       const prods = (prodData || []).filter((p: any) => {
         const meta = p.sector_meta || {}
-        if (meta.s) return meta.s === currentSectorSlug
-        if (meta.sector_slug) return meta.sector_slug === currentSectorSlug
-        if (p.sector_slug) return p.sector_slug === currentSectorSlug
-        return true
+        const prodSector = meta.s || meta.sector_slug || meta.sector || p.sector_slug
+        if (prodSector) {
+          return prodSector === currentSectorSlug
+        }
+        if (meta.act && activeActivityId) {
+          return meta.act === activeActivityId
+        }
+        return currentSectorSlug === (company?.activity_sector || 'boutique')
       })
       setActiveProductsCount(prods.length)
 

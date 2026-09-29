@@ -205,10 +205,14 @@ export const POSPage: React.FC = () => {
       const mappedProds = (prods || [])
         .filter((p: any) => {
           const meta = p.sector_meta || {}
-          if (meta.s) return meta.s === currentSectorSlug
-          if (meta.sector_slug) return meta.sector_slug === currentSectorSlug
-          if (p.sector_slug) return p.sector_slug === currentSectorSlug
-          return true
+          const prodSector = meta.s || meta.sector_slug || meta.sector || p.sector_slug
+          if (prodSector) {
+            return prodSector === currentSectorSlug
+          }
+          if (meta.act && activeActivityId) {
+            return meta.act === activeActivityId
+          }
+          return currentSectorSlug === (company.activity_sector || 'boutique')
         })
         .map((p: any) => ({
           ...p,
@@ -257,7 +261,7 @@ export const POSPage: React.FC = () => {
       })
       setCustomers(mappedCusts)
 
-      // Transformer les ventes réelles chargées depuis Supabase avec filtrage strict par secteur actif
+      // Transformer les ventes réelles chargées depuis Supabase avec filtrage strict par secteur actif (Zéro contamination)
       if (sales && !saleErr) {
         const sectorSales = (sales || []).filter((s: any) => {
           let parsedNotes: any = {}
@@ -272,12 +276,14 @@ export const POSPage: React.FC = () => {
             } catch (e) {}
           }
 
-          if (metaFromUid.s) return metaFromUid.s === currentSectorSlug
-          if (metaFromUid.sector_slug) return metaFromUid.sector_slug === currentSectorSlug
-          if (parsedNotes.s) return parsedNotes.s === currentSectorSlug
-          if (parsedNotes.sector_slug) return parsedNotes.sector_slug === currentSectorSlug
-          if (s.sector_slug) return s.sector_slug === currentSectorSlug
-          return true
+          const saleSector = metaFromUid.s || metaFromUid.sector_slug || metaFromUid.sector || parsedNotes.s || parsedNotes.sector_slug || parsedNotes.sector || s.sector_slug
+          if (saleSector) {
+            return saleSector === currentSectorSlug
+          }
+          if ((metaFromUid.act || parsedNotes.act) && activeActivityId) {
+            return (metaFromUid.act || parsedNotes.act) === activeActivityId
+          }
+          return currentSectorSlug === (company.activity_sector || 'boutique')
         })
 
         const mappedSales: SaleRecord[] = sectorSales.map((s: any) => {
