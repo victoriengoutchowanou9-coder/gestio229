@@ -33,6 +33,8 @@ interface Customer {
   total_reimbursed?: number
   payment_terms_days: number
   credit_authorized?: boolean
+  discount_eligible?: boolean
+  discount_rate?: number
   is_active: boolean
 }
 
@@ -48,6 +50,36 @@ interface SettlementReceipt {
   remainingDebt: number
   paymentMethod: string
   notes?: string
+}
+
+interface CustomerFormState {
+  code: string
+  name: string
+  ifu_number: string
+  phone: string
+  email: string
+  address: string
+  city: string
+  credit_choice: 'oui' | 'non' | null
+  credit_limit: string | number
+  discount_eligible: boolean
+  discount_rate: string | number
+  payment_terms_days: number
+}
+
+const initialFormState: CustomerFormState = {
+  code: '',
+  name: '',
+  ifu_number: '',
+  phone: '',
+  email: '',
+  address: '',
+  city: 'Cotonou',
+  credit_choice: null, // Par défaut : Non coché / aucune sélection
+  credit_limit: '',
+  discount_eligible: false,
+  discount_rate: '',
+  payment_terms_days: 30,
 }
 
 const ClientsPage: React.FC = () => {
@@ -84,18 +116,7 @@ const ClientsPage: React.FC = () => {
   // Relevé de compte client
   const [statementCustomer, setStatementCustomer] = useState<Customer | null>(null)
 
-  const [form, setForm] = useState({
-    code: '',
-    name: '',
-    ifu_number: '',
-    phone: '',
-    email: '',
-    address: '',
-    city: 'Cotonou',
-    credit_limit: 0,
-    credit_authorized: true,
-    payment_terms_days: 30,
-  })
+  const [form, setForm] = useState<CustomerFormState>(initialFormState)
 
   const loadCustomers = useCallback(async () => {
     if (!company?.id) return
@@ -108,7 +129,41 @@ const ClientsPage: React.FC = () => {
         .order('name')
 
       if (error) throw error
-      setCustomers(data || [])
+
+      // Charger métadonnées locales (fallback colonnes schema cache)
+      let localMeta: Record<string, any> = {}
+      try {
+        localMeta = JSON.parse(localStorage.getItem(`gestio_customers_meta_${company.id}`) || '{}')
+      } catch (e) {}
+
+      const mapped: Customer[] = (data || []).map((c: any) => {
+        const meta = localMeta[c.id] || localMeta[c.code] || {}
+        const creditLimit = Number(c.credit_limit) || 0
+        const isCreditAuth =
+          c.credit_authorized !== undefined && c.credit_authorized !== null
+            ? Boolean(c.credit_authorized)
+            : (meta.credit_authorized !== undefined ? Boolean(meta.credit_authorized) : (creditLimit > 0))
+
+        const isDiscount =
+          c.discount_eligible !== undefined && c.discount_eligible !== null
+            ? Boolean(c.discount_eligible)
+            : Boolean(meta.discount_eligible)
+
+        const discountRate =
+          c.discount_rate !== undefined && c.discount_rate !== null
+            ? Number(c.discount_rate)
+            : (Number(meta.discount_rate) || 0)
+
+        return {
+          ...c,
+          credit_limit: creditLimit,
+          credit_authorized: isCreditAuth,
+          discount_eligible: isDiscount,
+          discount_rate: discountRate,
+        }
+      })
+
+      setCustomers(mapped)
     } catch (err: any) {
       toast.error('Erreur chargement clients', err.message)
       setCustomers([])
@@ -136,38 +191,156 @@ const ClientsPage: React.FC = () => {
   const totalDebt = customers.reduce((sum, c) => sum + (c.current_debt || 0), 0)
   const debtorsCount = customers.filter((c) => (c.current_debt || 0) > 0).length
 
-  // Création Client
+  // Création Client avec validation stricte
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!company?.id || !form.name || !form.phone) return
+    if (!company?.id) {
+      toast.error('Session invalide', 'Veuillez vous reconnecter pour enregistrer un client.')
+      return
+    }
+
+    // 1. Validation Nom / Entreprise * (obligatoire)
+    if (!form.name.trim()) {
+      toast.error('Nom obligatoire', 'Veuillez saisir le nom ou l\'entreprise du client.')
+      return
+    }
+
+    // 2. Validation Téléphone * (obligatoire)
+    if (!form.phone.trim()) {
+      toast.error('Téléphone obligatoire', 'Veuillez saisir le numéro de téléphone du client.')
+      return
+    }
+
+    // 3. Validation N° IFU Bénin (optionnel, 13 chiffres si renseigné)
+    const trimmedIfu = form.ifu_number.trim()
+    if (trimmedIfu && !/^\d{13}$/.test(trimmedIfu)) {
+      toast.error(
+        'N° IFU Bénin Invalide',
+        'Le numéro IFU Bénin doit comporter exactement 13 chiffres numériques (ou laisser vide).'
+      )
+      return
+    }
+
+    // 4. Validation Réduction prix
+    if (form.discount_eligible) {
+      const parsedRate = Number(form.discount_rate)
+      if (!form.discount_rate || isNaN(parsedRate) || parsedRate <= 0 || parsedRate > 100) {
+        toast.error(
+          'Taux de réduction requis',
+          'Veuillez renseigner un taux de réduction valide supérieur à 0% et inférieur ou égal à 100% (ou décocher la réduction).'
+        )
+        return
+      }
+    }
+
+    // 5. Validation Logique Crédit
+    // Si Oui est coché → le champ "Plafond de Crédit (FCFA)" devient obligatoire et doit être > 0
+    if (form.credit_choice === 'oui') {
+      const parsedLimit = Number(form.credit_limit)
+      if (!form.credit_limit || isNaN(parsedLimit) || parsedLimit <= 0) {
+        toast.error(
+          'Plafond de crédit requis',
+          'Vous avez autorisé le crédit : veuillez indiquer un Plafond de Crédit obligatoire supérieur à 0 FCFA.'
+        )
+        return
+      }
+    }
+
     setSaving(true)
     try {
-      const autoCode = form.code || `CLI-${String(customers.length + 1).padStart(3, '0')}`
-      const { error } = await supabase.from('customers').insert({
-        ...form,
-        code: autoCode,
+      // Auto-génération du code client CLI-001, CLI-002...
+      let autoCode = form.code.trim()
+      if (!autoCode) {
+        const cliNums = customers
+          .map((c) => {
+            const m = c.code?.match(/CLI-(\d+)/i)
+            return m ? parseInt(m[1], 10) : 0
+          })
+          .filter((n) => !isNaN(n))
+        const nextNum = cliNums.length > 0 ? Math.max(...cliNums) + 1 : customers.length + 1
+        autoCode = `CLI-${String(nextNum).padStart(3, '0')}`
+      }
+
+      const isCreditAuthorized = form.credit_choice === 'oui'
+      const creditLimit = isCreditAuthorized ? Number(form.credit_limit) : 0
+      const isDiscountEligible = Boolean(form.discount_eligible)
+      const discountRate = isDiscountEligible ? Number(form.discount_rate) : 0
+
+      const fullPayload = {
         company_id: company.id,
+        code: autoCode,
+        name: form.name.trim(),
+        ifu_number: trimmedIfu || null,
+        phone: form.phone.trim(),
+        email: form.email.trim() || null,
+        address: form.address.trim() || null,
+        city: form.city.trim() || 'Cotonou',
+        credit_authorized: isCreditAuthorized,
+        credit_limit: creditLimit,
+        discount_eligible: isDiscountEligible,
+        discount_rate: discountRate,
+        payment_terms_days: Number(form.payment_terms_days) || 30,
         current_debt: 0,
         is_active: true,
-      })
-      if (error) throw error
-      toast.success('Client enregistré avec succès')
+      }
+
+      let savedRecord: any = null
+
+      // Tentative d'insertion avec colonnes complètes (PostgreSQL M017)
+      const { data: insertedData, error: insertErr } = await supabase
+        .from('customers')
+        .insert(fullPayload)
+        .select()
+
+      if (!insertErr && insertedData && insertedData.length > 0) {
+        savedRecord = insertedData[0]
+      } else if (insertErr) {
+        // En cas de cache schéma Supabase avant exécution de la migration M017
+        const isSchemaCacheError =
+          insertErr.code === 'PGRST204' ||
+          insertErr.code === '42703' ||
+          insertErr.message?.includes('schema cache') ||
+          insertErr.message?.includes('does not exist')
+
+        if (isSchemaCacheError) {
+          const { credit_authorized, discount_eligible, discount_rate, ...corePayload } = fullPayload
+          const { data: fallbackData, error: fallbackErr } = await supabase
+            .from('customers')
+            .insert(corePayload)
+            .select()
+
+          if (fallbackErr) throw fallbackErr
+          savedRecord = fallbackData?.[0]
+        } else {
+          throw insertErr
+        }
+      }
+
+      // Persistance métadonnées locales pour réactivité instantanée dans l'interface et le POS
+      try {
+        const metaKey = `gestio_customers_meta_${company.id}`
+        const existingMeta = JSON.parse(localStorage.getItem(metaKey) || '{}')
+        const clientMeta = {
+          credit_authorized: isCreditAuthorized,
+          credit_limit: creditLimit,
+          discount_eligible: isDiscountEligible,
+          discount_rate: discountRate,
+        }
+        if (savedRecord?.id) {
+          existingMeta[savedRecord.id] = clientMeta
+        }
+        existingMeta[autoCode] = clientMeta
+        localStorage.setItem(metaKey, JSON.stringify(existingMeta))
+      } catch (e) {
+        console.warn('LocalStorage meta error:', e)
+      }
+
+      toast.success('Client enregistré avec succès', `${form.name.trim()} (${autoCode})`)
       setShowModal(false)
-      setForm({
-        code: '',
-        name: '',
-        ifu_number: '',
-        phone: '',
-        email: '',
-        address: '',
-        city: 'Cotonou',
-        credit_limit: 0,
-        credit_authorized: true,
-        payment_terms_days: 30,
-      })
+      setForm(initialFormState)
       loadCustomers()
     } catch (err: any) {
-      toast.error('Erreur', err.message)
+      toast.error('Erreur enregistrement client', err.message || 'Impossible d\'enregistrer le client.')
     } finally {
       setSaving(false)
     }
@@ -409,8 +582,24 @@ const ClientsPage: React.FC = () => {
                   return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition">
                       <td className="px-5 py-3.5">
-                        <p className="font-bold text-slate-900 text-sm">{item.name}</p>
-                        <div className="flex items-center gap-2 mt-0.5 text-slate-500">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <p className="font-bold text-slate-900 text-sm">{item.name}</p>
+                          {item.discount_eligible && (item.discount_rate || 0) > 0 && (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                              Remise {item.discount_rate}%
+                            </span>
+                          )}
+                          {item.credit_authorized ? (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              Crédit max: {fmt(item.credit_limit)}
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-100 text-slate-500 border border-slate-200">
+                              Sans crédit
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 mt-0.5 text-slate-500 flex-wrap">
                           <span className="font-mono text-[11px] text-slate-400">{item.code}</span>
                           <span>•</span>
                           <span className="flex items-center gap-1 font-sans text-xs text-slate-600">
@@ -420,6 +609,12 @@ const ClientsPage: React.FC = () => {
                             <>
                               <span>•</span>
                               <span className="font-mono text-[11px] text-slate-500">IFU: {item.ifu_number}</span>
+                            </>
+                          )}
+                          {item.city && (
+                            <>
+                              <span>•</span>
+                              <span className="text-[11px] text-slate-400">{item.city}</span>
                             </>
                           )}
                         </div>
@@ -477,142 +672,330 @@ const ClientsPage: React.FC = () => {
         )}
       </div>
 
-      {/* MODAL 1: Création Client avec Autorisation de Crédit */}
+      {/* MODAL 1: Création Client avec Logique Crédit et Réduction */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-100 mb-4">
-              <h3 className="text-lg font-bold text-slate-800">Nouveau client</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Nouveau client</h3>
+                <p className="text-xs text-slate-500">
+                  Enregistrement pour facturation et gestion commerciale
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowModal(false)
+                  setForm(initialFormState)
+                }}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
+            {/* Bannière Objectif Principal : Affichage Facture */}
+            <div className="mb-4 p-3 bg-emerald-50/80 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 mt-0.5 shrink-0" />
+              <div>
+                <span className="font-bold">Affichage Facture de Vente :</span> Ce client sera automatiquement disponible au Point de Vente (POS) et son nom / entreprise s'affichera directement sur ses factures et tickets de vente.
+              </div>
+            </div>
+
             <form onSubmit={handleSave} className="space-y-4">
+              {/* Ligne 1 : Code Client (Auto) & N° IFU Bénin (13 chiffres) */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Code Client</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Code Client <span className="text-slate-400 font-normal">(Auto)</span>
+                  </label>
                   <input
                     type="text"
                     value={form.code}
                     onChange={(e) => setForm({ ...form, code: e.target.value })}
                     placeholder="Auto (ex: CLI-001)"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono bg-slate-50/50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">N° IFU Bénin</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    N° IFU Bénin <span className="text-slate-400 font-normal">(Optionnel, 13 chiffres)</span>
+                  </label>
                   <input
                     type="text"
+                    maxLength={13}
                     value={form.ifu_number}
-                    onChange={(e) => setForm({ ...form, ifu_number: e.target.value })}
-                    placeholder="13 chiffres"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono"
+                    onChange={(e) => setForm({ ...form, ifu_number: e.target.value.replace(/\D/g, '') })}
+                    placeholder="13 chiffres numériques"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
+                  {form.ifu_number && form.ifu_number.length !== 13 && (
+                    <p className="text-[10px] text-amber-600 mt-1 font-mono">
+                      {form.ifu_number.length}/13 chiffres saisis
+                    </p>
+                  )}
                 </div>
               </div>
 
+              {/* Ligne 2 : Nom / Entreprise * (Obligatoire) */}
               <div>
-                <label className="block text-xs font-semibold text-slate-600 mb-1">Nom / Entreprise *</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Nom / Entreprise <span className="text-rose-600 font-bold">*</span>
+                </label>
                 <input
                   type="text"
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="Nom du client"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold"
+                  placeholder="Ex: ETS BIO BÉNIN & FILS, Cabinet ABC..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
 
+              {/* Ligne 3 : Téléphone * (Obligatoire) & Email (Optionnel) */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Téléphone *</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Téléphone <span className="text-rose-600 font-bold">*</span>
+                  </label>
                   <input
                     type="tel"
                     required
                     value={form.phone}
                     onChange={(e) => setForm({ ...form, phone: e.target.value })}
                     placeholder="+229 97 00 00 00"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Email</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Email <span className="text-slate-400 font-normal">(Optionnel)</span>
+                  </label>
                   <input
                     type="email"
                     value={form.email}
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
-                    placeholder="client@mail.bj"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
+                    placeholder="client@domaine.bj"
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
               </div>
 
+              {/* Ligne 4 : Ville (Optionnel) & Adresse (Optionnel) */}
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Ville</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Ville <span className="text-slate-400 font-normal">(Optionnel)</span>
+                  </label>
                   <input
                     type="text"
                     value={form.city}
                     onChange={(e) => setForm({ ...form, city: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
+                    placeholder="Ex: Cotonou, Porto-Novo, Parakou..."
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Plafond de Crédit (FCFA)</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Adresse / Quartier <span className="text-slate-400 font-normal">(Optionnel)</span>
+                  </label>
                   <input
-                    type="number"
-                    value={form.credit_limit}
-                    onChange={(e) => setForm({ ...form, credit_limit: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-mono font-bold"
+                    type="text"
+                    value={form.address}
+                    onChange={(e) => setForm({ ...form, address: e.target.value })}
+                    placeholder="Ex: Dantokpa, Akpakpa, Cadjehoun..."
+                    className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
                 </div>
               </div>
 
-              {/* Règle 19 : Autoriser le crédit Oui / Non */}
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+              {/* SECTION 3 : Réduction Prix */}
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200 rounded-xl space-y-3">
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={form.discount_eligible}
+                    onChange={(e) => {
+                      const checked = e.target.checked
+                      setForm({
+                        ...form,
+                        discount_eligible: checked,
+                        discount_rate: checked ? (form.discount_rate || '') : '',
+                      })
+                    }}
+                    className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 accent-amber-600 cursor-pointer"
+                  />
+                  <div>
+                    <span className="text-xs font-bold text-slate-800">
+                      Client bénéficie d'une réduction
+                    </span>
+                    <p className="text-[11px] text-slate-500">
+                      Cochez pour accorder automatiquement un taux de remise sur ses factures de vente
+                    </p>
+                  </div>
+                </label>
+
+                {form.discount_eligible && (
+                  <div className="pt-2 border-t border-amber-200/80 flex items-center gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs font-bold text-amber-900 mb-1">
+                        Taux de réduction (%) <span className="text-rose-600 font-bold">*</span>
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          min="0.1"
+                          max="100"
+                          step="0.5"
+                          required={form.discount_eligible}
+                          value={form.discount_rate}
+                          onChange={(e) => setForm({ ...form, discount_rate: e.target.value })}
+                          placeholder="Ex: 5"
+                          className="w-full pl-3 pr-8 py-2 border border-amber-300 rounded-xl text-sm font-bold text-amber-900 bg-white focus:outline-none focus:ring-2 focus:ring-amber-500"
+                        />
+                        <span className="absolute right-3 top-2.5 text-xs font-bold text-amber-700">%</span>
+                      </div>
+                    </div>
+                    <p className="text-[11px] text-amber-800 max-w-[200px] leading-tight">
+                      Cette réduction sera appliquée automatiquement lors de la sélection du client en caisse.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* SECTION 4 : Logique Crédit (Oui / Non / Non sélectionné) */}
+              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
                 <div>
-                  <span className="font-bold text-xs text-slate-800">Autoriser le crédit aux achats :</span>
-                  <p className="text-[10px] text-slate-400">Si non coché, toute vente à crédit sera bloquée</p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-800">
+                      Autoriser le crédit aux achats :
+                    </span>
+                    {form.credit_choice !== null && (
+                      <button
+                        type="button"
+                        onClick={() => setForm({ ...form, credit_choice: null, credit_limit: '' })}
+                        className="text-[10px] text-slate-500 hover:text-slate-800 underline font-medium"
+                      >
+                        Réinitialiser (Non coché)
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    Par défaut non coché : le client est enregistré sans crédit pour l'affichage sur facture.
+                  </p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-1.5 text-xs font-bold text-emerald-700 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="credit_auth"
-                      checked={form.credit_authorized === true}
-                      onChange={() => setForm({ ...form, credit_authorized: true })}
-                      className="accent-emerald-600"
-                    />
-                    <span>Oui</span>
+
+                <div className="grid grid-cols-2 gap-3">
+                  {/* Option Oui */}
+                  <label
+                    className={clsx(
+                      "p-3 rounded-xl border-2 flex items-center justify-between cursor-pointer transition",
+                      form.credit_choice === 'oui'
+                        ? "border-emerald-500 bg-emerald-50/70 text-emerald-900 shadow-sm"
+                        : "border-slate-200 bg-white hover:border-slate-300 text-slate-700"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="credit_auth_choice"
+                        checked={form.credit_choice === 'oui'}
+                        onChange={() => setForm({ ...form, credit_choice: 'oui' })}
+                        className="w-4 h-4 text-emerald-600 accent-emerald-600 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold">Oui (Autorisé)</span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100/60 px-1.5 py-0.5 rounded">
+                      Plafond requis
+                    </span>
                   </label>
-                  <label className="flex items-center gap-1.5 text-xs font-bold text-rose-700 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="credit_auth"
-                      checked={form.credit_authorized === false}
-                      onChange={() => setForm({ ...form, credit_authorized: false })}
-                      className="accent-rose-600"
-                    />
-                    <span>Non</span>
+
+                  {/* Option Non */}
+                  <label
+                    className={clsx(
+                      "p-3 rounded-xl border-2 flex items-center justify-between cursor-pointer transition",
+                      form.credit_choice === 'non'
+                        ? "border-rose-500 bg-rose-50/70 text-rose-900 shadow-sm"
+                        : "border-slate-200 bg-white hover:border-slate-300 text-slate-700"
+                    )}
+                  >
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="radio"
+                        name="credit_auth_choice"
+                        checked={form.credit_choice === 'non'}
+                        onChange={() => setForm({ ...form, credit_choice: 'non', credit_limit: 0 })}
+                        className="w-4 h-4 text-rose-600 accent-rose-600 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold">Non (Refusé)</span>
+                    </div>
+                    <span className="text-[10px] font-semibold text-rose-700 bg-rose-100/60 px-1.5 py-0.5 rounded">
+                      Plafond = 0
+                    </span>
                   </label>
+                </div>
+
+                {/* Champ Plafond de Crédit */}
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-semibold text-slate-700">
+                      Plafond de Crédit (FCFA)
+                      {form.credit_choice === 'oui' ? (
+                        <span className="text-rose-600 font-bold ml-1">* (Obligatoire &gt; 0)</span>
+                      ) : (
+                        <span className="text-slate-400 font-normal ml-1">(Désactivé)</span>
+                      )}
+                    </label>
+                    {form.credit_choice === 'oui' && (
+                      <span className="text-[10px] font-mono text-emerald-600 font-bold">
+                        {form.credit_limit ? fmt(Number(form.credit_limit)) : '0 FCFA'}
+                      </span>
+                    )}
+                  </div>
+
+                  <input
+                    type="number"
+                    disabled={form.credit_choice !== 'oui'}
+                    required={form.credit_choice === 'oui'}
+                    min={form.credit_choice === 'oui' ? 1 : 0}
+                    value={form.credit_choice === 'oui' ? form.credit_limit : 0}
+                    onChange={(e) => setForm({ ...form, credit_limit: e.target.value })}
+                    placeholder={form.credit_choice === 'oui' ? "Ex: 500000" : "0 FCFA (Crédit non accordé)"}
+                    className={clsx(
+                      "w-full px-3 py-2.5 border rounded-xl text-sm font-mono font-bold transition",
+                      form.credit_choice === 'oui'
+                        ? "border-emerald-300 bg-white text-emerald-800 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        : "border-slate-200 bg-slate-100 text-slate-400 cursor-not-allowed"
+                    )}
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    {form.credit_choice === 'oui'
+                      ? "Montant maximal d'arriéré d'achat toléré pour ce client."
+                      : form.credit_choice === 'non'
+                      ? "Crédit désactivé. Toute vente à crédit sera bloquée pour ce client."
+                      : "Aucune sélection : client enregistré uniquement pour affichage sur facture (Plafond 0 FCFA)."}
+                  </p>
                 </div>
               </div>
 
               <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-50"
+                  onClick={() => {
+                    setShowModal(false)
+                    setForm(initialFormState)
+                  }}
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-semibold hover:bg-slate-50 text-slate-600"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700"
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
                 >
-                  {saving ? 'Enregistrement...' : 'Créer le client'}
+                  {saving ? 'Enregistrement...' : 'Enregistrer le client'}
                 </button>
               </div>
             </form>
@@ -897,8 +1280,10 @@ const ClientsPage: React.FC = () => {
               </div>
 
               <div className="bg-white p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-2 text-slate-600">
-                <div>Crédit autorisé aux achats : <strong className={statementCustomer.credit_authorized !== false ? 'text-emerald-700' : 'text-rose-700'}>{statementCustomer.credit_authorized !== false ? 'Oui' : 'Non'}</strong></div>
+                <div>Crédit autorisé aux achats : <strong className={statementCustomer.credit_authorized ? 'text-emerald-700' : 'text-rose-700'}>{statementCustomer.credit_authorized ? 'Oui' : 'Non'}</strong></div>
                 <div>Délai de paiement accordé : <strong>{statementCustomer.payment_terms_days} jours</strong></div>
+                <div>Remise accordée : <strong className={statementCustomer.discount_eligible ? 'text-amber-700' : 'text-slate-700'}>{statementCustomer.discount_eligible && (statementCustomer.discount_rate || 0) > 0 ? `${statementCustomer.discount_rate}%` : 'Aucune (0%)'}</strong></div>
+                <div>Statut Facturation : <strong className="text-emerald-700">Actif</strong></div>
               </div>
             </div>
 
