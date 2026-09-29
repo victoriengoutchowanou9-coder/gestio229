@@ -72,16 +72,54 @@ export const DashboardPage: React.FC = () => {
       const now = new Date()
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
-      // 1. Ventes du jour réelles (avec notes pour ventilation multi-règlements)
+      // 1. Ventes du jour réelles (chargées depuis Supabase)
       const { data: salesData, error: salesErr } = await supabase
         .from('sales_orders')
-        .select('id, order_number, created_at, total_amount, payment_method, customer_name, status, notes')
+        .select('*, customer:customers(id, name, ifu_number)')
         .eq('company_id', company.id)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false })
 
       if (salesErr) throw salesErr
-      setSalesToday(salesData || [])
+
+      const mappedSales: TodaySale[] = (salesData || []).map((s: any) => {
+        let meta: any = {}
+        if (s.notes) {
+          try {
+            meta = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+          } catch (e) {}
+        }
+        if (s.e_mecef_uid) {
+          try {
+            if (s.e_mecef_uid.startsWith('{')) {
+              meta = { ...meta, ...JSON.parse(s.e_mecef_uid) }
+            } else {
+              s.e_mecef_uid.split('|').forEach((part: string) => {
+                const [k, v] = part.split(':')
+                if (k === 'PAY') meta.pm = v
+                if (k === 'CL') meta.cn = v
+                if (k === 'ST') meta.st = v
+              })
+            }
+          } catch (e) {}
+        }
+
+        const pMethod = meta.pm || s.payment_method || (s.payment_status === 'credit' ? 'credit' : (s.payment_status || 'especes'))
+        const cName = s.customer?.name || s.customer_name || meta.customer_name || meta.cn || 'Client Comptoir'
+
+        return {
+          id: s.id,
+          order_number: s.order_number,
+          created_at: s.created_at,
+          total_amount: Number(s.total_amount) || 0,
+          payment_method: pMethod,
+          customer_name: cName,
+          status: s.status || meta.st || 'COMPLET',
+          notes: meta
+        }
+      })
+
+      setSalesToday(mappedSales)
 
       // 2. Produits actifs réels
       const { data: prodData, error: prodErr } = await supabase

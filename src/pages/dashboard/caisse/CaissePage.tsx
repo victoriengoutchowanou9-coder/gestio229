@@ -146,10 +146,10 @@ export const CaissePage: React.FC = () => {
       const now = new Date()
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
-      // 1. Ventes du jour
+      // 1. Ventes du jour réelles depuis Supabase
       const { data: sales, error } = await supabase
         .from('sales_orders')
-        .select('*')
+        .select('*, customer:customers(id, name, ifu_number)')
         .eq('company_id', company.id)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false })
@@ -157,22 +157,42 @@ export const CaissePage: React.FC = () => {
       if (error) console.warn('Erreur chargement sales_orders :', error)
       const realSales = sales || []
 
-      // Parser les paiements de chaque vente (depuis notes ou payment_method)
+      // Parser les paiements de chaque vente (depuis notes, e_mecef_uid ou payment_status)
       const parsedSales = realSales.map((s: any) => {
         let payments: { method: string; amount: number }[] = []
+        let parsedNotes: any = {}
         if (s.notes) {
           try {
-            const parsed = JSON.parse(s.notes)
-            if (Array.isArray(parsed.payments) && parsed.payments.length > 0) {
-              payments = parsed.payments
+            parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+            if (Array.isArray(parsedNotes.payments) && parsedNotes.payments.length > 0) {
+              payments = parsedNotes.payments
             }
           } catch (e) {}
         }
-        if (payments.length === 0) {
-          const m = s.payment_method || 'especes'
-          payments = [{ method: m, amount: Number(s.total_amount) || 0 }]
+
+        if (payments.length === 0 && s.e_mecef_uid) {
+          try {
+            if (s.e_mecef_uid.startsWith('{')) {
+              const uMeta = JSON.parse(s.e_mecef_uid)
+              if (Array.isArray(uMeta.payments)) payments = uMeta.payments
+              else if (uMeta.pm) payments = [{ method: uMeta.pm, amount: Number(s.paid_amount ?? s.total_amount) || 0 }]
+            } else {
+              s.e_mecef_uid.split('|').forEach((part: string) => {
+                const [k, v] = part.split(':')
+                if (k === 'PAY') payments = [{ method: v, amount: Number(s.paid_amount ?? s.total_amount) || 0 }]
+              })
+            }
+          } catch (e) {}
         }
-        return { ...s, parsedPayments: payments }
+
+        if (payments.length === 0) {
+          const rawMethod = s.payment_status === 'credit' ? 'credit' : (s.payment_status || s.payment_method || 'especes')
+          payments = [{ method: rawMethod, amount: Number(s.paid_amount ?? s.total_amount) || 0 }]
+        }
+
+        const clientName = s.customer?.name || s.customer_name || parsedNotes.customer_name || 'Client Comptoir'
+
+        return { ...s, parsedPayments: payments, customer_name: clientName }
       })
       setSalesToday(parsedSales)
 

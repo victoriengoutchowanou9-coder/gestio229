@@ -97,7 +97,7 @@ export const ReportingPage: React.FC = () => {
       ] = await Promise.all([
         supabase
           .from('sales_orders')
-          .select('*')
+          .select('*, customer:customers(id, name), items:sales_order_items(*)')
           .eq('company_id', company.id)
           .order('created_at', { ascending: false }),
         supabase
@@ -118,7 +118,46 @@ export const ReportingPage: React.FC = () => {
       if (salesErr) console.warn('Erreur chargement ventes:', salesErr)
       if (expErr) console.warn('Erreur chargement dépenses:', expErr)
 
-      setSales((salesData as any) || [])
+      const parsedSales: SaleRecord[] = (salesData || []).map((s: any) => {
+        let meta: any = {}
+        if (s.notes) {
+          try {
+            meta = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+          } catch (e) {}
+        }
+        if (s.e_mecef_uid) {
+          try {
+            if (s.e_mecef_uid.startsWith('{')) meta = { ...meta, ...JSON.parse(s.e_mecef_uid) }
+            else {
+              s.e_mecef_uid.split('|').forEach((p: string) => {
+                const [k, v] = p.split(':')
+                if (k === 'PAY') meta.pm = v
+                if (k === 'CL') meta.cn = v
+              })
+            }
+          } catch (e) {}
+        }
+
+        const pm = meta.pm || s.payment_method || (s.payment_status === 'credit' ? 'credit' : (s.payment_status || 'especes'))
+        const cName = s.customer?.name || s.customer_name || meta.customer_name || meta.cn || 'Client'
+
+        return {
+          id: s.id,
+          order_number: s.order_number,
+          order_date: s.order_date,
+          created_at: s.created_at,
+          total_amount: Number(s.total_amount) || 0,
+          total_ht: Number(s.subtotal_ht) || 0,
+          total_tax: Number(s.tva_amount) || 0,
+          payment_method: pm,
+          customer_name: cName,
+          customer_id: s.customer_id,
+          status: s.status || meta.st || 'COMPLET',
+          lines: s.items || []
+        }
+      })
+
+      setSales(parsedSales)
       setExpenses((expData as any) || [])
       setCustomers((custData as any) || [])
       setProducts((prodData as any) || [])
@@ -248,19 +287,29 @@ export const ReportingPage: React.FC = () => {
 
   // ─── Table Marge par Produit (Point 16) ───────────────────────────────────
   const productMargins = useMemo(() => {
-    // Calcul pour chaque produit actif
+    // Calcul réel pour chaque produit à partir des lignes réelles enregistrées
     return products.map((prod) => {
       const sellPrice = Number(prod.selling_price_ttc || prod.unit_price_ttc || 0)
       const costPrice = Number(prod.cost_price || prod.purchase_price || 0)
 
-      // Quantité vendue estimée ou extraite des ventes
-      const qtySold = filteredSales.length > 0
-        ? Math.max(1, Math.round(filteredSales.length / Math.max(1, products.length)))
-        : 0
+      let realQtySold = 0
+      let realCaTTC = 0
 
-      const caProduct = qtySold * sellPrice
+      filteredSales.forEach((s) => {
+        if (s.lines && Array.isArray(s.lines)) {
+          s.lines.forEach((l: any) => {
+            if (l.product_id === prod.id || l.product?.id === prod.id || l.product_name === prod.name) {
+              const q = Number(l.quantity ?? l.qty) || 0
+              realQtySold += q
+              realCaTTC += Number(l.total_ttc ?? (q * (l.unit_price || l.unitPrice || sellPrice))) || 0
+            }
+          })
+        }
+      })
+
+      const caProduct = realQtySold > 0 ? realCaTTC : 0
       const { ht: caHT } = calculateTaxFromTTC(caProduct, isTaxable, 0)
-      const totalCostHT = qtySold * costPrice
+      const totalCostHT = realQtySold * costPrice
       const productGrossMargin = Math.max(0, caHT - totalCostHT)
       const marginRate = caHT > 0 ? ((productGrossMargin / caHT) * 100).toFixed(1) : '0'
 
@@ -268,7 +317,7 @@ export const ReportingPage: React.FC = () => {
         id: prod.id,
         name: prod.name,
         category: prod.category || 'Général',
-        qtySold,
+        qtySold: realQtySold,
         caTTC: caProduct,
         caHT,
         costPrice,

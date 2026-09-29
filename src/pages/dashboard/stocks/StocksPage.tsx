@@ -256,7 +256,7 @@ export const StocksPage: React.FC = () => {
 
       const { data: sales } = await supabase
         .from('sales_orders')
-        .select('*')
+        .select('*, items:sales_order_items(*)')
         .eq('company_id', company.id)
         .gte('created_at', startIso)
         .lte('created_at', endIso)
@@ -264,7 +264,14 @@ export const StocksPage: React.FC = () => {
       const salesMap: Record<string, number> = {}
       if (sales) {
         sales.forEach((s: any) => {
-          if (s.notes) {
+          if (s.items && Array.isArray(s.items) && s.items.length > 0) {
+            s.items.forEach((it: any) => {
+              const pId = it.product_id
+              if (pId) {
+                salesMap[pId] = (salesMap[pId] || 0) + (Number(it.quantity) || 0)
+              }
+            })
+          } else if (s.notes) {
             try {
               const parsed = JSON.parse(s.notes)
               if (Array.isArray(parsed.lines)) {

@@ -8,8 +8,10 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
-  Layers, CreditCard, DollarSign, Smartphone, Landmark, Info
+  Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download
 } from 'lucide-react'
+import jsPDF from 'jspdf'
+import autoTable from 'jspdf-autotable'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
@@ -166,10 +168,10 @@ export const POSPage: React.FC = () => {
             .order('name'),
           supabase
             .from('sales_orders')
-            .select('*')
+            .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
             .eq('company_id', company.id)
             .order('created_at', { ascending: false })
-            .limit(50)
+            .limit(100)
         ])
 
       if (prodErr) throw prodErr
@@ -222,7 +224,7 @@ export const POSPage: React.FC = () => {
       })
       setCustomers(mappedCusts)
 
-      // Transformer les ventes réelles chargées depuis Supabase
+      // Transformer les ventes réelles chargées depuis Supabase avec leurs lignes réelles
       if (sales && !saleErr) {
         const mappedSales: SaleRecord[] = sales.map((s: any) => {
           let parsedNotes: any = {}
@@ -230,29 +232,77 @@ export const POSPage: React.FC = () => {
             if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
           } catch (e) {}
 
-          const lines: CartItem[] = (parsedNotes.lines || []).map((l: any) => ({
-            product: l.product || {
-              id: l.productId || l.id,
-              code: l.code || 'ART',
-              name: l.name || 'Article',
-              unit: l.unit || 'Pièce',
-              selling_price: l.unitPrice || 0,
-              cost_price: 0,
-            },
-            qty: Number(l.qty) || 1,
-            unitPrice: Number(l.unitPrice) || 0,
-            discount: Number(l.discount) || 0,
-            batchTierLabel: l.batchTierLabel,
-          }))
+          let metaFromUid: any = {}
+          if (s.e_mecef_uid) {
+            try {
+              if (s.e_mecef_uid.startsWith('{')) {
+                metaFromUid = JSON.parse(s.e_mecef_uid)
+              } else {
+                s.e_mecef_uid.split('|').forEach((part: string) => {
+                  const [k, v] = part.split(':')
+                  if (k === 'PAY') metaFromUid.pm = v
+                  if (k === 'CL') metaFromUid.cn = v
+                  if (k === 'ST') metaFromUid.st = v
+                })
+              }
+            } catch (e) {}
+          }
 
-          const clientName = s.customer_name || parsedNotes.customer_name || 'Client Comptoir'
-          const clientIfu = s.customer_ifu || parsedNotes.customer_ifu || null
-          const paymentsList: PaymentLine[] = parsedNotes.payments || [
-            {
-              method: (s.payment_method || (s.payment_status === 'credit' ? 'credit' : 'especes')) as any,
-              amount: Number(s.total_amount) || 0
-            }
-          ]
+          // 1. Récupération des lignes depuis sales_order_items (source de vérité Supabase)
+          let lines: CartItem[] = []
+          if (s.items && Array.isArray(s.items) && s.items.length > 0) {
+            lines = s.items.map((item: any) => ({
+              product: {
+                id: item.product_id || item.id,
+                code: item.product_id ? item.product_id.slice(0, 8) : 'ART',
+                name: item.product_name || 'Article',
+                unit: 'Pièce',
+                selling_price: Number(item.unit_price) || 0,
+                cost_price: Number(item.unit_cost) || 0,
+                is_vat_subject: Number(item.tva_rate) > 0,
+                vat_rate: Number(item.tva_rate) || 0,
+              },
+              qty: Number(item.quantity) || 1,
+              unitPrice: Number(item.unit_price) || 0,
+              discount: 0,
+            }))
+          } else if (parsedNotes.lines && Array.isArray(parsedNotes.lines)) {
+            lines = parsedNotes.lines.map((l: any) => ({
+              product: l.product || {
+                id: l.productId || l.id,
+                code: l.code || 'ART',
+                name: l.name || 'Article',
+                unit: l.unit || 'Pièce',
+                selling_price: l.unitPrice || 0,
+                cost_price: 0,
+              },
+              qty: Number(l.qty) || 1,
+              unitPrice: Number(l.unitPrice) || 0,
+              discount: Number(l.discount) || 0,
+              batchTierLabel: l.batchTierLabel,
+            }))
+          }
+
+          const clientName = s.customer?.name || s.customer_name || parsedNotes.customer_name || metaFromUid.cn || 'Client Comptoir'
+          const clientIfu = s.customer?.ifu_number || s.customer_ifu || parsedNotes.customer_ifu || null
+
+          let paymentsList: PaymentLine[] = []
+          if (Array.isArray(parsedNotes.payments) && parsedNotes.payments.length > 0) {
+            paymentsList = parsedNotes.payments
+          } else if (metaFromUid.payments && Array.isArray(metaFromUid.payments)) {
+            paymentsList = metaFromUid.payments
+          } else {
+            const rawMethod = metaFromUid.pm || s.payment_method || (s.payment_status === 'credit' ? 'credit' : (s.payment_status || 'especes'))
+            paymentsList = [
+              {
+                method: rawMethod as any,
+                amount: Number(s.paid_amount ?? s.total_amount) || 0
+              }
+            ]
+          }
+
+          const isDeferredSale = s.order_type === 'pos_deferred' || s.status === 'pending_delivery' || metaFromUid.st === 'A_LIVRER'
+          const isAvoir = s.payment_status === 'avoir' || s.status === 'cancelled' || metaFromUid.st === 'AVOIR'
 
           return {
             id: s.id,
@@ -269,8 +319,8 @@ export const POSPage: React.FC = () => {
             amount_paid: Number(s.paid_amount ?? s.amount_paid) || (s.payment_status === 'credit' ? 0 : Number(s.total_amount) || 0),
             credit_amount: Number(s.credit_amount) || (s.payment_status === 'credit' ? Number(s.total_amount) || 0 : 0),
             payments: paymentsList,
-            is_deferred: s.status === 'pending_delivery',
-            status: s.status === 'cancelled' ? 'AVOIR' : s.status === 'pending_delivery' ? 'A_LIVRER' : 'COMPLET',
+            is_deferred: isDeferredSale,
+            status: isAvoir ? 'AVOIR' : isDeferredSale ? 'A_LIVRER' : 'COMPLET',
             lines,
           }
         })
@@ -581,13 +631,18 @@ export const POSPage: React.FC = () => {
         }))
       }
 
-      // 1. Insertion en base de données Supabase dans sales_orders
-      const salePayload: any = {
+      // 1. Insertion garantie en base de données Supabase dans sales_orders
+      const custName = selectedCustomer ? selectedCustomer.name : 'Client Comptoir'
+      const todayDate = new Date().toISOString().split('T')[0]
+      const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 30)}|ST:${isDeferred ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
+
+      // Payload avec colonnes de base garanties dans le schéma Supabase
+      const baseSalePayload: any = {
         company_id: company.id,
         customer_id: selectedCustomer?.id || null,
         order_number: orderNum,
-        order_type: 'pos_direct',
-        order_date: new Date().toISOString().split('T')[0],
+        order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
+        order_date: todayDate,
         subtotal_ht: cartFiscalSummary.ht,
         tva_amount: cartFiscalSummary.tva,
         aib_amount: cartFiscalSummary.aib,
@@ -595,61 +650,203 @@ export const POSPage: React.FC = () => {
         total_cost: totalCost,
         paid_amount: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
-        payment_status: creditAmount > 0 ? (creditAmount >= totalNetTTC ? 'credit' : 'partiel') : 'paye',
+        payment_status: creditAmount >= totalNetTTC ? 'credit' : primaryMethod,
+        e_mecef_uid: encodedMeta,
+        created_by: user?.id || null
+      }
+
+      // Payload enrichi si la migration M018 a été exécutée
+      const fullSalePayload: any = {
+        ...baseSalePayload,
         payment_method: primaryMethod,
-        customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
+        customer_name: custName,
         status: isDeferred ? 'pending_delivery' : 'COMPLET',
         notes: JSON.stringify(notesPayload)
       }
 
       let savedDbSale: any = null
+
+      // Tentative insertion payload complet d'abord
       const { data: dbSale, error: dbSaleErr } = await supabase
         .from('sales_orders')
-        .insert(salePayload)
+        .insert(fullSalePayload)
         .select()
         .single()
 
       if (!dbSaleErr && dbSale) {
         savedDbSale = dbSale
-      } else if (dbSaleErr) {
-        // Fallback sécurisé si colonnes non migrées
-        const { payment_method, customer_name, status, ...fallbackPayload } = salePayload
+      } else {
+        // Fallback sécurisé sur les colonnes natives de sales_orders
         const { data: fbSale, error: fbErr } = await supabase
           .from('sales_orders')
-          .insert(fallbackPayload)
+          .insert(baseSalePayload)
           .select()
           .single()
-        if (fbErr) console.warn('Erreur insertion vente fallback:', fbErr)
+
+        if (fbErr || !fbSale) {
+          console.error('Erreur critique insertion sales_orders:', fbErr)
+          throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${fbErr?.message || 'Erreur inconnue'}`)
+        }
         savedDbSale = fbSale
       }
 
-      // 2. Insertion des lignes réelles dans sales_order_items
-      if (savedDbSale?.id) {
-        const lineItems = cart.map((line) => {
-          const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
-          const lineTotal = line.qty * line.unitPrice
-          const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
-          return {
-            order_id: savedDbSale.id,
-            product_id: line.product.id,
-            product_name: line.product.name,
-            quantity: line.qty,
-            unit_price: line.unitPrice,
-            unit_cost: line.product.cost_price || 0,
-            tva_rate: isTaxed ? (line.product.vat_rate || 18) : 0,
-            total_ht: lineHt,
-            total_ttc: lineTotal
-          }
-        })
-        const { error: linesErr } = await supabase.from('sales_order_items').insert(lineItems)
-        if (linesErr) console.warn('Erreur insertion sales_order_items:', linesErr.message)
+      if (!savedDbSale?.id) {
+        throw new Error("L'identifiant de la vente n'a pas pu être validé par Supabase.")
       }
 
+      // 2. Insertion des lignes réelles dans sales_order_items (source de vérité Supabase)
+      const lineItems = cart.map((line) => {
+        const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
+        const lineTotal = line.qty * line.unitPrice
+        const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
+        return {
+          order_id: savedDbSale.id,
+          product_id: line.product.id,
+          product_name: line.product.name,
+          quantity: line.qty,
+          unit_price: line.unitPrice,
+          unit_cost: line.product.cost_price || 0,
+          tva_rate: isTaxed ? (line.product.vat_rate || 18) : 0,
+          total_ht: lineHt,
+          total_ttc: lineTotal
+        }
+      })
+      const { error: linesErr } = await supabase.from('sales_order_items').insert(lineItems)
+      if (linesErr) {
+        console.warn('Avertissement insertion sales_order_items:', linesErr.message)
+      }
+
+      // 3. Déstockage strict dans le Stock Vente (en UV) sans altérer le Stock Magasin (en UCD)
+      for (const line of cart) {
+        if (line.product?.id) {
+          try {
+            const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
+            const currentStockMagasin = Number(line.product.stock_magasin ?? line.product.sector_meta?.stock_magasin ?? 0)
+            const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
+
+            const currentMeta = line.product.sector_meta || {}
+            const updatedMeta = {
+              ...currentMeta,
+              stock_vente: newStockVente,
+              stock_magasin: currentStockMagasin, // Reste intact en UCD
+              ucd: line.product.ucd || currentMeta.ucd || 'Carton',
+              uv: line.product.uv || currentMeta.uv || line.product.unit || 'Pièce',
+              coef: Number(line.product.coef || currentMeta.coef || 1)
+            }
+
+            // Mise à jour de la table products
+            await supabase
+              .from('products')
+              .update({ sector_meta: updatedMeta })
+              .eq('id', line.product.id)
+
+            // Traçabilité mouvement de stock dans stock_movements
+            await supabase.from('stock_movements').insert({
+              company_id: company.id,
+              product_id: line.product.id,
+              movement_type: 'VENTE_POS',
+              reference_type: 'sales_order',
+              reference_id: savedDbSale.id,
+              reference_number: orderNum,
+              quantity: -line.qty,
+              previous_stock: currentStockVente,
+              new_stock: newStockVente,
+              unit_cost: line.product.cost_price || 0,
+              total_cost: (line.product.cost_price || 0) * line.qty,
+              notes: `Vente POS ${orderNum} - Déstockage Stock Vente : ${line.qty} ${line.product.uv || line.product.unit || 'UV'}`
+            })
+
+            setProducts((prev) =>
+              prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: newStockVente, sector_meta: updatedMeta } : p))
+            )
+          } catch (err: any) {
+            console.warn('Erreur déstockage ligne vente :', err?.message)
+          }
+        }
+      }
+
+      // 4. Si client avec crédit, mise à jour de la créance dans Supabase
+      if (selectedCustomer && creditAmount > 0) {
+        const newDebt = (Number(selectedCustomer.current_debt) || 0) + creditAmount
+        await supabase
+          .from('customers')
+          .update({ current_debt: newDebt })
+          .eq('id', selectedCustomer.id)
+
+        setCustomers((prev) =>
+          prev.map((c) => (c.id === selectedCustomer.id ? { ...c, current_debt: newDebt } : c))
+        )
+      }
+
+      // 5. Synchronisation Caisse en temps réel & persistance Supabase
+      const paidCash = isMultiMode ? (multiPayments.especes || 0) : (singleMethod === 'especes' ? totalNetTTC : 0)
+      const paidMomo = isMultiMode
+        ? ((multiPayments.momo_mtn || 0) + (multiPayments.momo_moov || 0) + (multiPayments.wave || 0))
+        : (['momo_mtn', 'momo_moov', 'wave'].includes(singleMethod) ? totalNetTTC : 0)
+
+      if (paidCash > 0 || paidMomo > 0) {
+        try {
+          const { data: registers } = await supabase
+            .from('cash_registers')
+            .select('*')
+            .eq('company_id', company.id)
+            .limit(1)
+
+          if (registers && registers.length > 0) {
+            const reg = registers[0]
+            await supabase
+              .from('cash_registers')
+              .update({
+                current_cash_balance: (Number(reg.current_cash_balance) || 0) + paidCash,
+                current_momo_balance: (Number(reg.current_momo_balance) || 0) + paidMomo
+              })
+              .eq('id', reg.id)
+          } else {
+            await supabase
+              .from('cash_registers')
+              .insert({
+                company_id: company.id,
+                name: 'Caisse Principale POS',
+                current_cash_balance: paidCash,
+                current_momo_balance: paidMomo,
+                is_active: true
+              })
+          }
+        } catch (e) {
+          console.warn('Avertissement cash_registers Supabase:', e)
+        }
+      }
+
+      // Mise à jour de la session locale de caisse
+      try {
+        const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+        const cState = cashStateRaw ? JSON.parse(cashStateRaw) : { status: 'OUVERTE', todaySalesCash: 0, todaySalesMomo: 0 }
+        cState.todaySalesCash = (Number(cState.todaySalesCash) || 0) + paidCash
+        cState.todaySalesMomo = (Number(cState.todaySalesMomo) || 0) + paidMomo
+        localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
+      } catch (e) {}
+
+      // 6. Traçabilité Journal d'Audit automatique dans Supabase
+      try {
+        const { logAuditEvent } = await import('../../../services/auditService')
+        await logAuditEvent({
+          companyId: company.id,
+          userId: user?.id,
+          userName: user?.full_name || user?.username,
+          userRole: user?.role,
+          module: 'Vente-POS',
+          action: 'VENTE',
+          description: `Vente N° ${orderNum} enregistrée - Montant: ${fmt(totalNetTTC)} (${primaryMethod}) - Client: ${custName}`,
+          entityName: 'sales_orders',
+          entityId: savedDbSale.id
+        })
+      } catch (e) {}
+
       const newSale: SaleRecord = {
-        id: savedDbSale?.id || `sale-${Date.now()}`,
+        id: savedDbSale.id,
         order_number: orderNum,
         date: new Date().toISOString(),
-        customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
+        customer_name: custName,
         customer_id: selectedCustomer?.id,
         customer_ifu: selectedCustomer?.ifu_number,
         total_amount: totalNetTTC,
@@ -665,82 +862,7 @@ export const POSPage: React.FC = () => {
         lines: [...cart],
       }
 
-      // 3. Si client avec crédit, mettre à jour sa dette dans Supabase
-      if (selectedCustomer && creditAmount > 0) {
-        const newDebt = (Number(selectedCustomer.current_debt) || 0) + creditAmount
-        await supabase
-          .from('customers')
-          .update({ current_debt: newDebt })
-          .eq('id', selectedCustomer.id)
-
-        setCustomers((prev) =>
-          prev.map((c) => (c.id === selectedCustomer.id ? { ...c, current_debt: newDebt } : c))
-        )
-      }
-
-      // 4. Déstockage strict selon la quantité UV réellement vendue (CDC)
-      for (const line of cart) {
-        if (line.product?.id) {
-          try {
-            const currentStock = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? line.product.current_stock ?? 0)
-            const newStock = Math.max(0, Math.round((currentStock - line.qty) * 1000) / 1000)
-            const currentMeta = line.product.sector_meta || {}
-            const updatedMeta = { ...currentMeta, stock_vente: newStock }
-
-            let updRes = await supabase
-              .from('products')
-              .update({ stock_vente: newStock, sector_meta: updatedMeta })
-              .eq('id', line.product.id)
-
-            if (updRes.error && updRes.error.code === 'PGRST204') {
-              updRes = await supabase
-                .from('products')
-                .update({ sector_meta: updatedMeta })
-                .eq('id', line.product.id)
-            }
-
-            setProducts((prev) =>
-              prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: newStock, sector_meta: updatedMeta } : p))
-            )
-          } catch (err: any) {
-            console.warn('Erreur déstockage ligne vente :', err?.message)
-          }
-        }
-      }
-
-      // 5. Synchronisation caisse en temps réel
-      try {
-        const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
-        if (cashStateRaw) {
-          const cState = JSON.parse(cashStateRaw)
-          const paidCash = isMultiMode ? (multiPayments.especes || 0) : (singleMethod === 'especes' ? totalNetTTC : 0)
-          const paidMomo = isMultiMode
-            ? ((multiPayments.momo_mtn || 0) + (multiPayments.momo_moov || 0) + (multiPayments.wave || 0))
-            : (['momo_mtn', 'momo_moov', 'wave'].includes(singleMethod) ? totalNetTTC : 0)
-
-          cState.todaySalesCash = (Number(cState.todaySalesCash) || 0) + paidCash
-          cState.todaySalesMomo = (Number(cState.todaySalesMomo) || 0) + paidMomo
-          localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
-        }
-      } catch (e) {}
-
-      // 6. Traçabilité Journal d'Audit automatique
-      try {
-        const { logAuditEvent } = await import('../../../services/auditService')
-        await logAuditEvent({
-          companyId: company.id,
-          userId: user?.id,
-          userName: user?.full_name || user?.username,
-          userRole: user?.role,
-          module: 'Vente-POS',
-          action: 'VENTE',
-          description: `Vente N° ${orderNum} enregistrée - Montant: ${fmt(totalNetTTC)} (${primaryMethod}) - Client: ${selectedCustomer ? selectedCustomer.name : 'Client Comptoir'}`,
-          entityName: 'sales_orders',
-          entityId: savedDbSale?.id || newSale.id
-        })
-      } catch (e) {}
-
-      setSalesHistory([newSale, ...salesHistory])
+      setSalesHistory([newSale, ...salesHistory.filter(s => s.id !== newSale.id)])
       setCurrentSale(newSale)
       setShowPaymentModal(false)
       setShowInvoiceModal(true)
@@ -753,7 +875,7 @@ export const POSPage: React.FC = () => {
     }
   }
 
-  // ─── Facture d'Avoir ───────────────────────────────────────────────────────
+  // ─── Facture d'Avoir Réelle avec Supabase ──────────────────────────────────
 
   const handleCreateAvoir = async (sale: SaleRecord) => {
     if (sale.status === 'AVOIR') {
@@ -762,7 +884,16 @@ export const POSPage: React.FC = () => {
     }
 
     try {
-      // Si crédit, restaurer la dette du client
+      // 1. Mettre à jour sales_orders dans Supabase
+      await supabase
+        .from('sales_orders')
+        .update({
+          payment_status: 'avoir',
+          e_mecef_uid: `PAY:avoir|CL:${sale.customer_name.slice(0, 30)}|ST:AVOIR`.slice(0, 100)
+        })
+        .eq('id', sale.id)
+
+      // 2. Si crédit, restaurer la dette du client dans Supabase
       if (sale.credit_amount > 0 && sale.customer_id) {
         const cust = customers.find((c) => c.id === sale.customer_id)
         if (cust) {
@@ -778,6 +909,43 @@ export const POSPage: React.FC = () => {
         }
       }
 
+      // 3. Réintégrer le stock dans le Stock Vente (en UV)
+      for (const line of sale.lines) {
+        if (line.product?.id) {
+          const prod = products.find((p) => p.id === line.product.id)
+          const currentStockVente = Number(prod?.stock_vente ?? prod?.sector_meta?.stock_vente ?? 0)
+          const currentStockMagasin = Number(prod?.stock_magasin ?? prod?.sector_meta?.stock_magasin ?? 0)
+          const restoredStockVente = Math.round((currentStockVente + line.qty) * 1000) / 1000
+
+          const currentMeta = prod?.sector_meta || {}
+          const updatedMeta = { ...currentMeta, stock_vente: restoredStockVente, stock_magasin: currentStockMagasin }
+
+          await supabase
+            .from('products')
+            .update({ sector_meta: updatedMeta })
+            .eq('id', line.product.id)
+
+          await supabase.from('stock_movements').insert({
+            company_id: company.id,
+            product_id: line.product.id,
+            movement_type: 'RETOUR_AVOIR',
+            reference_type: 'sales_order',
+            reference_id: sale.id,
+            reference_number: `AVOIR-${sale.order_number}`,
+            quantity: line.qty,
+            previous_stock: currentStockVente,
+            new_stock: restoredStockVente,
+            unit_cost: line.product.cost_price || 0,
+            total_cost: (line.product.cost_price || 0) * line.qty,
+            notes: `Retour Stock Vente sur Avoir ${sale.order_number}`
+          })
+
+          setProducts((prev) =>
+            prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: restoredStockVente, sector_meta: updatedMeta } : p))
+          )
+        }
+      }
+
       const updated = salesHistory.map((s) =>
         s.id === sale.id ? { ...s, status: 'AVOIR' as const } : s
       )
@@ -785,6 +953,155 @@ export const POSPage: React.FC = () => {
       toast.success('Facture d\'Avoir générée', `Avoir créé avec succès pour la vente ${sale.order_number}`)
     } catch (err: any) {
       toast.error('Erreur création avoir', err.message)
+    }
+  }
+
+  // ─── Génération et Téléchargement PDF de Facture ───────────────────────────
+
+  const handleDownloadPDF = (sale: SaleRecord) => {
+    try {
+      const doc = new jsPDF()
+
+      // En-tête de l'entreprise
+      doc.setFontSize(18)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(5, 150, 105)
+      doc.text(company?.name || 'GESTIO 229 ERP', 14, 20)
+
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(100, 116, 139)
+      doc.text(`IFU : ${company?.ifu_number || 'Non renseigné'}  |  RCCM : ${company?.rccm_number || 'Non renseigné'}`, 14, 26)
+      doc.text(`${company?.address ? `${company.address}, ` : ''}${company?.city || 'Cotonou, République du Bénin'}`, 14, 31)
+      doc.text(`Tél : ${company?.phone || '+229 01 00 00 00'}  |  Email : ${company?.email || 'contact@gestio229.bj'}`, 14, 36)
+
+      // Bloc Titre & Réf Facture
+      doc.setFontSize(14)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(15, 23, 42)
+      const docTitle = sale.status === 'AVOIR' ? "FACTURE D'AVOIR" : 'FACTURE DE VENTE'
+      doc.text(docTitle, 135, 20)
+
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.text(`N° : ${sale.order_number}`, 135, 26)
+      doc.text(`Date : ${new Date(sale.date).toLocaleString('fr-BJ')}`, 135, 31)
+      doc.text(`Caisse : Caisse Principale POS`, 135, 36)
+
+      doc.setDrawColor(226, 232, 240)
+      doc.line(14, 42, 196, 42)
+
+      // Bloc Facturé à
+      doc.setFillColor(248, 250, 252)
+      doc.roundedRect(14, 46, 182, 16, 2, 2, 'F')
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(9)
+      doc.setTextColor(100, 116, 139)
+      doc.text('FACTURÉ À :', 18, 52)
+      doc.setTextColor(15, 23, 42)
+      doc.setFontSize(11)
+      doc.text(sale.customer_name || 'Client Comptoir', 18, 58)
+
+      if (sale.customer_ifu) {
+        doc.setFontSize(9)
+        doc.setFont('helvetica', 'normal')
+        doc.setTextColor(100, 116, 139)
+        doc.text(`N° IFU : ${sale.customer_ifu}`, 120, 58)
+      }
+
+      // Tableau des Lignes
+      const tableData = sale.lines.map((l) => [
+        l.product.code || 'ART',
+        l.product.name,
+        String(l.qty),
+        l.product.unit || 'Pièce',
+        fmt(l.unitPrice),
+        fmt(l.qty * l.unitPrice)
+      ])
+
+      autoTable(doc, {
+        startY: 68,
+        head: [['Réf', 'Désignation', 'Qté', 'Unité', 'Prix Unit. TTC', 'Total TTC']],
+        body: tableData,
+        theme: 'striped',
+        headStyles: {
+          fillColor: [5, 150, 105],
+          textColor: 255,
+          fontStyle: 'bold',
+          fontSize: 9
+        },
+        bodyStyles: {
+          fontSize: 9,
+          textColor: [30, 41, 59]
+        },
+        columnStyles: {
+          0: { cellWidth: 25 },
+          1: { cellWidth: 'auto' },
+          2: { halign: 'center', cellWidth: 18 },
+          3: { halign: 'center', cellWidth: 20 },
+          4: { halign: 'right', cellWidth: 32 },
+          5: { halign: 'right', cellWidth: 35 }
+        }
+      })
+
+      const finalY = (doc as any).lastAutoTable.finalY + 10
+      const startX = 120
+
+      // Totaux
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(71, 85, 105)
+      doc.text('Total Hors Taxes :', startX, finalY)
+      doc.text(fmt(sale.total_ht), 196, finalY, { align: 'right' })
+
+      doc.text('Total TVA (18%) :', startX, finalY + 6)
+      doc.text(fmt(sale.total_tva), 196, finalY + 6, { align: 'right' })
+
+      if (sale.total_aib && sale.total_aib > 0) {
+        doc.text('Total AIB :', startX, finalY + 12)
+        doc.text(fmt(sale.total_aib), 196, finalY + 12, { align: 'right' })
+      }
+
+      const netY = (sale.total_aib && sale.total_aib > 0) ? finalY + 18 : finalY + 12
+
+      doc.setDrawColor(203, 213, 225)
+      doc.line(startX, netY - 2, 196, netY - 2)
+
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(11)
+      doc.setTextColor(15, 23, 42)
+      doc.text('NET À PAYER :', startX, netY + 4)
+      doc.setTextColor(5, 150, 105)
+      doc.text(fmt(sale.total_amount), 196, netY + 4, { align: 'right' })
+
+      // Règlements
+      doc.setFontSize(9)
+      doc.setFont('helvetica', 'bold')
+      doc.setTextColor(71, 85, 105)
+      doc.text('Règlements :', 14, finalY)
+      doc.setFont('helvetica', 'normal')
+      let pY = finalY + 6
+      sale.payments.forEach((p) => {
+        doc.text(`• ${p.method.replace('_', ' ').toUpperCase()} : ${fmt(p.amount)}`, 14, pY)
+        pY += 5
+      })
+      if (sale.credit_amount > 0) {
+        doc.setTextColor(225, 29, 72)
+        doc.setFont('helvetica', 'bold')
+        doc.text(`• Reste Dû (Crédit) : ${fmt(sale.credit_amount)}`, 14, pY)
+      }
+
+      // Mentions Légales
+      doc.setFontSize(8)
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(148, 163, 184)
+      doc.text('Facture commerciale émise par GESTIO 229 ERP — République du Bénin', 105, 280, { align: 'center' })
+
+      doc.save(`Facture_${sale.order_number}.pdf`)
+      toast.success('Facture PDF générée', `Téléchargement : Facture_${sale.order_number}.pdf`)
+    } catch (e: any) {
+      console.error('Erreur génération PDF:', e)
+      toast.error('Erreur génération PDF', e.message)
     }
   }
 
@@ -1158,9 +1475,16 @@ export const POSPage: React.FC = () => {
                       <td className="p-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
                           <button
+                            onClick={() => handleDownloadPDF(s)}
+                            className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs"
+                            title="Télécharger Facture PDF"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          <button
                             onClick={() => { setCurrentSale(s); setShowInvoiceModal(true); }}
                             className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs"
-                            title="Imprimer Facture"
+                            title="Aperçu & Imprimer"
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
@@ -1553,8 +1877,14 @@ export const POSPage: React.FC = () => {
             </div>
             <div className="flex items-center gap-2">
               <button
+                onClick={() => currentSale && handleDownloadPDF(currentSale)}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition"
+              >
+                <Download className="w-3.5 h-3.5" /> Télécharger PDF
+              </button>
+              <button
                 onClick={() => window.print()}
-                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm"
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition"
               >
                 <Printer className="w-3.5 h-3.5" /> Imprimer
               </button>
