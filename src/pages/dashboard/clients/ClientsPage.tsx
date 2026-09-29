@@ -14,6 +14,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { formatFCFA } from '../../../utils/tax'
+import { logAuditEvent } from '../../../services/auditService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -389,10 +390,16 @@ const ClientsPage: React.FC = () => {
     e.preventDefault()
     if (!selectedCustomer || paymentAmount <= 0) return
 
+    const prevDebt = Number(selectedCustomer.current_debt) || 0
+    if (paymentAmount > prevDebt) {
+      toast.error('Montant invalide', 'Le montant du remboursement ne peut pas dépasser la dette actuelle.')
+      return
+    }
+
     setIsProcessingPayment(true)
     try {
-      const prevDebt = Number(selectedCustomer.current_debt) || 0
-      const newDebt = Math.max(0, prevDebt - paymentAmount)
+      const newDebt = Math.max(0, Math.round((prevDebt - paymentAmount) * 100) / 100)
+      const receiptNumber = `REC-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
 
       // 1. Mettre à jour la dette client dans Supabase
       const { error: updErr } = await supabase
@@ -402,7 +409,45 @@ const ClientsPage: React.FC = () => {
 
       if (updErr) throw updErr
 
-      // 2. Entrée immédiate dans la caisse opérationnelle si paiement Espèces ou Mobile Money
+      // 2. Insérer dans la table customer_repayments pour traçabilité comptable et historique
+      const normalizedMethod = paymentMode === 'cash' ? 'especes' : paymentMode
+      try {
+        await supabase
+          .from('customer_repayments')
+          .insert({
+            company_id: company?.id,
+            customer_id: selectedCustomer.id,
+            amount: paymentAmount,
+            payment_method: normalizedMethod,
+            reference: receiptNumber,
+            notes: paymentNotes || `Remboursement créance client ${selectedCustomer.name}`,
+            created_at: new Date().toISOString()
+          })
+      } catch (repErr) {
+        console.warn('Fallback insertion customer_repayments :', repErr)
+      }
+
+      // Persistance locale des remboursements
+      if (company?.id) {
+        try {
+          const key = `gestio_customer_repayments_${company.id}`
+          const existing = JSON.parse(localStorage.getItem(key) || '[]')
+          existing.push({
+            id: `rep-${Date.now()}`,
+            company_id: company.id,
+            customer_id: selectedCustomer.id,
+            customer_name: selectedCustomer.name,
+            amount: paymentAmount,
+            payment_method: normalizedMethod,
+            reference: receiptNumber,
+            notes: paymentNotes || 'Remboursement créance',
+            created_at: new Date().toISOString()
+          })
+          localStorage.setItem(key, JSON.stringify(existing))
+        } catch (e) {}
+      }
+
+      // 3. Entrée immédiate dans la caisse opérationnelle
       if (company?.id) {
         try {
           const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
@@ -418,8 +463,15 @@ const ClientsPage: React.FC = () => {
         } catch (e) {}
       }
 
-      // 3. Préparer le reçu de versement
-      const receiptNumber = `REC-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
+      // 4. Traçabilité Journal d'Audit
+      await logAuditEvent({
+        action: 'RECOUVREMENT_CREANCE',
+        module: 'CLIENTS',
+        sector: 'COMMERCIAL',
+        description: `Règlement de créance pour ${selectedCustomer.name} (${selectedCustomer.code}) : ${fmt(paymentAmount)} réglé en ${paymentMode}. Solde antérieur : ${fmt(prevDebt)}, Nouveau solde : ${fmt(newDebt)}. Reçu N° ${receiptNumber}`
+      })
+
+      // 5. Préparer le reçu de versement imprimable
       const receiptData: SettlementReceipt = {
         receiptNumber,
         date: new Date().toISOString(),

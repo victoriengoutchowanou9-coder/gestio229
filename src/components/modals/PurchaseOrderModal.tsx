@@ -1,20 +1,32 @@
 // =============================================================================
-// GESTIO 229 SaaS — Modale Création Bon de Commande (BC)
+// GESTIO 229 SaaS — Modale Création Bon de Commande Multi-Produits (BC)
 // Permet de choisir un fournisseur existant ou d'en créer un à la volée,
-// sélectionne exclusivement les produits existants, saisie en UCD et prix TTC
+// sélection multi-produits du catalogue, saisie des quantités en UCD et prix TTC
 // =============================================================================
 
-import React, { useState, useEffect } from 'react'
-import { ShoppingCart, Check, X, Plus, UserPlus, Package } from 'lucide-react'
+import React, { useState, useEffect, useMemo } from 'react'
+import { ShoppingCart, Check, X, Plus, Package, Search } from 'lucide-react'
 import ModalPortal from './ModalPortal'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { formatFCFA } from '../../utils/tax'
+import clsx from 'clsx'
 
 interface PurchaseOrderModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess?: (order: any) => void
+}
+
+interface OrderItemRow {
+  productId: string
+  code: string
+  name: string
+  ucdUnit: string
+  currentStock: number
+  qtyToOrder: number
+  unitPriceTtc: number
+  selected: boolean
 }
 
 export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess }) => {
@@ -24,9 +36,8 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
   const [suppliers, setSuppliers] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
   const [selectedSupplierId, setSelectedSupplierId] = useState('')
-  const [selectedProductId, setSelectedProductId] = useState('')
-  const [qtyUcd, setQtyUcd] = useState<number>(10)
-  const [unitPriceTtc, setUnitPriceTtc] = useState<number>(0)
+  const [orderRows, setOrderRows] = useState<Record<string, OrderItemRow>>({})
+  const [productSearch, setProductSearch] = useState('')
   const [notes, setNotes] = useState('')
   const [magasinierSigner, setMagasinierSigner] = useState(user?.username || 'Responsable Appro')
 
@@ -39,11 +50,10 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
   useEffect(() => {
     if (!company?.id || !isOpen) return
 
-    // Charger fournisseurs et produits réels
     const fetchResources = async () => {
       const [{ data: sData }, { data: pData }] = await Promise.all([
         supabase.from('suppliers').select('id, company_name, phone, city').eq('company_id', company.id).order('company_name'),
-        supabase.from('products').select('id, code, name, unit, cost_price, sector_meta').eq('company_id', company.id).order('name')
+        supabase.from('products').select('id, code, name, unit, cost_price, stock_magasin, sector_meta').eq('company_id', company.id).order('name')
       ])
 
       const mappedSuppliers = (sData || []).map((s: any) => ({
@@ -58,7 +68,8 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         ...p,
         ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
         unit: p.unit || p.sector_meta?.uv || 'Pièce',
-        cost_price: Number(p.cost_price) || 0
+        cost_price: Number(p.cost_price) || 0,
+        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
       }))
 
       setSuppliers(mappedSuppliers)
@@ -67,23 +78,26 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       if (mappedSuppliers.length > 0 && !selectedSupplierId) {
         setSelectedSupplierId(mappedSuppliers[0].id)
       }
-      if (pData && pData.length > 0 && !selectedProductId) {
-        setSelectedProductId(pData[0].id)
-        setUnitPriceTtc(pData[0].cost_price || 0)
-      }
+
+      // Initialiser la map des lignes de commande
+      const rowsMap: Record<string, OrderItemRow> = {}
+      mappedProducts.forEach((p: any, idx: number) => {
+        rowsMap[p.id] = {
+          productId: p.id,
+          code: p.code,
+          name: p.name,
+          ucdUnit: p.ucd || 'Carton',
+          currentStock: p.stock_magasin,
+          qtyToOrder: idx === 0 ? 5 : 0,
+          unitPriceTtc: p.cost_price || 0,
+          selected: idx === 0
+        }
+      })
+      setOrderRows(rowsMap)
     }
 
     fetchResources()
   }, [company?.id, isOpen])
-
-  // Quand le produit change, pré-remplir le prix d'achat
-  const handleProductChange = (prodId: string) => {
-    setSelectedProductId(prodId)
-    const p = products.find((x) => x.id === prodId)
-    if (p) {
-      setUnitPriceTtc(p.cost_price || 0)
-    }
-  }
 
   // Création fournisseur à la volée
   const handleCreateSupplierInline = async (e: React.FormEvent) => {
@@ -119,15 +133,92 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
   }
 
   const selectedSupplier = suppliers.find((s) => s.id === selectedSupplierId)
-  const selectedProduct = products.find((p) => p.id === selectedProductId)
-  const totalTtc = Math.round(qtyUcd * unitPriceTtc)
+
+  // Filtrer les produits affichés dans le tableau
+  const filteredProducts = useMemo(() => {
+    if (!productSearch.trim()) return products
+    const s = productSearch.toLowerCase()
+    return products.filter((p) => p.name.toLowerCase().includes(s) || p.code.toLowerCase().includes(s))
+  }, [products, productSearch])
+
+  // Liste des lignes sélectionnées avec quantité > 0
+  const activeOrderItems = useMemo(() => {
+    return Object.values(orderRows).filter((row) => row.selected && row.qtyToOrder > 0)
+  }, [orderRows])
+
+  const totalBcTtc = useMemo(() => {
+    return activeOrderItems.reduce((acc, it) => acc + (it.qtyToOrder * it.unitPriceTtc), 0)
+  }, [activeOrderItems])
+
+  const handleToggleProduct = (prodId: string) => {
+    setOrderRows((prev) => {
+      const existing = prev[prodId]
+      if (!existing) return prev
+      const newSel = !existing.selected
+      return {
+        ...prev,
+        [prodId]: {
+          ...existing,
+          selected: newSel,
+          qtyToOrder: newSel && existing.qtyToOrder <= 0 ? 1 : existing.qtyToOrder
+        }
+      }
+    })
+  }
+
+  const handleQtyChange = (prodId: string, qty: number) => {
+    setOrderRows((prev) => {
+      const existing = prev[prodId]
+      if (!existing) return prev
+      const val = Math.max(0, qty)
+      return {
+        ...prev,
+        [prodId]: {
+          ...existing,
+          qtyToOrder: val,
+          selected: val > 0 ? true : existing.selected
+        }
+      }
+    })
+  }
+
+  const handlePriceChange = (prodId: string, price: number) => {
+    setOrderRows((prev) => {
+      const existing = prev[prodId]
+      if (!existing) return prev
+      return {
+        ...prev,
+        [prodId]: {
+          ...existing,
+          unitPriceTtc: Math.max(0, price)
+        }
+      }
+    })
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedSupplierId || !selectedProductId || qtyUcd <= 0) {
-      alert('Veuillez renseigner le fournisseur, le produit et une quantité valide.')
+    if (!selectedSupplierId) {
+      alert('Veuillez sélectionner un fournisseur.')
       return
     }
+
+    if (activeOrderItems.length === 0) {
+      alert('Veuillez sélectionner au moins un produit avec une quantité supérieure à 0.')
+      return
+    }
+
+    const orderItems = activeOrderItems.map((it) => ({
+      productId: it.productId,
+      productName: it.name,
+      productCode: it.code,
+      ucdUnit: it.ucdUnit,
+      qtyOrderedUcd: it.qtyToOrder,
+      unitPriceUcd: it.unitPriceTtc,
+      totalTtc: Math.round(it.qtyToOrder * it.unitPriceTtc)
+    }))
+
+    const first = orderItems[0]
 
     const order = {
       id: `po-${Date.now()}`,
@@ -135,13 +226,15 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       date: new Date().toISOString(),
       supplierId: selectedSupplierId,
       supplierName: selectedSupplier?.name || 'Fournisseur',
-      productId: selectedProductId,
-      productName: selectedProduct?.name || 'Produit',
-      productCode: selectedProduct?.code || 'ART',
-      ucdUnit: selectedProduct?.ucd || selectedProduct?.unit || 'UCD',
-      qtyOrderedUcd: qtyUcd,
-      unitPriceUcd: unitPriceTtc,
-      totalTtc,
+      totalTtc: totalBcTtc,
+      items: orderItems,
+      // Champs de compatibilité racine pour premier article
+      productId: first.productId,
+      productName: orderItems.length === 1 ? first.productName : `${first.productName} (+${orderItems.length - 1} autre(s))`,
+      productCode: first.productCode,
+      ucdUnit: first.ucdUnit,
+      qtyOrderedUcd: orderItems.reduce((acc, it) => acc + it.qtyOrderedUcd, 0),
+      unitPriceUcd: first.unitPriceUcd,
       status: 'BROUILLON', // Statut initial : Brouillon -> À valider -> Validé -> Commandé -> Réceptionné
       notes,
       signatures: {
@@ -156,15 +249,15 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
 
   return (
     <ModalPortal isOpen={isOpen} onClose={onClose} id="modal-portal-purchase-order" zIndex={60}>
-      <div className="bg-white w-full max-w-2xl rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+      <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl overflow-hidden flex flex-col border border-slate-200 animate-in fade-in zoom-in-95 duration-150 max-h-[92vh]">
         <div className="bg-indigo-950 text-white p-4 flex items-center justify-between">
           <div className="flex items-center space-x-2.5">
             <div className="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center text-white font-bold">
               <ShoppingCart className="w-4 h-4" />
             </div>
             <div>
-              <h3 className="font-extrabold text-sm text-white">+ Nouveau Bon de Commande Fournisseur (BC)</h3>
-              <p className="text-[10px] text-indigo-300">Produits existants uniquement, UCD de stockage et prix TTC</p>
+              <h3 className="font-extrabold text-sm text-white">+ Nouveau Bon de Commande Fournisseur Multi-Produits (BC)</h3>
+              <p className="text-[10px] text-indigo-300">Sélectionnez les articles du catalogue, saisissez les quantités en UCD et tarifs TTC</p>
             </div>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white p-1">
@@ -172,7 +265,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
+        <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs overflow-y-auto flex-1">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">N° Bon de Commande *</label>
@@ -181,7 +274,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
                 required
                 value={ref}
                 onChange={(e) => setRef(e.target.value)}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
               />
             </div>
 
@@ -245,7 +338,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
                   required
                   value={selectedSupplierId}
                   onChange={(e) => setSelectedSupplierId(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
                 >
                   {suppliers.length === 0 ? (
                     <option value="">Aucun fournisseur (cliquez sur + Nouveau)</option>
@@ -261,69 +354,104 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
             </div>
           </div>
 
-          {/* Sélection Produit Existant */}
+          {/* TABLEAU MULTI-PRODUITS DU CATALOGUE */}
           <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-3">
-            <h4 className="font-bold text-slate-900 flex items-center gap-1.5">
-              <Package className="w-4 h-4 text-indigo-600" />
-              <span>Article à Commander (Catalogue Réel Existant)</span>
-            </h4>
-
-            <div className="grid grid-cols-12 gap-3">
-              <div className="col-span-6">
-                <label className="block font-bold text-slate-700 mb-1">Produit *</label>
-                <select
-                  required
-                  value={selectedProductId}
-                  onChange={(e) => handleProductChange(e.target.value)}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-lg font-bold"
-                >
-                  {products.length === 0 ? (
-                    <option value="">Aucun produit en stock</option>
-                  ) : (
-                    products.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.code} - {p.name} ({p.ucd || p.unit})
-                      </option>
-                    ))
-                  )}
-                </select>
-              </div>
-
-              <div className="col-span-3">
-                <label className="block font-bold text-slate-700 mb-1">
-                  Quantité ({selectedProduct?.ucd || selectedProduct?.unit || 'UCD'}) *
-                </label>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <h4 className="font-bold text-slate-900 flex items-center gap-1.5 text-xs">
+                <Package className="w-4 h-4 text-indigo-600" />
+                <span>Sélection des Articles à Commander ({activeOrderItems.length} sélectionné(s))</span>
+              </h4>
+              <div className="relative w-64">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
                 <input
-                  type="number"
-                  step="any"
-                  min="0.001"
-                  required
-                  value={qtyUcd}
-                  onChange={(e) => setQtyUcd(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-lg font-bold font-mono text-center"
+                  type="text"
+                  placeholder="Filtrer un produit..."
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="w-full pl-8 pr-2 py-1 border border-slate-200 rounded-lg text-xs bg-white"
                 />
               </div>
+            </div>
 
-              <div className="col-span-3">
-                <label className="block font-bold text-slate-700 mb-1">Prix Achat TTC (FCFA) *</label>
-                <input
-                  type="number"
-                  required
-                  min="0"
-                  value={unitPriceTtc}
-                  onChange={(e) => setUnitPriceTtc(Number(e.target.value))}
-                  className="w-full p-2 bg-white border border-slate-200 rounded-lg font-bold font-mono text-right"
-                />
-              </div>
+            <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white max-h-60 overflow-y-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 sticky top-0 z-10">
+                  <tr>
+                    <th className="p-2 text-center w-8">Choix</th>
+                    <th className="p-2">Réf</th>
+                    <th className="p-2">Désignation</th>
+                    <th className="p-2 text-center">Unité (UCD)</th>
+                    <th className="p-2 text-center text-slate-500">Stock Magasin</th>
+                    <th className="p-2 text-center w-28 bg-indigo-50/70 text-indigo-900">Qté à Commander</th>
+                    <th className="p-2 text-right w-28">Prix Achat TTC</th>
+                    <th className="p-2 text-right w-28 font-bold">Total Ligne</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {filteredProducts.map((p) => {
+                    const row = orderRows[p.id] || {
+                      productId: p.id,
+                      code: p.code,
+                      name: p.name,
+                      ucdUnit: p.ucd || 'Carton',
+                      currentStock: p.stock_magasin,
+                      qtyToOrder: 0,
+                      unitPriceTtc: p.cost_price || 0,
+                      selected: false
+                    }
+                    const lineTotal = Math.round(row.qtyToOrder * row.unitPriceTtc)
+
+                    return (
+                      <tr key={p.id} className={clsx('hover:bg-slate-50/80 transition', row.selected && 'bg-indigo-50/30')}>
+                        <td className="p-2 text-center">
+                          <input
+                            type="checkbox"
+                            checked={row.selected}
+                            onChange={() => handleToggleProduct(p.id)}
+                            className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="p-2 font-bold text-slate-900">{p.code}</td>
+                        <td className="p-2 font-sans font-medium text-slate-800">{p.name}</td>
+                        <td className="p-2 text-center font-sans text-slate-600">{p.ucd || 'Carton'}</td>
+                        <td className="p-2 text-center text-slate-500">{p.stock_magasin}</td>
+                        <td className="p-1.5 text-center bg-indigo-50/30">
+                          <input
+                            type="number"
+                            step="any"
+                            min="0"
+                            value={row.qtyToOrder || ''}
+                            onChange={(e) => handleQtyChange(p.id, Number(e.target.value))}
+                            placeholder="0"
+                            className="w-20 p-1 text-center font-bold font-mono border border-indigo-200 rounded text-xs bg-white focus:ring-1 focus:ring-indigo-500"
+                          />
+                        </td>
+                        <td className="p-1.5 text-right">
+                          <input
+                            type="number"
+                            min="0"
+                            value={row.unitPriceTtc || ''}
+                            onChange={(e) => handlePriceChange(p.id, Number(e.target.value))}
+                            className="w-24 p-1 text-right font-mono border border-slate-200 rounded text-xs bg-white"
+                          />
+                        </td>
+                        <td className="p-2 text-right font-bold text-indigo-900">
+                          {formatFCFA(lineTotal)}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             </div>
 
             <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl flex justify-between items-center font-mono">
-              <span className="text-indigo-900 font-bold">MONTANT TOTAL DU BON DE COMMANDE :</span>
-              <span className="text-base font-black text-indigo-950">{formatFCFA(totalTtc)}</span>
+              <span className="text-indigo-900 font-bold">MONTANT TOTAL DU BON DE COMMANDE ({activeOrderItems.length} article(s)) :</span>
+              <span className="text-base font-black text-indigo-950">{formatFCFA(totalBcTtc)}</span>
             </div>
           </div>
 
-          {/* Visa & Signatures */}
+          {/* Visa & Circuit de Validation */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block font-bold text-slate-700 mb-1">Signature Demandeur / Magasinier *</label>
@@ -353,10 +481,11 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
             </button>
             <button
               type="submit"
-              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black shadow-md flex items-center space-x-1.5"
+              disabled={activeOrderItems.length === 0}
+              className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-black shadow-md flex items-center space-x-1.5"
             >
               <Check className="w-4 h-4" />
-              <span>Créer le Bon de Commande</span>
+              <span>Créer le Bon de Commande ({activeOrderItems.length} articles)</span>
             </button>
           </div>
         </form>

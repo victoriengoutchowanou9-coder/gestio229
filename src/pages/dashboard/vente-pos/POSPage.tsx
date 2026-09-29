@@ -87,6 +87,7 @@ interface SaleRecord {
   total_ht: number
   total_tva: number
   total_aib: number
+  total_exonere?: number
   amount_paid: number
   credit_amount: number
   payments: PaymentLine[]
@@ -221,25 +222,58 @@ export const POSPage: React.FC = () => {
       })
       setCustomers(mappedCusts)
 
-      // Transformer les ventes réelles chargées
+      // Transformer les ventes réelles chargées depuis Supabase
       if (sales && !saleErr) {
-        const mappedSales: SaleRecord[] = sales.map((s: any) => ({
-          id: s.id,
-          order_number: s.order_number || `VTE-${s.id.slice(0, 6)}`,
-          date: s.order_date || s.created_at || new Date().toISOString(),
-          customer_name: s.customer_name || 'Client Comptoir',
-          customer_id: s.customer_id,
-          total_amount: Number(s.total_amount) || 0,
-          total_ht: Number(s.total_ht) || Math.round((Number(s.total_amount) || 0) / 1.18),
-          total_tva: Number(s.total_tax) || 0,
-          total_aib: 0,
-          amount_paid: Number(s.amount_paid) || (s.payment_method === 'credit' ? 0 : Number(s.total_amount) || 0),
-          credit_amount: s.payment_method === 'credit' ? Number(s.total_amount) || 0 : 0,
-          payments: [{ method: (s.payment_method as any) || 'especes', amount: Number(s.total_amount) || 0 }],
-          is_deferred: s.status === 'pending_delivery',
-          status: s.status === 'cancelled' ? 'AVOIR' : s.status === 'pending_delivery' ? 'A_LIVRER' : 'COMPLET',
-          lines: []
-        }))
+        const mappedSales: SaleRecord[] = sales.map((s: any) => {
+          let parsedNotes: any = {}
+          try {
+            if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+          } catch (e) {}
+
+          const lines: CartItem[] = (parsedNotes.lines || []).map((l: any) => ({
+            product: l.product || {
+              id: l.productId || l.id,
+              code: l.code || 'ART',
+              name: l.name || 'Article',
+              unit: l.unit || 'Pièce',
+              selling_price: l.unitPrice || 0,
+              cost_price: 0,
+            },
+            qty: Number(l.qty) || 1,
+            unitPrice: Number(l.unitPrice) || 0,
+            discount: Number(l.discount) || 0,
+            batchTierLabel: l.batchTierLabel,
+          }))
+
+          const clientName = s.customer_name || parsedNotes.customer_name || 'Client Comptoir'
+          const clientIfu = s.customer_ifu || parsedNotes.customer_ifu || null
+          const paymentsList: PaymentLine[] = parsedNotes.payments || [
+            {
+              method: (s.payment_method || (s.payment_status === 'credit' ? 'credit' : 'especes')) as any,
+              amount: Number(s.total_amount) || 0
+            }
+          ]
+
+          return {
+            id: s.id,
+            order_number: s.order_number || `VTE-${s.id.slice(0, 6)}`,
+            date: s.order_date || s.created_at || new Date().toISOString(),
+            customer_name: clientName,
+            customer_id: s.customer_id,
+            customer_ifu: clientIfu,
+            total_amount: Number(s.total_amount) || 0,
+            total_ht: Number(s.subtotal_ht ?? s.total_ht) || Math.round((Number(s.total_amount) || 0) / 1.18),
+            total_tva: Number(s.tva_amount ?? s.total_tax) || 0,
+            total_aib: Number(s.aib_amount) || 0,
+            total_exonere: Number(parsedNotes.total_exonere) || 0,
+            amount_paid: Number(s.paid_amount ?? s.amount_paid) || (s.payment_status === 'credit' ? 0 : Number(s.total_amount) || 0),
+            credit_amount: Number(s.credit_amount) || (s.payment_status === 'credit' ? Number(s.total_amount) || 0 : 0),
+            payments: paymentsList,
+            is_deferred: s.status === 'pending_delivery',
+            status: s.status === 'cancelled' ? 'AVOIR' : s.status === 'pending_delivery' ? 'A_LIVRER' : 'COMPLET',
+            lines,
+          }
+        })
         setSalesHistory(mappedSales)
       }
     } catch (err: any) {
@@ -387,30 +421,40 @@ export const POSPage: React.FC = () => {
 
   const totalNetTTC = Math.max(0, subtotalTTC - totalDiscount)
 
-  // Décomposition fiscale ligne par ligne
+  // Décomposition fiscale ligne par ligne rigoureuse
   const cartFiscalSummary = useMemo(() => {
     let ht = 0
     let tva = 0
     let aib = 0
+    let totalExonere = 0
 
     cart.forEach((item) => {
       const lineTtc = item.qty * item.unitPrice - item.qty * item.discount
+      const isVat = Boolean(item.product.is_vat_subject ?? (item.product.vat_rate && item.product.vat_rate > 0) ?? false)
+      const vatRate = isVat ? (item.product.vat_rate || 18) : 0
+      const isAib = Boolean(item.product.is_aib_subject ?? item.product.sector_meta?.is_aib_subject ?? false)
+      const aibRate = isAib ? (item.product.aib_rate || 1) : 0
+
       const tax = calculateTaxFromTTC(
         lineTtc,
-        item.product.is_vat_subject ?? true,
-        item.product.vat_rate ?? 18,
-        item.product.is_aib_subject ?? false,
-        item.product.aib_rate ?? 1
+        isVat,
+        vatRate,
+        isAib,
+        aibRate
       )
       ht += tax.htPrice
       tva += tax.vatAmount
       aib += tax.aibAmount
+      if (!isVat) {
+        totalExonere += lineTtc
+      }
     })
 
     return {
       ht: Math.round(ht * 100) / 100,
       tva: Math.round(tva * 100) / 100,
       aib: Math.round(aib * 100) / 100,
+      totalExonere: Math.round(totalExonere * 100) / 100,
     }
   }, [cart])
 
@@ -506,8 +550,103 @@ export const POSPage: React.FC = () => {
             .map(([k, v]) => ({ method: k as any, amount: v })))
         : [{ method: singleMethod, amount: totalNetTTC }]
 
+      const primaryMethod = isMultiMode
+        ? (paymentsList.find(p => p.amount > 0)?.method || 'especes')
+        : singleMethod
+
+      const totalCost = cart.reduce((sum, item) => sum + item.qty * (item.product.cost_price || 0), 0)
+
+      const notesPayload = {
+        payments: paymentsList,
+        customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
+        customer_ifu: selectedCustomer?.ifu_number || null,
+        is_deferred: isDeferred,
+        total_exonere: cartFiscalSummary.totalExonere,
+        lines: cart.map(c => ({
+          product: {
+            id: c.product.id,
+            code: c.product.code,
+            name: c.product.name,
+            unit: c.product.unit || c.product.uv || 'Pièce',
+            cost_price: c.product.cost_price,
+            selling_price: c.product.selling_price,
+            is_vat_subject: c.product.is_vat_subject,
+            vat_rate: c.product.vat_rate,
+            is_aib_subject: c.product.is_aib_subject,
+            aib_rate: c.product.aib_rate
+          },
+          qty: c.qty,
+          unitPrice: c.unitPrice,
+          discount: c.discount
+        }))
+      }
+
+      // 1. Insertion en base de données Supabase dans sales_orders
+      const salePayload: any = {
+        company_id: company.id,
+        customer_id: selectedCustomer?.id || null,
+        order_number: orderNum,
+        order_type: 'pos_direct',
+        order_date: new Date().toISOString().split('T')[0],
+        subtotal_ht: cartFiscalSummary.ht,
+        tva_amount: cartFiscalSummary.tva,
+        aib_amount: cartFiscalSummary.aib,
+        total_amount: totalNetTTC,
+        total_cost: totalCost,
+        paid_amount: totalNetTTC - creditAmount,
+        credit_amount: creditAmount,
+        payment_status: creditAmount > 0 ? (creditAmount >= totalNetTTC ? 'credit' : 'partiel') : 'paye',
+        payment_method: primaryMethod,
+        customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
+        status: isDeferred ? 'pending_delivery' : 'COMPLET',
+        notes: JSON.stringify(notesPayload)
+      }
+
+      let savedDbSale: any = null
+      const { data: dbSale, error: dbSaleErr } = await supabase
+        .from('sales_orders')
+        .insert(salePayload)
+        .select()
+        .single()
+
+      if (!dbSaleErr && dbSale) {
+        savedDbSale = dbSale
+      } else if (dbSaleErr) {
+        // Fallback sécurisé si colonnes non migrées
+        const { payment_method, customer_name, status, ...fallbackPayload } = salePayload
+        const { data: fbSale, error: fbErr } = await supabase
+          .from('sales_orders')
+          .insert(fallbackPayload)
+          .select()
+          .single()
+        if (fbErr) console.warn('Erreur insertion vente fallback:', fbErr)
+        savedDbSale = fbSale
+      }
+
+      // 2. Insertion des lignes réelles dans sales_order_items
+      if (savedDbSale?.id) {
+        const lineItems = cart.map((line) => {
+          const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
+          const lineTotal = line.qty * line.unitPrice
+          const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
+          return {
+            order_id: savedDbSale.id,
+            product_id: line.product.id,
+            product_name: line.product.name,
+            quantity: line.qty,
+            unit_price: line.unitPrice,
+            unit_cost: line.product.cost_price || 0,
+            tva_rate: isTaxed ? (line.product.vat_rate || 18) : 0,
+            total_ht: lineHt,
+            total_ttc: lineTotal
+          }
+        })
+        const { error: linesErr } = await supabase.from('sales_order_items').insert(lineItems)
+        if (linesErr) console.warn('Erreur insertion sales_order_items:', linesErr.message)
+      }
+
       const newSale: SaleRecord = {
-        id: `sale-${Date.now()}`,
+        id: savedDbSale?.id || `sale-${Date.now()}`,
         order_number: orderNum,
         date: new Date().toISOString(),
         customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
@@ -517,6 +656,7 @@ export const POSPage: React.FC = () => {
         total_ht: cartFiscalSummary.ht,
         total_tva: cartFiscalSummary.tva,
         total_aib: cartFiscalSummary.aib,
+        total_exonere: cartFiscalSummary.totalExonere,
         amount_paid: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
         payments: paymentsList,
@@ -525,7 +665,7 @@ export const POSPage: React.FC = () => {
         lines: [...cart],
       }
 
-      // Si client avec crédit, mettre à jour sa dette dans Supabase
+      // 3. Si client avec crédit, mettre à jour sa dette dans Supabase
       if (selectedCustomer && creditAmount > 0) {
         const newDebt = (Number(selectedCustomer.current_debt) || 0) + creditAmount
         await supabase
@@ -538,7 +678,7 @@ export const POSPage: React.FC = () => {
         )
       }
 
-      // Déstockage strict selon la quantité UV réellement vendue (CDC)
+      // 4. Déstockage strict selon la quantité UV réellement vendue (CDC)
       for (const line of cart) {
         if (line.product?.id) {
           try {
@@ -567,6 +707,38 @@ export const POSPage: React.FC = () => {
           }
         }
       }
+
+      // 5. Synchronisation caisse en temps réel
+      try {
+        const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+        if (cashStateRaw) {
+          const cState = JSON.parse(cashStateRaw)
+          const paidCash = isMultiMode ? (multiPayments.especes || 0) : (singleMethod === 'especes' ? totalNetTTC : 0)
+          const paidMomo = isMultiMode
+            ? ((multiPayments.momo_mtn || 0) + (multiPayments.momo_moov || 0) + (multiPayments.wave || 0))
+            : (['momo_mtn', 'momo_moov', 'wave'].includes(singleMethod) ? totalNetTTC : 0)
+
+          cState.todaySalesCash = (Number(cState.todaySalesCash) || 0) + paidCash
+          cState.todaySalesMomo = (Number(cState.todaySalesMomo) || 0) + paidMomo
+          localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
+        }
+      } catch (e) {}
+
+      // 6. Traçabilité Journal d'Audit automatique
+      try {
+        const { logAuditEvent } = await import('../../../services/auditService')
+        await logAuditEvent({
+          companyId: company.id,
+          userId: user?.id,
+          userName: user?.full_name || user?.username,
+          userRole: user?.role,
+          module: 'Vente-POS',
+          action: 'VENTE',
+          description: `Vente N° ${orderNum} enregistrée - Montant: ${fmt(totalNetTTC)} (${primaryMethod}) - Client: ${selectedCustomer ? selectedCustomer.name : 'Client Comptoir'}`,
+          entityName: 'sales_orders',
+          entityId: savedDbSale?.id || newSale.id
+        })
+      } catch (e) {}
 
       setSalesHistory([newSale, ...salesHistory])
       setCurrentSale(newSale)
@@ -696,31 +868,76 @@ export const POSPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Grille des articles - Clic ouvre la modale Détails Produit */}
-            <div className="flex-1 overflow-y-auto grid grid-cols-2 sm:grid-cols-3 gap-2.5 pr-1">
+            {/* Grille des articles sous forme de petits carreaux/cartes professionnelles */}
+            <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 pr-1">
               {filteredProducts.length === 0 ? (
                 <div className="col-span-full p-8 text-center text-slate-400 text-xs">
                   {loading ? 'Chargement des articles...' : 'Aucun produit actif disponible.'}
                 </div>
               ) : (
-                filteredProducts.map((p) => (
-                  <button
-                    key={p.id}
-                    onClick={() => handleOpenProductDetail(p)}
-                    className="flex flex-col justify-between p-3 bg-slate-50 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-xl text-left transition group active:scale-[0.98]"
-                  >
-                    <div>
-                      <span className="text-[10px] font-mono text-slate-400 block truncate">{p.code}</span>
-                      <p className="font-semibold text-xs text-slate-800 line-clamp-2 mt-0.5 group-hover:text-emerald-700">
-                        {p.name}
-                      </p>
+                filteredProducts.map((p) => {
+                  const stockVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
+                  const stockMagasin = Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
+                  const wholesalePrice = Number(p.wholesale_price || p.sector_meta?.price_vente_ucd_ttc || 0)
+                  const unitVente = p.uv || p.unit || 'Pièce'
+                  const unitMagasin = p.ucd || 'Carton'
+
+                  return (
+                    <div
+                      key={p.id}
+                      onClick={() => handleOpenProductDetail(p)}
+                      className="group relative flex flex-col justify-between p-3.5 bg-white hover:bg-emerald-50/40 border border-slate-200 hover:border-emerald-400 rounded-2xl text-left transition-all duration-150 shadow-sm hover:shadow cursor-pointer select-none"
+                    >
+                      <div>
+                        {/* En-tête : Référence + Badge Stock Vente */}
+                        <div className="flex items-center justify-between gap-1.5 mb-1.5">
+                          <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                            {p.code}
+                          </span>
+                          <span
+                            className={clsx(
+                              'text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-0.5',
+                              stockVente > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                            )}
+                            title={`Stock disponible vente directe : ${stockVente} ${unitVente}`}
+                          >
+                            Vente : {stockVente} {unitVente}
+                          </span>
+                        </div>
+
+                        {/* Vignette Produit avec Photo ou Icône et Nom */}
+                        <div className="flex items-start gap-2.5 my-1">
+                          <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-emerald-100/60 flex items-center justify-center flex-shrink-0 text-slate-600 group-hover:text-emerald-700 transition">
+                            <Layers className="w-5 h-5" />
+                          </div>
+                          <p className="font-bold text-xs text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-tight">
+                            {p.name}
+                          </p>
+                        </div>
+
+                        {/* Stock Magasin disponible */}
+                        <div className="text-[10px] text-slate-500 flex items-center justify-between mt-1 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-100 font-medium">
+                          <span>Stock Magasin :</span>
+                          <span className="font-bold text-indigo-700 font-mono">{stockMagasin} {unitMagasin}</span>
+                        </div>
+                      </div>
+
+                      {/* Tarification : Prix unitaire détail & Prix de gros */}
+                      <div className="mt-2 pt-2 border-t border-slate-100 space-y-0.5">
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-[10px] text-slate-500 font-medium">Prix Détail ({unitVente}) :</span>
+                          <span className="text-xs font-black text-emerald-700 font-mono">{fmt(p.selling_price)}</span>
+                        </div>
+                        {wholesalePrice > 0 && (
+                          <div className="flex items-baseline justify-between text-[10px] text-slate-500">
+                            <span>Prix Gros ({unitMagasin}) :</span>
+                            <span className="font-mono font-semibold text-slate-700">{fmt(wholesalePrice)}</span>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                    <div className="mt-2 pt-1 border-t border-slate-200/60 flex justify-between items-baseline">
-                      <span className="text-[10px] text-slate-500">{p.unit}</span>
-                      <span className="text-xs font-black text-emerald-700 font-mono">{fmt(p.selling_price)}</span>
-                    </div>
-                  </button>
-                ))
+                  )
+                })
               )}
             </div>
           </div>
@@ -1035,18 +1252,27 @@ export const POSPage: React.FC = () => {
                 })()
               )}
 
-              {/* Sélecteur de quantité numérique décimale */}
+              {/* Sélecteur de quantité numérique décimale avec boutons fractionnés */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1.5">
                   Quantité à Vendre ({selectedProductForDetail.unit}) :
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 mb-2">
                   <button
                     type="button"
                     onClick={() => setDetailQty(Math.max(0.1, Math.round((detailQty - 1) * 100) / 100))}
-                    className="w-10 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-black text-lg flex items-center justify-center transition"
+                    className="px-2.5 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center transition"
+                    title="-1"
                   >
-                    <Minus className="w-4 h-4" />
+                    -1
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setDetailQty(Math.max(0.05, Math.round((detailQty - 0.5) * 100) / 100))}
+                    className="px-2.5 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center transition"
+                    title="-0.5"
+                  >
+                    -0.5
                   </button>
 
                   <input
@@ -1060,11 +1286,39 @@ export const POSPage: React.FC = () => {
 
                   <button
                     type="button"
-                    onClick={() => setDetailQty(Math.round((detailQty + 1) * 100) / 100)}
-                    className="w-10 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-black text-lg flex items-center justify-center transition"
+                    onClick={() => setDetailQty(Math.round((detailQty + 0.5) * 100) / 100)}
+                    className="px-2.5 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center transition"
+                    title="+0.5"
                   >
-                    <Plus className="w-4 h-4" />
+                    +0.5
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setDetailQty(Math.round((detailQty + 1) * 100) / 100)}
+                    className="px-2.5 h-10 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center transition"
+                    title="+1"
+                  >
+                    +1
+                  </button>
+                </div>
+
+                {/* Raccourcis directs de quantités fractionnées et entières */}
+                <div className="flex flex-wrap gap-1">
+                  {[0.25, 0.5, 0.75, 1, 1.5, 2, 5, 10].map((preset) => (
+                    <button
+                      key={preset}
+                      type="button"
+                      onClick={() => setDetailQty(preset)}
+                      className={clsx(
+                        'px-2 py-1 rounded-lg text-[11px] font-mono font-bold transition border',
+                        Math.abs(detailQty - preset) < 0.001
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                      )}
+                    >
+                      {preset} {selectedProductForDetail.unit}
+                    </button>
+                  ))}
                 </div>
               </div>
 
@@ -1335,7 +1589,8 @@ export const POSPage: React.FC = () => {
                     {currentSale?.status === 'AVOIR' ? 'FACTURE D\'AVOIR' : 'FACTURE DE VENTE'}
                   </span>
                   <p className="font-mono font-bold text-sm mt-1.5">{currentSale?.order_number}</p>
-                  <p className="text-slate-500">Date : {new Date(currentSale?.date || '').toLocaleDateString('fr-BJ')}</p>
+                  <p className="text-slate-500">Date : {new Date(currentSale?.date || '').toLocaleString('fr-BJ')}</p>
+                  <p className="text-slate-500 text-[11px] font-medium">Caisse : Caisse Principale POS</p>
                 </div>
               </div>
 
@@ -1404,6 +1659,12 @@ export const POSPage: React.FC = () => {
                     <span className="text-slate-600">Total Hors Taxes :</span>
                     <span className="font-mono font-bold">{fmt(currentSale?.total_ht || 0)}</span>
                   </div>
+                  {(currentSale?.total_exonere || 0) > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-slate-600">Total Exonéré :</span>
+                      <span className="font-mono font-bold">{fmt(currentSale.total_exonere)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-slate-600">Total TVA (18%) :</span>
                     <span className="font-mono font-bold">{fmt(currentSale?.total_tva || 0)}</span>

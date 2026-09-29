@@ -8,13 +8,15 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Package, Plus, Search, AlertTriangle, CheckCircle, RefreshCw,
   Printer, ArrowRightLeft, ClipboardCheck, FileSpreadsheet, Download,
-  Check, X, ArrowUpRight, ArrowDownRight, Layers, DollarSign
+  Check, X, ArrowUpRight, ArrowDownRight, Layers, DollarSign,
+  Edit2, Trash2, Calendar, FileText
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { NewProductModal, StockSheetModal, ModalPortal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
+import { logAuditEvent } from '../../../services/auditService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -87,17 +89,36 @@ export const StocksPage: React.FC = () => {
   const [showTransferModal, setShowTransferModal] = useState(false)
   const [showValuationModal, setShowValuationModal] = useState(false)
 
-  // État Transfert Individuel (Magasin -> Vente)
+  // État Transfert (Direction & Paramètres)
+  const [transferDirection, setTransferDirection] = useState<'magasin_to_vente' | 'vente_to_magasin'>('magasin_to_vente')
   const [transferProdId, setTransferProdId] = useState('')
   const [transferQty, setTransferQty] = useState<number>(0)
   const [transferMotif, setTransferMotif] = useState('Réapprovisionnement Rayon Vente POS')
 
-  // État Transfert en Masse (Magasin -> Vente)
+  // État Transfert en Masse (Plusieurs produits)
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([])
   const [showBulkTransferModal, setShowBulkTransferModal] = useState(false)
   const [bulkTransferQtys, setBulkTransferQtys] = useState<Record<string, number>>({})
   const [bulkTransferMotif, setBulkTransferMotif] = useState('Réapprovisionnement Rayon Vente POS')
   const [isProcessingBulkTransfer, setIsProcessingBulkTransfer] = useState(false)
+
+  // Édition rapide de produit
+  const [editingProduct, setEditingProduct] = useState<ProductStock | null>(null)
+  const [editForm, setEditForm] = useState<{
+    name: string
+    cost_price: number
+    selling_price: number
+    min_stock_alert: number
+    stock_magasin: number
+    stock_vente: number
+  }>({ name: '', cost_price: 0, selling_price: 0, min_stock_alert: 5, stock_magasin: 0, stock_vente: 0 })
+
+  // Filtres de Date Fiche Journalière de Stock
+  const [dateFilterMode, setDateFilterMode] = useState<'today' | 'yesterday' | 'single' | 'period'>('today')
+  const [customDate, setCustomDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [startDate, setStartDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [endDate, setEndDate] = useState<string>(new Date().toISOString().slice(0, 10))
+  const [periodSalesItems, setPeriodSalesItems] = useState<Record<string, number>>({})
 
   // État Inventaire Physique & Historique
   const [inventoryList, setInventoryList] = useState<InventoryItem[]>([])
@@ -206,7 +227,71 @@ export const StocksPage: React.FC = () => {
     )
   }, [products])
 
-  // ─── Actions Double Stock : Transfert Magasin -> Vente ─────────────────────
+  // ─── Chargement Activité Période pour la Fiche Journalière ──────────────
+  const loadPeriodActivity = useCallback(async () => {
+    if (!company?.id) return
+    try {
+      let startIso = ''
+      let endIso = ''
+      const now = new Date()
+
+      if (dateFilterMode === 'today') {
+        startIso = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+        endIso = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59).toISOString()
+      } else if (dateFilterMode === 'yesterday') {
+        const y = new Date(now)
+        y.setDate(y.getDate() - 1)
+        startIso = new Date(y.getFullYear(), y.getMonth(), y.getDate()).toISOString()
+        endIso = new Date(y.getFullYear(), y.getMonth(), y.getDate(), 23, 59, 59).toISOString()
+      } else if (dateFilterMode === 'single') {
+        const d = new Date(customDate)
+        startIso = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString()
+        endIso = new Date(d.getFullYear(), d.getMonth(), d.getDate(), 23, 59, 59).toISOString()
+      } else {
+        const s = new Date(startDate)
+        const e = new Date(endDate)
+        startIso = new Date(s.getFullYear(), s.getMonth(), s.getDate()).toISOString()
+        endIso = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59).toISOString()
+      }
+
+      const { data: sales } = await supabase
+        .from('sales_orders')
+        .select('*')
+        .eq('company_id', company.id)
+        .gte('created_at', startIso)
+        .lte('created_at', endIso)
+
+      const salesMap: Record<string, number> = {}
+      if (sales) {
+        sales.forEach((s: any) => {
+          if (s.notes) {
+            try {
+              const parsed = JSON.parse(s.notes)
+              if (Array.isArray(parsed.lines)) {
+                parsed.lines.forEach((l: any) => {
+                  const pId = l.product?.id || l.productId
+                  if (pId) {
+                    salesMap[pId] = (salesMap[pId] || 0) + (Number(l.qty) || 0)
+                  }
+                })
+              }
+            } catch (e) {}
+          }
+        })
+      }
+      setPeriodSalesItems(salesMap)
+    } catch (e) {
+      console.warn('Erreur chargement activite periode stock', e)
+    }
+  }, [company?.id, dateFilterMode, customDate, startDate, endDate])
+
+  useEffect(() => {
+    if (activeTab === 'fiche_journaliere') {
+      loadPeriodActivity()
+    }
+  }, [activeTab, loadPeriodActivity])
+
+  // ─── Actions Double Stock : Transfert Individuel (Bi-directionnel) ─────────
 
   const handleExecuteTransfer = async () => {
     const prod = products.find((p) => p.id === transferProdId)
@@ -218,14 +303,34 @@ export const StocksPage: React.FC = () => {
       toast.error('Quantité invalide', 'La quantité transférée doit être supérieure à 0.')
       return
     }
-    if (transferQty > prod.stock_magasin) {
-      toast.error('Stock insuffisant en magasin', `Stock magasin disponible : ${prod.stock_magasin} ${prod.unit}`)
-      return
+
+    const coef = prod.coef || 1
+
+    if (transferDirection === 'magasin_to_vente') {
+      if (transferQty > prod.stock_magasin) {
+        toast.error('Stock insuffisant en magasin', `Stock disponible : ${prod.stock_magasin} ${prod.ucd || 'UCD'}`)
+        return
+      }
+    } else {
+      if (transferQty > prod.stock_vente) {
+        toast.error('Stock insuffisant en rayon vente', `Stock disponible : ${prod.stock_vente} ${prod.uv || 'UV'}`)
+        return
+      }
     }
 
     try {
-      const newMagasin = Math.round((prod.stock_magasin - transferQty) * 1000) / 1000
-      const newVente = Math.round((prod.stock_vente + transferQty) * 1000) / 1000
+      let newMagasin = prod.stock_magasin
+      let newVente = prod.stock_vente
+
+      if (transferDirection === 'magasin_to_vente') {
+        const addedVente = transferQty * coef
+        newMagasin = Math.max(0, Math.round((prod.stock_magasin - transferQty) * 1000) / 1000)
+        newVente = Math.round((prod.stock_vente + addedVente) * 1000) / 1000
+      } else {
+        const addedMagasin = transferQty / coef
+        newVente = Math.max(0, Math.round((prod.stock_vente - transferQty) * 1000) / 1000)
+        newMagasin = Math.round((prod.stock_magasin + addedMagasin) * 1000) / 1000
+      }
 
       const currentMeta = prod.sector_meta || {}
       const updatedMeta = {
@@ -234,7 +339,6 @@ export const StocksPage: React.FC = () => {
         stock_vente: newVente
       }
 
-      // Mise à jour réelle Supabase
       let updRes = await supabase
         .from('products')
         .update({
@@ -255,6 +359,13 @@ export const StocksPage: React.FC = () => {
 
       if (updRes.error) throw updRes.error
 
+      await logAuditEvent({
+        action: 'TRANSFERT_STOCK',
+        module: 'STOCKS',
+        sector: 'COMMERCIAL',
+        description: `Transfert ${transferDirection === 'magasin_to_vente' ? 'Magasin -> Vente' : 'Vente -> Magasin'} de ${transferQty} ${transferDirection === 'magasin_to_vente' ? (prod.ucd || 'UCD') : (prod.uv || 'UV')} pour ${prod.name}. Motif: ${transferMotif}`
+      })
+
       setProducts((prev) =>
         prev.map((p) =>
           p.id === prod.id ? { ...p, stock_magasin: newMagasin, stock_vente: newVente, sector_meta: updatedMeta } : p
@@ -265,14 +376,14 @@ export const StocksPage: React.FC = () => {
       setTransferQty(0)
       toast.success(
         'Transfert effectué !',
-        `Transféré ${transferQty} ${prod.unit} du Magasin vers le Stock Vente POS.`
+        `Mise à jour des stocks validée avec application du coefficient de conversion (${coef}).`
       )
     } catch (err: any) {
       toast.error('Erreur transfert', err.message)
     }
   }
 
-  // ─── Actions Double Stock : Transfert en Masse (Plusieurs Produits) ────────
+  // ─── Actions Double Stock : Transfert en Masse (Bi-directionnel) ───────────
 
   const handleToggleSelectProduct = (productId: string) => {
     setSelectedProductIds((prev) =>
@@ -281,7 +392,9 @@ export const StocksPage: React.FC = () => {
   }
 
   const handleSelectAllProducts = () => {
-    const available = products.filter((p) => p.stock_magasin > 0).map((p) => p.id)
+    const available = products
+      .filter((p) => (transferDirection === 'magasin_to_vente' ? p.stock_magasin > 0 : p.stock_vente > 0))
+      .map((p) => p.id)
     if (selectedProductIds.length === available.length && available.length > 0) {
       setSelectedProductIds([])
     } else {
@@ -293,8 +406,10 @@ export const StocksPage: React.FC = () => {
     const initialQtys: Record<string, number> = {}
     selectedProductIds.forEach((id) => {
       const prod = products.find((p) => p.id === id)
-      // Par défaut proposer 1 ou la totalité si < 1
-      initialQtys[id] = prod && prod.stock_magasin >= 1 ? 1 : (prod?.stock_magasin || 0)
+      if (prod) {
+        const sourceStock = transferDirection === 'magasin_to_vente' ? prod.stock_magasin : prod.stock_vente
+        initialQtys[id] = sourceStock >= 1 ? 1 : sourceStock
+      }
     })
     setBulkTransferQtys(initialQtys)
     setShowBulkTransferModal(true)
@@ -315,10 +430,11 @@ export const StocksPage: React.FC = () => {
     }
 
     for (const item of itemsToTransfer) {
-      if (item.qty > (item.prod?.stock_magasin || 0)) {
+      const sourceStock = transferDirection === 'magasin_to_vente' ? (item.prod?.stock_magasin || 0) : (item.prod?.stock_vente || 0)
+      if (item.qty > sourceStock) {
         toast.error(
           'Stock insuffisant',
-          `Quantité pour ${item.prod?.name} (${item.qty}) dépasse le stock magasin disponible (${item.prod?.stock_magasin}).`
+          `Quantité pour ${item.prod?.name} (${item.qty}) dépasse le stock disponible (${sourceStock}).`
         )
         return
       }
@@ -328,8 +444,17 @@ export const StocksPage: React.FC = () => {
     try {
       for (const item of itemsToTransfer) {
         if (!item.prod) continue
-        const newMagasin = Math.round((item.prod.stock_magasin - item.qty) * 1000) / 1000
-        const newVente = Math.round((item.prod.stock_vente + item.qty) * 1000) / 1000
+        const coef = item.prod.coef || 1
+        let newMagasin = item.prod.stock_magasin
+        let newVente = item.prod.stock_vente
+
+        if (transferDirection === 'magasin_to_vente') {
+          newMagasin = Math.max(0, Math.round((item.prod.stock_magasin - item.qty) * 1000) / 1000)
+          newVente = Math.round((item.prod.stock_vente + (item.qty * coef)) * 1000) / 1000
+        } else {
+          newVente = Math.max(0, Math.round((item.prod.stock_vente - item.qty) * 1000) / 1000)
+          newMagasin = Math.round((item.prod.stock_magasin + (item.qty / coef)) * 1000) / 1000
+        }
 
         const currentMeta = item.prod.sector_meta || {}
         const updatedMeta = {
@@ -359,17 +484,129 @@ export const StocksPage: React.FC = () => {
         if (updRes.error) throw updRes.error
       }
 
+      await logAuditEvent({
+        action: 'TRANSFERT_STOCK',
+        module: 'STOCKS',
+        sector: 'COMMERCIAL',
+        description: `Transfert groupé (${transferDirection === 'magasin_to_vente' ? 'Magasin -> Vente' : 'Vente -> Magasin'}) de ${itemsToTransfer.length} produit(s). Motif: ${bulkTransferMotif}`
+      })
+
       await loadData()
       setSelectedProductIds([])
       setShowBulkTransferModal(false)
       toast.success(
         'Transfert en masse validé !',
-        `${itemsToTransfer.length} produit(s) transféré(s) en 1 clic vers le Stock Vente POS.`
+        `${itemsToTransfer.length} produit(s) transféré(s) avec succès selon le sens ${transferDirection === 'magasin_to_vente' ? 'Magasin ➔ Vente' : 'Vente ➔ Magasin'}.`
       )
     } catch (err: any) {
       toast.error('Erreur transfert groupé', err.message)
     } finally {
       setIsProcessingBulkTransfer(false)
+    }
+  }
+
+  // ─── Actions Modification & Suppression de Produit ────────────────────────
+
+  const handleOpenEditProduct = (p: ProductStock) => {
+    setEditingProduct(p)
+    setEditForm({
+      name: p.name,
+      cost_price: p.cost_price,
+      selling_price: p.selling_price,
+      min_stock_alert: p.min_stock_alert,
+      stock_magasin: p.stock_magasin,
+      stock_vente: p.stock_vente
+    })
+  }
+
+  const handleSaveProductEdit = async () => {
+    if (!editingProduct) return
+    try {
+      const currentMeta = editingProduct.sector_meta || {}
+      const updatedMeta = {
+        ...currentMeta,
+        stock_magasin: Number(editForm.stock_magasin) || 0,
+        stock_vente: Number(editForm.stock_vente) || 0
+      }
+
+      let updRes = await supabase
+        .from('products')
+        .update({
+          name: editForm.name,
+          cost_price: Number(editForm.cost_price) || 0,
+          selling_price: Number(editForm.selling_price) || 0,
+          min_stock_alert: Number(editForm.min_stock_alert) || 5,
+          stock_magasin: Number(editForm.stock_magasin) || 0,
+          stock_vente: Number(editForm.stock_vente) || 0,
+          sector_meta: updatedMeta
+        })
+        .eq('id', editingProduct.id)
+
+      if (updRes.error && updRes.error.code === 'PGRST204') {
+        updRes = await supabase
+          .from('products')
+          .update({
+            name: editForm.name,
+            cost_price: Number(editForm.cost_price) || 0,
+            selling_price: Number(editForm.selling_price) || 0,
+            min_stock_alert: Number(editForm.min_stock_alert) || 5,
+            sector_meta: updatedMeta
+          })
+          .eq('id', editingProduct.id)
+      }
+
+      if (updRes.error) throw updRes.error
+
+      await logAuditEvent({
+        action: 'MODIFICATION_PRODUIT',
+        module: 'STOCKS',
+        sector: 'COMMERCIAL',
+        description: `Modification de l'article "${editForm.name}" (${editingProduct.code}) par ${user?.full_name || 'Utilisateur'}`
+      })
+
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === editingProduct.id
+            ? {
+                ...p,
+                name: editForm.name,
+                cost_price: Number(editForm.cost_price) || 0,
+                selling_price: Number(editForm.selling_price) || 0,
+                min_stock_alert: Number(editForm.min_stock_alert) || 5,
+                stock_magasin: Number(editForm.stock_magasin) || 0,
+                stock_vente: Number(editForm.stock_vente) || 0,
+                sector_meta: updatedMeta
+              }
+            : p
+        )
+      )
+
+      setEditingProduct(null)
+      toast.success('Produit modifié', `Les informations de ${editForm.name} ont été mises à jour.`)
+    } catch (e: any) {
+      toast.error('Erreur mise à jour', e.message)
+    }
+  }
+
+  const handleDeleteProduct = async (p: ProductStock) => {
+    if (!window.confirm(`Confirmez-vous la suppression définitive du produit "${p.name}" (${p.code}) ?`)) {
+      return
+    }
+    try {
+      const { error } = await supabase.from('products').delete().eq('id', p.id)
+      if (error) throw error
+
+      await logAuditEvent({
+        action: 'SUPPRESSION_PRODUIT',
+        module: 'STOCKS',
+        sector: 'COMMERCIAL',
+        description: `Suppression du produit "${p.name}" (${p.code}) par ${user?.full_name || 'Utilisateur'}`
+      })
+
+      setProducts((prev) => prev.filter((item) => item.id !== p.id))
+      toast.success('Produit supprimé', `Le produit ${p.name} a été retiré avec succès.`)
+    } catch (e: any) {
+      toast.error('Erreur suppression', e.message)
     }
   }
 
@@ -650,75 +887,113 @@ export const StocksPage: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                 <tr>
-                  <th className="p-3 text-center w-10">
+                  <th className="p-2.5 text-center w-8">
                     <input
                       type="checkbox"
                       checked={
                         selectedProductIds.length > 0 &&
-                        selectedProductIds.length === products.filter((p) => p.stock_magasin > 0).length
+                        selectedProductIds.length === products.filter((p) => (transferDirection === 'magasin_to_vente' ? p.stock_magasin > 0 : p.stock_vente > 0)).length
                       }
                       onChange={handleSelectAllProducts}
                       title="Tout sélectionner pour le transfert groupé"
                       className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
                     />
                   </th>
-                  <th className="p-3">Réf</th>
-                  <th className="p-3">Désignation</th>
-                  <th className="p-3">Unité</th>
-                  <th className="p-3 text-right">Prix Achat TTC</th>
-                  <th className="p-3 text-right">Prix Vente TTC</th>
-                  <th className="p-3 text-center bg-indigo-50/70 text-indigo-900">Stock Magasin (UCD)</th>
-                  <th className="p-3 text-center bg-emerald-50/70 text-emerald-900">Stock Vente (UV)</th>
-                  <th className="p-3 text-center">Action</th>
+                  <th className="p-2.5">Réf</th>
+                  <th className="p-2.5">Désignation</th>
+                  <th className="p-2.5">Unité</th>
+                  <th className="p-2.5 text-right">Prix d'achat TTC</th>
+                  <th className="p-2.5 text-right">Prix de Vente TTC</th>
+                  <th className="p-2.5 text-center bg-indigo-50/70 text-indigo-900">Stock Magasin (UCD)</th>
+                  <th className="p-2.5 text-right bg-indigo-50/40 text-indigo-900">Valeur Stock Magasin TTC</th>
+                  <th className="p-2.5 text-center bg-emerald-50/70 text-emerald-900">Stock Vente (UV)</th>
+                  <th className="p-2.5 text-right bg-emerald-50/40 text-emerald-900">Valeur Stock Vente TTC</th>
+                  <th className="p-2.5 text-center">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
                 {filteredProducts.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="p-8 text-center text-slate-400 font-sans">
+                    <td colSpan={11} className="p-8 text-center text-slate-400 font-sans">
                       {loading ? 'Chargement...' : 'Aucun produit trouvé dans cette entreprise.'}
                     </td>
                   </tr>
                 ) : (
-                  filteredProducts.map((p) => (
-                    <tr
-                      key={p.id}
-                      className={clsx(
-                        'hover:bg-slate-50/80 transition',
-                        selectedProductIds.includes(p.id) && 'bg-indigo-50/40'
-                      )}
-                    >
-                      <td className="p-3 text-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedProductIds.includes(p.id)}
-                          onChange={() => handleToggleSelectProduct(p.id)}
-                          disabled={p.stock_magasin <= 0}
-                          title={p.stock_magasin <= 0 ? 'Stock magasin vide' : 'Sélectionner pour transfert'}
-                          className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-30"
-                        />
-                      </td>
-                      <td className="p-3 font-bold text-slate-900">{p.code}</td>
-                      <td className="p-3 font-sans font-semibold text-slate-800">{p.name}</td>
-                      <td className="p-3 font-sans text-slate-500">{p.unit}</td>
-                      <td className="p-3 text-right">{fmt(p.cost_price)}</td>
-                      <td className="p-3 text-right text-emerald-700 font-bold">{fmt(p.selling_price)}</td>
-                      <td className="p-3 text-center bg-indigo-50/30 font-black text-indigo-800 text-sm">
-                        {p.stock_magasin} {p.unit}
-                      </td>
-                      <td className="p-3 text-center bg-emerald-50/30 font-black text-emerald-800 text-sm">
-                        {p.stock_vente} {p.unit}
-                      </td>
-                      <td className="p-3 text-center font-sans">
-                        <button
-                          onClick={() => { setTransferProdId(p.id); setShowTransferModal(true); }}
-                          className="px-2.5 py-1 bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 rounded-lg text-[11px] font-bold transition flex items-center gap-1 mx-auto"
-                        >
-                          <ArrowRightLeft className="w-3 h-3" /> Transférer
-                        </button>
-                      </td>
-                    </tr>
-                  ))
+                  filteredProducts.map((p) => {
+                    const ucdUnit = p.ucd || 'Carton'
+                    const uvUnit = p.uv || p.unit || 'Pièce'
+                    const coef = p.coef || 1
+                    const valeurMagasinTTC = p.stock_magasin * coef * p.cost_price
+                    const valeurVenteTTC = p.stock_vente * p.selling_price
+
+                    return (
+                      <tr
+                        key={p.id}
+                        className={clsx(
+                          'hover:bg-slate-50/80 transition',
+                          selectedProductIds.includes(p.id) && 'bg-indigo-50/40'
+                        )}
+                      >
+                        <td className="p-2.5 text-center">
+                          <input
+                            type="checkbox"
+                            checked={selectedProductIds.includes(p.id)}
+                            onChange={() => handleToggleSelectProduct(p.id)}
+                            disabled={transferDirection === 'magasin_to_vente' ? p.stock_magasin <= 0 : p.stock_vente <= 0}
+                            title={
+                              (transferDirection === 'magasin_to_vente' ? p.stock_magasin <= 0 : p.stock_vente <= 0)
+                                ? 'Stock source vide'
+                                : 'Sélectionner pour transfert'
+                            }
+                            className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-30"
+                          />
+                        </td>
+                        <td className="p-2.5 font-bold text-slate-900 font-mono">{p.code}</td>
+                        <td className="p-2.5 font-sans font-semibold text-slate-800">{p.name}</td>
+                        <td className="p-2.5 font-sans text-slate-500">{uvUnit}</td>
+                        <td className="p-2.5 text-right font-mono">{fmt(p.cost_price)}</td>
+                        <td className="p-2.5 text-right text-emerald-700 font-bold font-mono">{fmt(p.selling_price)}</td>
+                        <td className="p-2.5 text-center bg-indigo-50/30 font-black text-indigo-900 font-mono text-xs">
+                          {p.stock_magasin} {ucdUnit}
+                        </td>
+                        <td className="p-2.5 text-right bg-indigo-50/20 font-bold text-slate-700 font-mono">
+                          {fmt(valeurMagasinTTC)}
+                        </td>
+                        <td className="p-2.5 text-center bg-emerald-50/30 font-black text-emerald-900 font-mono text-xs">
+                          {p.stock_vente} {uvUnit}
+                        </td>
+                        <td className="p-2.5 text-right bg-emerald-50/20 font-bold text-emerald-700 font-mono">
+                          {fmt(valeurVenteTTC)}
+                        </td>
+                        <td className="p-2.5 text-center font-sans">
+                          <div className="flex items-center justify-center gap-1">
+                            <button
+                              onClick={() => { setTransferProdId(p.id); setShowTransferModal(true); }}
+                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                              title="Transférer le stock"
+                            >
+                              <ArrowRightLeft className="w-3.5 h-3.5" />
+                              <span className="hidden xl:inline">Transférer</span>
+                            </button>
+                            <button
+                              onClick={() => handleOpenEditProduct(p)}
+                              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs transition"
+                              title="Modifier l'article"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteProduct(p)}
+                              className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs transition"
+                              title="Supprimer l'article"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
                 )}
               </tbody>
             </table>
@@ -855,19 +1130,118 @@ export const StocksPage: React.FC = () => {
       )}
 
       {activeTab === 'fiche_journaliere' && (
-        /* ── TAB 3 : FICHE JOURNALIÈRE DE STOCK ──────────────────────────────── */
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        /* ── TAB 3 : FICHE JOURNALIÈRE DE STOCK (QUANTITÉS PURES & FILTRES) ── */
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100">
             <div>
-              <h3 className="font-bold text-sm text-slate-900">Fiche de Stock Journalière (Rapport Quotidien)</h3>
-              <p className="text-xs text-slate-500">Traçabilité : Stock Initial + Entrées (BL) - Sorties (Ventes) = Stock Final</p>
+              <h3 className="font-extrabold text-base text-slate-900 flex items-center gap-2">
+                <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
+                Fiche de Stock Journalière (Quantités Pures)
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Rapport d'activité des flux physiques : Stock début + Entrées (BL) - Sorties (Ventes) = Stocks réels
+              </p>
             </div>
-            <div className="flex items-center gap-2">
+
+            {/* Filtres de Date & Exports */}
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center bg-slate-100 p-1 rounded-xl text-xs font-bold text-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('today')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', dateFilterMode === 'today' ? 'bg-white shadow-sm text-emerald-800' : 'text-slate-600 hover:text-slate-900')}
+                >
+                  Aujourd'hui
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('yesterday')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', dateFilterMode === 'yesterday' ? 'bg-white shadow-sm text-emerald-800' : 'text-slate-600 hover:text-slate-900')}
+                >
+                  Hier
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('single')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', dateFilterMode === 'single' ? 'bg-white shadow-sm text-emerald-800' : 'text-slate-600 hover:text-slate-900')}
+                >
+                  Date précise
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDateFilterMode('period')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', dateFilterMode === 'period' ? 'bg-white shadow-sm text-emerald-800' : 'text-slate-600 hover:text-slate-900')}
+                >
+                  Période
+                </button>
+              </div>
+
+              {dateFilterMode === 'single' && (
+                <input
+                  type="date"
+                  value={customDate}
+                  onChange={(e) => setCustomDate(e.target.value)}
+                  className="p-1.5 border border-slate-200 rounded-xl text-xs font-mono font-bold"
+                />
+              )}
+
+              {dateFilterMode === 'period' && (
+                <div className="flex items-center gap-1 text-xs">
+                  <input
+                    type="date"
+                    value={startDate}
+                    onChange={(e) => setStartDate(e.target.value)}
+                    className="p-1.5 border border-slate-200 rounded-xl font-mono text-xs font-bold"
+                  />
+                  <span className="text-slate-400">à</span>
+                  <input
+                    type="date"
+                    value={endDate}
+                    onChange={(e) => setEndDate(e.target.value)}
+                    className="p-1.5 border border-slate-200 rounded-xl font-mono text-xs font-bold"
+                  />
+                </div>
+              )}
+
+              {/* Export Excel / CSV */}
+              <button
+                type="button"
+                onClick={() => {
+                  const headers = ['Réf', 'Produit', 'Stock Début (UV)', 'Approvisionnements Entrées', 'Ventes Sorties', 'Stock Magasin Actuel (UCD)', 'Stock Vente Actuel (UV)']
+                  const rows = filteredProducts.map((p) => {
+                    const sorties = periodSalesItems[p.id] || 0
+                    const entrees = 0
+                    const stockDebut = Math.max(0, Math.round((p.stock_vente + sorties - entrees) * 100) / 100)
+                    return [
+                      p.code,
+                      `"${p.name.replace(/"/g, '""')}"`,
+                      stockDebut,
+                      entrees,
+                      sorties,
+                      `${p.stock_magasin} ${p.ucd || 'Carton'}`,
+                      `${p.stock_vente} ${p.uv || p.unit || 'Pièce'}`
+                    ]
+                  })
+                  const csv = '\uFEFF' + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\r\n')
+                  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = `fiche_journaliere_stock_${new Date().toISOString().slice(0, 10)}.csv`
+                  a.click()
+                  URL.revokeObjectURL(url)
+                  toast.success('Export CSV généré', 'La fiche journalière a été téléchargée.')
+                }}
+                className="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" /> Exporter Excel/CSV
+              </button>
+
               <button
                 onClick={() => window.print()}
-                className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm"
               >
-                <Printer className="w-3.5 h-3.5" /> Imprimer / Export PDF
+                <Printer className="w-3.5 h-3.5" /> Imprimer
               </button>
             </div>
           </div>
@@ -876,45 +1250,105 @@ export const StocksPage: React.FC = () => {
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                 <tr>
-                  <th className="p-3">Article</th>
-                  <th className="p-3 text-center">Stock Magasin</th>
-                  <th className="p-3 text-center">Stock Vente</th>
-                  <th className="p-3 text-center font-black">Stock Total Final</th>
-                  <th className="p-3 text-right">Valeur Achat (FCFA)</th>
-                  <th className="p-3 text-right">Valeur Vente (FCFA)</th>
+                  <th className="p-3">Produit (Réf / Désignation)</th>
+                  <th className="p-3 text-center bg-slate-50 text-slate-800 font-black">Stock Début (UV)</th>
+                  <th className="p-3 text-center bg-emerald-50 text-emerald-900">Appro du Jour (Entrées)</th>
+                  <th className="p-3 text-center bg-rose-50 text-rose-900">Ventes du Jour (Sorties)</th>
+                  <th className="p-3 text-center bg-indigo-50/70 text-indigo-900 font-black">Stock Magasin Actuel (UCD)</th>
+                  <th className="p-3 text-center bg-emerald-50/70 text-emerald-900 font-black">Stock Vente Actuel (UV)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {dailyStockData.map((row) => (
-                  <tr key={row.productId} className="hover:bg-slate-50/80 transition">
-                    <td className="p-3 font-sans font-medium text-slate-800">{row.name} ({row.code})</td>
-                    <td className="p-3 text-center text-indigo-700 font-bold">{products.find(p => p.id === row.productId)?.stock_magasin || 0}</td>
-                    <td className="p-3 text-center text-emerald-700 font-bold">{products.find(p => p.id === row.productId)?.stock_vente || 0}</td>
-                    <td className="p-3 text-center font-black text-slate-900">{row.stockFinal}</td>
-                    <td className="p-3 text-right font-black text-slate-900">{fmt(row.valeurAchat)}</td>
-                    <td className="p-3 text-right font-black text-emerald-800">{fmt(row.valeurVente)}</td>
+                {filteredProducts.length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="p-8 text-center text-slate-400 font-sans">
+                      Aucun produit répertorié.
+                    </td>
                   </tr>
-                ))}
+                ) : (
+                  filteredProducts.map((p) => {
+                    const sorties = periodSalesItems[p.id] || 0
+                    const entrees = 0
+                    const stockDebut = Math.max(0, Math.round((p.stock_vente + sorties - entrees) * 100) / 100)
+                    const ucdUnit = p.ucd || 'Carton'
+                    const uvUnit = p.uv || p.unit || 'Pièce'
+
+                    return (
+                      <tr key={p.id} className="hover:bg-slate-50/80 transition">
+                        <td className="p-3 font-sans">
+                          <span className="font-bold text-slate-900">{p.name}</span>
+                          <span className="text-slate-400 font-mono text-[11px] block">{p.code}</span>
+                        </td>
+                        <td className="p-3 text-center font-bold text-slate-700 bg-slate-50/40">
+                          {stockDebut} {uvUnit}
+                        </td>
+                        <td className="p-3 text-center font-bold text-emerald-700 bg-emerald-50/30">
+                          +{entrees} {uvUnit}
+                        </td>
+                        <td className="p-3 text-center font-bold text-rose-700 bg-rose-50/30">
+                          -{sorties} {uvUnit}
+                        </td>
+                        <td className="p-3 text-center font-black text-indigo-900 bg-indigo-50/20 text-xs">
+                          {p.stock_magasin} {ucdUnit}
+                        </td>
+                        <td className="p-3 text-center font-black text-emerald-900 bg-emerald-50/20 text-xs">
+                          {p.stock_vente} {uvUnit}
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {/* ── MODAL TRANSFERT DE STOCK ─────────────────────────────────────────── */}
+      {/* ── MODAL TRANSFERT DE STOCK INDIVIDUEL (BI-DIRECTIONNEL) ───────────── */}
       <ModalPortal isOpen={showTransferModal} onClose={() => setShowTransferModal(false)} id="modal-transfer-stock">
         <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
           <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
             <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
               <ArrowRightLeft className="w-5 h-5 text-indigo-600" />
-              Transfert Magasin ➔ Rayon Vente
+              Transfert de Stock Interne
             </h3>
             <button onClick={() => setShowTransferModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
               <X className="w-5 h-5" />
             </button>
           </div>
 
-          <div className="space-y-3 text-xs">
+          <div className="space-y-3.5 text-xs">
+            {/* Sélection Sens de transfert */}
+            <div>
+              <label className="font-bold text-slate-700 block mb-1">Sens du transfert</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTransferDirection('magasin_to_vente')}
+                  className={clsx(
+                    'p-2.5 rounded-xl border text-center font-bold transition text-xs',
+                    transferDirection === 'magasin_to_vente'
+                      ? 'bg-indigo-50 border-indigo-500 text-indigo-800 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  )}
+                >
+                  Magasin ➔ Rayon Vente
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTransferDirection('vente_to_magasin')}
+                  className={clsx(
+                    'p-2.5 rounded-xl border text-center font-bold transition text-xs',
+                    transferDirection === 'vente_to_magasin'
+                      ? 'bg-indigo-50 border-indigo-500 text-indigo-800 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  )}
+                >
+                  Rayon Vente ➔ Magasin
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="font-bold text-slate-700 block mb-1">Article à transférer</label>
               <select
@@ -923,13 +1357,48 @@ export const StocksPage: React.FC = () => {
                 className="w-full p-2 border border-slate-200 rounded-xl text-xs bg-white font-medium"
               >
                 <option value="">Sélectionnez un article</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} (Magasin : {p.stock_magasin} {p.unit} | Rayon : {p.stock_vente})
-                  </option>
-                ))}
+                {products.map((p) => {
+                  const ucd = p.ucd || 'Carton'
+                  const uv = p.uv || p.unit || 'Pièce'
+                  return (
+                    <option key={p.id} value={p.id}>
+                      {p.name} (Magasin : {p.stock_magasin} {ucd} | Rayon : {p.stock_vente} {uv})
+                    </option>
+                  )
+                })}
               </select>
             </div>
+
+            {(() => {
+              const selectedProd = products.find((p) => p.id === transferProdId)
+              if (!selectedProd) return null
+              const coef = selectedProd.coef || 1
+              const ucd = selectedProd.ucd || 'Carton'
+              const uv = selectedProd.uv || selectedProd.unit || 'Pièce'
+              const sourceMax = transferDirection === 'magasin_to_vente' ? selectedProd.stock_magasin : selectedProd.stock_vente
+              const sourceUnit = transferDirection === 'magasin_to_vente' ? ucd : uv
+              const targetUnit = transferDirection === 'magasin_to_vente' ? uv : ucd
+              const resultingQty = transferDirection === 'magasin_to_vente' ? transferQty * coef : Math.round((transferQty / coef) * 100) / 100
+
+              return (
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <div className="flex justify-between items-center text-slate-600">
+                    <span>Stock source disponible :</span>
+                    <strong className="font-mono text-slate-900">{sourceMax} {sourceUnit}</strong>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-600">
+                    <span>Rapport de conversion :</span>
+                    <strong className="font-mono text-indigo-700">1 {ucd} = {coef} {uv}</strong>
+                  </div>
+                  {transferQty > 0 && (
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-200 text-emerald-800">
+                      <span className="font-bold">Quantité ajoutée au stock cible :</span>
+                      <strong className="font-mono text-sm">+{resultingQty} {targetUnit}</strong>
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
 
             <div>
               <label className="font-bold text-slate-700 block mb-1">Quantité à transférer</label>
@@ -939,7 +1408,7 @@ export const StocksPage: React.FC = () => {
                 min="0.001"
                 value={transferQty || ''}
                 onChange={(e) => setTransferQty(Number(e.target.value))}
-                placeholder="Nombre d'unités (ex: 2.5)"
+                placeholder="Nombre d'unités"
                 className="w-full p-2 border border-slate-200 rounded-xl text-xs font-mono font-bold"
               />
             </div>
@@ -964,7 +1433,7 @@ export const StocksPage: React.FC = () => {
             </button>
             <button
               onClick={handleExecuteTransfer}
-              className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+              className="flex-1 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
             >
               <Check className="w-4 h-4" /> Valider le Transfert
             </button>
@@ -1047,15 +1516,15 @@ export const StocksPage: React.FC = () => {
 
       {/* ── MODAL TRANSFERT EN MASSE (PLUSIEURS PRODUITS) ──────────────────── */}
       <ModalPortal isOpen={showBulkTransferModal} onClose={() => setShowBulkTransferModal(false)} id="modal-bulk-transfer">
-        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-2xl w-full border border-slate-200 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-3xl w-full border border-slate-200 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
           <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
             <div>
               <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
                 <ArrowRightLeft className="w-5 h-5 text-indigo-600" />
-                Transfert en Masse : Magasin ➔ Rayon Vente POS
+                Transfert Multiple de Produits
               </h3>
               <p className="text-xs text-slate-500">
-                Transférez {selectedProductIds.length} produit(s) sélectionné(s) en 1 seul clic
+                Transférez les {selectedProductIds.length} produit(s) sélectionné(s) avec conversion automatique de stocks
               </p>
             </div>
             <button onClick={() => setShowBulkTransferModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
@@ -1064,6 +1533,37 @@ export const StocksPage: React.FC = () => {
           </div>
 
           <div className="space-y-4 text-xs">
+            {/* Sens du transfert */}
+            <div>
+              <label className="font-bold text-slate-700 block mb-1">Sens du transfert groupé :</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTransferDirection('magasin_to_vente')}
+                  className={clsx(
+                    'p-2.5 rounded-xl border text-center font-bold transition text-xs',
+                    transferDirection === 'magasin_to_vente'
+                      ? 'bg-indigo-50 border-indigo-500 text-indigo-800 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  )}
+                >
+                  Magasin (UCD) ➔ Rayon Vente (UV)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setTransferDirection('vente_to_magasin')}
+                  className={clsx(
+                    'p-2.5 rounded-xl border text-center font-bold transition text-xs',
+                    transferDirection === 'vente_to_magasin'
+                      ? 'bg-indigo-50 border-indigo-500 text-indigo-800 shadow-sm'
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  )}
+                >
+                  Rayon Vente (UV) ➔ Magasin (UCD)
+                </button>
+              </div>
+            </div>
+
             <div>
               <label className="font-bold text-slate-700 block mb-1">Motif commun du transfert</label>
               <input
@@ -1080,9 +1580,10 @@ export const StocksPage: React.FC = () => {
                 <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200">
                   <tr>
                     <th className="p-2.5">Article</th>
-                    <th className="p-2.5 text-center">Dispo Magasin</th>
-                    <th className="p-2.5 text-center">Rayon Actuel</th>
+                    <th className="p-2.5 text-center">Stock Source Dispo</th>
+                    <th className="p-2.5 text-center">Conversion</th>
                     <th className="p-2.5 text-center bg-indigo-50/70 text-indigo-900">Qté à Transférer</th>
+                    <th className="p-2.5 text-center bg-emerald-50/70 text-emerald-900">Cible Résultante</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono">
@@ -1090,23 +1591,31 @@ export const StocksPage: React.FC = () => {
                     const prod = products.find((p) => p.id === id)
                     if (!prod) return null
                     const val = bulkTransferQtys[id] ?? 0
+                    const coef = prod.coef || 1
+                    const ucd = prod.ucd || 'Carton'
+                    const uv = prod.uv || prod.unit || 'Pièce'
+                    const sourceStock = transferDirection === 'magasin_to_vente' ? prod.stock_magasin : prod.stock_vente
+                    const sourceUnit = transferDirection === 'magasin_to_vente' ? ucd : uv
+                    const targetUnit = transferDirection === 'magasin_to_vente' ? uv : ucd
+                    const resultingQty = transferDirection === 'magasin_to_vente' ? Math.round((val * coef) * 1000) / 1000 : Math.round((val / coef) * 100) / 100
+
                     return (
                       <tr key={id} className="hover:bg-slate-50">
                         <td className="p-2.5 font-sans font-medium text-slate-800">
                           {prod.name} <span className="text-slate-400 font-mono text-[11px]">({prod.code})</span>
                         </td>
-                        <td className="p-2.5 text-center font-bold text-indigo-800">
-                          {prod.stock_magasin} {prod.unit}
+                        <td className="p-2.5 text-center font-bold text-slate-900">
+                          {sourceStock} {sourceUnit}
                         </td>
-                        <td className="p-2.5 text-center font-bold text-emerald-800">
-                          {prod.stock_vente} {prod.unit}
+                        <td className="p-2.5 text-center text-slate-500 font-sans text-[11px]">
+                          1 {ucd} = {coef} {uv}
                         </td>
                         <td className="p-2.5 text-center bg-indigo-50/40">
                           <input
                             type="number"
                             step="any"
                             min="0"
-                            max={prod.stock_magasin}
+                            max={sourceStock}
                             value={val || ''}
                             onChange={(e) =>
                               setBulkTransferQtys((prev) => ({
@@ -1117,6 +1626,9 @@ export const StocksPage: React.FC = () => {
                             placeholder="0"
                             className="w-24 p-1.5 text-center font-bold font-mono border border-indigo-200 rounded-lg text-xs bg-white focus:ring-2 focus:ring-indigo-500"
                           />
+                        </td>
+                        <td className="p-2.5 text-center bg-emerald-50/40 font-bold text-emerald-800">
+                          +{resultingQty} {targetUnit}
                         </td>
                       </tr>
                     )
@@ -1146,6 +1658,118 @@ export const StocksPage: React.FC = () => {
           </div>
         </div>
       </ModalPortal>
+
+      {/* ── MODAL ÉDITION RAPIDE PRODUIT ───────────────────────────────────── */}
+      {editingProduct && (
+        <ModalPortal isOpen={!!editingProduct} onClose={() => setEditingProduct(null)} id="modal-edit-product">
+          <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+              <div>
+                <span className="text-[10px] font-mono text-slate-400 uppercase">{editingProduct.code}</span>
+                <h3 className="font-bold text-slate-900 text-base">Modifier l'article</h3>
+              </div>
+              <button onClick={() => setEditingProduct(null)} className="text-slate-400 hover:text-slate-600 p-1">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault()
+                handleSaveProductEdit()
+              }}
+              className="space-y-3 text-xs"
+            >
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Désignation *</label>
+                <input
+                  type="text"
+                  required
+                  value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  className="w-full p-2 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Prix d'Achat TTC</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={editForm.cost_price}
+                    onChange={(e) => setEditForm({ ...editForm, cost_price: Number(e.target.value) })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Prix de Vente TTC *</label>
+                  <input
+                    type="number"
+                    min="0"
+                    required
+                    value={editForm.selling_price}
+                    onChange={(e) => setEditForm({ ...editForm, selling_price: Number(e.target.value) })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-mono font-bold text-emerald-800"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Stock Magasin ({editingProduct.ucd || 'UCD'})</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={editForm.stock_magasin}
+                    onChange={(e) => setEditForm({ ...editForm, stock_magasin: Number(e.target.value) })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-mono text-indigo-700 font-bold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Stock Vente ({editingProduct.uv || editingProduct.unit || 'UV'})</label>
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    value={editForm.stock_vente}
+                    onChange={(e) => setEditForm({ ...editForm, stock_vente: Number(e.target.value) })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-mono text-emerald-700 font-bold"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold text-slate-700 block mb-1">Seuil Alerte Stock Minimum</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={editForm.min_stock_alert}
+                  onChange={(e) => setEditForm({ ...editForm, min_stock_alert: Number(e.target.value) })}
+                  className="w-full p-2 border border-slate-200 rounded-xl font-mono"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setEditingProduct(null)}
+                  className="flex-1 py-2.5 border border-slate-200 rounded-xl font-semibold hover:bg-slate-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" /> Enregistrer
+                </button>
+              </div>
+            </form>
+          </div>
+        </ModalPortal>
+      )}
 
       {/* ── MODAL IMPRESSION FICHE D'INVENTAIRE OFFICIELLE ────────────────────── */}
       <ModalPortal isOpen={showHistoryPrintModal} onClose={() => setShowHistoryPrintModal(false)} id="modal-inventory-print">

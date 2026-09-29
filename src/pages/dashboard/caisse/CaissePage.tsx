@@ -17,6 +17,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../components/modals'
+import { logAuditEvent } from '../../../services/auditService'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -59,8 +60,9 @@ export const CaissePage: React.FC = () => {
   const [initialCash, setInitialCash] = useState<number>(0)
   const [initialMomo, setInitialMomo] = useState<number>(0)
 
-  // Données réelles des ventes du jour
+  // Données réelles des ventes et remboursements du jour
   const [salesToday, setSalesToday] = useState<any[]>([])
+  const [repaymentsToday, setRepaymentsToday] = useState<any[]>([])
   const [closuresHistory, setClosuresHistory] = useState<CashClosure[]>([])
   const [movementsHistory, setMovementsHistory] = useState<CashMovement[]>([])
   const [pendingRequests, setPendingRequests] = useState<any[]>([])
@@ -81,6 +83,7 @@ export const CaissePage: React.FC = () => {
 
   // Saisie clôture
   const [closingPhysicalCash, setClosingPhysicalCash] = useState<number>(0)
+  const [rolloverCash, setRolloverCash] = useState<number>(0)
   const [closingNotes, setClosingNotes] = useState<string>('')
 
   // Vérifier si la session a été ouverte un jour précédent et jamais clôturée
@@ -135,7 +138,7 @@ export const CaissePage: React.FC = () => {
     setInitialMomo(initM)
   }
 
-  // Charger les ventes réelles du jour depuis Supabase
+  // Charger les ventes réelles et remboursements du jour depuis Supabase
   const loadCaisseData = useCallback(async () => {
     if (!company?.id) return
     setLoading(true)
@@ -143,6 +146,7 @@ export const CaissePage: React.FC = () => {
       const now = new Date()
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
+      // 1. Ventes du jour
       const { data: sales, error } = await supabase
         .from('sales_orders')
         .select('*')
@@ -150,22 +154,93 @@ export const CaissePage: React.FC = () => {
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false })
 
-      if (error) throw error
+      if (error) console.warn('Erreur chargement sales_orders :', error)
       const realSales = sales || []
-      setSalesToday(realSales)
 
-      // Construire les mouvements à partir des ventes réelles
-      const saleMovements: CashMovement[] = realSales.map((s: any) => ({
-        id: `mov-${s.id}`,
-        created_at: s.created_at,
-        user_name: s.created_by_name || 'Vendeur / Caissier',
-        type: 'ENCAISSEMENT',
-        payment_channel: (s.payment_method === 'cash' || s.payment_method === 'especes') ? 'Espèces' : 'MoMo',
-        amount: Number(s.total_amount) || 0,
-        motif: `Vente POS N° ${s.order_number}`,
-        reference: s.order_number || s.id.slice(0, 8),
-        status: 'VALIDE'
-      }))
+      // Parser les paiements de chaque vente (depuis notes ou payment_method)
+      const parsedSales = realSales.map((s: any) => {
+        let payments: { method: string; amount: number }[] = []
+        if (s.notes) {
+          try {
+            const parsed = JSON.parse(s.notes)
+            if (Array.isArray(parsed.payments) && parsed.payments.length > 0) {
+              payments = parsed.payments
+            }
+          } catch (e) {}
+        }
+        if (payments.length === 0) {
+          const m = s.payment_method || 'especes'
+          payments = [{ method: m, amount: Number(s.total_amount) || 0 }]
+        }
+        return { ...s, parsedPayments: payments }
+      })
+      setSalesToday(parsedSales)
+
+      // 2. Remboursements de créances du jour
+      let repList: any[] = []
+      try {
+        const { data: repayments } = await supabase
+          .from('customer_repayments')
+          .select('*, customer:customers(name)')
+          .eq('company_id', company.id)
+          .gte('created_at', startOfDay)
+          .order('created_at', { ascending: false })
+        if (repayments) repList = repayments
+      } catch (err) {
+        console.warn('Fallback customer_repayments :', err)
+      }
+      // Combiner avec local storage si présent
+      const storedRep = localStorage.getItem(`gestio_customer_repayments_${company.id}`)
+      if (storedRep) {
+        try {
+          const parsedLocal = JSON.parse(storedRep)
+          if (Array.isArray(parsedLocal)) {
+            parsedLocal.filter((r: any) => r.created_at >= startOfDay).forEach((r: any) => {
+              if (!repList.some((x) => x.id === r.id)) {
+                repList.push(r)
+              }
+            })
+          }
+        } catch (e) {}
+      }
+      setRepaymentsToday(repList)
+
+      // 3. Mouvements de caisse
+      const saleMovements: CashMovement[] = []
+      parsedSales.forEach((s: any) => {
+        s.parsedPayments.forEach((p: any, idx: number) => {
+          const isCash = p.method === 'cash' || p.method === 'especes'
+          const isMomo = p.method.includes('momo') || p.method.includes('wave') || p.method.includes('flooz')
+          if (p.amount > 0 && (isCash || isMomo)) {
+            saleMovements.push({
+              id: `mov-${s.id}-${idx}`,
+              created_at: s.created_at,
+              user_name: s.created_by_name || 'Vendeur / Caissier',
+              type: 'ENCAISSEMENT',
+              payment_channel: isCash ? 'Espèces' : 'MoMo',
+              amount: Number(p.amount) || 0,
+              motif: `Vente POS N° ${s.order_number || s.id.slice(0, 8)} (${p.method})`,
+              reference: s.order_number || s.id.slice(0, 8),
+              status: 'VALIDE'
+            })
+          }
+        })
+      })
+
+      const repaymentMovements: CashMovement[] = repList.map((r: any) => {
+        const isCash = r.payment_method === 'cash' || r.payment_method === 'especes'
+        return {
+          id: `rep-${r.id}`,
+          created_at: r.created_at,
+          user_name: r.created_by_name || 'Caissier',
+          type: 'REMBOURSEMENT',
+          payment_channel: isCash ? 'Espèces' : 'MoMo',
+          amount: Number(r.amount) || 0,
+          motif: `Remboursement créance : ${r.customer?.name || r.customer_name || 'Client'}`,
+          reference: r.reference || `RC-${r.id.slice(0, 6)}`,
+          status: 'VALIDE'
+        }
+      })
 
       // Combiner avec les demandes de transfert de la session
       const storedReqs = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
@@ -187,10 +262,15 @@ export const CaissePage: React.FC = () => {
         } catch (e) {}
       }
 
-      setMovementsHistory([...transferMovements, ...saleMovements].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()))
+      setMovementsHistory(
+        [...transferMovements, ...repaymentMovements, ...saleMovements].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        )
+      )
     } catch (err: any) {
-      console.error('Erreur chargement ventes caisse :', err)
+      console.error('Erreur chargement données caisse :', err)
       setSalesToday([])
+      setRepaymentsToday([])
       setMovementsHistory([])
     } finally {
       setLoading(false)
@@ -201,26 +281,50 @@ export const CaissePage: React.FC = () => {
     loadCaisseData()
   }, [loadCaisseData])
 
-  // ─── 5 Indicateurs Spécifiés au Point 5 ─────────────────────────────────────
+  // ─── 7 COMPTEURS JOURNALIERS SÉPARÉS (RÈGLE DU CAHIER DES CHARGES) ───────────
 
-  // C. Espèces du jour (encaissées aujourd'hui)
-  const especesDuJour = useMemo(() => {
-    return salesToday
-      .filter((s) => s.payment_method === 'cash' || s.payment_method === 'especes')
-      .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+  // 1. Ventes en espèces
+  const ventesEspeces = useMemo(() => {
+    return salesToday.reduce((sum, s) => {
+      if (Array.isArray(s.parsedPayments)) {
+        const cashPart = s.parsedPayments
+          .filter((p: any) => p.method === 'cash' || p.method === 'especes')
+          .reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0)
+        return sum + cashPart
+      }
+      return sum + ((s.payment_method === 'cash' || s.payment_method === 'especes') ? Number(s.total_amount) || 0 : 0)
+    }, 0)
   }, [salesToday])
 
-  // D. MoMo du jour (encaissés aujourd'hui)
-  const momoDuJour = useMemo(() => {
-    return salesToday
-      .filter((s) => s.payment_method === 'momo' || s.payment_method === 'wave' || s.payment_method === 'flooz')
-      .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+  // 2. Ventes en MoMo
+  const ventesMomo = useMemo(() => {
+    return salesToday.reduce((sum, s) => {
+      if (Array.isArray(s.parsedPayments)) {
+        const momoPart = s.parsedPayments
+          .filter((p: any) => p.method.includes('momo') || p.method.includes('wave') || p.method.includes('flooz'))
+          .reduce((acc: number, p: any) => acc + (Number(p.amount) || 0), 0)
+        return sum + momoPart
+      }
+      return sum + ((s.payment_method && (s.payment_method.includes('momo') || s.payment_method.includes('wave'))) ? Number(s.total_amount) || 0 : 0)
+    }, 0)
   }, [salesToday])
 
-  // E. CA du jour (Total des ventes enregistrées, y compris crédit et autres)
-  const caDuJour = useMemo(() => {
-    return salesToday.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
-  }, [salesToday])
+  // 3. Remboursements créances en espèces
+  const remboursementsEspeces = useMemo(() => {
+    return repaymentsToday
+      .filter((r) => r.payment_method === 'cash' || r.payment_method === 'especes')
+      .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+  }, [repaymentsToday])
+
+  // 4. Remboursements créances en MoMo
+  const remboursementsMomo = useMemo(() => {
+    return repaymentsToday
+      .filter((r) => r.payment_method && (r.payment_method.includes('momo') || r.payment_method.includes('wave')))
+      .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+  }, [repaymentsToday])
+
+  // 5. Total entrées du jour
+  const totalEntreesDuJour = ventesEspeces + ventesMomo + remboursementsEspeces + remboursementsMomo
 
   // Total des retraits espèces exécutés vers trésorerie
   const totalRetraitsEspeces = useMemo(() => {
@@ -235,11 +339,22 @@ export const CaissePage: React.FC = () => {
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
-  // A. Fond actuel — Espèces (Cumul espèces conservées + initial + entrées - sorties)
-  const fondActuelEspeces = initialCash + especesDuJour - totalRetraitsEspeces
+  // Fond actuel — Espèces (initial + ventes espèces + remboursements espèces - retraits)
+  const fondActuelEspeces = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces
 
-  // B. Fond actuel — MoMo (Cumul MoMo + initial + entrées - sorties)
-  const fondActuelMomo = initialMomo + momoDuJour - totalRetraitsMomo
+  // Fond actuel — MoMo (initial + ventes MoMo + remboursements MoMo - retraits)
+  const fondActuelMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo
+
+  // 6. Fond initial global
+  const fondInitialTotal = initialCash + initialMomo
+
+  // 7. Fond théorique actuel global
+  const fondTheoriqueActuel = fondActuelEspeces + fondActuelMomo
+
+  // CA total des ventes du jour (tous modes confondus)
+  const caDuJour = useMemo(() => {
+    return salesToday.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+  }, [salesToday])
 
   // ─── Action : Ouvrir la Caisse ─────────────────────────────────────────────
   const handleOpenCaisse = (e: React.FormEvent) => {
@@ -251,13 +366,18 @@ export const CaissePage: React.FC = () => {
     toast.success('Caisse Ouverte avec succès !', `Fond initial tiroir : ${fmt(openInputCash)}`)
   }
 
-  // ─── Action : Fermer la Caisse ─────────────────────────────────────────────
-  const handleConfirmCloseCaisse = () => {
+  // ─── Action : Fermer la Caisse (avec Clôture Rigoureuse et Audit) ─────────────
+  const handleConfirmCloseCaisse = async () => {
+    const ecart = Number(closingPhysicalCash) - fondActuelEspeces
+    if (ecart !== 0 && !closingNotes.trim()) {
+      toast.error('Justification obligatoire', 'Un écart de caisse est constaté. Veuillez saisir un motif dans les observations.')
+      return
+    }
+
     const closedAt = new Date().toISOString()
     const closedBy = user?.full_name || 'Caissier'
-    const ecart = Number(closingPhysicalCash) - fondActuelEspeces
 
-    // Récupérer les adresses emails de notification configurées (gérant, patron, comptable)
+    // Récupérer les adresses emails de notification configurées
     const recipientEmails: string[] = []
     if ((company as any)?.closure_email_1) recipientEmails.push((company as any).closure_email_1.trim())
     if ((company as any)?.closure_email_2) recipientEmails.push((company as any).closure_email_2.trim())
@@ -301,8 +421,17 @@ export const CaissePage: React.FC = () => {
       localStorage.setItem(`gestio_caisse_closures_${company.id}`, JSON.stringify(updatedClosures))
     }
 
-    // Basculer l'état en fermé et conserver le fond final
-    saveCaisseState('FERMEE', null, '', Number(closingPhysicalCash), fondActuelMomo)
+    // Le montant laissé en caisse devient le fond initial du lendemain
+    const nextDayFunds = Number(rolloverCash) || 0
+    saveCaisseState('FERMEE', null, '', nextDayFunds, fondActuelMomo)
+
+    // Traçabilité Audit Senior
+    await logAuditEvent({
+      action: 'CLOTURE_CAISSE',
+      module: 'CAISSE',
+      sector: 'COMMERCIAL',
+      description: `Clôture caisse par ${closedBy}. Espèces comptées : ${fmt(closingPhysicalCash)} (Théorique : ${fmt(fondActuelEspeces)}, Écart : ${fmt(ecart)}). MoMo : ${fmt(fondActuelMomo)}. Fond reporté lendemain : ${fmt(nextDayFunds)}. Justification : ${closingNotes || 'RAS'}`
+    })
 
     setShowCloseModal(false)
     setActiveReportClosure(newClosure)
@@ -311,7 +440,7 @@ export const CaissePage: React.FC = () => {
     if (recipientEmails.length > 0) {
       toast.success(
         'Caisse Clôturée !',
-        `Rapport Z généré et transmis automatiquement par email aux destinataires : ${recipientEmails.join(', ')}`
+        `Rapport Z généré et archivé. Destinataires : ${recipientEmails.join(', ')}`
       )
     } else {
       toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été généré et archivé.')
@@ -496,7 +625,74 @@ export const CaissePage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── 5 Indicateurs Clés de Caisse (Conformes au Point 5) ───────────────── */}
+      {/* ── 7 Compteurs Journaliers Séparés (Exigence stricte de gestion) ── */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-4">
+        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div>
+            <h2 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <TrendingUp className="w-4 h-4 text-emerald-600" />
+              Compteurs d'Activités Journalières
+            </h2>
+            <p className="text-xs text-slate-400">Ventilation stricte des flux encaissés et situation de trésorerie tiroir</p>
+          </div>
+          <span className="text-xs font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl">
+            Total Entrées : {fmt(totalEntreesDuJour)}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
+          {/* 1. Ventes en espèces */}
+          <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-2xl">
+            <span className="text-[10px] font-bold text-emerald-800 uppercase block">1. Ventes Espèces</span>
+            <p className="text-base font-black text-emerald-900 font-mono mt-1">{fmt(ventesEspeces)}</p>
+            <span className="text-[10px] text-emerald-600 font-medium">Tiroir direct</span>
+          </div>
+
+          {/* 2. Ventes en MoMo */}
+          <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-2xl">
+            <span className="text-[10px] font-bold text-amber-800 uppercase block">2. Ventes MoMo</span>
+            <p className="text-base font-black text-amber-900 font-mono mt-1">{fmt(ventesMomo)}</p>
+            <span className="text-[10px] text-amber-600 font-medium">MTN / Moov / Wave</span>
+          </div>
+
+          {/* 3. Remboursements espèces */}
+          <div className="p-3 bg-teal-50/60 border border-teal-200 rounded-2xl">
+            <span className="text-[10px] font-bold text-teal-800 uppercase block">3. Recouvr. Espèces</span>
+            <p className="text-base font-black text-teal-900 font-mono mt-1">{fmt(remboursementsEspeces)}</p>
+            <span className="text-[10px] text-teal-600 font-medium">Créances clients</span>
+          </div>
+
+          {/* 4. Remboursements MoMo */}
+          <div className="p-3 bg-sky-50/60 border border-sky-200 rounded-2xl">
+            <span className="text-[10px] font-bold text-sky-800 uppercase block">4. Recouvr. MoMo</span>
+            <p className="text-base font-black text-sky-900 font-mono mt-1">{fmt(remboursementsMomo)}</p>
+            <span className="text-[10px] text-sky-600 font-medium">Créances MoMo</span>
+          </div>
+
+          {/* 5. Total entrées du jour */}
+          <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-2xl">
+            <span className="text-[10px] font-bold text-indigo-800 uppercase block">5. Total Entrées</span>
+            <p className="text-base font-black text-indigo-900 font-mono mt-1">{fmt(totalEntreesDuJour)}</p>
+            <span className="text-[10px] text-indigo-600 font-medium">Flux bruts reçus</span>
+          </div>
+
+          {/* 6. Fond de caisse initial */}
+          <div className="p-3 bg-slate-100 border border-slate-200 rounded-2xl">
+            <span className="text-[10px] font-bold text-slate-700 uppercase block">6. Fond Initial</span>
+            <p className="text-base font-black text-slate-900 font-mono mt-1">{fmt(fondInitialTotal)}</p>
+            <span className="text-[10px] text-slate-500 font-medium">Esp : {fmt(initialCash)}</span>
+          </div>
+
+          {/* 7. Fond théorique actuel */}
+          <div className="p-3 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-sm">
+            <span className="text-[10px] font-bold text-slate-300 uppercase block">7. Fond Théorique</span>
+            <p className="text-base font-black text-emerald-400 font-mono mt-1">{fmt(fondTheoriqueActuel)}</p>
+            <span className="text-[10px] text-slate-400 font-medium">Esp : {fmt(fondActuelEspeces)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── 5 Indicateurs Clés Globaux de Caisse ────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {/* A. Fond actuel — Espèces */}
         <div className="bg-white rounded-3xl border-2 border-emerald-300 p-4 shadow-sm flex flex-col justify-between">
@@ -541,10 +737,10 @@ export const CaissePage: React.FC = () => {
             </div>
           </div>
           <p className="text-xl font-black text-emerald-700 font-mono">
-            {fmt(especesDuJour)}
+            {fmt(ventesEspeces + remboursementsEspeces)}
           </p>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Encaissé aujourd'hui en cash
+            Ventes ({fmt(ventesEspeces)}) + Recouvr. ({fmt(remboursementsEspeces)})
           </p>
         </div>
 
@@ -559,10 +755,10 @@ export const CaissePage: React.FC = () => {
             </div>
           </div>
           <p className="text-xl font-black text-amber-700 font-mono">
-            {fmt(momoDuJour)}
+            {fmt(ventesMomo + remboursementsMomo)}
           </p>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Paiements électroniques reçus
+            Ventes ({fmt(ventesMomo)}) + Recouvr. ({fmt(remboursementsMomo)})
           </p>
         </div>
 
@@ -885,23 +1081,53 @@ export const CaissePage: React.FC = () => {
               <input
                 type="number"
                 value={closingPhysicalCash}
-                onChange={(e) => setClosingPhysicalCash(Number(e.target.value))}
+                onChange={(e) => {
+                  const val = Number(e.target.value)
+                  setClosingPhysicalCash(val)
+                  setRolloverCash(val)
+                }}
                 className="w-full p-2.5 border border-slate-200 rounded-xl font-mono text-sm font-bold"
               />
               {closingPhysicalCash !== fondActuelEspeces && (
-                <p className="text-xs font-bold text-rose-600 mt-1 font-mono">
-                  Écart de caisse : {fmt(closingPhysicalCash - fondActuelEspeces)}
-                </p>
+                <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 font-mono text-xs flex justify-between items-center">
+                  <span>Écart de caisse :</span>
+                  <span className="font-black font-mono">
+                    {closingPhysicalCash - fondActuelEspeces > 0 ? '+' : ''}{fmt(closingPhysicalCash - fondActuelEspeces)}
+                  </span>
+                </div>
               )}
             </div>
 
             <div>
-              <label className="font-bold text-slate-700 block mb-1">Observations / Remarques</label>
+              <label className="font-bold text-slate-700 block mb-1">
+                Montant laissé en caisse pour demain (Fond Initial Suivant) *
+              </label>
+              <input
+                type="number"
+                min="0"
+                max={closingPhysicalCash}
+                value={rolloverCash}
+                onChange={(e) => setRolloverCash(Number(e.target.value))}
+                className="w-full p-2.5 border border-slate-200 rounded-xl font-mono text-sm font-bold text-emerald-700 bg-emerald-50/30"
+              />
+              <p className="text-[10px] text-slate-400 mt-1">
+                Le solde restant ({fmt(Math.max(0, closingPhysicalCash - rolloverCash))}) sera versé au coffre-fort / Trésorerie.
+              </p>
+            </div>
+
+            <div>
+              <label className="font-bold text-slate-700 block mb-1">
+                Observations / Remarques {closingPhysicalCash !== fondActuelEspeces && <span className="text-rose-600 font-bold">* (Justification écart obligatoire)</span>}
+              </label>
               <textarea
                 value={closingNotes}
                 onChange={(e) => setClosingNotes(e.target.value)}
-                placeholder="Ex : RAS, solde exact remis au gérant"
-                className="w-full p-2.5 border border-slate-200 rounded-xl text-xs"
+                placeholder={closingPhysicalCash !== fondActuelEspeces ? "Veuillez expliquer impérativement la cause de l'écart..." : "Ex : RAS, solde exact remis au gérant"}
+                className={`w-full p-2.5 border rounded-xl text-xs ${
+                  closingPhysicalCash !== fondActuelEspeces && !closingNotes.trim()
+                    ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50/20'
+                    : 'border-slate-200'
+                }`}
                 rows={2}
               />
             </div>

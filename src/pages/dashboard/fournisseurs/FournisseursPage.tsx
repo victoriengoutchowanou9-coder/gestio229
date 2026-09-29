@@ -15,6 +15,7 @@ import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
+import { logAuditEvent } from '../../../services/auditService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -42,6 +43,15 @@ export interface Supplier {
 
 type BCStatus = 'BROUILLON' | 'A_VALIDER' | 'VALIDE' | 'REJETE' | 'COMMANDE' | 'RECEPTIONNE'
 
+interface PurchaseOrderItem {
+  productId: string
+  productName: string
+  ucdUnit: string
+  qty: number
+  unitPrice: number
+  total: number
+}
+
 interface PurchaseOrder {
   id: string
   reference: string
@@ -60,6 +70,16 @@ interface PurchaseOrder {
     magasinier: string
     gerant?: string
   }
+  items?: PurchaseOrderItem[]
+}
+
+interface ReceptionRecordItem {
+  productId: string
+  productName: string
+  ucdUnit: string
+  qtyOrdered: number
+  receivedQty: number
+  ecart: number
 }
 
 interface ReceptionRecord {
@@ -74,10 +94,11 @@ interface ReceptionRecord {
   ecart: number
   status: 'CONFORME' | 'NON_CONFORME'
   notes?: string
+  items?: ReceptionRecordItem[]
 }
 
 export const FournisseursPage: React.FC = () => {
-  const { company } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
 
   const [activeTab, setActiveTab] = useState<'bc' | 'reception' | 'fournisseurs'>('bc')
@@ -164,7 +185,8 @@ export const FournisseursPage: React.FC = () => {
           signatures: {
             magasinier: p.created_by_name || 'Magasinier',
             gerant: p.validated_by_name || ''
-          }
+          },
+          items: p.items || undefined
         }))
         setPurchaseOrders(mappedPo)
       }
@@ -186,42 +208,126 @@ export const FournisseursPage: React.FC = () => {
   const handleCreatePoSuccess = async (newPo: PurchaseOrder) => {
     setPurchaseOrders([newPo, ...purchaseOrders])
     toast.success('Bon de Commande créé', `Réf: ${newPo.reference} (Statut: Brouillon)`)
+
+    if (company?.id) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'FOURNISSEURS',
+        action: 'CREATION_BON_COMMANDE',
+        entityName: 'Bons de Commande',
+        entityId: newPo.reference,
+        description: `Création du Bon de Commande ${newPo.reference} pour ${newPo.supplierName} (Montant: ${fmt(newPo.totalTtc)})`,
+        details: { reference: newPo.reference, supplierName: newPo.supplierName, totalTtc: newPo.totalTtc }
+      })
+    }
   }
 
   // Soumettre pour validation (Brouillon -> À valider)
-  const handleSubmitToValidate = (poId: string) => {
+  const handleSubmitToValidate = async (poId: string) => {
+    const po = purchaseOrders.find((p) => p.id === poId)
     setPurchaseOrders((prev) =>
       prev.map((p) => (p.id === poId ? { ...p, status: 'A_VALIDER' as const } : p))
     )
     toast.success('BC Soumis pour visa', 'Le Gérant doit maintenant valider la commande.')
+
+    if (company?.id && po) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'FOURNISSEURS',
+        action: 'SOUMISSION_BON_COMMANDE',
+        entityName: 'Bons de Commande',
+        entityId: po.reference,
+        description: `Soumission du BC ${po.reference} (${po.supplierName}) pour validation gérance`,
+        details: { poId, reference: po.reference }
+      })
+    }
   }
 
   // Validation par le Gérant (À valider -> Validé)
-  const handleValidatePo = (poId: string) => {
+  const handleValidatePo = async (poId: string) => {
+    const po = purchaseOrders.find((p) => p.id === poId)
     setPurchaseOrders((prev) =>
       prev.map((p) =>
         p.id === poId
-          ? { ...p, status: 'VALIDE' as const, signatures: { ...p.signatures, gerant: 'Direction Générale' } }
+          ? { ...p, status: 'VALIDE' as const, signatures: { ...p.signatures, gerant: user?.name || 'Direction Générale' } }
           : p
       )
     )
     toast.success('Bon de Commande Validé', 'Le bon peut maintenant être envoyé au fournisseur.')
+
+    if (company?.id && po) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'FOURNISSEURS',
+        action: 'VALIDATION_BON_COMMANDE',
+        entityName: 'Bons de Commande',
+        entityId: po.reference,
+        description: `Validation officielle du BC ${po.reference} par la Direction`,
+        details: { poId, reference: po.reference }
+      })
+    }
   }
 
   // Rejet par le Gérant (À valider -> Rejeté)
-  const handleRejectPo = (poId: string) => {
+  const handleRejectPo = async (poId: string) => {
+    const po = purchaseOrders.find((p) => p.id === poId)
     setPurchaseOrders((prev) =>
       prev.map((p) => (p.id === poId ? { ...p, status: 'REJETE' as const } : p))
     )
     toast.error('Bon de Commande Rejeté', 'La commande a été refusée.')
+
+    if (company?.id && po) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'FOURNISSEURS',
+        action: 'REJET_BON_COMMANDE',
+        entityName: 'Bons de Commande',
+        entityId: po.reference,
+        description: `Rejet du BC ${po.reference} (${po.supplierName})`,
+        details: { poId, reference: po.reference }
+      })
+    }
   }
 
   // Marquer Commandé au fournisseur (Validé -> Commandé)
-  const handleMarkOrdered = (poId: string) => {
+  const handleMarkOrdered = async (poId: string) => {
+    const po = purchaseOrders.find((p) => p.id === poId)
     setPurchaseOrders((prev) =>
       prev.map((p) => (p.id === poId ? { ...p, status: 'COMMANDE' as const } : p))
     )
     toast.success('Commande transmise', 'En attente de livraison par le fournisseur.')
+
+    if (company?.id && po) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'FOURNISSEURS',
+        action: 'COMMANDE_FOURNISSEUR_TRANSMISE',
+        entityName: 'Bons de Commande',
+        entityId: po.reference,
+        description: `BC ${po.reference} transmis au fournisseur ${po.supplierName}`,
+        details: { poId, reference: po.reference }
+      })
+    }
   }
 
   // Déclencher Réception BL (Commandé -> Réceptionné)
@@ -232,32 +338,51 @@ export const FournisseursPage: React.FC = () => {
 
   const handleReceiveBlSuccess = async (data: any) => {
     try {
-      // 1. Appliquer Règle B.1 : Incrémenter le Stock Magasin du produit avec la quantité reçue
-      if (data.productId && data.receivedQty > 0) {
-        const { data: prodData } = await supabase
-          .from('products')
-          .select('*')
-          .eq('id', data.productId)
-          .maybeSingle()
+      const itemsToReceive: any[] = (data.items && Array.isArray(data.items) && data.items.length > 0)
+        ? data.items
+        : [{
+            productId: data.productId,
+            productName: data.productName,
+            ucdUnit: selectedPoForReceive?.ucdUnit || 'UCD',
+            qtyOrdered: data.qtyOrdered,
+            receivedQty: data.receivedQty,
+            ecart: data.ecart
+          }]
 
-        if (prodData) {
-          const currentStock = Number(prodData.stock_magasin ?? prodData.sector_meta?.stock_magasin ?? 0)
-          const newStock = Math.round((currentStock + data.receivedQty) * 1000) / 1000
-          const updatedMeta = {
-            ...(prodData.sector_meta || {}),
-            stock_magasin: newStock
-          }
+      let totalItemsUpdated = 0
+      let totalQtyReceived = 0
 
-          let updRes = await supabase
+      // 1. Appliquer Règle B.1 : Pour chaque article reçu, créditer le Stock Magasin (UCD)
+      for (const item of itemsToReceive) {
+        const itemQty = Number(item.receivedQty) || 0
+        if (item.productId && itemQty > 0) {
+          const { data: prodData } = await supabase
             .from('products')
-            .update({ stock_magasin: newStock, sector_meta: updatedMeta })
-            .eq('id', data.productId)
+            .select('*')
+            .eq('id', item.productId)
+            .maybeSingle()
 
-          if (updRes.error && updRes.error.code === 'PGRST204') {
-            await supabase
+          if (prodData) {
+            const currentStock = Number(prodData.stock_magasin ?? prodData.sector_meta?.stock_magasin ?? 0)
+            const newStock = Math.round((currentStock + itemQty) * 1000) / 1000
+            const updatedMeta = {
+              ...(prodData.sector_meta || {}),
+              stock_magasin: newStock
+            }
+
+            let updRes = await supabase
               .from('products')
-              .update({ sector_meta: updatedMeta })
-              .eq('id', data.productId)
+              .update({ stock_magasin: newStock, sector_meta: updatedMeta })
+              .eq('id', item.productId)
+
+            if (updRes.error && updRes.error.code === 'PGRST204') {
+              await supabase
+                .from('products')
+                .update({ sector_meta: updatedMeta })
+                .eq('id', item.productId)
+            }
+            totalItemsUpdated++
+            totalQtyReceived += itemQty
           }
         }
       }
@@ -279,16 +404,41 @@ export const FournisseursPage: React.FC = () => {
         qtyReceived: data.receivedQty,
         ecart: data.ecart,
         status: data.conform ? 'CONFORME' : 'NON_CONFORME',
-        notes: data.notes
+        notes: data.notes,
+        items: itemsToReceive
       }
 
       setReceptions([newRec, ...receptions])
       setShowReceiveModal(false)
       setSelectedPoForReceive(null)
 
+      // 4. Traçabilité Audit Règle B.1
+      if (company?.id) {
+        await logAuditEvent({
+          companyId: company.id,
+          userId: user?.id,
+          userName: user?.name,
+          userRole: user?.role,
+          sector: user?.sector,
+          module: 'FOURNISSEURS',
+          action: 'RECEPTION_BL',
+          entityName: 'Bons de Réception (BL)',
+          entityId: data.blRef,
+          description: `Réception BL ${data.blRef} pour BC ${newRec.bcReference} (${totalItemsUpdated} article(s) entrés en stock magasin, total ${totalQtyReceived} UCD)`,
+          details: {
+            blRef: data.blRef,
+            bcReference: newRec.bcReference,
+            supplierName: data.supplierName,
+            items: itemsToReceive,
+            totalQtyReceived,
+            conform: data.conform
+          }
+        })
+      }
+
       toast.success(
         'Réception Marchandise Confirmée (Règle B.1)',
-        `Le Stock Magasin a été crédité de ${data.receivedQty} ${selectedPoForReceive?.ucdUnit || 'UCD'}.`
+        `Le Stock Magasin a été crédité pour ${totalItemsUpdated} article(s) (${totalQtyReceived} UCD au total).`
       )
     } catch (err: any) {
       toast.error('Erreur réception', err.message)
@@ -335,6 +485,28 @@ export const FournisseursPage: React.FC = () => {
       setSuppliers((prev) =>
         prev.map((s) => (s.id === selectedSupplierForPay.id ? { ...s, current_payable: updatedDebt, current_debt: updatedDebt } : s))
       )
+
+      if (company?.id) {
+        await logAuditEvent({
+          companyId: company.id,
+          userId: user?.id,
+          userName: user?.name,
+          userRole: user?.role,
+          sector: user?.sector,
+          module: 'FOURNISSEURS',
+          action: 'REGLEMENT_DETTE_FOURNISSEUR',
+          entityName: 'Fournisseurs',
+          entityId: selectedSupplierForPay.id,
+          description: `Règlement de ${fmt(paymentAmount)} en ${paymentMode} au fournisseur ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}`,
+          details: {
+            supplierId: selectedSupplierForPay.id,
+            supplierName: selectedSupplierForPay.company_name || selectedSupplierForPay.name,
+            amount: paymentAmount,
+            mode: paymentMode,
+            remainingDebt: updatedDebt
+          }
+        })
+      }
 
       setShowPaymentModal(false)
       toast.success(
@@ -519,10 +691,23 @@ export const FournisseursPage: React.FC = () => {
                       </td>
                       <td className="p-3 font-semibold text-slate-800">{po.supplierName}</td>
                       <td className="p-3">
-                        <span className="font-semibold text-slate-900">{po.productName}</span>
-                        <span className="text-slate-500 font-mono text-[11px] block">
-                          Qté : {po.qtyOrderedUcd} {po.ucdUnit} @ {fmt(po.unitPriceUcd)}
-                        </span>
+                        {po.items && po.items.length > 1 ? (
+                          <div>
+                            <span className="font-semibold text-slate-900">{po.items.length} articles commandés</span>
+                            <div className="text-[11px] text-slate-500 font-mono mt-0.5 space-y-0.5 max-h-16 overflow-y-auto">
+                              {po.items.map((it, idx) => (
+                                <div key={idx}>• {it.productName} ({it.qty} {it.ucdUnit})</div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <div>
+                            <span className="font-semibold text-slate-900">{po.productName}</span>
+                            <span className="text-slate-500 font-mono text-[11px] block">
+                              Qté : {po.qtyOrderedUcd} {po.ucdUnit} @ {fmt(po.unitPriceUcd)}
+                            </span>
+                          </div>
+                        )}
                       </td>
                       <td className="p-3 text-right font-black font-mono text-slate-900">{fmt(po.totalTtc)}</td>
                       <td className="p-3 text-center">
@@ -652,7 +837,20 @@ export const FournisseursPage: React.FC = () => {
                         {new Date(r.date).toLocaleDateString('fr-BJ')}
                       </td>
                       <td className="p-3 font-semibold text-slate-800">{r.supplierName}</td>
-                      <td className="p-3 font-medium text-slate-800">{r.productName}</td>
+                      <td className="p-3">
+                        {r.items && r.items.length > 1 ? (
+                          <div>
+                            <span className="font-semibold text-slate-900">{r.items.length} articles reçus</span>
+                            <div className="text-[11px] text-slate-500 font-mono mt-0.5 space-y-0.5 max-h-16 overflow-y-auto">
+                              {r.items.map((it, idx) => (
+                                <div key={idx}>• {it.productName} ({it.receivedQty}/{it.qtyOrdered} {it.ucdUnit})</div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : (
+                          <span className="font-medium text-slate-800">{r.productName}</span>
+                        )}
+                      </td>
                       <td className="p-3 text-center font-mono font-bold text-slate-600">{r.qtyOrdered}</td>
                       <td className="p-3 text-center font-mono font-black text-emerald-700 bg-emerald-50/30">
                         {r.qtyReceived}
@@ -885,13 +1083,25 @@ export const FournisseursPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                <tr>
-                  <td className="p-2.5 font-sans font-semibold text-slate-900">{printedPo?.productName}</td>
-                  <td className="p-2.5 text-center text-slate-500 font-sans">{printedPo?.ucdUnit}</td>
-                  <td className="p-2.5 text-center font-bold text-slate-900">{printedPo?.qtyOrderedUcd}</td>
-                  <td className="p-2.5 text-right">{fmt(printedPo?.unitPriceUcd || 0)}</td>
-                  <td className="p-2.5 text-right font-black text-indigo-900">{fmt(printedPo?.totalTtc || 0)}</td>
-                </tr>
+                {printedPo?.items && printedPo.items.length > 0 ? (
+                  printedPo.items.map((it, idx) => (
+                    <tr key={idx}>
+                      <td className="p-2.5 font-sans font-semibold text-slate-900">{it.productName}</td>
+                      <td className="p-2.5 text-center text-slate-500 font-sans">{it.ucdUnit}</td>
+                      <td className="p-2.5 text-center font-bold text-slate-900">{it.qty}</td>
+                      <td className="p-2.5 text-right">{fmt(it.unitPrice)}</td>
+                      <td className="p-2.5 text-right font-black text-indigo-900">{fmt(it.total)}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="p-2.5 font-sans font-semibold text-slate-900">{printedPo?.productName}</td>
+                    <td className="p-2.5 text-center text-slate-500 font-sans">{printedPo?.ucdUnit}</td>
+                    <td className="p-2.5 text-center font-bold text-slate-900">{printedPo?.qtyOrderedUcd}</td>
+                    <td className="p-2.5 text-right">{fmt(printedPo?.unitPriceUcd || 0)}</td>
+                    <td className="p-2.5 text-right font-black text-indigo-900">{fmt(printedPo?.totalTtc || 0)}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
 
@@ -961,13 +1171,29 @@ export const FournisseursPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                <tr>
-                  <td className="p-2.5 font-sans font-semibold text-slate-900">{printedBl?.productName}</td>
-                  <td className="p-2.5 text-center">{printedBl?.qtyOrdered}</td>
-                  <td className="p-2.5 text-center font-black text-emerald-700 bg-emerald-50/50">{printedBl?.qtyReceived}</td>
-                  <td className="p-2.5 text-center">{printedBl?.ecart}</td>
-                  <td className="p-2.5 text-center font-sans font-bold text-emerald-800">{printedBl?.status}</td>
-                </tr>
+                {printedBl?.items && printedBl.items.length > 0 ? (
+                  printedBl.items.map((it, idx) => (
+                    <tr key={idx}>
+                      <td className="p-2.5 font-sans font-semibold text-slate-900">{it.productName}</td>
+                      <td className="p-2.5 text-center">{it.qtyOrdered} {it.ucdUnit}</td>
+                      <td className="p-2.5 text-center font-black text-emerald-700 bg-emerald-50/50">{it.receivedQty} {it.ucdUnit}</td>
+                      <td className="p-2.5 text-center">
+                        <span className={clsx('px-2 py-0.5 rounded-full text-[10px]', it.ecart === 0 ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800')}>
+                          {it.ecart > 0 ? `+${it.ecart}` : it.ecart}
+                        </span>
+                      </td>
+                      <td className="p-2.5 text-center font-sans font-bold text-emerald-800">{printedBl?.status}</td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="p-2.5 font-sans font-semibold text-slate-900">{printedBl?.productName}</td>
+                    <td className="p-2.5 text-center">{printedBl?.qtyOrdered}</td>
+                    <td className="p-2.5 text-center font-black text-emerald-700 bg-emerald-50/50">{printedBl?.qtyReceived}</td>
+                    <td className="p-2.5 text-center">{printedBl?.ecart}</td>
+                    <td className="p-2.5 text-center font-sans font-bold text-emerald-800">{printedBl?.status}</td>
+                  </tr>
+                )}
               </tbody>
             </table>
 

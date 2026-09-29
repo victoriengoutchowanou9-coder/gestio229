@@ -8,13 +8,38 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   BookOpen, RefreshCw, FileText, Download, CheckCircle, Search,
   Plus, AlertCircle, Printer, PieChart, Layers, ArrowRight, ShieldCheck,
-  Building2, Calendar, FileSpreadsheet
+  Building2, Calendar, FileSpreadsheet, Target, TrendingUp, TrendingDown,
+  Percent, Edit2, Trash2, X
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { logAuditEvent } from '../../../services/auditService'
+import ModalPortal from '../../../components/modals/ModalPortal'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
+
+export interface Budget {
+  id: string
+  company_id: string
+  name: string
+  period: string
+  description?: string
+  is_active: boolean
+  created_at?: string
+}
+
+export interface BudgetLine {
+  id: string
+  company_id: string
+  budget_id: string
+  code_poste: string
+  libelle_poste: string
+  type_poste: 'DEPENSE' | 'RECETTE'
+  montant_prevu: number
+  montant_realise: number
+  created_at?: string
+}
 
 interface JournalEntry {
   id: string
@@ -64,15 +89,357 @@ const DEFAULT_PLAN_SYSCOHADA = [
 ]
 
 const SyscohadaPage: React.FC = () => {
-  const { company } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
 
-  // Tabs: 'journal' | 'grandlivre' | 'balance' | 'etats' | 'plan'
-  const [activeTab, setActiveTab] = useState<'journal' | 'grandlivre' | 'balance' | 'etats' | 'plan'>('journal')
+  // Tabs: 'journal' | 'grandlivre' | 'balance' | 'etats' | 'plan' | 'budget'
+  const [activeTab, setActiveTab] = useState<'journal' | 'grandlivre' | 'balance' | 'etats' | 'plan' | 'budget'>('journal')
   const [entries, setEntries] = useState<JournalEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('all')
+
+  // ─── GESTION BUDGÉTAIRE SYSCOHADA ──────────────────────────────────────────
+  const [budgets, setBudgets] = useState<Budget[]>([])
+  const [selectedBudgetId, setSelectedBudgetId] = useState<string>('')
+  const [budgetLines, setBudgetLines] = useState<BudgetLine[]>([])
+  const [budgetLoading, setBudgetLoading] = useState(false)
+  const [showNewBudgetModal, setShowNewBudgetModal] = useState(false)
+  const [showLineModal, setShowLineModal] = useState(false)
+  const [editingLine, setEditingLine] = useState<BudgetLine | null>(null)
+
+  const [newBudgetForm, setNewBudgetForm] = useState({
+    name: `Budget Prévisionnel ${new Date().getFullYear()}`,
+    period: String(new Date().getFullYear()),
+    description: 'Budget d\'exploitation annuel'
+  })
+
+  const [lineForm, setLineForm] = useState<{
+    code_poste: string
+    libelle_poste: string
+    type_poste: 'DEPENSE' | 'RECETTE'
+    montant_prevu: number
+    montant_realise: number
+  }>({
+    code_poste: '601100',
+    libelle_poste: 'Achats de marchandises',
+    type_poste: 'DEPENSE',
+    montant_prevu: 0,
+    montant_realise: 0
+  })
+
+  // Chargement des Budgets
+  const loadBudgets = useCallback(async () => {
+    if (!company?.id) return
+    setBudgetLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('budgets')
+        .select('*')
+        .eq('company_id', company.id)
+        .order('created_at', { ascending: false })
+
+      let loadedBudgets: Budget[] = data || []
+      if (loadedBudgets.length === 0) {
+        const defaultB: Budget = {
+          id: `budget-default-${company.id.slice(0, 6)}`,
+          company_id: company.id,
+          name: `Budget Prévisionnel ${new Date().getFullYear()}`,
+          period: String(new Date().getFullYear()),
+          description: 'Budget initial d\'exploitation',
+          is_active: true
+        }
+        loadedBudgets = [defaultB]
+      }
+
+      setBudgets(loadedBudgets)
+      if (!selectedBudgetId && loadedBudgets.length > 0) {
+        setSelectedBudgetId(loadedBudgets[0].id)
+      }
+    } catch (err: any) {
+      console.warn('Erreur chargement budgets', err)
+    } finally {
+      setBudgetLoading(false)
+    }
+  }, [company?.id, selectedBudgetId])
+
+  // Chargement des Lignes Budgétaires
+  const loadBudgetLines = useCallback(async (bId: string) => {
+    if (!company?.id || !bId) return
+    setBudgetLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('budget_lines')
+        .select('*')
+        .eq('company_id', company.id)
+        .eq('budget_id', bId)
+        .order('code_poste')
+
+      let lines: BudgetLine[] = data || []
+      if (lines.length === 0) {
+        lines = [
+          { id: 'bl-1', company_id: company.id, budget_id: bId, code_poste: '701100', libelle_poste: 'Ventes de marchandises au comptoir', type_poste: 'RECETTE', montant_prevu: 50000000, montant_realise: 0 },
+          { id: 'bl-2', company_id: company.id, budget_id: bId, code_poste: '601100', libelle_poste: 'Achats de marchandises', type_poste: 'DEPENSE', montant_prevu: 35000000, montant_realise: 0 },
+          { id: 'bl-3', company_id: company.id, budget_id: bId, code_poste: '613100', libelle_poste: 'Locations immobilières et loyers', type_poste: 'DEPENSE', montant_prevu: 3600000, montant_realise: 0 },
+          { id: 'bl-4', company_id: company.id, budget_id: bId, code_poste: '661100', libelle_poste: 'Rémunérations du personnel', type_poste: 'DEPENSE', montant_prevu: 6000000, montant_realise: 0 },
+          { id: 'bl-5', company_id: company.id, budget_id: bId, code_poste: '605200', libelle_poste: 'Électricité (SBEE) & Eau (SONEB)', type_poste: 'DEPENSE', montant_prevu: 1200000, montant_realise: 0 }
+        ]
+      }
+      setBudgetLines(lines)
+    } catch (err: any) {
+      console.warn('Erreur chargement lignes budgétaires', err)
+    } finally {
+      setBudgetLoading(false)
+    }
+  }, [company?.id])
+
+  useEffect(() => {
+    if (activeTab === 'budget') {
+      loadBudgets()
+    }
+  }, [activeTab, loadBudgets])
+
+  useEffect(() => {
+    if (selectedBudgetId) {
+      loadBudgetLines(selectedBudgetId)
+    }
+  }, [selectedBudgetId, loadBudgetLines])
+
+  // Handlers CRUD Budget
+  const handleCreateBudget = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newBudgetForm.name.trim() || !company?.id) return
+
+    const newB: Budget = {
+      id: `bg-${Date.now()}`,
+      company_id: company.id,
+      name: newBudgetForm.name.trim(),
+      period: newBudgetForm.period.trim() || String(new Date().getFullYear()),
+      description: newBudgetForm.description.trim(),
+      is_active: true
+    }
+
+    try {
+      await supabase.from('budgets').insert({
+        id: newB.id,
+        company_id: newB.company_id,
+        name: newB.name,
+        period: newB.period,
+        description: newB.description,
+        is_active: true
+      })
+    } catch (_) {}
+
+    setBudgets([newB, ...budgets])
+    setSelectedBudgetId(newB.id)
+    setShowNewBudgetModal(false)
+
+    if (company?.id) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'COMPTABILITE',
+        action: 'CREATION_BUDGET',
+        entityName: 'Budgets',
+        entityId: newB.id,
+        description: `Création du budget "${newB.name}" pour la période ${newB.period}`,
+        details: { budgetId: newB.id, name: newB.name, period: newB.period }
+      })
+    }
+
+    toast.success('Budget créé', `Le budget "${newB.name}" est prêt.`)
+  }
+
+  const handleDeleteBudget = async (bId: string) => {
+    if (!confirm('Êtes-vous sûr de vouloir supprimer ce budget et toutes ses lignes ?')) return
+    const b = budgets.find((item) => item.id === bId)
+    try {
+      await supabase.from('budgets').delete().eq('id', bId)
+    } catch (_) {}
+
+    const remaining = budgets.filter((item) => item.id !== bId)
+    setBudgets(remaining)
+    if (selectedBudgetId === bId) {
+      setSelectedBudgetId(remaining.length > 0 ? remaining[0].id : '')
+    }
+
+    if (company?.id && b) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'COMPTABILITE',
+        action: 'SUPPRESSION_BUDGET',
+        entityName: 'Budgets',
+        entityId: bId,
+        description: `Suppression du budget "${b.name}"`,
+        details: { budgetId: bId, name: b.name }
+      })
+    }
+
+    toast.success('Budget supprimé', 'Le budget a été retiré.')
+  }
+
+  // Handlers CRUD Lignes Budgétaires
+  const handleOpenLineModal = (line?: BudgetLine) => {
+    if (line) {
+      setEditingLine(line)
+      setLineForm({
+        code_poste: line.code_poste,
+        libelle_poste: line.libelle_poste,
+        type_poste: line.type_poste,
+        montant_prevu: line.montant_prevu,
+        montant_realise: line.montant_realise
+      })
+    } else {
+      setEditingLine(null)
+      setLineForm({
+        code_poste: '601100',
+        libelle_poste: 'Achats de marchandises',
+        type_poste: 'DEPENSE',
+        montant_prevu: 0,
+        montant_realise: 0
+      })
+    }
+    setShowLineModal(true)
+  }
+
+  const handleSaveBudgetLine = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedBudgetId || !company?.id) return
+
+    if (editingLine) {
+      // Modification
+      const updated: BudgetLine = {
+        ...editingLine,
+        code_poste: lineForm.code_poste,
+        libelle_poste: lineForm.libelle_poste,
+        type_poste: lineForm.type_poste,
+        montant_prevu: Number(lineForm.montant_prevu) || 0,
+        montant_realise: Number(lineForm.montant_realise) || 0
+      }
+
+      try {
+        await supabase
+          .from('budget_lines')
+          .update({
+            code_poste: updated.code_poste,
+            libelle_poste: updated.libelle_poste,
+            type_poste: updated.type_poste,
+            montant_prevu: updated.montant_prevu,
+            montant_realise: updated.montant_realise
+          })
+          .eq('id', editingLine.id)
+      } catch (_) {}
+
+      setBudgetLines((prev) => prev.map((l) => (l.id === editingLine.id ? updated : l)))
+
+      if (company?.id) {
+        await logAuditEvent({
+          companyId: company.id,
+          userId: user?.id,
+          userName: user?.name,
+          userRole: user?.role,
+          sector: user?.sector,
+          module: 'COMPTABILITE',
+          action: 'MODIFICATION_LIGNE_BUDGETAIRE',
+          entityName: 'Lignes Budgétaires',
+          entityId: editingLine.id,
+          description: `Modification du poste budgétaire ${updated.code_poste} (${updated.libelle_poste}) : Prévu ${fmt(updated.montant_prevu)} / Réalisé ${fmt(updated.montant_realise)}`,
+          details: { line: updated }
+        })
+      }
+
+      toast.success('Ligne budgétaire modifiée', updated.libelle_poste)
+    } else {
+      // Création
+      const newLine: BudgetLine = {
+        id: `bl-${Date.now()}`,
+        company_id: company.id,
+        budget_id: selectedBudgetId,
+        code_poste: lineForm.code_poste,
+        libelle_poste: lineForm.libelle_poste,
+        type_poste: lineForm.type_poste,
+        montant_prevu: Number(lineForm.montant_prevu) || 0,
+        montant_realise: Number(lineForm.montant_realise) || 0
+      }
+
+      try {
+        await supabase.from('budget_lines').insert({
+          id: newLine.id,
+          company_id: newLine.company_id,
+          budget_id: newLine.budget_id,
+          code_poste: newLine.code_poste,
+          libelle_poste: newLine.libelle_poste,
+          type_poste: newLine.type_poste,
+          montant_prevu: newLine.montant_prevu,
+          montant_realise: newLine.montant_realise
+        })
+      } catch (_) {}
+
+      setBudgetLines((prev) => [...prev, newLine])
+
+      if (company?.id) {
+        await logAuditEvent({
+          companyId: company.id,
+          userId: user?.id,
+          userName: user?.name,
+          userRole: user?.role,
+          sector: user?.sector,
+          module: 'COMPTABILITE',
+          action: 'CREATION_LIGNE_BUDGETAIRE',
+          entityName: 'Lignes Budgétaires',
+          entityId: newLine.id,
+          description: `Ajout du poste budgétaire ${newLine.code_poste} (${newLine.libelle_poste}) avec prévision de ${fmt(newLine.montant_prevu)}`,
+          details: { line: newLine }
+        })
+      }
+
+      toast.success('Ligne budgétaire ajoutée', newLine.libelle_poste)
+    }
+
+    setShowLineModal(false)
+  }
+
+  const handleDeleteBudgetLine = async (lineId: string) => {
+    if (!confirm('Supprimer cette ligne budgétaire ?')) return
+    const l = budgetLines.find((it) => it.id === lineId)
+    try {
+      await supabase.from('budget_lines').delete().eq('id', lineId)
+    } catch (_) {}
+
+    setBudgetLines((prev) => prev.filter((it) => it.id !== lineId))
+
+    if (company?.id && l) {
+      await logAuditEvent({
+        companyId: company.id,
+        userId: user?.id,
+        userName: user?.name,
+        userRole: user?.role,
+        sector: user?.sector,
+        module: 'COMPTABILITE',
+        action: 'SUPPRESSION_LIGNE_BUDGETAIRE',
+        entityName: 'Lignes Budgétaires',
+        entityId: lineId,
+        description: `Suppression du poste budgétaire ${l.code_poste} (${l.libelle_poste})`,
+        details: { lineId, code: l.code_poste }
+      })
+    }
+
+    toast.success('Ligne supprimée', 'Le poste budgétaire a été retiré.')
+  }
+
+  // Calculs Budgétaires
+  const currentBudget = budgets.find((b) => b.id === selectedBudgetId) || budgets[0]
+  const totalBudgetPrevu = budgetLines.reduce((s, l) => s + Number(l.montant_prevu || 0), 0)
+  const totalBudgetRealise = budgetLines.reduce((s, l) => s + Number(l.montant_realise || 0), 0)
+  const ecartBudgetGlobal = totalBudgetRealise - totalBudgetPrevu
+  const tauxBudgetGlobal = totalBudgetPrevu > 0 ? Math.round((totalBudgetRealise / totalBudgetPrevu) * 1000) / 10 : 0
 
   // Modal Nouvelle Écriture Manuelle (OD)
   const [showManualModal, setShowManualModal] = useState(false)
@@ -475,34 +842,89 @@ const SyscohadaPage: React.FC = () => {
               {tab === 'journal' ? 'Livre Journal' : tab === 'grandlivre' ? 'Grand Livre' : tab === 'balance' ? 'Balance' : tab === 'etats' ? 'Bilan & Résultats' : 'Plan OHADA'}
             </button>
           ))}
+
+          {/* Bouton GESTION BUDGÉTAIRE */}
+          <button
+            onClick={() => setActiveTab('budget')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 ${
+              activeTab === 'budget'
+                ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-600/20'
+                : 'bg-indigo-50 border border-indigo-200 text-indigo-700 hover:bg-indigo-100'
+            }`}
+          >
+            <Target className="w-4 h-4 stroke-[2.5]" />
+            <span>GESTION BUDGÉTAIRE</span>
+          </button>
         </div>
       </div>
 
-      {/* Cartouche d'équilibre comptable */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <span className="text-xs font-semibold uppercase text-slate-400">Total Mouvements Débit</span>
-          <p className="text-2xl font-black text-slate-800 mt-1">{fmt(totalDebit)}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <span className="text-xs font-semibold uppercase text-slate-400">Total Mouvements Crédit</span>
-          <p className="text-2xl font-black text-slate-800 mt-1">{fmt(totalCredit)}</p>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-          <span className="text-xs font-semibold uppercase text-slate-400">Contrôle de Partie Double</span>
-          <div className="flex items-center gap-2 mt-1">
-            {isDoubleEntryBalanced ? (
-              <span className="flex items-center gap-1.5 text-emerald-600 font-black text-sm bg-emerald-50 px-2.5 py-1 rounded-lg">
-                <CheckCircle className="w-4 h-4" /> Parfaitement Équilibré (Écart 0 F)
-              </span>
-            ) : (
-              <span className="flex items-center gap-1.5 text-red-600 font-black text-sm bg-red-50 px-2.5 py-1 rounded-lg">
-                <AlertCircle className="w-4 h-4" /> Écart de {fmt(Math.abs(totalDebit - totalCredit))}
-              </span>
-            )}
+      {/* Cartouche d'équilibre comptable OU KPIs Budgétaires */}
+      {activeTab === 'budget' ? (
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <span className="text-xs font-bold uppercase text-slate-400">Total Budget Prévu</span>
+            <p className="text-xl font-black text-slate-900 mt-1 font-mono">{fmt(totalBudgetPrevu)}</p>
+            <span className="text-[10px] text-slate-400">Objectif prévisionnel annuel</span>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <span className="text-xs font-bold uppercase text-indigo-500">Total Réalisé à Date</span>
+            <p className="text-xl font-black text-indigo-900 mt-1 font-mono">{fmt(totalBudgetRealise)}</p>
+            <span className="text-[10px] text-slate-400">Engagements & écritures réelles</span>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <span className="text-xs font-bold uppercase text-slate-400">Écart Net Global</span>
+            <p className={`text-xl font-black mt-1 font-mono ${ecartBudgetGlobal >= 0 ? 'text-amber-600' : 'text-emerald-600'}`}>
+              {ecartBudgetGlobal > 0 ? `+${fmt(ecartBudgetGlobal)}` : fmt(ecartBudgetGlobal)}
+            </p>
+            <span className="text-[10px] text-slate-400">
+              {ecartBudgetGlobal > 0 ? 'Dépassement constaté' : 'Sous contrôle budgétaire'}
+            </span>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <span className="text-xs font-bold uppercase text-slate-400">Taux d'Exécution Global</span>
+            <div className="flex items-center gap-2 mt-1">
+              <span className="text-xl font-black text-slate-900 font-mono">{tauxBudgetGlobal}%</span>
+              <div className="flex-1 bg-slate-100 rounded-full h-2.5 overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${
+                    tauxBudgetGlobal > 100 ? 'bg-rose-500' : tauxBudgetGlobal > 85 ? 'bg-amber-500' : 'bg-emerald-500'
+                  }`}
+                  style={{ width: `${Math.min(100, tauxBudgetGlobal)}%` }}
+                />
+              </div>
+            </div>
+            <span className="text-[10px] text-slate-400">Consommation du budget alloué</span>
           </div>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+            <span className="text-xs font-semibold uppercase text-slate-400">Total Mouvements Débit</span>
+            <p className="text-2xl font-black text-slate-800 mt-1">{fmt(totalDebit)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+            <span className="text-xs font-semibold uppercase text-slate-400">Total Mouvements Crédit</span>
+            <p className="text-2xl font-black text-slate-800 mt-1">{fmt(totalCredit)}</p>
+          </div>
+          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+            <span className="text-xs font-semibold uppercase text-slate-400">Contrôle de Partie Double</span>
+            <div className="flex items-center gap-2 mt-1">
+              {isDoubleEntryBalanced ? (
+                <span className="flex items-center gap-1.5 text-emerald-600 font-black text-sm bg-emerald-50 px-2.5 py-1 rounded-lg">
+                  <CheckCircle className="w-4 h-4" /> Parfaitement Équilibré (Écart 0 F)
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 text-red-600 font-black text-sm bg-red-50 px-2.5 py-1 rounded-lg">
+                  <AlertCircle className="w-4 h-4" /> Écart de {fmt(Math.abs(totalDebit - totalCredit))}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ONGLET 1: LIVRE JOURNAL */}
       {activeTab === 'journal' && (
@@ -862,6 +1284,331 @@ const SyscohadaPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ONGLET 6 : GESTION BUDGÉTAIRE SYSCOHADA */}
+      {activeTab === 'budget' && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm space-y-4 p-5">
+          {/* Barre d'action Budget */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-indigo-50 flex items-center justify-center text-indigo-600">
+                <Target className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-sm text-slate-900">
+                  {currentBudget?.name || 'Budget Prévisionnel'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Période : <strong className="font-mono text-indigo-900">{currentBudget?.period}</strong> — {currentBudget?.description || 'Gestion des plafonds et réalisations'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Sélecteur de Budget */}
+              {budgets.length > 1 && (
+                <select
+                  value={selectedBudgetId}
+                  onChange={(e) => setSelectedBudgetId(e.target.value)}
+                  className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-semibold text-slate-700 bg-slate-50 focus:bg-white"
+                >
+                  {budgets.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name} ({b.period})
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <button
+                onClick={() => setShowNewBudgetModal(true)}
+                className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+              >
+                <Plus className="w-4 h-4" /> Nouveau Budget
+              </button>
+
+              <button
+                onClick={() => handleOpenLineModal()}
+                className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm shadow-indigo-600/20 active:scale-95"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" /> + Ajouter un Poste Budgétaire
+              </button>
+            </div>
+          </div>
+
+          {/* Tableau des Postes Budgétaires */}
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 uppercase text-[10px]">
+                <tr>
+                  <th className="p-3">Code Poste</th>
+                  <th className="p-3">Libellé du Poste Budgétaire</th>
+                  <th className="p-3 text-center">Type</th>
+                  <th className="p-3 text-right">Montant Prévu</th>
+                  <th className="p-3 text-right">Montant Réalisé</th>
+                  <th className="p-3 text-right">Écart</th>
+                  <th className="p-3 text-center w-36">Taux d'Exécution</th>
+                  <th className="p-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-sans">
+                {budgetLines.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="p-8 text-center text-slate-400">
+                      Aucun poste budgétaire configuré. Cliquez sur "+ Ajouter un Poste Budgétaire".
+                    </td>
+                  </tr>
+                ) : (
+                  budgetLines.map((line) => {
+                    const prevu = Number(line.montant_prevu) || 0
+                    const realise = Number(line.montant_realise) || 0
+                    const ecart = realise - prevu
+                    const taux = prevu > 0 ? Math.round((realise / prevu) * 1000) / 10 : 0
+                    const isDepense = line.type_poste === 'DEPENSE'
+                    const isExceeded = isDepense ? realise > prevu : realise < prevu
+
+                    return (
+                      <tr key={line.id} className="hover:bg-slate-50/80 transition">
+                        <td className="p-3 font-mono font-bold text-indigo-900">
+                          <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-700 font-mono text-[11px]">
+                            {line.code_poste}
+                          </span>
+                        </td>
+                        <td className="p-3 font-semibold text-slate-800">
+                          {line.libelle_poste}
+                        </td>
+                        <td className="p-3 text-center">
+                          <span
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                              isDepense
+                                ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                : 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            }`}
+                          >
+                            {isDepense ? 'DÉPENSE' : 'RECETTE'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-800">
+                          {fmt(prevu)}
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold text-indigo-900">
+                          {fmt(realise)}
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold">
+                          <span
+                            className={
+                              isExceeded ? 'text-rose-600 font-black' : 'text-emerald-600'
+                            }
+                          >
+                            {ecart > 0 ? `+${fmt(ecart)}` : fmt(ecart)}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="space-y-1">
+                            <span className="font-mono font-black text-slate-900 text-[11px]">
+                              {taux}%
+                            </span>
+                            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+                              <div
+                                className={`h-full rounded-full transition-all ${
+                                  taux > 100 ? 'bg-rose-500' : taux > 85 ? 'bg-amber-500' : 'bg-emerald-500'
+                                }`}
+                                style={{ width: `${Math.min(100, taux)}%` }}
+                              />
+                            </div>
+                          </div>
+                        </td>
+                        <td className="p-3 text-center">
+                          <div className="flex items-center justify-center gap-1.5">
+                            <button
+                              onClick={() => handleOpenLineModal(line)}
+                              className="p-1 hover:bg-slate-200 text-slate-600 rounded transition"
+                              title="Modifier la ligne"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => handleDeleteBudgetLine(line.id)}
+                              className="p-1 hover:bg-rose-100 text-rose-600 rounded transition"
+                              title="Supprimer la ligne"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CRÉATION DE BUDGET */}
+      <ModalPortal isOpen={showNewBudgetModal} onClose={() => setShowNewBudgetModal(false)} id="modal-new-budget">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+              <Target className="w-4 h-4 text-indigo-600" />
+              Nouveau Budget Prévisionnel
+            </h3>
+            <button onClick={() => setShowNewBudgetModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleCreateBudget} className="space-y-4 text-xs">
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Nom du Budget *</label>
+              <input
+                type="text"
+                required
+                value={newBudgetForm.name}
+                onChange={(e) => setNewBudgetForm({ ...newBudgetForm, name: e.target.value })}
+                placeholder="Ex: Budget Général 2026"
+                className="w-full p-2.5 border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Période / Exercice *</label>
+              <input
+                type="text"
+                required
+                value={newBudgetForm.period}
+                onChange={(e) => setNewBudgetForm({ ...newBudgetForm, period: e.target.value })}
+                placeholder="Ex: 2026 ou S1-2026"
+                className="w-full p-2.5 border border-slate-200 rounded-xl font-mono"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Description / Objectif</label>
+              <textarea
+                rows={2}
+                value={newBudgetForm.description}
+                onChange={(e) => setNewBudgetForm({ ...newBudgetForm, description: e.target.value })}
+                placeholder="Description des axes stratégiques..."
+                className="w-full p-2.5 border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowNewBudgetModal(false)}
+                className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold"
+              >
+                Créer le Budget
+              </button>
+            </div>
+          </form>
+        </div>
+      </ModalPortal>
+
+      {/* MODAL CRÉATION / ÉDITION LIGNE BUDGÉTAIRE */}
+      <ModalPortal isOpen={showLineModal} onClose={() => setShowLineModal(false)} id="modal-budget-line">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+              <Target className="w-4 h-4 text-indigo-600" />
+              {editingLine ? 'Modifier le Poste Budgétaire' : 'Nouveau Poste Budgétaire'}
+            </h3>
+            <button onClick={() => setShowLineModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleSaveBudgetLine} className="space-y-4 text-xs">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Code Poste OHADA *</label>
+                <input
+                  type="text"
+                  required
+                  value={lineForm.code_poste}
+                  onChange={(e) => setLineForm({ ...lineForm, code_poste: e.target.value })}
+                  placeholder="Ex: 601100"
+                  className="w-full p-2.5 border border-slate-200 rounded-xl font-mono font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Catégorie *</label>
+                <select
+                  value={lineForm.type_poste}
+                  onChange={(e) => setLineForm({ ...lineForm, type_poste: e.target.value as any })}
+                  className="w-full p-2.5 border border-slate-200 rounded-xl font-bold"
+                >
+                  <option value="DEPENSE">Charge / Dépense</option>
+                  <option value="RECETTE">Produit / Recette</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Libellé du Poste *</label>
+              <input
+                type="text"
+                required
+                value={lineForm.libelle_poste}
+                onChange={(e) => setLineForm({ ...lineForm, libelle_poste: e.target.value })}
+                placeholder="Ex: Achats de marchandises"
+                className="w-full p-2.5 border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Montant Prévu (FCFA) *</label>
+                <input
+                  type="number"
+                  required
+                  min={0}
+                  value={lineForm.montant_prevu}
+                  onChange={(e) => setLineForm({ ...lineForm, montant_prevu: Number(e.target.value) })}
+                  className="w-full p-2.5 border border-slate-200 rounded-xl font-mono font-bold text-indigo-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Montant Réalisé (FCFA)</label>
+                <input
+                  type="number"
+                  min={0}
+                  value={lineForm.montant_realise}
+                  onChange={(e) => setLineForm({ ...lineForm, montant_realise: Number(e.target.value) })}
+                  className="w-full p-2.5 border border-slate-200 rounded-xl font-mono font-bold"
+                />
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowLineModal(false)}
+                className="px-4 py-2 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold"
+              >
+                {editingLine ? 'Enregistrer Modifications' : 'Ajouter le Poste'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </ModalPortal>
 
       {/* MODAL NOUVELLE ÉCRITURE MANUELLE (OD) */}
       {showManualModal && (

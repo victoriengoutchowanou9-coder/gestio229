@@ -84,6 +84,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
   // Sous-modale "Paramétrage des tarifs par lot"
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
+  const [lastSavedProduct, setLastSavedProduct] = useState<{ code: string; name: string } | null>(null)
 
   // Décomposition fiscale automatique
   const taxAchat = useMemo(() => {
@@ -289,8 +290,55 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
       setIsSaving(false)
       if (onSuccess) onSuccess(savedProduct)
-      alert(`✅ Produit [${finalCode}] "${form.name.trim()}" enregistré avec succès !`)
-      onClose()
+
+      // Traçabilité Audit automatique
+      try {
+        const { logAuditEvent } = await import('../../services/auditService')
+        await logAuditEvent({
+          companyId: company.id,
+          module: 'Stocks',
+          action: 'CREATION_PRODUIT',
+          description: `Création du produit [${finalCode}] "${form.name.trim()}" - Magasin: ${parsedMagasin} ${form.ucd}, Vente: ${parsedVente} ${form.uv}`,
+          entityName: 'products',
+          entityId: res.data?.id
+        })
+      } catch (e) {}
+
+      // Confirmation et réinitialisation pour saisie en série sans forcer la fermeture
+      setLastSavedProduct({ code: finalCode, name: form.name.trim() })
+      setForm({
+        code: '',
+        name: '',
+        category: form.category,
+        ucd: form.ucd,
+        packaging: form.packaging,
+        uv: form.uv,
+        coef: form.coef,
+        priceAchatUcdTtc: 0,
+        priceVenteUcdTtc: 0,
+        priceVenteUvTtc: 0,
+        stockMagasinInitial: '',
+        stockVenteInitial: '',
+        lotNumber: '',
+        isVatSubject: true,
+        vatRate: 18,
+        isAibSubject: false,
+        aibRate: 1,
+        isBatchPricing: false,
+        batchPricing: {
+          enabled: false,
+          coef: form.coef,
+          price_half_ucd_ttc: 0,
+          price_third_ucd_ttc: 0,
+          price_quarter_ucd_ttc: 0,
+          price_sixth_ucd_ttc: 0,
+          price_eighth_ucd_ttc: 0,
+          price_twelfth_ucd_ttc: 0,
+          price_sixteenth_ucd_ttc: 0,
+          price_ucd_ttc: 0,
+          price_uv_ttc: 0,
+        }
+      })
     } catch (err: any) {
       console.error('[NewProductModal] Exception handleSubmit:', err)
       alert(`❌ Erreur inattendue : ${err?.message || 'Vérifiez votre connexion internet.'}`)
@@ -319,6 +367,31 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
           </div>
 
           <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-4 text-xs">
+            {/* Bannière de confirmation de saisie en série */}
+            {lastSavedProduct && (
+              <div className="p-3.5 bg-emerald-50 dark:bg-emerald-950/60 border-2 border-emerald-400 dark:border-emerald-600 rounded-2xl flex items-center justify-between text-emerald-900 dark:text-emerald-100 shadow-sm animate-in fade-in">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold text-xs shrink-0 shadow-sm">
+                    ✓
+                  </div>
+                  <div>
+                    <p className="font-extrabold text-xs">
+                      Produit [{lastSavedProduct.code}] "{lastSavedProduct.name}" enregistré avec succès !
+                    </p>
+                    <p className="text-[11px] text-emerald-700 dark:text-emerald-300 font-medium">
+                      Disponible immédiatement dans Stocks et POS. Vous pouvez saisir directement le produit suivant ou cliquer sur « Terminer & Fermer ».
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLastSavedProduct(null)}
+                  className="px-2 py-1 text-xs text-emerald-700 hover:text-emerald-900 dark:text-emerald-300 font-bold bg-emerald-100 dark:bg-emerald-900/40 rounded-lg transition"
+                >
+                  Fermer l'alerte
+                </button>
+              </div>
+            )}
             {/* Avertissement fiscal */}
             <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl flex items-start gap-2.5 text-emerald-900 dark:text-emerald-200">
               <Info className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
@@ -706,22 +779,24 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
             </div>
 
             {/* Boutons d'action */}
-            <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-200 dark:border-slate-800">
+            <div className="pt-3 flex items-center justify-between border-t border-slate-200 dark:border-slate-800">
               <button
                 type="button"
                 onClick={onClose}
-                className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl"
+                className="px-4 py-2 text-xs font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition"
               >
-                Annuler
+                Terminer & Fermer
               </button>
-              <button
-                type="submit"
-                disabled={isSaving}
-                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md flex items-center space-x-1.5 transition disabled:opacity-50"
-              >
-                <Check className="w-4 h-4" />
-                <span>{isSaving ? 'Enregistrement...' : 'Enregistrer le Produit'}</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="submit"
+                  disabled={isSaving}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md flex items-center space-x-1.5 transition disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>{isSaving ? 'Enregistrement en cours...' : 'Enregistrer ce Produit (+)'}</span>
+                </button>
+              </div>
             </div>
           </form>
         </div>

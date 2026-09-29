@@ -27,6 +27,7 @@ interface TodaySale {
   payment_method: string
   customer_name?: string
   status?: string
+  notes?: any
 }
 
 export const DashboardPage: React.FC = () => {
@@ -38,6 +39,7 @@ export const DashboardPage: React.FC = () => {
   const [salesToday, setSalesToday] = useState<TodaySale[]>([])
   const [activeProductsCount, setActiveProductsCount] = useState<number>(0)
   const [totalProductsValue, setTotalProductsValue] = useState<number>(0)
+  const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
 
   // Déterminer le secteur d'activité actif
   const currentSectorSlug =
@@ -70,10 +72,10 @@ export const DashboardPage: React.FC = () => {
       const now = new Date()
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
-      // 1. Ventes du jour réelles
+      // 1. Ventes du jour réelles (avec notes pour ventilation multi-règlements)
       const { data: salesData, error: salesErr } = await supabase
         .from('sales_orders')
-        .select('id, order_number, created_at, total_amount, payment_method, customer_name, status')
+        .select('id, order_number, created_at, total_amount, payment_method, customer_name, status, notes')
         .eq('company_id', company.id)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false })
@@ -99,9 +101,19 @@ export const DashboardPage: React.FC = () => {
         return sum + (qtyMagasin + qtyVente) * cost
       }, 0)
       setTotalProductsValue(stockVal)
+
+      // 3. Total créances clients exigibles
+      const { data: custData } = await supabase
+        .from('customers')
+        .select('current_debt')
+        .eq('company_id', company.id)
+
+      if (custData) {
+        const debtSum = custData.reduce((sum, c: any) => sum + (Number(c.current_debt) || 0), 0)
+        setTotalCustomersDebt(debtSum)
+      }
     } catch (err: any) {
       console.error('Erreur chargement Dashboard :', err)
-      // Ne jamais injecter de données fictives en cas d'erreur
       setSalesToday([])
       setActiveProductsCount(0)
       setTotalProductsValue(0)
@@ -121,25 +133,49 @@ export const DashboardPage: React.FC = () => {
     return salesToday.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
   }, [salesToday])
 
-  // 2. Espèces du jour (Montant encaissé en liquide aujourd'hui)
-  const especesDuJour = useMemo(() => {
-    return salesToday
-      .filter((s) => s.payment_method === 'cash' || s.payment_method === 'especes')
-      .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
-  }, [salesToday])
+  // Ventilation des règlements (Espèces, MoMo, Crédit) supportant le multi-paiement
+  const { especesDuJour, momoDuJour, creancesDuJour } = useMemo(() => {
+    let cash = 0
+    let momo = 0
+    let credit = 0
 
-  // 3. Créances du jour (Ventes à crédit enregistrées aujourd'hui)
-  const creancesDuJour = useMemo(() => {
-    return salesToday
-      .filter((s) => s.payment_method === 'credit' || s.payment_method === 'dette')
-      .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
-  }, [salesToday])
+    salesToday.forEach((s) => {
+      let pList: any[] = []
+      if (s.notes) {
+        try {
+          const parsed = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+          if (Array.isArray(parsed.payments) && parsed.payments.length > 0) {
+            pList = parsed.payments
+          }
+        } catch (_) {}
+      }
 
-  // Paiements Mobile Money du jour
-  const momoDuJour = useMemo(() => {
-    return salesToday
-      .filter((s) => s.payment_method === 'momo' || s.payment_method === 'wave' || s.payment_method === 'flooz')
-      .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+      if (pList.length > 0) {
+        pList.forEach((p) => {
+          const m = String(p.method || '').toLowerCase()
+          const amt = Number(p.amount) || 0
+          if (m === 'cash' || m === 'especes') {
+            cash += amt
+          } else if (m.includes('momo') || m === 'wave' || m === 'flooz') {
+            momo += amt
+          } else if (m === 'credit' || m === 'dette') {
+            credit += amt
+          }
+        })
+      } else {
+        const pm = String(s.payment_method || '').toLowerCase()
+        const tot = Number(s.total_amount) || 0
+        if (pm === 'cash' || pm === 'especes') {
+          cash += tot
+        } else if (pm.includes('momo') || pm === 'wave' || pm === 'flooz') {
+          momo += tot
+        } else if (pm === 'credit' || pm === 'dette') {
+          credit += tot
+        }
+      }
+    })
+
+    return { especesDuJour: cash, momoDuJour: momo, creancesDuJour: credit }
   }, [salesToday])
 
   const todayDateStr = new Date().toLocaleDateString('fr-BJ', {
@@ -225,14 +261,14 @@ export const DashboardPage: React.FC = () => {
             {fmt(especesDuJour)}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
-            <span>Encaissé en tiroir :</span>
-            <span className="text-slate-700 font-mono">
-              {salesToday.filter((s) => s.payment_method === 'cash').length} transaction(s)
+            <span>Mobile Money encaissé :</span>
+            <span className="text-purple-700 font-mono font-bold">
+              {fmt(momoDuJour)}
             </span>
           </div>
         </div>
 
-        {/* 3. Créances du Jour */}
+        {/* 3. Créances du Jour & Dettes Clients */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-rose-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -246,9 +282,9 @@ export const DashboardPage: React.FC = () => {
             {fmt(creancesDuJour)}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
-            <span>Ventes à crédit :</span>
-            <span className="text-rose-700 font-bold">
-              {salesToday.filter((s) => s.payment_method === 'credit').length} à recouvrer
+            <span>Total exigible clients :</span>
+            <span className="text-rose-700 font-bold font-mono">
+              {fmt(totalCustomersDebt)}
             </span>
           </div>
         </div>
