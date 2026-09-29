@@ -689,11 +689,12 @@ export const GROUP_LABELS: Record<string, string> = {
   admin: 'Administration',
 }
 
-// Catalogue exhaustif des 15+ Secteurs d'activité de GESTIO 229
+// Catalogue exhaustif des Secteurs d'activité de GESTIO 229
 export interface SectorDefinition {
   code: string
   slug: string
   name: string
+  label: string
   category: string
   emoji: string
   icon: string
@@ -703,20 +704,28 @@ export interface SectorDefinition {
 }
 
 export const ALL_SECTORS_CATALOG: SectorDefinition[] = [
-  { code: 'POISSONNERIE', slug: 'poissonnerie', name: 'Poissonnerie & Surgelés', category: 'Alimentation & Frais', emoji: '🐟', icon: 'Fish', color: '#06b6d4', badge: 'Surgelés & Frais', description: 'Chambres froides (-18°C), pesée kg, cartons et alertes avaries.' },
-  { code: 'QUINCAILLERIE', slug: 'quincaillerie', name: 'Quincaillerie & Matériaux BTP', category: 'BTP & Construction', emoji: '🔨', icon: 'Hammer', color: '#f59e0b', badge: 'Matériaux BTP', description: 'Ciment, fer à béton, facturation au mètre/tonne et suivi chantiers.' },
-  { code: 'BOUTIQUE', slug: 'boutique', name: 'Boutique & Commerce général', category: 'Commerce Détail', emoji: '🏪', icon: 'Store', color: '#3b82f6', badge: 'Commerce Détail', description: 'Vente comptoir, variantes taille/couleur, remises et approvisionnement.' },
-  { code: 'BRASSERIE', slug: 'brasserie', name: 'Brasserie & Dépôt Boissons', category: 'Boissons & Restauration', emoji: '🍾', icon: 'Wine', color: '#eab308', badge: 'Dépôt Boissons', description: 'Gestion des casiers pleins/vides Sobebra et consignes emballages.' },
-  { code: 'STATION', slug: 'station', name: 'Station-Service & Hydrocarbures', category: 'Énergie & Carburants', emoji: '⛽', icon: 'Fuel', color: '#f97316', badge: 'Hydrocarbures', description: 'Jaugeage cuves (Super, Gazole), index pompes et quarts pompistes.' },
-  { code: 'SUPERMARCHE', slug: 'supermarche', name: 'Supermarché & Supérette', category: 'Grande Distribution', emoji: '🛒', icon: 'ShoppingCart', color: '#10b981', badge: 'Grande Distribution', description: 'Code-barres POS rapide, têtes de gondoles et démarques DLC.' },
-  { code: 'IMPRESSION', slug: 'impression', name: 'Imprimerie & Print', category: 'Industrie Graphique', emoji: '🖨️', icon: 'Printer', color: '#ec4899', badge: 'Imprimerie & Graphisme', description: 'Calculette BAT, formats et grammages papiers, suivi atelier.' },
-  { code: 'EVENEMENTIEL', slug: 'evenementiel', name: 'Événementiel & Prestations', category: 'Services & Fêtes', emoji: '🎉', icon: 'PartyPopper', color: '#8b5cf6', badge: 'Prestations & Fêtes', description: 'Réservations dates, traiteur, location bâches/chaises et acomptes.' },
-  { code: 'HOTEL', slug: 'hotel', name: 'Hôtel & Résidences Hôtelières', category: 'Hôtellerie', emoji: '🏨', icon: 'Building2', color: '#6366f1', badge: 'Hébergement', description: 'Planning chambres, nuitées, check-in/out et facturation séjour.' },
-  { code: 'PHARMACIE', slug: 'pharmacie', name: 'Pharmacie & Parapharmacie', category: 'Santé', emoji: '💊', icon: 'Pill', color: '#14b8a6', badge: 'Santé & Médicaments', description: 'Ordonnances, numéros de lots, dates péremption et CAMU/UBIPHAR.' },
-  { code: 'ECOLE', slug: 'ecole', name: 'École & Établissement Scolaire', category: 'Éducation', emoji: '🎓', icon: 'GraduationCap', color: '#3b82f6', badge: 'Éducation', description: 'Classes, inscriptions élèves, tranches scolarité et reçus.' },
-  { code: 'GARAGE', slug: 'garage', name: 'Atelier Garage & Mécanique', category: 'Automobile', emoji: '🚗', icon: 'Wrench', color: '#64748b', badge: 'Mécanique Auto', description: 'Ordres de réparation OR, véhicules immatriculés et pièces détachées.' },
-  { code: 'LOCATION', slug: 'location', name: 'Gestion de location & Immobilier', category: 'Immobilier', emoji: '🏠', icon: 'Home', color: '#a855f7', badge: 'Immobilier & Baux', description: 'Baux locatifs, états des lieux, quittances de loyer et impayés.' },
-  { code: 'MICROFINANCE', slug: 'microfinance', name: 'Microfinance & Crédit', category: 'Services Financiers', emoji: '🏦', icon: 'Landmark', color: '#059669', badge: 'Finance Inclusive', description: 'Comptes épargne membres, demandes de crédit et échéanciers.' },
-  { code: 'TONTINE', slug: 'tontine', name: 'Tontine & Épargne Journalière', category: 'Finance Populaire', emoji: '🔄', icon: 'Repeat', color: '#0284c7', badge: 'Tontine Traditionnelle', description: 'Cycles tontine, pointage journalier collecteurs et attributions.' },
+  { code: 'POISSONNERIE', slug: 'poissonnerie', name: 'Poissonnerie & Surgelés', label: 'Poissonnerie & Surgelés', category: 'Alimentation & Frais', emoji: '🐟', icon: 'Fish', color: '#06b6d4', badge: 'Surgelés & Frais', description: 'Chambres froides (-18°C), pesée kg, cartons et alertes avaries.' },
+  { code: 'QUINCAILLERIE', slug: 'quincaillerie', name: 'Quincaillerie & Matériaux BTP', label: 'Quincaillerie & Matériaux BTP', category: 'BTP & Construction', emoji: '🔨', icon: 'Hammer', color: '#f59e0b', badge: 'Matériaux BTP', description: 'Ciment, fer à béton, facturation au mètre/tonne et suivi chantiers.' },
+  { code: 'BOUTIQUE', slug: 'boutique', name: 'Boutique & Commerce général', label: 'Boutique & Commerce général', category: 'Commerce Détail', emoji: '🏪', icon: 'Store', color: '#3b82f6', badge: 'Commerce Détail', description: 'Vente comptoir, variantes taille/couleur, remises et approvisionnement.' },
+  { code: 'MERCERIE', slug: 'mercerie', name: 'Mercerie & Couture', label: 'Mercerie & Couture', category: 'Mode & Artisanat', emoji: '🧵', icon: 'Scissors', color: '#ec4899', badge: 'Mercerie & Tissus', description: 'Fils, boutons, fermetures, tissus au mètre, dentelles et accessoires de couture.' },
+  { code: 'BRASSERIE', slug: 'brasserie', name: 'Brasserie & Dépôt Boissons', label: 'Brasserie & Dépôt Boissons', category: 'Boissons & Restauration', emoji: '🍾', icon: 'Wine', color: '#eab308', badge: 'Dépôt Boissons', description: 'Gestion des casiers pleins/vides Sobebra et consignes emballages.' },
+  { code: 'SUPERMARCHE', slug: 'supermarche', name: 'Supermarché & Supérette', label: 'Supermarché & Supérette', category: 'Grande Distribution', emoji: '🛒', icon: 'ShoppingCart', color: '#10b981', badge: 'Grande Distribution', description: 'Code-barres POS rapide, têtes de gondoles et démarques DLC.' },
+  { code: 'STATION', slug: 'station', name: 'Station-Service & Hydrocarbures', label: 'Station-Service & Hydrocarbures', category: 'Énergie & Carburants', emoji: '⛽', icon: 'Fuel', color: '#f97316', badge: 'Hydrocarbures', description: 'Jaugeage cuves (Super, Gazole), index pompes et quarts pompistes.' },
+  { code: 'RESTAURANT', slug: 'restaurant', name: 'Restaurant & Maquis', label: 'Restaurant & Maquis', category: 'Restauration', emoji: '🍽️', icon: 'Utensils', color: '#ef4444', badge: 'Restauration', description: 'Commandes tables, cuisine, bar, formules du jour et fiches de stock ingrédients.' },
+  { code: 'BOULANGERIE', slug: 'boulangerie', name: 'Boulangerie & Pâtisserie', label: 'Boulangerie & Pâtisserie', category: 'Alimentation & Frais', emoji: '🥖', icon: 'Cake', color: '#d97706', badge: 'Boulangerie', description: 'Fournées, sacs de farine, viennoiseries, DLC et vente au comptoir.' },
+  { code: 'COSMETIQUE', slug: 'cosmetique', name: 'Cosmétique & Parfumerie', label: 'Cosmétique & Parfumerie', category: 'Beauté & Soins', emoji: '💄', icon: 'Sparkles', color: '#f43f5e', badge: 'Cosmétique', description: 'Produits de beauté, parfums, gammes capillaires et soins corporels.' },
+  { code: 'TEXTILE', slug: 'textile', name: 'Textile & Prêt-à-porter', label: 'Textile & Prêt-à-porter', category: 'Mode & Habillement', emoji: '👗', icon: 'Shirt', color: '#8b5cf6', badge: 'Prêt-à-porter', description: 'Vêtements, chaussures, accessoires, tailles/coloris et étiquetage.' },
+  { code: 'ELECTRONIQUE', slug: 'electronique', name: 'Électronique & Informatique', label: 'Électronique & Informatique', category: 'High-Tech', emoji: '💻', icon: 'Laptop', color: '#0284c7', badge: 'Électronique', description: 'Téléphones, accessoires high-tech, numéros IMEI, garanties et SAV.' },
+  { code: 'IMPRESSION', slug: 'impression', name: 'Imprimerie & Print', label: 'Imprimerie & Print', category: 'Industrie Graphique', emoji: '🖨️', icon: 'Printer', color: '#ec4899', badge: 'Imprimerie & Graphisme', description: 'Calculette BAT, formats et grammages papiers, suivi atelier.' },
+  { code: 'EVENEMENTIEL', slug: 'evenementiel', name: 'Événementiel & Prestations', label: 'Événementiel & Prestations', category: 'Services & Fêtes', emoji: '🎉', icon: 'PartyPopper', color: '#8b5cf6', badge: 'Prestations & Fêtes', description: 'Réservations dates, traiteur, location bâches/chaises et acomptes.' },
+  { code: 'HOTEL', slug: 'hotel', name: 'Hôtel & Résidences Hôtelières', label: 'Hôtel & Résidences Hôtelières', category: 'Hôtellerie', emoji: '🏨', icon: 'Building2', color: '#6366f1', badge: 'Hébergement', description: 'Planning chambres, nuitées, check-in/out et facturation séjour.' },
+  { code: 'PHARMACIE', slug: 'pharmacie', name: 'Pharmacie & Parapharmacie', label: 'Pharmacie & Parapharmacie', category: 'Santé', emoji: '💊', icon: 'Pill', color: '#14b8a6', badge: 'Santé & Médicaments', description: 'Ordonnances, numéros de lots, dates péremption et CAMU/UBIPHAR.' },
+  { code: 'ECOLE', slug: 'ecole', name: 'École & Établissement Scolaire', label: 'École & Établissement Scolaire', category: 'Éducation', emoji: '🎓', icon: 'GraduationCap', color: '#3b82f6', badge: 'Éducation', description: 'Classes, inscriptions élèves, tranches scolarité et reçus.' },
+  { code: 'GARAGE', slug: 'garage', name: 'Atelier Garage & Mécanique', label: 'Atelier Garage & Mécanique', category: 'Automobile', emoji: '🚗', icon: 'Wrench', color: '#64748b', badge: 'Mécanique Auto', description: 'Ordres de réparation OR, véhicules immatriculés et pièces détachées.' },
+  { code: 'LOCATION', slug: 'location', name: 'Gestion de location & Immobilier', label: 'Gestion de location & Immobilier', category: 'Immobilier', emoji: '🏠', icon: 'Home', color: '#a855f7', badge: 'Immobilier & Baux', description: 'Baux locatifs, états des lieux, quittances de loyer et impayés.' },
+  { code: 'MICROFINANCE', slug: 'microfinance', name: 'Microfinance & Crédit', label: 'Microfinance & Crédit', category: 'Services Financiers', emoji: '🏦', icon: 'Landmark', color: '#059669', badge: 'Finance Inclusive', description: 'Comptes épargne membres, demandes de crédit et échéanciers.' },
+  { code: 'TONTINE', slug: 'tontine', name: 'Tontine & Épargne Journalière', label: 'Tontine & Épargne Journalière', category: 'Finance Populaire', emoji: '🔄', icon: 'Repeat', color: '#0284c7', badge: 'Tontine Traditionnelle', description: 'Cycles tontine, pointage journalier collecteurs et attributions.' },
+  { code: 'AGRICULTURE', slug: 'agriculture', name: 'Agriculture & Élevage', label: 'Agriculture & Élevage', category: 'Agro-pastoral', emoji: '🌾', icon: 'Wheat', color: '#84cc16', badge: 'Agro-Business', description: 'Intrants agricoles, récoltes, bétail, alimentation animale et coopératives.' },
+  { code: 'TRANSPORT', slug: 'transport', name: 'Transport & Logistique', label: 'Transport & Logistique', category: 'Logistique & Fret', emoji: '🚚', icon: 'Truck', color: '#0ea5e9', badge: 'Logistique', description: 'Flotte camions, fiches de courses, carburant chauffeur et suivi livraison.' },
 ]
 

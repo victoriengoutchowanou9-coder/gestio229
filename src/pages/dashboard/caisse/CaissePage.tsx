@@ -50,8 +50,10 @@ interface CashClosure {
 }
 
 export const CaissePage: React.FC = () => {
-  const { company, user } = useAuthStore()
+  const { company, user, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
   const { toast } = useUIStore()
+
+  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
 
   // État de la caisse : Ouverte ou Fermée
   const [caisseStatus, setCaisseStatus] = useState<'OUVERTE' | 'FERMEE'>('FERMEE')
@@ -94,43 +96,81 @@ export const CaissePage: React.FC = () => {
     return openD !== todayD
   }, [caisseStatus, openedAt])
 
-  // Charger la persistance locale de l'état de la caisse
+  // Charger la persistance locale de l'état de la caisse pour le secteur actif
   useEffect(() => {
     if (!company?.id) return
-    const storedState = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+    const sectorKey = `gestio_caisse_state_${company.id}_${currentSectorSlug}`
+    const legacyKey = `gestio_caisse_state_${company.id}`
+    const storedState = localStorage.getItem(sectorKey) || (currentSectorSlug === (company.activity_sector || 'boutique') ? localStorage.getItem(legacyKey) : null)
     if (storedState) {
       try {
         const parsed = JSON.parse(storedState)
         setCaisseStatus(parsed.status || 'FERMEE')
         setOpenedAt(parsed.openedAt || null)
         setOpenedBy(parsed.openedBy || '')
-        setInitialCash(Number(parsed.initialCash) || 0)
-        setInitialMomo(Number(parsed.initialMomo) || 0)
+        const cVal = Number(parsed.initialCash) || 0
+        const mVal = Number(parsed.initialMomo) || 0
+        setInitialCash(cVal)
+        setInitialMomo(mVal)
+        setOpenInputCash(cVal)
+        setOpenInputMomo(mVal)
       } catch (e) {
         console.error('Erreur lecture session caisse', e)
       }
+    } else {
+      setCaisseStatus('FERMEE')
+      setOpenedAt(null)
+      setOpenedBy('')
+      setInitialCash(0)
+      setInitialMomo(0)
+      setOpenInputCash(0)
+      setOpenInputMomo(0)
     }
 
-    const storedClosures = localStorage.getItem(`gestio_caisse_closures_${company.id}`)
+    const sectorClosuresKey = `gestio_caisse_closures_${company.id}_${currentSectorSlug}`
+    const legacyClosuresKey = `gestio_caisse_closures_${company.id}`
+    const storedClosures = localStorage.getItem(sectorClosuresKey) || (currentSectorSlug === (company.activity_sector || 'boutique') ? localStorage.getItem(legacyClosuresKey) : null)
     if (storedClosures) {
       try {
         setClosuresHistory(JSON.parse(storedClosures))
       } catch (e) {}
+    } else {
+      setClosuresHistory([])
     }
 
-    const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
+    const sectorRequestsKey = `gestio_treasury_requests_${company.id}_${currentSectorSlug}`
+    const globalRequestsKey = `gestio_treasury_requests_${company.id}`
+    const storedRequests = localStorage.getItem(sectorRequestsKey) || localStorage.getItem(globalRequestsKey)
     if (storedRequests) {
       try {
-        setPendingRequests(JSON.parse(storedRequests))
+        const parsed = JSON.parse(storedRequests)
+        const filtered = Array.isArray(parsed)
+          ? parsed.filter((r: any) => !r.sector || r.sector === currentSectorSlug)
+          : []
+        setPendingRequests(filtered)
       } catch (e) {}
+    } else {
+      setPendingRequests([])
     }
-  }, [company?.id])
+  }, [company?.id, currentSectorSlug])
 
-  // Sauvegarder l'état de session dans localStorage
-  const saveCaisseState = (status: 'OUVERTE' | 'FERMEE', opAt: string | null, opBy: string, initC: number, initM: number) => {
+  // Sauvegarder l'état de session dans localStorage par secteur
+  const saveCaisseState = (status: 'OUVERTE' | 'FERMEE', opAt: string | null, opBy: string, initC: number, initM: number, lastClosedC?: number, lastClosedM?: number) => {
     if (!company?.id) return
-    const payload = { status, openedAt: opAt, openedBy: opBy, initialCash: initC, initialMomo: initM }
-    localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(payload))
+    const payload = {
+      status,
+      openedAt: opAt,
+      openedBy: opBy,
+      initialCash: initC,
+      initialMomo: initM,
+      lastClosedCash: lastClosedC !== undefined ? lastClosedC : initC,
+      lastClosedMomo: lastClosedM !== undefined ? lastClosedM : initM,
+      sector: currentSectorSlug
+    }
+    localStorage.setItem(`gestio_caisse_state_${company.id}_${currentSectorSlug}`, JSON.stringify(payload))
+    if (currentSectorSlug === (company.activity_sector || 'boutique')) {
+      localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(payload))
+    }
     setCaisseStatus(status)
     setOpenedAt(opAt)
     setOpenedBy(opBy)
@@ -155,7 +195,30 @@ export const CaissePage: React.FC = () => {
         .order('created_at', { ascending: false })
 
       if (error) console.warn('Erreur chargement sales_orders :', error)
-      const realSales = sales || []
+      const allSales = sales || []
+
+      // Filtrer strictement les ventes par secteur actif (isolation totale)
+      const realSales = allSales.filter((s: any) => {
+        let saleSector = null
+        if (s.e_mecef_uid) {
+          try {
+            if (s.e_mecef_uid.startsWith('{')) {
+              const meta = JSON.parse(s.e_mecef_uid)
+              saleSector = meta.s || meta.sector
+            }
+          } catch (e) {}
+        }
+        if (!saleSector && s.notes) {
+          try {
+            const nMeta = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+            saleSector = nMeta.s || nMeta.sector
+          } catch (e) {}
+        }
+        if (!saleSector) {
+          return currentSectorSlug === (company?.activity_sector || 'boutique')
+        }
+        return saleSector === currentSectorSlug
+      })
 
       // Parser les paiements de chaque vente (depuis notes, e_mecef_uid ou payment_status)
       const parsedSales = realSales.map((s: any) => {
@@ -262,13 +325,18 @@ export const CaissePage: React.FC = () => {
         }
       })
 
-      // Combiner avec les demandes de transfert de la session
-      const storedReqs = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
+      // Combiner avec les demandes de transfert de la session pour ce secteur
+      const sectorRequestsKey = `gestio_treasury_requests_${company.id}_${currentSectorSlug}`
+      const globalRequestsKey = `gestio_treasury_requests_${company.id}`
+      const storedReqs = localStorage.getItem(sectorRequestsKey) || localStorage.getItem(globalRequestsKey)
       let transferMovements: CashMovement[] = []
       if (storedReqs) {
         try {
           const reqs = JSON.parse(storedReqs)
-          transferMovements = reqs.map((r: any) => ({
+          const secReqs = Array.isArray(reqs)
+            ? reqs.filter((r: any) => !r.sector || r.sector === currentSectorSlug)
+            : []
+          transferMovements = secReqs.map((r: any) => ({
             id: r.id,
             created_at: r.created_at,
             user_name: r.requested_by,
@@ -277,7 +345,7 @@ export const CaissePage: React.FC = () => {
             amount: r.amount,
             motif: `Demande transfert trésorerie : ${r.motif}`,
             reference: `TR-${r.id.slice(0, 6)}`,
-            status: r.status === 'APPROVED' ? 'VALIDE' : r.status === 'REJECTED' ? 'REFUSE' : 'EN_ATTENTE'
+            status: (r.status === 'APPROVED' || r.status === 'VALIDE' || r.status === 'EXECUTE') ? 'VALIDE' : (r.status === 'REJECTED' || r.status === 'REFUSE') ? 'REFUSE' : 'EN_ATTENTE'
           }))
         } catch (e) {}
       }
@@ -295,7 +363,7 @@ export const CaissePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id])
+  }, [company?.id, currentSectorSlug])
 
   useEffect(() => {
     loadCaisseData()
@@ -347,22 +415,30 @@ export const CaissePage: React.FC = () => {
   const totalEntreesDuJour = ventesEspeces + ventesMomo + remboursementsEspeces + remboursementsMomo
 
   // Total des retraits espèces exécutés vers trésorerie
+  // RÈGLE 4 : Ne diminuer la caisse qu'après validation effective !
   const totalRetraitsEspeces = useMemo(() => {
     return pendingRequests
-      .filter((r) => r.type === 'Espèces' && r.status !== 'REFUSE')
+      .filter((r) => r.type === 'Espèces' && (r.status === 'APPROVED' || r.status === 'VALIDE' || r.status === 'EXECUTE'))
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
   const totalRetraitsMomo = useMemo(() => {
     return pendingRequests
-      .filter((r) => r.type === 'MoMo' && r.status !== 'REFUSE')
+      .filter((r) => r.type === 'MoMo' && (r.status === 'APPROVED' || r.status === 'VALIDE' || r.status === 'EXECUTE'))
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
-  // Fond actuel — Espèces (initial + ventes espèces + remboursements espèces - retraits)
+  // Total des transferts en attente de validation (pour information sans déduction)
+  const totalRetraitsEnAttente = useMemo(() => {
+    return pendingRequests
+      .filter((r) => r.status === 'EN_ATTENTE')
+      .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
+  }, [pendingRequests])
+
+  // Fond actuel — Espèces (initial + ventes espèces + remboursements espèces - retraits validés)
   const fondActuelEspeces = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces
 
-  // Fond actuel — MoMo (initial + ventes MoMo + remboursements MoMo - retraits)
+  // Fond actuel — MoMo (initial + ventes MoMo + remboursements MoMo - retraits validés)
   const fondActuelMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo
 
   // 6. Fond initial global
@@ -377,6 +453,7 @@ export const CaissePage: React.FC = () => {
   }, [salesToday])
 
   // ─── Action : Ouvrir la Caisse ─────────────────────────────────────────────
+  // RÈGLE 3 : Préremplir automatiquement les fonds de la veille
   const handleOpenCaisse = (e: React.FormEvent) => {
     e.preventDefault()
     const opBy = user?.full_name || 'Caissier'
@@ -387,6 +464,7 @@ export const CaissePage: React.FC = () => {
   }
 
   // ─── Action : Fermer la Caisse (avec Clôture Rigoureuse et Audit) ─────────────
+  // RÈGLE 2 : Après la clôture, aucune fenêtre modale ne doit s'ouvrir automatiquement
   const handleConfirmCloseCaisse = async () => {
     const ecart = Number(closingPhysicalCash) - fondActuelEspeces
     if (ecart !== 0 && !closingNotes.trim()) {
@@ -424,7 +502,7 @@ export const CaissePage: React.FC = () => {
       id: `cloture-${Date.now()}`,
       closed_at: closedAt,
       closed_by: closedBy,
-      caisse_name: 'Caisse Principale Secteur',
+      caisse_name: `Caisse ${activeActivityName || currentSectorSlug.toUpperCase()}`,
       fond_especes_theorique: fondActuelEspeces,
       fond_especes_physique: Number(closingPhysicalCash),
       ecart_especes: ecart,
@@ -438,32 +516,38 @@ export const CaissePage: React.FC = () => {
     const updatedClosures = [newClosure, ...closuresHistory]
     setClosuresHistory(updatedClosures)
     if (company?.id) {
-      localStorage.setItem(`gestio_caisse_closures_${company.id}`, JSON.stringify(updatedClosures))
+      localStorage.setItem(`gestio_caisse_closures_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedClosures))
+      if (currentSectorSlug === (company.activity_sector || 'boutique')) {
+        localStorage.setItem(`gestio_caisse_closures_${company.id}`, JSON.stringify(updatedClosures))
+      }
     }
 
-    // Le montant laissé en caisse devient le fond initial du lendemain
-    const nextDayFunds = Number(rolloverCash) || 0
-    saveCaisseState('FERMEE', null, '', nextDayFunds, fondActuelMomo)
+    // Le montant restant en caisse devient le fond initial du lendemain
+    const nextDayFunds = Number(rolloverCash) > 0 ? Number(rolloverCash) : Number(closingPhysicalCash)
+    saveCaisseState('FERMEE', null, '', nextDayFunds, fondActuelMomo, Number(closingPhysicalCash), fondActuelMomo)
+    setOpenInputCash(nextDayFunds)
+    setOpenInputMomo(fondActuelMomo)
 
     // Traçabilité Audit Senior
     await logAuditEvent({
       action: 'CLOTURE_CAISSE',
       module: 'CAISSE',
-      sector: 'COMMERCIAL',
-      description: `Clôture caisse par ${closedBy}. Espèces comptées : ${fmt(closingPhysicalCash)} (Théorique : ${fmt(fondActuelEspeces)}, Écart : ${fmt(ecart)}). MoMo : ${fmt(fondActuelMomo)}. Fond reporté lendemain : ${fmt(nextDayFunds)}. Justification : ${closingNotes || 'RAS'}`
+      sector: currentSectorSlug.toUpperCase(),
+      description: `Clôture caisse par ${closedBy} [${activeActivityName || currentSectorSlug}]. Espèces comptées : ${fmt(closingPhysicalCash)} (Théorique : ${fmt(fondActuelEspeces)}, Écart : ${fmt(ecart)}). MoMo : ${fmt(fondActuelMomo)}. Fond reporté lendemain : ${fmt(nextDayFunds)}. Justification : ${closingNotes || 'RAS'}`
     })
 
     setShowCloseModal(false)
     setActiveReportClosure(newClosure)
-    setShowReportModal(true)
+    // CRITIQUE : après la clôture, AUCUNE fenêtre modale ne doit s'ouvrir automatiquement
+    setShowReportModal(false)
 
     if (recipientEmails.length > 0) {
       toast.success(
-        'Caisse Clôturée !',
-        `Rapport Z généré et archivé. Destinataires : ${recipientEmails.join(', ')}`
+        'Caisse Clôturée avec Succès !',
+        `Rapport Z enregistré et archivé pour le lendemain. Destinataires : ${recipientEmails.join(', ')}`
       )
     } else {
-      toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été généré et archivé.')
+      toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été enregistré et archivé.')
     }
   }
 
@@ -479,26 +563,34 @@ export const CaissePage: React.FC = () => {
   }
 
   // ─── Action : Envoyer une Demande vers Trésorerie ───────────────────────────
+  // RÈGLE 4 : Ne diminue pas automatiquement le solde avant validation
   const handleSendWithdrawalRequest = (req: { type: string; amount: number; reason: string }) => {
     const newReq = {
       id: `req-${Date.now()}`,
       created_at: new Date().toISOString(),
       requested_by: user?.full_name || 'Caissier',
+      sector: currentSectorSlug,
       type: req.type,
       amount: req.amount,
       motif: req.reason,
-      status: 'EN_ATTENTE' // En attente, Acceptée, Refusée, Exécutée
+      status: 'EN_ATTENTE' // En attente de validation : solde non déduit avant acceptation
     }
 
     const updated = [newReq, ...pendingRequests]
     setPendingRequests(updated)
     if (company?.id) {
-      localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updated))
+      localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updated))
+      try {
+        const rawGlob = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
+        const globList = rawGlob ? JSON.parse(rawGlob) : []
+        const updatedGlob = [newReq, ...globList.filter((x: any) => x.id !== newReq.id)]
+        localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedGlob))
+      } catch (e) {}
     }
 
     toast.success(
-      'Demande envoyée vers la Trésorerie',
-      `Demande de versement de ${fmt(req.amount)} (${req.type}) soumise à validation.`
+      'Demande transmise à la Trésorerie',
+      `Demande de versement de ${fmt(req.amount)} (${req.type}) enregistrée (le solde sera débité dès validation effective).`
     )
     loadCaisseData()
   }
@@ -575,9 +667,19 @@ export const CaissePage: React.FC = () => {
           <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <Wallet className="w-6 h-6 text-emerald-600" />
             Caisse Opérationnelle
+            {activeActivityName && (
+              <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl">
+                {activeActivityName}
+              </span>
+            )}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Gestion du tiroir espèces, réceptions Mobile Money, clôtures journalières et versements
+            {totalRetraitsEnAttente > 0 && (
+              <span className="ml-2 font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg inline-block">
+                ⏳ {fmt(totalRetraitsEnAttente)} en attente validation trésorerie
+              </span>
+            )}
           </p>
         </div>
 

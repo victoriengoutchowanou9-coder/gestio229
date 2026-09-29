@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { supabase } from '../../lib/supabase'
+import { getPortoNovoNow } from '../../utils/datePortoNovo'
 
 const LoginPage: React.FC = () => {
   const navigate = useNavigate()
@@ -75,25 +76,13 @@ const LoginPage: React.FC = () => {
     }
   }
 
-  // Formatage date en français avec majuscule : Mardi 29 septembre 2026 — 14:35
-  const formattedDateTime = useMemo(() => {
-    const days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi']
-    const months = [
-      'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
-      'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'
-    ]
-    const dayName = days[currentTime.getDay()]
-    const dayNum = currentTime.getDate()
-    const monthName = months[currentTime.getMonth()]
-    const year = currentTime.getFullYear()
-    const hours = String(currentTime.getHours()).padStart(2, '0')
-    const minutes = String(currentTime.getMinutes()).padStart(2, '0')
-    return `${dayName} ${dayNum} ${monthName} ${year} — ${hours}:${minutes}`
-  }, [currentTime])
+  // Formatage date et heure dynamique réelle fuseau Africa/Porto-Novo (Bénin)
+  const portoNovoData = useMemo(() => getPortoNovoNow(currentTime), [currentTime])
+  const formattedDateTime = portoNovoData.fullDisplay
 
-  // Pensée de l'entrepreneur avec rotation jour (05h-17h) / soir (18h-04h)
+  // Pensée de l'entrepreneur avec rotation jour (05h-17h) / soir (18h-04h) basée sur heure Porto-Novo
   const entrepreneurQuote = useMemo(() => {
-    const hour = currentTime.getHours()
+    const hour = portoNovoData.hour
     const isMorning = hour >= 5 && hour < 18
     const morningQuotes = [
       { text: "Le succès en affaires n'est pas le fruit du hasard, mais de la constance dans l'effort et de la maîtrise quotidienne de ses chiffres.", author: "Discipline Commerciale & Croissance" },

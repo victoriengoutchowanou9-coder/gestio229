@@ -1,27 +1,54 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { ArrowDownRight, Check, X } from 'lucide-react'
 import ModalPortal from './ModalPortal'
+
+interface TreasuryAccountOption {
+  id: string
+  name: string
+  type: string
+  balance: number
+}
 
 interface TreasuryDisbursementModalProps {
   isOpen: boolean
   onClose: () => void
-  onSuccess?: (disb: any) => void
+  onSuccess?: (disb: { accountId?: string; accountName?: string; source: string; amount: number; beneficiary: string; reason: string }) => void
+  accounts?: TreasuryAccountOption[]
 }
 
-export const TreasuryDisbursementModal: React.FC<TreasuryDisbursementModalProps> = ({ isOpen, onClose, onSuccess }) => {
+export const TreasuryDisbursementModal: React.FC<TreasuryDisbursementModalProps> = ({ isOpen, onClose, onSuccess, accounts = [] }) => {
+  const [selectedAccountId, setSelectedAccountId] = useState('')
   const [source, setSource] = useState('especes')
   const [amount, setAmount] = useState(50000)
   const [beneficiary, setBeneficiary] = useState('')
   const [reason, setReason] = useState('')
 
+  React.useEffect(() => {
+    if (accounts.length > 0 && !selectedAccountId) {
+      setSelectedAccountId(accounts[0].id)
+    }
+  }, [accounts, selectedAccountId])
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    if (!amount || amount <= 0 || !beneficiary) {
-      alert('Veuillez renseigner le montant et le bénéficiaire.')
+    if (!amount || amount <= 0 || !beneficiary.trim()) {
       return
     }
-    if (onSuccess) onSuccess({ source, amount, beneficiary, reason })
-    alert(`✅ Décaissement de ${amount} FCFA vers "${beneficiary}" validé !`)
+    const chosenAcc = accounts.find((a) => a.id === selectedAccountId)
+    const effectiveSource = chosenAcc
+      ? (chosenAcc.type === 'vault' ? 'especes' : chosenAcc.type === 'mobile_money' ? 'momo' : 'banque')
+      : source
+
+    if (onSuccess) {
+      onSuccess({
+        accountId: selectedAccountId || undefined,
+        accountName: chosenAcc?.name,
+        source: effectiveSource,
+        amount,
+        beneficiary: beneficiary.trim(),
+        reason: reason.trim()
+      })
+    }
     onClose()
   }
 
@@ -46,15 +73,30 @@ export const TreasuryDisbursementModal: React.FC<TreasuryDisbursementModalProps>
         <form onSubmit={handleSubmit} className="p-6 space-y-4 text-xs">
           <div>
             <label className="block font-bold text-slate-700 mb-1">Compte Source Débité *</label>
-            <select
-              value={source}
-              onChange={(e) => setSource(e.target.value)}
-              className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
-            >
-              <option value="especes">💵 Caisse Espèces (Tiroir)</option>
-              <option value="momo">📱 Compte MoMo Central (MTN / Moov)</option>
-              <option value="banque">🏦 Compte Bancaire (Ecobank / BOA)</option>
-            </select>
+            {accounts.length > 0 ? (
+              <select
+                value={selectedAccountId}
+                onChange={(e) => setSelectedAccountId(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+              >
+                {accounts.map((acc) => (
+                  <option key={acc.id} value={acc.id}>
+                    {acc.type === 'vault' ? '💵 ' : acc.type === 'mobile_money' ? '📱 ' : '🏦 '}
+                    {acc.name} — Solde : {new Intl.NumberFormat('fr-BJ').format(acc.balance)} FCFA
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <select
+                value={source}
+                onChange={(e) => setSource(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+              >
+                <option value="especes">💵 Coffre-fort Espèces (Tiroir)</option>
+                <option value="momo">📱 Compte MoMo Central (MTN / Moov)</option>
+                <option value="banque">🏦 Compte Bancaire (Ecobank / BOA)</option>
+              </select>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">

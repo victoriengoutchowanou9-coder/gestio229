@@ -23,8 +23,12 @@ import {
   AlertTriangle,
   RotateCcw as RestoreIcon,
   LogOut,
+  Clock,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
+import { supabase } from '../../lib/supabase';
+import { useAuthStore } from '../../store/authStore';
+import { getPortoNovoNow } from '../../utils/datePortoNovo';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES & ÉTATS (PARTIE 9 — POLITIQUE DE CONSERVATION DES DONNÉES)
@@ -102,6 +106,17 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   onLogout,
   onOpenSubscription,
 }) => {
+  const company = useAuthStore((s) => s.company);
+  const setActiveSectorStore = useAuthStore((s) => s.setActiveSector);
+
+  // ── Horloge temps réel dynamique fuseau Africa/Porto-Novo ─────────────────
+  const [hubTime, setHubTime] = useState<Date>(new Date());
+  useEffect(() => {
+    const timer = setInterval(() => setHubTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const portoNovoTime = useMemo(() => getPortoNovoNow(hubTime), [hubTime]);
+
   // ── State ──────────────────────────────────────────────────────────────────
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -132,38 +147,144 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   }, []);
 
-  // ── Persistence ────────────────────────────────────────────────────────────
-  useEffect(() => {
-    const loadFromStorage = () => {
-      try {
-        localStorage.removeItem('gestio229_test_dataset_active');
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed: ActivityEntry[] = JSON.parse(raw);
-          // Purger toute ancienne donnée de test si présente
-          const realOnly = parsed.filter((a) => !a.id.startsWith('test-act-'));
-          if (realOnly.length !== parsed.length) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(realOnly));
+  // ── Métriques réelles par activité chargées depuis Supabase ────────────────
+  const loadRealMetricsForActivities = useCallback(async (acts: ActivityEntry[]) => {
+    if (!company?.id || acts.length === 0) return;
+    try {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+      const { data: sales } = await supabase
+        .from('sales_orders')
+        .select('id, total_amount, total_cost, e_mecef_uid, created_at, customer_name')
+        .eq('company_id', company.id)
+        .gte('created_at', startOfMonth);
+
+      if (!sales) return;
+
+      const updatedActs = acts.map((act) => {
+        const actSales = (sales || []).filter((s: any) => {
+          let sMeta: any = {};
+          if (s.e_mecef_uid) {
+            try {
+              if (s.e_mecef_uid.startsWith('{')) sMeta = JSON.parse(s.e_mecef_uid);
+            } catch (e) {}
           }
-          setActivities(realOnly);
+          return (
+            sMeta.act === act.id ||
+            sMeta.s === act.sectorSlug ||
+            sMeta.sector_slug === act.sectorSlug ||
+            s.sector_slug === act.sectorSlug
+          );
+        });
+
+        const daySales = actSales.filter((s: any) => s.created_at >= startOfDay);
+        const dayRev = daySales.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0);
+        const dayCost = daySales.reduce((sum, s) => sum + (Number(s.total_cost) || 0), 0);
+        const dayMargin = dayRev - dayCost;
+
+        const monthRev = actSales.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0);
+        const monthCost = actSales.reduce((sum, s) => sum + (Number(s.total_cost) || 0), 0);
+        const monthMargin = monthRev - monthCost;
+
+        return {
+          ...act,
+          revenue: dayRev,
+          expenses: act.expenses || 0,
+          netMargin: dayMargin - (act.expenses || 0),
+          monthRevenue: monthRev,
+          monthExpenses: act.monthExpenses || 0,
+          monthNetMargin: monthMargin - (act.monthExpenses || 0),
+        };
+      });
+
+      setActivities(updatedActs);
+    } catch (e) {
+      console.warn('Erreur calcul métriques réelles HUB:', e);
+    }
+  }, [company?.id]);
+
+  // ── Source de Vérité Permanente : SUPABASE ─────────────────────────────────
+  useEffect(() => {
+    let isMounted = true;
+    const loadFromSupabase = async () => {
+      if (company?.id) {
+        try {
+          const { data: comp } = await supabase
+            .from('companies')
+            .select('id, activity_sectors, selected_sectors, sectors')
+            .eq('id', company.id)
+            .maybeSingle();
+
+          if (comp && Array.isArray(comp.activity_sectors) && comp.activity_sectors.length > 0) {
+            const realOnly = comp.activity_sectors.filter((a: any) => a && a.id && !a.id.startsWith('test-act-'));
+            if (isMounted && realOnly.length > 0) {
+              setActivities(realOnly);
+              localStorage.setItem(STORAGE_KEY, JSON.stringify(realOnly));
+              loadRealMetricsForActivities(realOnly);
+              return;
+            }
+          }
+        } catch (e) {
+          console.error('Erreur chargement Supabase activity_sectors', e);
         }
-      } catch {
-        // ignore
+      }
+
+      // Fallback local storage
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          const realOnly = (Array.isArray(parsed) ? parsed : []).filter((a: any) => !a.id.startsWith('test-act-'));
+          if (isMounted && realOnly.length > 0) {
+            setActivities(realOnly);
+            loadRealMetricsForActivities(realOnly);
+          }
+        } catch (e) {}
       }
     };
 
-    // Chargement initial
-    loadFromStorage();
+    loadFromSupabase();
 
-    // Écouter les mises à jour externes (ex: auto-sync depuis HubPage)
-    window.addEventListener('storage', loadFromStorage);
-    return () => window.removeEventListener('storage', loadFromStorage);
-  }, []);
+    const handleStorage = () => {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw);
+          const realOnly = (Array.isArray(parsed) ? parsed : []).filter((a: any) => !a.id.startsWith('test-act-'));
+          if (isMounted) setActivities(realOnly);
+        } catch (e) {}
+      }
+    };
 
-  const persist = useCallback((data: ActivityEntry[]) => {
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [company?.id, loadRealMetricsForActivities]);
+
+  const persist = useCallback(async (data: ActivityEntry[]) => {
     setActivities(data);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, []);
+    if (company?.id) {
+      try {
+        const uniqueSlugs = Array.from(new Set(data.map((a) => a.sectorSlug)));
+        await supabase
+          .from('companies')
+          .update({
+            activity_sectors: data,
+            selected_sectors: uniqueSlugs,
+            sectors: uniqueSlugs,
+            active_sector: data[0]?.sectorSlug || company.active_sector,
+          })
+          .eq('id', company.id);
+      } catch (err) {
+        console.error('Erreur synchronisation Supabase des activités:', err);
+      }
+    }
+  }, [company?.id, company?.active_sector]);
 
   // ── Filtrage des activités actives vs archivées (PARTIE 9) ─────────────────
   const activeActivities = useMemo(
@@ -205,8 +326,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     const newEntry: ActivityEntry = {
       id: generateId(),
       sectorSlug: meta.slug,
-      sectorLabel: meta.label,
-      sectorIcon: meta.icon,
+      sectorLabel: meta.name || meta.label,
+      sectorIcon: meta.emoji || meta.icon,
       sectorColor: meta.color,
       name: form.name.trim().toUpperCase(),
       location: form.location.trim(),
@@ -318,6 +439,10 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                 HUB CENTRAL MULTISERVICES — GESTIO 229
               </span>
               <span className="text-xs text-slate-400 font-mono">Bénin • UEMOA (FCFA)</span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-mono font-bold bg-slate-900 border border-emerald-500/30 text-emerald-400 shadow-sm">
+                <Clock size={13} className="text-emerald-400 animate-pulse" />
+                {portoNovoTime.fullDisplay}
+              </span>
             </div>
 
             {companyName ? (
@@ -980,14 +1105,17 @@ const SectorSelector: React.FC<SectorSelectorProps> = ({ value, onChange }) => {
           <option value="">— Sélectionnez un secteur d'activité —</option>
           {ALL_SECTORS_CATALOG.map((s) => (
             <option key={s.slug} value={s.slug}>
-              {s.icon} {s.label}
+              {s.emoji} {s.name || s.label}
             </option>
           ))}
         </select>
         <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
       </div>
       {selected && (
-        <p className="text-xs text-slate-500 mt-1.5 pl-1">{selected.description || selected.label}</p>
+        <p className="text-xs text-slate-400 mt-1.5 pl-1 flex items-center gap-1.5">
+          <span className="text-emerald-400 font-bold">{selected.badge} :</span>
+          <span>{selected.description || selected.name}</span>
+        </p>
       )}
     </div>
   );

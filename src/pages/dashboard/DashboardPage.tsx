@@ -15,6 +15,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
+import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -32,7 +33,15 @@ interface TodaySale {
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate()
-  const { company, user, tenantCtx } = useAuthStore()
+  const {
+    company,
+    user,
+    tenantCtx,
+    activeSectorSlug,
+    activeActivityId,
+    activeActivityName,
+    activeActivityLocation
+  } = useAuthStore()
   const { toast } = useUIStore()
 
   const [loading, setLoading] = useState(true)
@@ -41,24 +50,34 @@ export const DashboardPage: React.FC = () => {
   const [totalProductsValue, setTotalProductsValue] = useState<number>(0)
   const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
 
-  // Déterminer le secteur d'activité actif
+  // Déterminer le secteur d'activité actif (priorité à l'activité sélectionnée au HUB)
   const currentSectorSlug =
+    activeSectorSlug ||
+    (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_sector') : null) ||
     tenantCtx?.activeSectorSlug ||
-    user?.permissions?.sector ||
-    user?.permissions?.assigned_sector ||
     company?.active_sector ||
-    (Array.isArray(company?.sectors) && company?.sectors[0]) ||
-    'Commerce & Distribution'
+    'boutique'
+
+  const currentActivityName =
+    activeActivityName ||
+    (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null) ||
+    ''
 
   const sectorDisplayName = useMemo(() => {
+    const meta = ALL_SECTORS_CATALOG.find((s) => s.slug === currentSectorSlug)
+    if (meta) return meta.name
     const s = String(currentSectorSlug).toLowerCase()
     if (s.includes('poisson')) return 'Poissonnerie & Surgelés'
-    if (s.includes('quincaillerie')) return 'Quincaillerie & Matériaux'
+    if (s.includes('quincaillerie')) return 'Quincaillerie & Matériaux BTP'
+    if (s.includes('mercerie')) return 'Mercerie & Couture'
     if (s.includes('brasserie') || s.includes('boisson')) return 'Brasserie & Dépôt de Boissons'
     if (s.includes('pharmacie')) return 'Pharmacie & Parapharmacie'
     if (s.includes('station')) return 'Station-Service & Hydrocarbures'
     if (s.includes('restaurant') || s.includes('maquis')) return 'Restaurant & Maquis'
-    if (s.includes('pressing')) return 'Pressing & Blanchisserie'
+    if (s.includes('boulangerie')) return 'Boulangerie & Pâtisserie'
+    if (s.includes('cosmetique')) return 'Cosmétique & Parfumerie'
+    if (s.includes('textile')) return 'Textile & Prêt-à-porter'
+    if (s.includes('electronique')) return 'Électronique & Informatique'
     if (s.includes('boutique') || s.includes('commerce')) return 'Boutique & Commerce Général'
     return currentSectorSlug.charAt(0).toUpperCase() + currentSectorSlug.slice(1)
   }, [currentSectorSlug])
@@ -119,9 +138,17 @@ export const DashboardPage: React.FC = () => {
         }
       })
 
-      setSalesToday(mappedSales)
+      // 1. Filtrer STRICTEMENT les ventes du jour par secteur actif
+      const sectorSales = (mappedSales || []).filter((sale) => {
+        const meta = sale.notes || {}
+        if (meta.s) return meta.s === currentSectorSlug
+        if (meta.sector_slug) return meta.sector_slug === currentSectorSlug
+        if (meta.act && activeActivityId) return meta.act === activeActivityId
+        return true
+      })
+      setSalesToday(sectorSales)
 
-      // 2. Produits actifs réels
+      // 2. Produits actifs réels filtrés par secteur actif
       const { data: prodData, error: prodErr } = await supabase
         .from('products')
         .select('*')
@@ -129,7 +156,13 @@ export const DashboardPage: React.FC = () => {
         .eq('is_active', true)
 
       if (prodErr) throw prodErr
-      const prods = prodData || []
+      const prods = (prodData || []).filter((p: any) => {
+        const meta = p.sector_meta || {}
+        if (meta.s) return meta.s === currentSectorSlug
+        if (meta.sector_slug) return meta.sector_slug === currentSectorSlug
+        if (p.sector_slug) return p.sector_slug === currentSectorSlug
+        return true
+      })
       setActiveProductsCount(prods.length)
 
       const stockVal = prods.reduce((sum, p: any) => {
@@ -237,11 +270,15 @@ export const DashboardPage: React.FC = () => {
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <LayoutDashboard className="w-6 h-6 text-emerald-600" />
-            Tableau de Bord — {sectorDisplayName}
+            <span>
+              {currentActivityName ? `${currentActivityName} — ` : ''}
+              {sectorDisplayName}
+            </span>
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Indicateurs d'activité en temps réel pour l'établissement{' '}
-            <strong className="text-slate-700">{company?.name || 'Entreprise'}</strong>
+            <strong className="text-slate-700">{currentActivityName || company?.name || 'Entreprise'}</strong>
+            {activeActivityLocation && <span className="text-slate-400"> ({activeActivityLocation})</span>}
           </p>
         </div>
 

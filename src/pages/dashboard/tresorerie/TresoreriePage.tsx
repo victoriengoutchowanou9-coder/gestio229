@@ -76,32 +76,67 @@ export const TresoreriePage: React.FC = () => {
       if (!error && dbAccounts && dbAccounts.length > 0) {
         setAccounts(dbAccounts)
       } else {
-        // Fallback local tenant (uniquement les comptes enregistrés pour ce tenant)
+        // Fallback local tenant
         const stored = localStorage.getItem(`gestio_treasury_accounts_${company.id}`)
         if (stored) {
           try {
-            setAccounts(JSON.parse(stored))
+            const parsed = JSON.parse(stored)
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setAccounts(parsed)
+            } else {
+              throw new Error('empty')
+            }
           } catch (e) {
-            setAccounts([])
+            const defaultAccs: TreasuryAccount[] = [
+              { id: 'acc-vault-1', name: 'Coffre-fort Espèces', type: 'vault', institution: 'Coffre Principal Siège', account_number: 'CF-001', balance: 0, alert_threshold: 100000 },
+              { id: 'acc-momo-1', name: 'MoMo Marchand (MTN / Moov)', type: 'mobile_money', institution: 'MTN & Moov Bénin', account_number: 'MOMO-COMMERCE-01', balance: 0, alert_threshold: 50000 },
+              { id: 'acc-bank-1', name: 'Compte Bancaire Principal', type: 'bank', institution: 'Banque Locale Bénin', account_number: 'BJ66-0100-001', balance: 0, alert_threshold: 200000 }
+            ]
+            setAccounts(defaultAccs)
+            localStorage.setItem(`gestio_treasury_accounts_${company.id}`, JSON.stringify(defaultAccs))
           }
         } else {
-          // Aucun compte par défaut : affiche état vide professionnel
-          setAccounts([])
+          // Comptes standards d'entreprise prêts à l'emploi
+          const defaultAccs: TreasuryAccount[] = [
+            { id: 'acc-vault-1', name: 'Coffre-fort Espèces', type: 'vault', institution: 'Coffre Principal Siège', account_number: 'CF-001', balance: 0, alert_threshold: 100000 },
+            { id: 'acc-momo-1', name: 'MoMo Marchand (MTN / Moov)', type: 'mobile_money', institution: 'MTN & Moov Bénin', account_number: 'MOMO-COMMERCE-01', balance: 0, alert_threshold: 50000 },
+            { id: 'acc-bank-1', name: 'Compte Bancaire Principal', type: 'bank', institution: 'Banque Locale Bénin', account_number: 'BJ66-0100-001', balance: 0, alert_threshold: 200000 }
+          ]
+          setAccounts(defaultAccs)
+          localStorage.setItem(`gestio_treasury_accounts_${company.id}`, JSON.stringify(defaultAccs))
         }
       }
 
-      // 2. Charger les demandes de versements caisse en attente
+      // 2. Charger les demandes de versements caisse en attente (depuis la clé globale et les clés par secteur)
+      let allReqs: any[] = []
       const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
       if (storedRequests) {
         try {
-          const reqs = JSON.parse(storedRequests)
-          setPendingTransfers(reqs)
-        } catch (e) {
-          setPendingTransfers([])
-        }
-      } else {
-        setPendingTransfers([])
+          allReqs = JSON.parse(storedRequests)
+        } catch (e) {}
       }
+
+      // Scanner d'éventuelles demandes spécifiques de secteurs
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i)
+          if (k && k.startsWith(`gestio_treasury_requests_${company.id}_`)) {
+            const val = localStorage.getItem(k)
+            if (val) {
+              const secReqs = JSON.parse(val)
+              if (Array.isArray(secReqs)) {
+                secReqs.forEach((sr: any) => {
+                  if (!allReqs.some((x) => x.id === sr.id)) {
+                    allReqs.push(sr)
+                  }
+                })
+              }
+            }
+          }
+        }
+      } catch (e) {}
+
+      setPendingTransfers(allReqs)
     } catch (err: any) {
       console.error('Erreur chargement trésorerie :', err)
       setAccounts([])
@@ -188,11 +223,29 @@ export const TresoreriePage: React.FC = () => {
     setPendingTransfers(updatedTransfers)
     if (company?.id) {
       localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
+      // Mettre également à jour les clés sectorielles pour synchroniser immédiatement la caisse
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i)
+          if (k && k.startsWith(`gestio_treasury_requests_${company.id}_`)) {
+            const raw = localStorage.getItem(k)
+            if (raw) {
+              const secList = JSON.parse(raw)
+              if (Array.isArray(secList)) {
+                const newSecList = secList.map((item: any) =>
+                  item.id === transfer.id ? { ...item, status: 'APPROVED' } : item
+                )
+                localStorage.setItem(k, JSON.stringify(newSecList))
+              }
+            }
+          }
+        }
+      } catch (e) {}
     }
 
     toast.success(
       'Fonds Encaissés en Trésorerie !',
-      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité.`
+      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité sur ${target?.name || 'la trésorerie'}.`
     )
   }
 
@@ -204,6 +257,23 @@ export const TresoreriePage: React.FC = () => {
     setPendingTransfers(updatedTransfers)
     if (company?.id) {
       localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
+      try {
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i)
+          if (k && k.startsWith(`gestio_treasury_requests_${company.id}_`)) {
+            const raw = localStorage.getItem(k)
+            if (raw) {
+              const secList = JSON.parse(raw)
+              if (Array.isArray(secList)) {
+                const newSecList = secList.map((item: any) =>
+                  item.id === transferId ? { ...item, status: 'REJECTED' } : item
+                )
+                localStorage.setItem(k, JSON.stringify(newSecList))
+              }
+            }
+          }
+        }
+      } catch (e) {}
     }
     toast.info('Demande rejetée', 'Le caissier a été notifié.')
   }
@@ -537,15 +607,29 @@ export const TresoreriePage: React.FC = () => {
       <TreasuryDisbursementModal
         isOpen={showDisbursementModal}
         onClose={() => setShowDisbursementModal(false)}
+        accounts={accounts}
         onSuccess={(d) => {
-          // Déduire du premier compte bancaire ou coffre
-          if (accounts.length > 0) {
-            const updated = accounts.map((a, i) =>
-              i === 0 ? { ...a, balance: Math.max(0, a.balance - Number(d.amount || 0)) } : a
+          let target = accounts.find((a) => {
+            if (d.accountId) return a.id === d.accountId
+            if (d.source === 'especes') return a.type === 'vault'
+            if (d.source === 'momo') return a.type === 'mobile_money'
+            if (d.source === 'banque') return a.type === 'bank'
+            return false
+          })
+          if (!target && accounts.length > 0) target = accounts[0]
+
+          if (target) {
+            const updated = accounts.map((a) =>
+              a.id === target!.id
+                ? { ...a, balance: Math.max(0, a.balance - Number(d.amount || 0)) }
+                : a
             )
             saveAccounts(updated)
+            toast.success(
+              'Décaissement Exécuté !',
+              `Le compte ${target.name} a été débité de ${fmt(d.amount)} vers "${d.beneficiary}".`
+            )
           }
-          toast.success('Décaissement enregistré avec succès')
         }}
       />
     </div>
