@@ -1430,8 +1430,9 @@ export const POSPage: React.FC = () => {
               )}
             </div>
 
-            {/* Pied du Panier & Encaissement */}
-            <div className="p-3 border-t border-slate-200 bg-slate-50 space-y-2">
+            {/* Pied du Panier & Encaissement DIRECT */}
+            <div className="p-3.5 border-t border-slate-200 bg-slate-50 space-y-3">
+              {/* Récapitulatif Fiscal & Total TTC */}
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>Sous-total HT :</span>
@@ -1447,19 +1448,198 @@ export const POSPage: React.FC = () => {
                     <span className="font-mono">{fmt(cartFiscalSummary.aib)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-sm font-black text-slate-900 pt-1 border-t border-slate-200">
+                <div className="flex justify-between text-base font-black text-slate-900 pt-1.5 border-t border-slate-200">
                   <span>TOTAL TTC :</span>
-                  <span className="font-mono text-emerald-700 text-base">{fmt(totalNetTTC)}</span>
+                  <span className="font-mono text-emerald-700 text-lg">{fmt(totalNetTTC)}</span>
                 </div>
               </div>
 
+              {/* ── SECTION MODE DE PAIEMENT APRÈS TOTAL TTC (EXIGENCE CRITIQUE GESTIO 229) ── */}
+              <div className="pt-2 border-t border-slate-200 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
+                    Mode de Paiement :
+                  </span>
+                  {/* Case à cocher : [ ] Paiement par plusieurs modes */}
+                  <label htmlFor="chk-multi-mode-cart" className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 hover:text-emerald-700">
+                    <input
+                      type="checkbox"
+                      id="chk-multi-mode-cart"
+                      checked={isMultiMode}
+                      onChange={(e) => {
+                        const checked = e.target.checked
+                        setIsMultiMode(checked)
+                        if (checked) {
+                          setMultiMode1('especes')
+                          setMultiAmount1(totalNetTTC)
+                          setMultiMode2('momo_mtn')
+                          setMultiAmount2(0)
+                        }
+                      }}
+                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                    />
+                    <span>Paiement par plusieurs modes</span>
+                  </label>
+                </div>
+
+                {!isMultiMode ? (
+                  /* Choix Unique : 5 Modes de Paiement */
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                      {[
+                        { id: 'especes', label: '💵 Espèces' },
+                        { id: 'momo_mtn', label: '📱 MoMo' },
+                        { id: 'momo_moov', label: '📱 Moov / Flooz' },
+                        { id: 'banque', label: '🏦 Banque' },
+                        { id: 'credit', label: '📝 Crédit' },
+                      ].map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setSingleMethod(m.id as any)}
+                          className={clsx(
+                            'p-2 rounded-xl border text-center font-bold transition text-[11px]',
+                            singleMethod === m.id
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                          )}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Rendu monnaie espèces en mode simple */}
+                    {singleMethod === 'especes' && totalNetTTC > 0 && (
+                      <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <label className="text-[11px] font-bold text-slate-600">Espèces reçues :</label>
+                          <input
+                            type="number"
+                            min="0"
+                            value={cashReceivedInput}
+                            onChange={(e) => setCashReceivedInput(e.target.value)}
+                            placeholder="Montant client"
+                            className="w-28 p-1.5 border border-slate-300 rounded-lg font-mono text-xs text-right font-bold focus:border-emerald-500 focus:outline-none"
+                          />
+                        </div>
+                        {cashChange > 0 && (
+                          <div className="flex items-center justify-between text-[11px] font-black text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
+                            <span>Monnaie à rendre :</span>
+                            <span className="font-mono">{fmt(cashChange)}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  /* Mode Multi-Modes : Mode 1 + Montant & Mode 2 + Montant */
+                  <div className="p-3 bg-emerald-50/40 rounded-2xl border-2 border-emerald-300 space-y-2.5">
+                    {/* Mode 1 */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center text-[11px] font-bold text-slate-700">
+                        <span>Mode 1 :</span>
+                        <span className="font-mono text-emerald-800">{fmt(multiAmount1)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={multiMode1}
+                          onChange={(e) => setMultiMode1(e.target.value)}
+                          className="w-1/2 p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none"
+                        >
+                          <option value="especes">💵 Espèces</option>
+                          <option value="momo_mtn">📱 MoMo</option>
+                          <option value="momo_moov">📱 Moov Money/Flooz</option>
+                          <option value="banque">🏦 Banque</option>
+                          <option value="credit">📝 Crédit</option>
+                        </select>
+                        <input
+                          type="number"
+                          min="0"
+                          value={multiAmount1 || ''}
+                          onChange={(e) => handleAmount1Change(Number(e.target.value))}
+                          placeholder="Montant 1"
+                          className="flex-1 p-1.5 bg-white border border-slate-300 rounded-lg font-mono text-right font-bold text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Mode 2 */}
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center text-[11px] font-bold text-slate-700">
+                        <span>Mode 2 :</span>
+                        <span className="font-mono text-emerald-800">{fmt(multiAmount2)}</span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <select
+                          value={multiMode2}
+                          onChange={(e) => setMultiMode2(e.target.value)}
+                          className="w-1/2 p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none"
+                        >
+                          <option value="momo_mtn">📱 MoMo</option>
+                          <option value="momo_moov">📱 Moov Money/Flooz</option>
+                          <option value="especes">💵 Espèces</option>
+                          <option value="banque">🏦 Banque</option>
+                          <option value="credit">📝 Crédit</option>
+                        </select>
+                        <input
+                          type="number"
+                          min="0"
+                          value={multiAmount2 || ''}
+                          onChange={(e) => handleAmount2Change(Number(e.target.value))}
+                          placeholder="Montant 2"
+                          className="flex-1 p-1.5 bg-white border border-slate-300 rounded-lg font-mono text-right font-bold text-xs"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Calcul en temps réel du reste à payer ou équilibre */}
+                    <div className="pt-1.5 border-t border-emerald-200">
+                      {Math.abs(remainingToPay) < 0.01 ? (
+                        <div className="flex items-center justify-between text-xs font-black text-emerald-700 bg-emerald-100/70 p-2 rounded-xl">
+                          <span>✓ Règlements équilibrés :</span>
+                          <span className="font-mono">{fmt(multiAmount1 + multiAmount2)}</span>
+                        </div>
+                      ) : remainingToPay > 0 ? (
+                        <div className="flex items-center justify-between text-xs font-black text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-xl">
+                          <span>⚠️ Reste à percevoir :</span>
+                          <span className="font-mono">{fmt(remainingToPay)}</span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-between text-xs font-black text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded-xl">
+                          <span>⚠️ Trop perçu :</span>
+                          <span className="font-mono">{fmt(Math.abs(remainingToPay))}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* BOUTON DE VALIDATION DIRECTE DE LA VENTE */}
+              {/* Le bouton reste strictement désactivé tant que la somme des montants n'est pas égale au Total TTC */}
               <button
-                disabled={cart.length === 0}
-                onClick={handleOpenPaymentModal}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-sm"
+                disabled={
+                  cart.length === 0 ||
+                  paying ||
+                  (isMultiMode && Math.abs(remainingToPay) > 0.01)
+                }
+                onClick={handleValidateSale}
+                className={clsx(
+                  'w-full py-3.5 rounded-xl font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-md',
+                  cart.length === 0 || paying || (isMultiMode && Math.abs(remainingToPay) > 0.01)
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
+                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200'
+                )}
               >
                 <Check className="w-4 h-4" />
-                <span>Paiement / Encaissement ({fmt(totalNetTTC)})</span>
+                <span>
+                  {paying
+                    ? 'Enregistrement de la vente...'
+                    : isMultiMode && Math.abs(remainingToPay) > 0.01
+                    ? `Validation impossible : Somme ≠ Total TTC (Reste ${fmt(remainingToPay)})`
+                    : `Valider la Vente (${fmt(totalNetTTC)})`}
+                </span>
               </button>
             </div>
           </div>
