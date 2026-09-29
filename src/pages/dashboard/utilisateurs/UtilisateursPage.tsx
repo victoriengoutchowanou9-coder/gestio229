@@ -3,18 +3,25 @@
 // Conforme Code du Travail de la République du Bénin & Normes UEMOA
 // =============================================================================
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
-  BadgePercent, Layers
+  BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check
 } from 'lucide-react'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+export const MONTHS_LIST = [
+  'Janvier', 'Février', 'Mars', 'Avril', 'Mai', 'Juin',
+  'Juillet', 'Août', 'Septembre', 'Octobre', 'Novembre', 'Décembre'
+]
+
+export const YEARS_LIST = [2024, 2025, 2026, 2027, 2028, 2029, 2030]
 
 interface InternalUser {
   id: string
@@ -26,6 +33,35 @@ interface InternalUser {
   permissions: Record<string, Record<string, boolean>>
   phone?: string
   created_at: string
+}
+
+export interface StaffMember {
+  id: string
+  fullName: string
+  jobTitle: string
+  phone: string
+  cnssNumber: string
+  baseSalary: number
+  transportAllowance: number
+  housingAllowance: number
+  bonus: number
+  hireDate: string
+  advancePayment: number
+}
+
+export interface PayrollPayment {
+  id: string
+  employeeId: string
+  employeeName: string
+  period: string
+  baseSalary: number
+  grossSalary: number
+  cnssSalariale: number
+  netSalary: number
+  paymentMethod: string
+  expenseId?: string
+  paidAt: string
+  paidBy: string
 }
 
 interface EmployeePayrollProfile {
@@ -111,11 +147,37 @@ const UtilisateursPage: React.FC = () => {
   const [showPassword, setShowPassword] = useState(false)
   const [sectors, setSectors] = useState<{ id: string; sector_name: string; sector_slug: string }[]>([])
 
-  // State pour la paie
+  // Période de paie sélectionnable (mois / année)
+  const currentMonthIdx = new Date().getMonth()
+  const [selectedMonth, setSelectedMonth] = useState<string>(MONTHS_LIST[currentMonthIdx] || 'Septembre')
+  const [selectedYear, setSelectedYear] = useState<number>(new Date().getFullYear())
+  const payrollPeriod = `${selectedMonth} ${selectedYear}`
+
+  // State pour la paie et le personnel
   const [payrollProfiles, setPayrollProfiles] = useState<Record<string, EmployeePayrollProfile>>({})
-  const [selectedForPayslip, setSelectedForPayslip] = useState<EmployeePayrollProfile | null>(null)
+  const [additionalStaff, setAdditionalStaff] = useState<StaffMember[]>([])
+  const [payrollPayments, setPayrollPayments] = useState<PayrollPayment[]>([])
+  const [selectedForPayslip, setSelectedForPayslip] = useState<any | null>(null)
   const [generatedSlip, setGeneratedSlip] = useState<PayslipData | null>(null)
-  const [payrollPeriod, setPayrollPeriod] = useState<string>('Septembre 2026')
+
+  // Modal Nouveau Personnel
+  const [showNewStaffModal, setShowNewStaffModal] = useState(false)
+  const [newStaffForm, setNewStaffForm] = useState({
+    fullName: '',
+    jobTitle: '',
+    baseSalary: '',
+    phone: '',
+    cnssNumber: '',
+    transportAllowance: '15000',
+    housingAllowance: '0',
+    bonus: '0',
+    hireDate: new Date().toISOString().split('T')[0],
+  })
+
+  // Modal Payer Salaire
+  const [payingEmployee, setPayingEmployee] = useState<any | null>(null)
+  const [payMethod, setPayMethod] = useState<'especes' | 'virement' | 'momo' | 'cheque'>('especes')
+  const [isPaying, setIsPaying] = useState(false)
 
   const emptyForm: NewUserForm = {
     full_name: '',
@@ -168,6 +230,24 @@ const UtilisateursPage: React.FC = () => {
         }
       })
       setPayrollProfiles(initialProfiles)
+
+      // Charger le personnel enregistré localement / persistant
+      const storedStaff = localStorage.getItem(`gestio_staff_members_${company.id}`)
+      if (storedStaff) {
+        try {
+          const parsedStaff = JSON.parse(storedStaff)
+          if (Array.isArray(parsedStaff)) setAdditionalStaff(parsedStaff)
+        } catch (e) {}
+      }
+
+      // Charger les paiements de paie enregistrés
+      const storedPayments = localStorage.getItem(`gestio_payroll_payments_${company.id}`)
+      if (storedPayments) {
+        try {
+          const parsedPayments = JSON.parse(storedPayments)
+          if (Array.isArray(parsedPayments)) setPayrollPayments(parsedPayments)
+        } catch (e) {}
+      }
     } catch (err: any) {
       setError('Erreur chargement utilisateurs : ' + err.message)
     } finally {
@@ -295,33 +375,272 @@ const UtilisateursPage: React.FC = () => {
     if (!err) loadUsers()
   }
 
+  // Liste consolidée de tout le personnel (Utilisateurs internes + Personnel enregistré)
+  const allStaffList = useMemo(() => {
+    const list: Array<{
+      id: string
+      fullName: string
+      jobTitle: string
+      phone?: string
+      cnssNumber: string
+      baseSalary: number
+      transportAllowance: number
+      housingAllowance: number
+      bonus: number
+      advancePayment: number
+      hireDate?: string
+      isInternalUser: boolean
+    }> = []
+
+    // 1. Utilisateurs internes
+    users.forEach((u) => {
+      const p = payrollProfiles[u.id] || {
+        userId: u.id,
+        fullName: u.full_name,
+        role: u.role,
+        cnssNumber: 'CNSS-EN-COURS',
+        jobTitle: u.role,
+        baseSalary: 60000,
+        transportAllowance: 15000,
+        housingAllowance: 0,
+        bonus: 0,
+        advancePayment: 0,
+      }
+      list.push({
+        id: u.id,
+        fullName: u.full_name,
+        jobTitle: p.jobTitle,
+        phone: u.phone,
+        cnssNumber: p.cnssNumber,
+        baseSalary: p.baseSalary,
+        transportAllowance: p.transportAllowance,
+        housingAllowance: p.housingAllowance,
+        bonus: p.bonus,
+        advancePayment: p.advancePayment,
+        isInternalUser: true
+      })
+    })
+
+    // 2. Personnel externe enregistré
+    additionalStaff.forEach((s) => {
+      list.push({
+        id: s.id,
+        fullName: s.fullName,
+        jobTitle: s.jobTitle,
+        phone: s.phone,
+        cnssNumber: s.cnssNumber,
+        baseSalary: s.baseSalary,
+        transportAllowance: s.transportAllowance,
+        housingAllowance: s.housingAllowance,
+        bonus: s.bonus,
+        advancePayment: s.advancePayment,
+        hireDate: s.hireDate,
+        isInternalUser: false
+      })
+    })
+
+    return list
+  }, [users, payrollProfiles, additionalStaff])
+
+  // Statistiques de paie pour la période sélectionnée
+  const periodStats = useMemo(() => {
+    let totalBrut = 0
+    let totalNet = 0
+    let totalPaid = 0
+    let totalCnss = 0
+
+    allStaffList.forEach((emp) => {
+      const totAllow = emp.transportAllowance + emp.housingAllowance + emp.bonus
+      const brut = emp.baseSalary + totAllow
+      const cnssSal = Math.round(brut * 0.036)
+      const cnssPat = Math.round(brut * 0.164)
+      const vps = Math.round(brut * 0.04)
+      const net = Math.max(0, brut - cnssSal - emp.advancePayment)
+
+      totalBrut += brut
+      totalNet += net
+      totalCnss += (cnssSal + cnssPat + vps)
+
+      const isPaid = payrollPayments.some((p) => p.employeeId === emp.id && p.period === payrollPeriod)
+      if (isPaid) {
+        totalPaid += net
+      }
+    })
+
+    return {
+      totalBrut,
+      totalNet,
+      totalPaid,
+      totalCnss,
+      remaining: Math.max(0, totalNet - totalPaid),
+      paidCount: allStaffList.filter((e) => payrollPayments.some((p) => p.employeeId === e.id && p.period === payrollPeriod)).length,
+      totalCount: allStaffList.length
+    }
+  }, [allStaffList, payrollPayments, payrollPeriod])
+
+  // Enregistrer un nouveau personnel
+  const handleSaveNewStaff = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newStaffForm.fullName.trim() || !newStaffForm.jobTitle.trim() || !newStaffForm.baseSalary) {
+      setError('Veuillez remplir les champs obligatoires (Nom, Poste, Salaire de base).')
+      return
+    }
+
+    const newStaff: StaffMember = {
+      id: `staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      fullName: newStaffForm.fullName.trim(),
+      jobTitle: newStaffForm.jobTitle.trim(),
+      phone: newStaffForm.phone.trim(),
+      cnssNumber: newStaffForm.cnssNumber.trim() || `CNSS-${(company?.id || '').slice(0, 4)}-${Math.floor(1000 + Math.random() * 9000)}`,
+      baseSalary: Number(newStaffForm.baseSalary) || 0,
+      transportAllowance: Number(newStaffForm.transportAllowance) || 0,
+      housingAllowance: Number(newStaffForm.housingAllowance) || 0,
+      bonus: Number(newStaffForm.bonus) || 0,
+      hireDate: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
+      advancePayment: 0,
+    }
+
+    const updated = [newStaff, ...additionalStaff]
+    setAdditionalStaff(updated)
+    if (company?.id) {
+      localStorage.setItem(`gestio_staff_members_${company.id}`, JSON.stringify(updated))
+    }
+
+    setSuccess(`Nouveau personnel "${newStaff.fullName}" enregistré avec succès !`)
+    setShowNewStaffModal(false)
+    setNewStaffForm({
+      fullName: '',
+      jobTitle: '',
+      baseSalary: '',
+      phone: '',
+      cnssNumber: '',
+      transportAllowance: '15000',
+      housingAllowance: '0',
+      bonus: '0',
+      hireDate: new Date().toISOString().split('T')[0],
+    })
+  }
+
+  // Payer le salaire pour la période sélectionnée (avec impact Dépenses & Trésorerie)
+  const handleConfirmSalaryPayment = async () => {
+    if (!payingEmployee || !company?.id) return
+    setIsPaying(true)
+    setError('')
+    try {
+      const monthIdx = MONTHS_LIST.indexOf(selectedMonth)
+      // Dernière date du mois sélectionné (ex: 2026-09-30)
+      const lastDayOfMonth = new Date(selectedYear, (monthIdx >= 0 ? monthIdx : 8) + 1, 0)
+      const expenseDate = lastDayOfMonth.toISOString().split('T')[0]
+
+      const base = Number(payingEmployee.baseSalary) || 0
+      const transp = Number(payingEmployee.transportAllowance) || 0
+      const house = Number(payingEmployee.housingAllowance) || 0
+      const bon = Number(payingEmployee.bonus) || 0
+      const gross = base + transp + house + bon
+      const cnssSal = Math.round(gross * 0.036)
+      const cnssPat = Math.round(gross * 0.164)
+      const vps = Math.round(gross * 0.04)
+      const adv = Number(payingEmployee.advancePayment) || 0
+      const net = Math.max(0, gross - cnssSal - adv)
+
+      // 1. Enregistrer dans la table `expenses` Supabase pour cette période
+      const { data: expData, error: expErr } = await supabase.from('expenses').insert({
+        company_id: company.id,
+        title: `Salaire ${payrollPeriod} — ${payingEmployee.fullName}`,
+        category: 'Salaires & Rémunérations',
+        amount: net,
+        payment_method: payMethod,
+        expense_date: expenseDate,
+        notes: JSON.stringify({
+          type: 'PAIE_SALAIRE',
+          period: payrollPeriod,
+          employee_id: payingEmployee.id,
+          employee_name: payingEmployee.fullName,
+          job_title: payingEmployee.jobTitle,
+          base_salary: base,
+          allowances: transp + house + bon,
+          gross_salary: gross,
+          cnss_salariale: cnssSal,
+          cnss_patronale: cnssPat,
+          vps_benin: vps,
+          net_salary: net,
+          payment_method: payMethod
+        }),
+        created_by: user?.id
+      }).select().maybeSingle()
+
+      if (expErr) {
+        console.warn('Erreur insertion expenses :', expErr)
+      }
+
+      // 2. Décaissement en Trésorerie / Caisse si espèces
+      if (payMethod === 'especes') {
+        const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+        if (cashStateRaw) {
+          try {
+            const cState = JSON.parse(cashStateRaw)
+            cState.initialCash = Math.max(0, (Number(cState.initialCash) || 0) - net)
+            localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
+          } catch (e) {}
+        }
+      }
+
+      // 3. Mémoriser le paiement de paie rattaché à la période
+      const newPayment: PayrollPayment = {
+        id: `pay-${Date.now()}`,
+        employeeId: payingEmployee.id,
+        employeeName: payingEmployee.fullName,
+        period: payrollPeriod,
+        baseSalary: base,
+        grossSalary: gross,
+        cnssSalariale: cnssSal,
+        netSalary: net,
+        paymentMethod: payMethod,
+        expenseId: expData?.id,
+        paidAt: new Date().toISOString(),
+        paidBy: user?.full_name || 'Direction'
+      }
+
+      const updated = [newPayment, ...payrollPayments]
+      setPayrollPayments(updated)
+      localStorage.setItem(`gestio_payroll_payments_${company.id}`, JSON.stringify(updated))
+
+      setSuccess(`Salaire de ${payingEmployee.fullName} pour ${payrollPeriod} (${fmt(net)}) payé avec succès !`)
+      setPayingEmployee(null)
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors du versement du salaire.')
+    } finally {
+      setIsPaying(false)
+    }
+  }
+
   // Calcul du bulletin de paie conforme Bénin
-  const calculatePayslip = (profile: EmployeePayrollProfile) => {
-    const gross = profile.baseSalary + profile.transportAllowance + profile.housingAllowance + profile.bonus
+  const calculatePayslip = (profile: any) => {
+    const gross = (profile.baseSalary || 0) + (profile.transportAllowance || 0) + (profile.housingAllowance || 0) + (profile.bonus || 0)
     // Déductions Bénin : CNSS Salariale = 3.6% du brut
     const cnssSal = Math.round(gross * 0.036)
     // Charges patronales Bénin : CNSS Patronale = 16.4%, VPS = 4%
     const cnssPat = Math.round(gross * 0.164)
     const vps = Math.round(gross * 0.04)
-    const net = Math.max(0, gross - cnssSal - profile.advancePayment)
+    const net = Math.max(0, gross - cnssSal - (profile.advancePayment || 0))
     const totalCost = gross + cnssPat + vps
 
     const slip: PayslipData = {
-      slipNumber: `BP-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      slipNumber: `BP-${selectedYear}-${Math.floor(1000 + Math.random() * 9000)}`,
       periodMonth: payrollPeriod,
-      periodYear: new Date().getFullYear(),
+      periodYear: selectedYear,
       employeeName: profile.fullName,
       jobTitle: profile.jobTitle,
       cnssNumber: profile.cnssNumber,
-      baseSalary: profile.baseSalary,
-      transportAllowance: profile.transportAllowance,
-      housingAllowance: profile.housingAllowance,
-      bonus: profile.bonus,
+      baseSalary: profile.baseSalary || 0,
+      transportAllowance: profile.transportAllowance || 0,
+      housingAllowance: profile.housingAllowance || 0,
+      bonus: profile.bonus || 0,
       grossSalary: gross,
       cnssSalariale: cnssSal,
       cnssPatronale: cnssPat,
       vpsBénin: vps,
-      advancePayment: profile.advancePayment,
+      advancePayment: profile.advancePayment || 0,
       netSalary: net,
       totalEmployerCost: totalCost
     }
@@ -616,77 +935,182 @@ const UtilisateursPage: React.FC = () => {
       {/* ONGLET 2: PERSONNEL & PAIE (BÉNIN & CNSS) */}
       {activeTab === 'paie' && (
         <div className="space-y-6">
+          {/* En-tête de l'onglet Paie : Période sélectionnable & Bouton Nouveau Personnel */}
           <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
+            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 mb-6">
               <div>
-                <h3 className="font-bold text-slate-800 text-base">Rémunérations & Bulletins de Salaire</h3>
-                <p className="text-xs text-slate-500">Conforme Code du Travail Béninois : CNSS Salariale 3.6%, CNSS Patronale 16.4%, VPS 4%</p>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-black text-slate-900 text-lg">Ressources Humaines, Personnel & Paie</h3>
+                  <span className="text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                    Conforme Bénin 🇧🇯
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Gestion des collaborateurs, calcul CNSS Bénin (3.6% salarié, 16.4% patronal, VPS 4%) et décaissement en trésorerie
+                </p>
               </div>
-              <div className="flex items-center gap-2">
-                <label className="text-xs font-semibold text-slate-600">Période :</label>
-                <input
-                  type="text"
-                  value={payrollPeriod}
-                  onChange={(e) => setPayrollPeriod(e.target.value)}
-                  placeholder="Ex: Septembre 2026"
-                  className="px-3 py-1.5 border border-slate-200 rounded-xl text-xs font-medium"
-                />
+
+              <div className="flex flex-wrap items-center gap-3">
+                {/* Sélecteur de période de paie (Mois / Année) */}
+                <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 shadow-xs">
+                  <Calendar className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span className="text-xs font-bold text-slate-700">Période :</span>
+                  {/* Mois */}
+                  <select
+                    value={selectedMonth}
+                    onChange={(e) => setSelectedMonth(e.target.value)}
+                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer"
+                  >
+                    {MONTHS_LIST.map((m) => (
+                      <option key={m} value={m}>{m}</option>
+                    ))}
+                  </select>
+                  {/* Année */}
+                  <select
+                    value={selectedYear}
+                    onChange={(e) => setSelectedYear(Number(e.target.value))}
+                    className="bg-transparent text-xs font-bold text-slate-800 focus:outline-none cursor-pointer border-l border-slate-200 pl-2"
+                  >
+                    {YEARS_LIST.map((y) => (
+                      <option key={y} value={y}>{y}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Bouton + Nouveau Personnel */}
+                <button
+                  type="button"
+                  onClick={() => setShowNewStaffModal(true)}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition-all shadow-md shadow-emerald-600/20 active:scale-95"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>+ Nouveau personnel</span>
+                </button>
               </div>
             </div>
 
+            {/* Grille Synthèse financière de la période sélectionnée */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+              <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+                <span className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Masse Salariale Brute</span>
+                <p className="text-base font-black text-slate-900 font-mono">{fmt(periodStats.totalBrut)}</p>
+                <span className="text-[10px] text-slate-400">Total bruts imposables</span>
+              </div>
+              <div className="p-3.5 bg-indigo-50/60 rounded-xl border border-indigo-200">
+                <span className="text-[10px] font-bold uppercase text-indigo-700 block mb-1">Charges CNSS &amp; VPS</span>
+                <p className="text-base font-black text-indigo-900 font-mono">{fmt(periodStats.totalCnss)}</p>
+                <span className="text-[10px] text-indigo-500">Part patronale + salariale</span>
+              </div>
+              <div className="p-3.5 bg-emerald-50/60 rounded-xl border border-emerald-200">
+                <span className="text-[10px] font-bold uppercase text-emerald-700 block mb-1">Total Net à Payer</span>
+                <p className="text-base font-black text-emerald-900 font-mono">{fmt(periodStats.totalNet)}</p>
+                <span className="text-[10px] text-emerald-600">Net après cotisations</span>
+              </div>
+              <div className="p-3.5 bg-slate-900 text-white rounded-xl border border-slate-800 shadow-sm">
+                <span className="text-[10px] font-bold uppercase text-slate-300 block mb-1">Statut Décaissements</span>
+                <p className="text-base font-black text-emerald-400 font-mono">{fmt(periodStats.totalPaid)}</p>
+                <span className="text-[10px] text-slate-400">
+                  {periodStats.paidCount}/{periodStats.totalCount} payé(s) — Reste : {fmt(periodStats.remaining)}
+                </span>
+              </div>
+            </div>
+
+            {/* Tableau complet du personnel */}
             <div className="overflow-x-auto">
               <table className="w-full text-left text-xs text-slate-600">
                 <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600 uppercase">
                   <tr>
                     <th className="px-4 py-3">Employé</th>
-                    <th className="px-4 py-3">Poste</th>
+                    <th className="px-4 py-3">Poste / Fonction</th>
                     <th className="px-4 py-3">N° CNSS Bénin</th>
                     <th className="px-4 py-3 text-right">Salaire Base</th>
                     <th className="px-4 py-3 text-right">Primes / Indemnités</th>
                     <th className="px-4 py-3 text-right">Net Estimé</th>
-                    <th className="px-4 py-3 text-center">Action</th>
+                    <th className="px-4 py-3 text-center">Statut ({payrollPeriod})</th>
+                    <th className="px-4 py-3 text-center">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {users.map((u) => {
-                    const profile = payrollProfiles[u.id] || {
-                      userId: u.id,
-                      fullName: u.full_name,
-                      role: u.role,
-                      cnssNumber: 'CNSS-EN-COURS',
-                      jobTitle: u.role,
-                      baseSalary: 60000,
-                      transportAllowance: 15000,
-                      housingAllowance: 0,
-                      bonus: 0,
-                      advancePayment: 0,
-                    }
-                    const totalAllowances = profile.transportAllowance + profile.housingAllowance + profile.bonus
-                    const gross = profile.baseSalary + totalAllowances
-                    const netEst = Math.max(0, gross - Math.round(gross * 0.036) - profile.advancePayment)
+                  {allStaffList.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="text-center py-8 text-slate-400">
+                        Aucun employé ou personnel enregistré. Cliquez sur "+ Nouveau personnel" pour en ajouter.
+                      </td>
+                    </tr>
+                  ) : (
+                    allStaffList.map((emp) => {
+                      const totalAllowances = emp.transportAllowance + emp.housingAllowance + emp.bonus
+                      const gross = emp.baseSalary + totalAllowances
+                      const netEst = Math.max(0, gross - Math.round(gross * 0.036) - emp.advancePayment)
+                      const paidRecord = payrollPayments.find((p) => p.employeeId === emp.id && p.period === payrollPeriod)
 
-                    return (
-                      <tr key={u.id} className="hover:bg-slate-50">
-                        <td className="px-4 py-3 font-semibold text-slate-800">{u.full_name}</td>
-                        <td className="px-4 py-3 text-slate-500">{profile.jobTitle}</td>
-                        <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{profile.cnssNumber}</td>
-                        <td className="px-4 py-3 text-right font-bold text-slate-800">{fmt(profile.baseSalary)}</td>
-                        <td className="px-4 py-3 text-right text-emerald-600">{fmt(totalAllowances)}</td>
-                        <td className="px-4 py-3 text-right font-black text-emerald-700">{fmt(netEst)}</td>
-                        <td className="px-4 py-3 text-center">
-                          <button
-                            onClick={() => {
-                              setSelectedForPayslip(profile)
-                              calculatePayslip(profile)
-                            }}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-semibold text-xs flex items-center gap-1 mx-auto shadow-sm"
-                          >
-                            <FileText className="w-3.5 h-3.5" /> Bulletin
-                          </button>
-                        </td>
-                      </tr>
-                    )
-                  })}
+                      return (
+                        <tr key={emp.id} className="hover:bg-slate-50 transition">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs shrink-0">
+                                {emp.fullName.charAt(0).toUpperCase()}
+                              </div>
+                              <div>
+                                <p className="font-bold text-slate-900 text-sm leading-tight">{emp.fullName}</p>
+                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
+                                  <span>{emp.phone || 'Pas de tél'}</span>
+                                  <span>•</span>
+                                  <span className={`px-1.5 py-0.2 rounded font-semibold ${
+                                    emp.isInternalUser ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'
+                                  }`}>
+                                    {emp.isInternalUser ? 'Utilisateur Interne' : 'Personnel'}
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 font-medium text-slate-700">{emp.jobTitle}</td>
+                          <td className="px-4 py-3 font-mono text-[11px] text-slate-500">{emp.cnssNumber}</td>
+                          <td className="px-4 py-3 text-right font-bold text-slate-800 font-mono">{fmt(emp.baseSalary)}</td>
+                          <td className="px-4 py-3 text-right text-emerald-600 font-mono font-semibold">{fmt(totalAllowances)}</td>
+                          <td className="px-4 py-3 text-right font-black text-slate-900 font-mono">{fmt(netEst)}</td>
+                          <td className="px-4 py-3 text-center">
+                            {paidRecord ? (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                Payé ({fmt(paidRecord.netSalary)})
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-300">
+                                <Clock className="w-3 h-3 text-amber-600" />
+                                En attente
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {!paidRecord && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPayingEmployee(emp)}
+                                  className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-sm transition active:scale-95"
+                                  title="Enregistrer le décaissement du salaire"
+                                >
+                                  <DollarSign className="w-3.5 h-3.5" />
+                                  <span>Payer</span>
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => calculatePayslip(emp)}
+                                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold text-xs flex items-center gap-1 transition"
+                                title="Générer et imprimer le bulletin officiel"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>Bulletin</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
@@ -886,6 +1310,315 @@ const UtilisateursPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ══ MODAL NOUVEAU PERSONNEL ══════════════════════════════════════════ */}
+      {showNewStaffModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                  <UserPlus className="w-5 h-5 text-emerald-700" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Enregistrer un Nouveau Personnel</h3>
+                  <p className="text-xs text-slate-500">Collaborateurs d'exploitation et personnel contractuel</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowNewStaffModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveNewStaff} className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Nom &amp; Prénom *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newStaffForm.fullName}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, fullName: e.target.value }))}
+                    placeholder="Ex: KODJO Pascal"
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Poste / Fonction *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newStaffForm.jobTitle}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, jobTitle: e.target.value }))}
+                    placeholder="Ex: Caissier, Vendeur, Livreur..."
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Salaire de Base (F CFA) *
+                  </label>
+                  <input
+                    type="number"
+                    required
+                    min={0}
+                    step={1000}
+                    value={newStaffForm.baseSalary}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, baseSalary: e.target.value }))}
+                    placeholder="Ex: 75000"
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Téléphone
+                  </label>
+                  <input
+                    type="tel"
+                    value={newStaffForm.phone}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, phone: e.target.value }))}
+                    placeholder="Ex: +229 97 00 00 00"
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    N° CNSS Bénin (optionnel)
+                  </label>
+                  <input
+                    type="text"
+                    value={newStaffForm.cnssNumber}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, cnssNumber: e.target.value }))}
+                    placeholder="Ex: 10459828381"
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Date d'embauche
+                  </label>
+                  <input
+                    type="date"
+                    value={newStaffForm.hireDate}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, hireDate: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Indemnité de Transport (F CFA)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={500}
+                    value={newStaffForm.transportAllowance}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, transportAllowance: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Indemnité de Logement (F CFA)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={500}
+                    value={newStaffForm.housingAllowance}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, housingAllowance: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                  Primes Diverses / Rendement (F CFA)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  step={500}
+                  value={newStaffForm.bonus}
+                  onChange={(e) => setNewStaffForm((p) => ({ ...p, bonus: e.target.value }))}
+                  className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-3 justify-end border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowNewStaffModal(false)}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-md shadow-emerald-600/20"
+                >
+                  Enregistrer le Personnel
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL PAYER LE SALAIRE ═════════════════════════════════════════════ */}
+      {payingEmployee && (() => {
+        const base = Number(payingEmployee.baseSalary) || 0
+        const transp = Number(payingEmployee.transportAllowance) || 0
+        const house = Number(payingEmployee.housingAllowance) || 0
+        const bon = Number(payingEmployee.bonus) || 0
+        const gross = base + transp + house + bon
+        const cnssSal = Math.round(gross * 0.036)
+        const adv = Number(payingEmployee.advancePayment) || 0
+        const net = Math.max(0, gross - cnssSal - adv)
+
+        return (
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+                <div className="flex items-center gap-2">
+                  <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
+                    <DollarSign className="w-5 h-5 text-emerald-700" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">Payer le Salaire</h3>
+                    <p className="text-xs text-slate-500">Période : {payrollPeriod}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPayingEmployee(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Récapitulatif Salarié & Calcul */}
+              <div className="space-y-4">
+                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-bold text-slate-900 text-sm">{payingEmployee.fullName}</span>
+                    <span className="text-xs font-semibold text-slate-500">{payingEmployee.jobTitle}</span>
+                  </div>
+                  <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-200">
+                    <div className="flex justify-between">
+                      <span>Salaire de base conventionnel :</span>
+                      <span className="font-mono font-bold text-slate-800">{fmt(base)}</span>
+                    </div>
+                    <div className="flex justify-between text-emerald-700">
+                      <span>Indemnités &amp; Primes :</span>
+                      <span className="font-mono font-bold">+{fmt(transp + house + bon)}</span>
+                    </div>
+                    <div className="flex justify-between text-rose-600">
+                      <span>Retenue CNSS (3.6% part salariale) :</span>
+                      <span className="font-mono font-bold">-{fmt(cnssSal)}</span>
+                    </div>
+                    {adv > 0 && (
+                      <div className="flex justify-between text-rose-600">
+                        <span>Acompte sur salaire déduit :</span>
+                        <span className="font-mono font-bold">-{fmt(adv)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between pt-2 border-t border-slate-200 text-sm font-black text-emerald-800">
+                      <span>NET À DÉCAISSER :</span>
+                      <span className="font-mono text-base">{fmt(net)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Choix de la Trésorerie Source */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">
+                    Mode / Source de Paiement *
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {[
+                      { id: 'especes', label: 'Espèces', icon: Wallet, desc: 'Tiroir-Caisse direct' },
+                      { id: 'virement', label: 'Virement', icon: CreditCard, desc: 'Trésorerie Centrale' },
+                      { id: 'momo', label: 'Mobile Money', icon: Smartphone, desc: 'MTN / Moov / Wave' },
+                      { id: 'cheque', label: 'Chèque', icon: FileText, desc: 'Chèque entreprise' },
+                    ].map((m) => {
+                      const Icon = m.icon
+                      const isSelected = payMethod === m.id
+                      return (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setPayMethod(m.id as any)}
+                          className={`p-3 rounded-2xl border text-left transition flex items-start gap-2.5 ${
+                            isSelected
+                              ? 'bg-emerald-50/80 border-emerald-500 text-emerald-900 shadow-sm'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <Icon className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-emerald-700' : 'text-slate-400'}`} />
+                          <div>
+                            <p className="font-bold text-xs">{m.label}</p>
+                            <p className="text-[10px] text-slate-400">{m.desc}</p>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                {/* Note Informative Conformité & Persistance */}
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 leading-relaxed">
+                  🛡️ <strong>Rattachement Comptable :</strong> Ce paiement sera enregistré dans la table <code>expenses</code> au titre de la période <strong>{payrollPeriod}</strong>. La marge nette de ce mois sera calculée sans modifier rétroactivement les autres périodes.
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-2 pt-2 justify-end border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => setPayingEmployee(null)}
+                    disabled={isPaying}
+                    className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleConfirmSalaryPayment}
+                    disabled={isPaying}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-lg shadow-emerald-600/30 flex items-center gap-1.5"
+                  >
+                    {isPaying ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Confirmer le Paiement ({fmt(net)})</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }

@@ -116,9 +116,8 @@ const HubPage: React.FC = () => {
     if (activityName) localStorage.setItem('gestio229_active_activity_name', activityName)
     if (location)     localStorage.setItem('gestio229_active_activity_location', location)
 
-    // Naviguer vers la route principale du secteur
-    const targetRoute = SECTOR_ROUTE_MAP[sectorSlug] ?? '/dashboard/vente-pos'
-    navigate(targetRoute)
+    // Naviguer directement vers le tableau de bord du secteur
+    navigate('/dashboard')
   }
 
   const handleOpenOnboarding = (_sectorSlug: string) => {

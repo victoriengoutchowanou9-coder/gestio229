@@ -2,9 +2,13 @@
 // GESTIO 229 SaaS — Page Login Unifiée (Administrateur & Utilisateurs Internes)
 // =============================================================================
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { useNavigate, useSearchParams, Link } from 'react-router-dom'
-import { UserCheck, Lock, Eye, EyeOff, LogIn, AlertCircle, CheckCircle2, Mail, ShieldAlert } from 'lucide-react'
+import {
+  UserCheck, Lock, Eye, EyeOff, LogIn, AlertCircle, CheckCircle2,
+  Mail, Download, Smartphone, Laptop, Clock, Sparkles, Sun, Moon,
+  ShieldCheck, HelpCircle, X
+} from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { supabase } from '../../lib/supabase'
 
@@ -28,6 +32,89 @@ const LoginPage: React.FC = () => {
   const [forgotLoading, setForgotLoading] = useState(false)
   const [forgotSuccess, setForgotSuccess] = useState(false)
   const [forgotError, setForgotError] = useState('')
+
+  // Horloge temps réel (Mardi 29 septembre 2026 — 14:35)
+  const [currentTime, setCurrentTime] = useState<Date>(new Date())
+
+  // Installation PWA (PC & Mobile)
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [showInstallGuide, setShowInstallGuide] = useState(false)
+  const [isAppInstalled, setIsAppInstalled] = useState(false)
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000)
+    return () => clearInterval(timer)
+  }, [])
+
+  useEffect(() => {
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault()
+      setDeferredPrompt(e)
+    }
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall)
+
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsAppInstalled(true)
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
+    }
+  }, [])
+
+  const handleInstallClick = async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt()
+      const { outcome } = await deferredPrompt.userChoice
+      if (outcome === 'accepted') {
+        setIsAppInstalled(true)
+      }
+      setDeferredPrompt(null)
+    } else {
+      setShowInstallGuide(true)
+    }
+  }
+
+  // Formatage date en français avec majuscule : Mardi 29 septembre 2026 — 14:35
+  const formattedDateTime = useMemo(() => {
+    const days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi']
+    const months = [
+      'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+      'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'
+    ]
+    const dayName = days[currentTime.getDay()]
+    const dayNum = currentTime.getDate()
+    const monthName = months[currentTime.getMonth()]
+    const year = currentTime.getFullYear()
+    const hours = String(currentTime.getHours()).padStart(2, '0')
+    const minutes = String(currentTime.getMinutes()).padStart(2, '0')
+    return `${dayName} ${dayNum} ${monthName} ${year} — ${hours}:${minutes}`
+  }, [currentTime])
+
+  // Pensée de l'entrepreneur avec rotation jour (05h-17h) / soir (18h-04h)
+  const entrepreneurQuote = useMemo(() => {
+    const hour = currentTime.getHours()
+    const isMorning = hour >= 5 && hour < 18
+    const morningQuotes = [
+      { text: "Le succès en affaires n'est pas le fruit du hasard, mais de la constance dans l'effort et de la maîtrise quotidienne de ses chiffres.", author: "Discipline Commerciale & Croissance" },
+      { text: "Chaque matin en Afrique, le commerce s'éveille : structurez vos ambitions et transformez chaque opportunité en valeur durable.", author: "Action & Leadership Africain" },
+      { text: "L'excellence opérationnelle commence par une gestion rigoureuse dès la première vente du jour.", author: "Rigueur Opérationnelle & Caisse" },
+      { text: "La rapidité d'exécution et la fidélité de vos clients se bâtissent sur la précision de vos comptes.", author: "Efficacité & Confiance Client" },
+    ]
+    const eveningQuotes = [
+      { text: "Faites le bilan de votre journée avec lucidité : ce qui est mesuré avec précision se développe avec certitude.", author: "Bilan du Soir & Stratégie" },
+      { text: "La paix d'esprit de l'entrepreneur repose sur une caisse exacte et une vision limpide de ses stocks.", author: "Sérénité du Dirigeant & Clôture" },
+      { text: "Bâtir une entreprise pérenne, c'est semer la rigueur aujourd'hui pour récolter la prospérité demain.", author: "Vision Long Terme & Pérennité" },
+      { text: "Une journée bien clôturée est le meilleur tremplin pour les victoires de demain.", author: "Préparation & Contrôle de Gestion" },
+    ]
+    const list = isMorning ? morningQuotes : eveningQuotes
+    const dayIndex = currentTime.getDate() % list.length
+    return {
+      quote: list[dayIndex].text,
+      theme: list[dayIndex].author,
+      isMorning
+    }
+  }, [currentTime])
 
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -82,82 +169,162 @@ const LoginPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen flex bg-gradient-to-br from-slate-100 via-slate-50 to-emerald-50 dark:from-slate-950 dark:via-slate-900 dark:to-slate-900">
-      {/* Panel gauche — Image professionnelle Port Conteneurs & Import/Export */}
-      <div className="hidden lg:flex lg:w-1/2 relative flex-col justify-between p-12 text-white overflow-hidden">
-        {/* Image de fond : Port Autonome & Conteneurs */}
+    <div className="min-h-screen flex flex-col lg:flex-row bg-slate-900 text-slate-100">
+      {/* Panel gauche — Image plein écran Port & Conteneurs (sans bandes blanches) */}
+      <div className="hidden lg:flex lg:w-1/2 relative flex-col justify-between p-10 xl:p-14 text-white overflow-hidden bg-slate-950">
+        {/* Image de fond : 100% de la partie gauche, sans bandes blanches */}
         <div
-          className="absolute inset-0 bg-cover bg-center transition-transform duration-1000 scale-105"
+          className="absolute inset-0 w-full h-full bg-cover bg-center transition-transform duration-1000 scale-100"
           style={{ backgroundImage: "url('/images/port-cotonou.jpg')" }}
         />
-        {/* Overlay dégradé professionnel */}
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-950/85 via-emerald-950/75 to-slate-900/90 backdrop-blur-[2px]" />
+        {/* Léger overlay sombre pour améliorer la lisibilité tout en conservant une image bien visible */}
+        <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-slate-950/60 to-slate-900/75 backdrop-blur-[1px]" />
 
         {/* Header panel gauche */}
-        <div className="relative z-10">
+        <div className="relative z-10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-emerald-500 flex items-center justify-center font-black text-2xl text-white shadow-lg">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500 flex items-center justify-center font-black text-2xl text-white shadow-xl shadow-emerald-500/20">
               G
             </div>
             <div>
               <span className="font-black text-2xl tracking-tight text-white">GESTIO 229</span>
-              <span className="ml-2 text-[10px] font-bold bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 px-2 py-0.5 rounded-full">
+              <span className="ml-2 text-[10px] font-bold bg-emerald-500/30 text-emerald-300 border border-emerald-400/40 px-2.5 py-0.5 rounded-full">
                 SaaS Entreprise Bénin 🇧🇯
               </span>
             </div>
           </div>
+          <span className="text-xs text-emerald-200/80 font-medium bg-white/10 backdrop-blur-md px-3 py-1 rounded-full border border-white/10">
+            Hub Commercial UEMOA
+          </span>
         </div>
 
         {/* Message central portuaire & échanges ouest-africains */}
-        <div className="relative z-10 max-w-lg my-auto py-8">
+        <div className="relative z-10 max-w-lg my-auto py-6">
           <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 mb-4 backdrop-blur-sm">
             Commerce · Import/Export · Logistique · UEMOA
           </span>
-          <h1 className="text-3xl xl:text-4xl font-black leading-tight text-white">
+          <h1 className="text-3xl xl:text-4xl font-black leading-tight text-white drop-shadow-md">
             La plateforme intégrée des entreprises en Afrique de l'Ouest
           </h1>
-          <p className="text-emerald-100/90 text-sm mt-3 leading-relaxed">
+          <p className="text-emerald-100/90 text-sm mt-3 leading-relaxed drop-shadow">
             Du commerce général aux flux maritimes et import-export, pilotez vos ventes, stocks, caisses et comptabilité SYSCOHADA en toute sérénité.
           </p>
 
-          <div className="mt-8 grid grid-cols-2 gap-4 text-left">
-            <div className="bg-white/10 rounded-2xl p-4 backdrop-blur-md border border-white/10">
-              <p className="text-2xl font-black text-emerald-300">100% Conforme</p>
+          {/* Badges 100% Conforme & 15+ Métiers */}
+          <div className="mt-6 grid grid-cols-2 gap-4 text-left">
+            <div className="bg-slate-900/60 rounded-2xl p-4 backdrop-blur-md border border-white/15 shadow-lg">
+              <p className="text-2xl font-black text-emerald-400">100% Conforme</p>
               <p className="text-slate-200 text-xs mt-1">DGI Bénin (e-MECeF) & SYSCOHADA Révisé</p>
             </div>
-            <div className="bg-white/10 rounded-2xl p-4 backdrop-blur-md border border-white/10">
-              <p className="text-2xl font-black text-emerald-300">15+ Métiers</p>
+            <div className="bg-slate-900/60 rounded-2xl p-4 backdrop-blur-md border border-white/15 shadow-lg">
+              <p className="text-2xl font-black text-emerald-400">15+ Métiers</p>
               <p className="text-slate-200 text-xs mt-1">Poissonnerie, Quincaillerie, Print, etc.</p>
+            </div>
+          </div>
+
+          {/* SOUS LES BADGES : Date & Heure temps réel + Pensée de l'entrepreneur */}
+          <div className="mt-5 space-y-3">
+            {/* Date et Heure en temps réel (ex: Mardi 29 septembre 2026 — 14:35) */}
+            <div className="flex items-center gap-2.5 px-4 py-2.5 bg-slate-950/70 backdrop-blur-md border border-emerald-500/30 rounded-2xl text-white shadow-lg">
+              <div className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+              <Clock className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span className="text-xs font-bold tracking-wide">
+                {formattedDateTime}
+              </span>
+            </div>
+
+            {/* Pensée de l'entrepreneur du jour avec rotation matin (05h-17h) / soir (18h-04h) */}
+            <div className="p-4 bg-slate-950/75 backdrop-blur-md border border-white/15 rounded-2xl shadow-xl">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  {entrepreneurQuote.isMorning ? (
+                    <Sun className="w-4 h-4 text-amber-400" />
+                  ) : (
+                    <Moon className="w-4 h-4 text-indigo-300" />
+                  )}
+                  <span className="text-[11px] font-black uppercase tracking-wider text-emerald-400">
+                    Pensée de l'entrepreneur du jour
+                  </span>
+                </div>
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-white/10 text-slate-300">
+                  {entrepreneurQuote.isMorning ? '05h–17h · Action' : '18h–04h · Bilan'}
+                </span>
+              </div>
+              <p className="text-xs italic text-slate-100 leading-relaxed font-serif">
+                « {entrepreneurQuote.quote} »
+              </p>
+              <p className="text-[10px] font-semibold text-emerald-300 mt-2 text-right">
+                — {entrepreneurQuote.theme}
+              </p>
             </div>
           </div>
         </div>
 
         {/* Footer panel gauche */}
-        <div className="relative z-10 text-xs text-emerald-200/70">
-          © 2026 GESTIO 229 ERP · Hub Économique & Commercial UEMOA
+        <div className="relative z-10 flex items-center justify-between text-xs text-emerald-200/70 border-t border-white/10 pt-4">
+          <span>© 2026 GESTIO 229 ERP · Hub Économique & Commercial</span>
+          <span className="flex items-center gap-1 text-[11px] text-emerald-300">
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" /> Système Sécurisé Bénin
+          </span>
         </div>
       </div>
 
-      {/* Panel droit — formulaire unifié */}
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          {/* Logo & Bannière portuaire mobile */}
+      {/* Panel droit — Formulaire unifié & Actions PWA */}
+      <div className="flex-1 flex flex-col justify-between p-6 sm:p-8 bg-slate-50 dark:bg-slate-900 min-h-screen">
+        {/* Barre du haut : Bouton Installer l'application (PC & Mobile) */}
+        <div className="w-full max-w-md mx-auto flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+              {isAppInstalled ? 'Application installée' : 'Application disponible'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleInstallClick}
+            className="flex items-center gap-2 px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+            title="Installer GESTIO 229 sur votre ordinateur ou smartphone"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Installer l'application</span>
+          </button>
+        </div>
+
+        <div className="w-full max-w-md mx-auto my-auto">
+          {/* Logo & Bannière portuaire mobile avec Date/Heure et Pensée */}
           <div className="lg:hidden text-center mb-6">
-            <div className="relative rounded-2xl overflow-hidden shadow-md mb-4 h-28 border border-slate-200 dark:border-slate-700">
+            <div className="relative rounded-2xl overflow-hidden shadow-md mb-4 h-32 border border-slate-200 dark:border-slate-700">
               <img
                 src="/images/port-cotonou.jpg"
                 alt="Port Autonome de Cotonou - Commerce & Logistique"
                 className="w-full h-full object-cover"
                 loading="lazy"
               />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-slate-900/40 to-transparent flex items-end p-3">
-                <span className="text-[10px] font-bold text-white uppercase tracking-wider bg-emerald-600/80 backdrop-blur-sm px-2.5 py-0.5 rounded-md">
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950/85 via-slate-900/40 to-transparent flex flex-col justify-end p-3 text-left">
+                <span className="text-[10px] font-bold text-white uppercase tracking-wider bg-emerald-600/80 backdrop-blur-sm px-2 py-0.5 rounded-md inline-block w-fit mb-1">
                   Port de Cotonou · Commerce &amp; Logistique
+                </span>
+                <span className="text-[11px] font-bold text-slate-100 flex items-center gap-1">
+                  <Clock className="w-3 h-3 text-emerald-400" /> {formattedDateTime}
                 </span>
               </div>
             </div>
+            {/* Pensée mobile */}
+            <div className="p-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm mb-4 text-left">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-bold text-emerald-600 uppercase flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" /> Pensée du jour
+                </span>
+                <span className="text-[9px] text-slate-400">
+                  {entrepreneurQuote.isMorning ? '05h–17h' : '18h–04h'}
+                </span>
+              </div>
+              <p className="text-xs italic text-slate-700 dark:text-slate-300">
+                « {entrepreneurQuote.quote} »
+              </p>
+            </div>
             <h1 className="text-2xl font-black text-slate-800 dark:text-slate-100">GESTIO 229</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">SaaS Multi-Secteurs &amp; Multi-Tenants</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">SaaS Multi-Secteurs &amp; Multi-Tenants</p>
           </div>
 
           <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-xl border border-slate-100 dark:border-slate-700 p-8">
@@ -381,6 +548,81 @@ const LoginPage: React.FC = () => {
                 </div>
               </form>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL GUIDE D'INSTALLATION PWA (PC & MOBILE) */}
+      {showInstallGuide && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-700 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                    Installer l'application GESTIO 229
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Accès direct et fonctionnement fluide sur PC & Mobile</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowInstallGuide(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              {/* Option PC (Chrome / Edge / Windows / Mac) */}
+              <div className="p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">
+                  <Laptop className="w-4 h-4 text-emerald-600" />
+                  <span>Sur Ordinateur (Chrome, Edge, Brave)</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  1. Cliquez sur l'icône <strong>Installer</strong> (petit écran avec flèche) située dans la barre d'adresse tout à droite de votre navigateur.<br />
+                  2. Ou ouvrez le menu <strong>⋮ (trois points)</strong> en haut à droite &gt; <strong>« Installer GESTIO 229 »</strong>.
+                </p>
+              </div>
+
+              {/* Option Android */}
+              <div className="p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">
+                  <Smartphone className="w-4 h-4 text-emerald-600" />
+                  <span>Sur Smartphone Android (Chrome)</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  1. Appuyez sur les <strong>3 points ⋮</strong> en haut à droite du navigateur.<br />
+                  2. Sélectionnez <strong>« Installer l'application »</strong> ou <strong>« Ajouter à l'écran d'accueil »</strong>.
+                </p>
+              </div>
+
+              {/* Option iPhone / iPad */}
+              <div className="p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">
+                  <Smartphone className="w-4 h-4 text-indigo-600" />
+                  <span>Sur iPhone / iPad (Safari)</span>
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  1. Appuyez sur l'icône de <strong>Partage ⎋</strong> au bas de l'écran Safari.<br />
+                  2. Faites défiler et appuyez sur <strong>« Sur l'écran d'accueil »</strong>, puis confirmez <strong>« Ajouter »</strong>.
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowInstallGuide(false)}
+                className="w-full sm:w-auto px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-md shadow-emerald-600/20"
+              >
+                Compris, fermer
+              </button>
+            </div>
           </div>
         </div>
       )}
