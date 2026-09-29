@@ -236,16 +236,29 @@ export const FournisseursPage: React.FC = () => {
       if (data.productId && data.receivedQty > 0) {
         const { data: prodData } = await supabase
           .from('products')
-          .select('stock_magasin')
+          .select('*')
           .eq('id', data.productId)
           .maybeSingle()
 
         if (prodData) {
-          const newStock = Math.round(((Number(prodData.stock_magasin) || 0) + data.receivedQty) * 1000) / 1000
-          await supabase
+          const currentStock = Number(prodData.stock_magasin ?? prodData.sector_meta?.stock_magasin ?? 0)
+          const newStock = Math.round((currentStock + data.receivedQty) * 1000) / 1000
+          const updatedMeta = {
+            ...(prodData.sector_meta || {}),
+            stock_magasin: newStock
+          }
+
+          let updRes = await supabase
             .from('products')
-            .update({ stock_magasin: newStock })
+            .update({ stock_magasin: newStock, sector_meta: updatedMeta })
             .eq('id', data.productId)
+
+          if (updRes.error && updRes.error.code === 'PGRST204') {
+            await supabase
+              .from('products')
+              .update({ sector_meta: updatedMeta })
+              .eq('id', data.productId)
+          }
         }
       }
 

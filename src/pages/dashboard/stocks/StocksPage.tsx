@@ -123,14 +123,14 @@ export const StocksPage: React.FC = () => {
         id: p.id,
         code: p.code,
         name: p.name,
-        unit: p.unit || 'Pièce',
-        ucd: p.ucd || 'Carton',
-        uv: p.uv || p.unit || 'Pièce',
-        coef: Number(p.coef) || 1,
+        unit: p.unit || p.uv || p.sector_meta?.uv || 'Pièce',
+        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
+        uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
+        coef: Number(p.coef || p.sector_meta?.coef) || 1,
         cost_price: Number(p.cost_price) || 0,
         selling_price: Number(p.selling_price) || 0,
-        stock_magasin: Number(p.stock_magasin) || 0,
-        stock_vente: Number(p.stock_vente) || 0,
+        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
+        stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
         min_stock_alert: Number(p.min_stock_alert) || 5,
         category: p.category,
         batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
@@ -149,6 +149,31 @@ export const StocksPage: React.FC = () => {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // Synchronisation temps réel avec Supabase
+  useEffect(() => {
+    if (!company?.id) return
+
+    const channel = supabase
+      .channel(`products-stocks-${company.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'products',
+          filter: `company_id=eq.${company.id}`
+        },
+        () => {
+          loadData()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [company?.id, loadData])
 
   // Charger l'historique des inventaires
   useEffect(() => {
@@ -202,20 +227,37 @@ export const StocksPage: React.FC = () => {
       const newMagasin = Math.round((prod.stock_magasin - transferQty) * 1000) / 1000
       const newVente = Math.round((prod.stock_vente + transferQty) * 1000) / 1000
 
+      const currentMeta = prod.sector_meta || {}
+      const updatedMeta = {
+        ...currentMeta,
+        stock_magasin: newMagasin,
+        stock_vente: newVente
+      }
+
       // Mise à jour réelle Supabase
-      const { error } = await supabase
+      let updRes = await supabase
         .from('products')
         .update({
           stock_magasin: newMagasin,
-          stock_vente: newVente
+          stock_vente: newVente,
+          sector_meta: updatedMeta
         })
         .eq('id', prod.id)
 
-      if (error) throw error
+      if (updRes.error && updRes.error.code === 'PGRST204') {
+        updRes = await supabase
+          .from('products')
+          .update({
+            sector_meta: updatedMeta
+          })
+          .eq('id', prod.id)
+      }
+
+      if (updRes.error) throw updRes.error
 
       setProducts((prev) =>
         prev.map((p) =>
-          p.id === prod.id ? { ...p, stock_magasin: newMagasin, stock_vente: newVente } : p
+          p.id === prod.id ? { ...p, stock_magasin: newMagasin, stock_vente: newVente, sector_meta: updatedMeta } : p
         )
       )
 
@@ -289,15 +331,32 @@ export const StocksPage: React.FC = () => {
         const newMagasin = Math.round((item.prod.stock_magasin - item.qty) * 1000) / 1000
         const newVente = Math.round((item.prod.stock_vente + item.qty) * 1000) / 1000
 
-        const { error } = await supabase
+        const currentMeta = item.prod.sector_meta || {}
+        const updatedMeta = {
+          ...currentMeta,
+          stock_magasin: newMagasin,
+          stock_vente: newVente
+        }
+
+        let updRes = await supabase
           .from('products')
           .update({
             stock_magasin: newMagasin,
-            stock_vente: newVente
+            stock_vente: newVente,
+            sector_meta: updatedMeta
           })
           .eq('id', item.prod.id)
 
-        if (error) throw error
+        if (updRes.error && updRes.error.code === 'PGRST204') {
+          updRes = await supabase
+            .from('products')
+            .update({
+              sector_meta: updatedMeta
+            })
+            .eq('id', item.prod.id)
+        }
+
+        if (updRes.error) throw updRes.error
       }
 
       await loadData()
@@ -350,10 +409,23 @@ export const StocksPage: React.FC = () => {
           const prod = products.find((p) => p.id === item.productId)
           if (prod) {
             const newVente = Math.max(0, item.stockPhysique - prod.stock_magasin)
-            await supabase
+            const currentMeta = prod.sector_meta || {}
+            const updatedMeta = {
+              ...currentMeta,
+              stock_vente: newVente
+            }
+
+            let updRes = await supabase
               .from('products')
-              .update({ stock_vente: newVente })
+              .update({ stock_vente: newVente, sector_meta: updatedMeta })
               .eq('id', prod.id)
+
+            if (updRes.error && updRes.error.code === 'PGRST204') {
+              updRes = await supabase
+                .from('products')
+                .update({ sector_meta: updatedMeta })
+                .eq('id', prod.id)
+            }
           }
         }
       }

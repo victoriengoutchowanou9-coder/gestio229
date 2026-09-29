@@ -84,7 +84,7 @@ export const DashboardPage: React.FC = () => {
       // 2. Produits actifs réels
       const { data: prodData, error: prodErr } = await supabase
         .from('products')
-        .select('id, is_active, current_stock, warehouse_stock, cost_price, purchase_price')
+        .select('*')
         .eq('company_id', company.id)
         .eq('is_active', true)
 
@@ -92,10 +92,11 @@ export const DashboardPage: React.FC = () => {
       const prods = prodData || []
       setActiveProductsCount(prods.length)
 
-      const stockVal = prods.reduce((sum, p) => {
-        const qty = Number(p.current_stock || 0) + Number(p.warehouse_stock || 0)
+      const stockVal = prods.reduce((sum, p: any) => {
+        const qtyMagasin = Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
+        const qtyVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
         const cost = Number(p.cost_price || p.purchase_price || 0)
-        return sum + qty * cost
+        return sum + (qtyMagasin + qtyVente) * cost
       }, 0)
       setTotalProductsValue(stockVal)
     } catch (err: any) {

@@ -44,20 +44,20 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
   // Formulaire Produit sans valeurs fictives (vides ou 0 réels)
   const [form, setForm] = useState({
-    code: 'ART-' + Math.floor(1000 + Math.random() * 9000),
+    code: '', // Vide au départ, généré automatiquement à l'enregistrement si non saisi
     name: '',
     category: 'Alimentation & Boissons',
     ucd: 'Carton',
     packaging: 'Standard',
     uv: 'Pièce',
     coef: 1,
-    // Prix saisis DIRECTEMENT en TTC (vidés de toute valeur fictive 10000/14000)
+    // Prix saisis DIRECTEMENT en TTC
     priceAchatUcdTtc: 0,
     priceVenteUcdTtc: 0,
     priceVenteUvTtc: 0,
-    // Stocks initiaux
-    stockMagasinInitial: 0,
-    stockVenteInitial: 0,
+    // Stocks initiaux : vides par défaut (string vide pour ne pas afficher artificiellement 0)
+    stockMagasinInitial: '',
+    stockVenteInitial: '',
     lotNumber: '',
     // Fiscalité
     isVatSubject: true,
@@ -129,92 +129,173 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!form.code || !form.name) {
-      alert('Veuillez renseigner au minimum le code et la désignation.')
+
+    if (!form.name || !form.name.trim()) {
+      alert('Veuillez renseigner la désignation du produit.')
+      return
+    }
+
+    if (!company?.id) {
+      alert('Erreur : Session d\'entreprise introuvable. Veuillez vous reconnecter.')
       return
     }
 
     setIsSaving(true)
 
-    const finalBatchConfig: BatchPricingConfig | null = form.isBatchPricing
-      ? {
-          ...form.batchPricing,
-          enabled: true,
-          coef: form.coef,
-          price_ucd_ttc: form.batchPricing.price_ucd_ttc || form.priceVenteUcdTtc,
-          price_uv_ttc: form.batchPricing.price_uv_ttc || form.priceVenteUvTtc,
-        }
-      : null
+    try {
+      // 1. Détermination du code produit (automatique si non saisi)
+      let finalCode = form.code.trim().toUpperCase()
 
-    const newProd = {
-      id: 'prod_' + Date.now(),
-      company_id: company?.id,
-      code: form.code.trim().toUpperCase(),
-      name: form.name.trim(),
-      category: form.category,
-      unit: form.uv,
-      ucd: form.ucd,
-      packaging: form.packaging,
-      uv: form.uv,
-      coef: form.coef,
-      // Prix TTC enregistrés
-      cost_price: form.priceAchatUcdTtc,
-      selling_price: form.priceVenteUvTtc,
-      price_achat_ucd_ttc: form.priceAchatUcdTtc,
-      price_vente_ucd_ttc: form.priceVenteUcdTtc,
-      price_vente_uv_ttc: form.priceVenteUvTtc,
-      // Valeurs HT calculées
-      price_achat_ht: taxAchat.htPrice,
-      price_vente_ht: taxVenteUv.htPrice,
-      // Fiscalité
-      is_vat_subject: form.isVatSubject,
-      vat_rate: form.isVatSubject ? form.vatRate : 0,
-      is_aib_subject: form.isAibSubject,
-      aib_rate: form.isAibSubject ? form.aibRate : 0,
-      // Stocks
-      stock_magasin: Number(form.stockMagasinInitial) || 0,
-      stock_vente: Number(form.stockVenteInitial) || 0,
-      lot_number: form.lotNumber,
-      // Marges HT
-      margin_ucd_ht: marginUcdHt,
-      margin_uv_ht: marginUvHt,
-      // Tarifs par lot
-      batch_pricing: finalBatchConfig,
-      sector_meta: {
+      if (!finalCode) {
+        // Logique de codification automatique de l'entreprise
+        const { data: existingProds, error: fetchCodesErr } = await supabase
+          .from('products')
+          .select('code')
+          .eq('company_id', company.id)
+
+        if (fetchCodesErr) {
+          console.warn('Erreur vérification codes existants:', fetchCodesErr)
+        }
+
+        const codes = (existingProds || []).map((p: any) => (p.code || '').trim().toUpperCase())
+
+        let maxNum = 0
+        let detectedPrefix = 'PRD-'
+
+        codes.forEach((c: string) => {
+          const prdMatch = c.match(/^PRD-(\d+)$/)
+          if (prdMatch) {
+            const n = parseInt(prdMatch[1], 10)
+            if (!isNaN(n) && n > maxNum) {
+              maxNum = n
+              detectedPrefix = 'PRD-'
+            }
+          } else {
+            const artMatch = c.match(/^ART-(\d+)$/)
+            if (artMatch) {
+              const n = parseInt(artMatch[1], 10)
+              if (!isNaN(n) && n > maxNum) {
+                maxNum = n
+                detectedPrefix = 'ART-'
+              }
+            }
+          }
+        })
+
+        let candidateNum = maxNum + 1
+        let candidateCode = `${detectedPrefix}${String(candidateNum).padStart(3, '0')}`
+        while (codes.includes(candidateCode)) {
+          candidateNum++
+          candidateCode = `${detectedPrefix}${String(candidateNum).padStart(3, '0')}`
+        }
+        finalCode = candidateCode
+      } else {
+        // Vérification de l'unicité du code dans l'entreprise connectée (isolation stricte)
+        const { data: duplicate } = await supabase
+          .from('products')
+          .select('id, code')
+          .eq('company_id', company.id)
+          .ilike('code', finalCode)
+          .maybeSingle()
+
+        if (duplicate) {
+          alert(`❌ Le code "${finalCode}" est déjà utilisé par un autre produit de votre entreprise. Veuillez le modifier ou laisser le champ vide pour le générer automatiquement.`)
+          setIsSaving(false)
+          return
+        }
+      }
+
+      // 2. Gestion technique des stocks initiaux
+      const hasMagasinInput = String(form.stockMagasinInitial).trim() !== ''
+      const hasVenteInput = String(form.stockVenteInitial).trim() !== ''
+      const parsedMagasin = hasMagasinInput ? Math.max(0, Number(form.stockMagasinInitial)) : 0
+      const parsedVente = hasVenteInput ? Math.max(0, Number(form.stockVenteInitial)) : 0
+
+      const finalBatchConfig: BatchPricingConfig | null = form.isBatchPricing
+        ? {
+            ...form.batchPricing,
+            enabled: true,
+            coef: form.coef,
+            price_ucd_ttc: form.batchPricing.price_ucd_ttc || form.priceVenteUcdTtc,
+            price_uv_ttc: form.batchPricing.price_uv_ttc || form.priceVenteUvTtc,
+          }
+        : null
+
+      const sectorMeta = {
         ucd: form.ucd,
         packaging: form.packaging,
         uv: form.uv,
         coef: form.coef,
+        stock_magasin: parsedMagasin,
+        stock_vente: parsedVente,
+        has_initial_stock_magasin: hasMagasinInput,
+        has_initial_stock_vente: hasVenteInput,
         batch_pricing: finalBatchConfig,
-      },
-    }
-
-    // Sauvegarde réelle Supabase si l'entreprise est connectée
-    if (company?.id) {
-      try {
-        await supabase.from('products').insert({
-          company_id: company.id,
-          code: newProd.code,
-          name: newProd.name,
-          unit: newProd.unit,
-          cost_price: newProd.cost_price,
-          selling_price: newProd.selling_price,
-          stock_magasin: newProd.stock_magasin,
-          stock_vente: newProd.stock_vente,
-          is_taxable: newProd.is_vat_subject,
-          tva_rate: newProd.vat_rate,
-          sector_meta: newProd.sector_meta,
-          is_active: true,
-        })
-      } catch (err: any) {
-        console.warn('Sauvegarde Supabase locale / fallback :', err?.message)
+        lot_number: form.lotNumber,
+        is_aib_subject: form.isAibSubject,
+        aib_rate: form.isAibSubject ? form.aibRate : 0,
+        price_achat_ucd_ttc: form.priceAchatUcdTtc,
+        price_vente_ucd_ttc: form.priceVenteUcdTtc,
+        price_vente_uv_ttc: form.priceVenteUvTtc,
+        price_achat_ht: taxAchat.htPrice,
+        price_vente_ht: taxVenteUv.htPrice,
+        margin_ucd_ht: marginUcdHt,
+        margin_uv_ht: marginUvHt,
       }
-    }
 
-    setIsSaving(false)
-    if (onSuccess) onSuccess(newProd)
-    alert(`✅ Produit "${form.name}" créé avec succès !`)
-    onClose()
+      // 3. Préparation du payload pour Supabase
+      const insertPayload: any = {
+        company_id: company.id,
+        code: finalCode,
+        name: form.name.trim(),
+        unit: form.uv,
+        cost_price: form.priceAchatUcdTtc,
+        selling_price: form.priceVenteUvTtc,
+        wholesale_price: form.priceVenteUcdTtc,
+        is_taxable: form.isVatSubject,
+        tva_rate: form.isVatSubject ? form.vatRate : 0,
+        min_stock_alert: 5,
+        sector_meta: sectorMeta,
+        is_active: true,
+        stock_magasin: parsedMagasin,
+        stock_vente: parsedVente,
+      }
+
+      let res = await supabase.from('products').insert(insertPayload).select().single()
+
+      // Si les colonnes stock_magasin/stock_vente ne sont pas présentes en colonne directe SQL
+      if (res.error && res.error.code === 'PGRST204') {
+        delete insertPayload.stock_magasin
+        delete insertPayload.stock_vente
+        res = await supabase.from('products').insert(insertPayload).select().single()
+      }
+
+      // 4. Contrôle strict des erreurs (zéro erreur silencieuse)
+      if (res.error || !res.data) {
+        console.error('[NewProductModal] Échec Supabase insert:', res.error)
+        alert(`❌ Erreur lors de l'enregistrement dans la base de données :\n\n${res.error?.message || 'Erreur inconnue'}\n\nLe produit n'a pas été enregistré.`)
+        setIsSaving(false)
+        return
+      }
+
+      const savedProduct = {
+        ...res.data,
+        stock_magasin: parsedMagasin,
+        stock_vente: parsedVente,
+        ucd: form.ucd,
+        uv: form.uv,
+        coef: form.coef,
+      }
+
+      setIsSaving(false)
+      if (onSuccess) onSuccess(savedProduct)
+      alert(`✅ Produit [${finalCode}] "${form.name.trim()}" enregistré avec succès !`)
+      onClose()
+    } catch (err: any) {
+      console.error('[NewProductModal] Exception handleSubmit:', err)
+      alert(`❌ Erreur inattendue : ${err?.message || 'Vérifiez votre connexion internet.'}`)
+      setIsSaving(false)
+    }
   }
 
   return (
@@ -254,13 +335,15 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
               </h4>
               <div className="grid grid-cols-12 gap-3">
                 <div className="col-span-4">
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Code / Référence *</label>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Code / Référence <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500">(Auto si vide)</span>
+                  </label>
                   <input
                     type="text"
-                    required
+                    placeholder="Généré automatiquement (ex: PRD-001)"
                     value={form.code}
                     onChange={(e) => setForm({ ...form, code: e.target.value })}
-                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-mono font-bold uppercase text-slate-800 dark:text-slate-100"
+                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-mono font-bold uppercase text-slate-800 dark:text-slate-100 placeholder:text-slate-400 placeholder:font-normal placeholder:italic placeholder:text-[11px]"
                   />
                 </div>
                 <div className="col-span-8">
@@ -573,10 +656,15 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
             {/* SECTION 5: STOCKS INITIAUX */}
             <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">
-              <h4 className="font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-1.5">
-                <span className="w-2 h-2 rounded-full bg-slate-600"></span>
-                <span>5. Stocks Initiaux au Démarrage</span>
-              </h4>
+              <div className="flex items-center justify-between">
+                <h4 className="font-bold text-slate-900 dark:text-slate-100 flex items-center space-x-1.5">
+                  <span className="w-2 h-2 rounded-full bg-slate-600"></span>
+                  <span>5. Stocks Initiaux au Démarrage (Optionnel)</span>
+                </h4>
+                <span className="text-[10px] text-slate-400 font-medium italic">
+                  Laisser vide si aucun stock initial
+                </span>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
@@ -585,10 +673,16 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                   <input
                     type="number"
                     step="any"
+                    placeholder="Non renseigné (vide)"
                     value={form.stockMagasinInitial}
-                    onChange={(e) => setForm({ ...form, stockMagasinInitial: Number(e.target.value) })}
-                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold font-mono text-slate-800 dark:text-slate-100"
+                    onChange={(e) => setForm({ ...form, stockMagasinInitial: e.target.value })}
+                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold font-mono text-slate-800 dark:text-slate-100 placeholder:text-slate-400 placeholder:font-normal placeholder:italic placeholder:text-[11px]"
                   />
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    {form.stockMagasinInitial === '' 
+                      ? 'Aucune quantité renseignée' 
+                      : `Quantité saisie : ${form.stockMagasinInitial} ${form.ucd}`}
+                  </span>
                 </div>
                 <div>
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
@@ -597,10 +691,16 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                   <input
                     type="number"
                     step="any"
+                    placeholder="Non renseigné (vide)"
                     value={form.stockVenteInitial}
-                    onChange={(e) => setForm({ ...form, stockVenteInitial: Number(e.target.value) })}
-                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold font-mono text-slate-800 dark:text-slate-100"
+                    onChange={(e) => setForm({ ...form, stockVenteInitial: e.target.value })}
+                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold font-mono text-slate-800 dark:text-slate-100 placeholder:text-slate-400 placeholder:font-normal placeholder:italic placeholder:text-[11px]"
                   />
+                  <span className="text-[10px] text-slate-400 mt-1 block">
+                    {form.stockVenteInitial === '' 
+                      ? 'Aucune quantité renseignée' 
+                      : `Quantité saisie : ${form.stockVenteInitial} ${form.uv}`}
+                  </span>
                 </div>
               </div>
             </div>

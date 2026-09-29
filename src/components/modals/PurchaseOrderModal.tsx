@@ -43,7 +43,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     const fetchResources = async () => {
       const [{ data: sData }, { data: pData }] = await Promise.all([
         supabase.from('suppliers').select('id, company_name, phone, city').eq('company_id', company.id).order('company_name'),
-        supabase.from('products').select('id, code, name, ucd, unit, cost_price').eq('company_id', company.id).order('name')
+        supabase.from('products').select('id, code, name, unit, cost_price, sector_meta').eq('company_id', company.id).order('name')
       ])
 
       const mappedSuppliers = (sData || []).map((s: any) => ({
@@ -54,8 +54,15 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         city: s.city
       }))
 
+      const mappedProducts = (pData || []).map((p: any) => ({
+        ...p,
+        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
+        unit: p.unit || p.sector_meta?.uv || 'Pièce',
+        cost_price: Number(p.cost_price) || 0
+      }))
+
       setSuppliers(mappedSuppliers)
-      setProducts(pData || [])
+      setProducts(mappedProducts)
 
       if (mappedSuppliers.length > 0 && !selectedSupplierId) {
         setSelectedSupplierId(mappedSuppliers[0].id)

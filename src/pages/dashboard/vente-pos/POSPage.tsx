@@ -176,6 +176,8 @@ export const POSPage: React.FC = () => {
         ...p,
         selling_price: Number(p.selling_price) || 0,
         cost_price: Number(p.cost_price) || 0,
+        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
+        stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
         coef: Number(p.coef || p.sector_meta?.coef || 1),
         ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
         uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
@@ -218,6 +220,31 @@ export const POSPage: React.FC = () => {
   useEffect(() => {
     loadData()
   }, [loadData])
+
+  // Synchronisation temps réel Supabase dans le POS
+  useEffect(() => {
+    if (!company?.id) return
+
+    const channel = supabase
+      .channel(`products-pos-${company.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'products',
+          filter: `company_id=eq.${company.id}`
+        },
+        () => {
+          loadData()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      supabase.removeChannel(channel)
+    }
+  }, [company?.id, loadData])
 
   // ─── Gestion de la Modale Détail Produit ───────────────────────────────────
 
@@ -480,15 +507,25 @@ export const POSPage: React.FC = () => {
       for (const line of cart) {
         if (line.product?.id) {
           try {
-            const currentStock = Number(line.product.stock_vente ?? line.product.current_stock ?? 0)
-            const newStock = Math.max(0, currentStock - line.qty)
-            await supabase
+            const currentStock = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? line.product.current_stock ?? 0)
+            const newStock = Math.max(0, Math.round((currentStock - line.qty) * 1000) / 1000)
+            const currentMeta = line.product.sector_meta || {}
+            const updatedMeta = { ...currentMeta, stock_vente: newStock }
+
+            let updRes = await supabase
               .from('products')
-              .update({ stock_vente: newStock })
+              .update({ stock_vente: newStock, sector_meta: updatedMeta })
               .eq('id', line.product.id)
 
+            if (updRes.error && updRes.error.code === 'PGRST204') {
+              updRes = await supabase
+                .from('products')
+                .update({ sector_meta: updatedMeta })
+                .eq('id', line.product.id)
+            }
+
             setProducts((prev) =>
-              prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: newStock } : p))
+              prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: newStock, sector_meta: updatedMeta } : p))
             )
           } catch (err: any) {
             console.warn('Erreur déstockage ligne vente :', err?.message)
