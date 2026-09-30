@@ -182,18 +182,18 @@ export const useAuthStore = create<AuthState>()(
             // Authentification Supabase réussie : charger le tenant et l'entreprise
             let ctx = await SectorLoader.loadTenantContext(authData.user.id, authData.user.email)
 
-            // ── Self-Healing : profil non trouvé malgré auth valide ────────────
-            // Cause probable : auth_user_id = NULL dans user_profiles (bug inscription)
-            // Solution : chercher par email et lier automatiquement le compte
+            // ── Résolution et auto-guérison du tenant et de l'entreprise ────────
             if (!ctx) {
               try {
-                console.warn('[AuthStore] Profil non trouvé par auth_user_id, tentative self-healing par email...')
+                console.warn('[AuthStore] Contexte tenant non résolu immédiatement, tentative d\'auto-guérison...')
 
-                // Récupérer l'email exact depuis Supabase Auth
+                // Récupérer l'utilisateur Auth complet
                 const { data: { user: authFullUser } } = await supabase.auth.getUser()
-                const authEmail = authFullUser?.email || emailLower
+                const currentAuthUser = authFullUser || authData.user
+                const authEmail = (currentAuthUser?.email || emailLower).trim().toLowerCase()
+                const meta = currentAuthUser?.user_metadata || {}
 
-                // 1. Chercher le profil par email (fonctionne si RLS M015 appliquée)
+                // 1. Chercher le profil par email
                 const { data: orphanProfile } = await supabase
                   .from('user_profiles')
                   .select(`id, company_id, auth_user_id, email, role`)
@@ -201,53 +201,87 @@ export const useAuthStore = create<AuthState>()(
                   .maybeSingle()
 
                 if (orphanProfile) {
-                  console.log('[AuthStore] Profil orphelin trouvé, liaison en cours...')
-                  // 2. Lier le auth_user_id au profil
+                  // Lier le auth_user_id au profil
                   await supabase
                     .from('user_profiles')
                     .update({
-                      auth_user_id: authData.user.id,
+                      auth_user_id: currentAuthUser.id,
                       updated_at: new Date().toISOString()
                     })
                     .eq('id', orphanProfile.id)
-
-                  // 3. Réessayer le chargement du contexte
-                  ctx = await SectorLoader.loadTenantContext(authData.user.id, authEmail)
-                  console.log('[AuthStore] Self-healing résultat :', ctx ? '✅ Succès' : '❌ Échec')
                 }
 
-                // 4. Si toujours introuvable, essayer depuis companies
-                if (!ctx) {
-                  const { data: companyByEmail } = await supabase
+                // 2. Chercher ou créer l'entreprise
+                let companyId = orphanProfile?.company_id
+                if (!companyId) {
+                  const { data: compByEmail } = await supabase
                     .from('companies')
                     .select('*')
                     .ilike('email', authEmail)
                     .maybeSingle()
 
-                  if (companyByEmail) {
-                    const defaultAdminPerms = {
-                      admin: true, commercial: true, stock: true,
-                      treasury: true, purchases: true, reporting: true,
-                      accounting: true, hr: true,
-                      ventes: { view: true, create: true, edit: true, delete: true },
-                      finances: { view: true, caisse: true, tresorerie: true }
-                    }
-                    await supabase.from('user_profiles').upsert({
-                      company_id: companyByEmail.id,
-                      auth_user_id: authData.user.id,
-                      email: authEmail,
-                      username: authEmail,
-                      full_name: authData.user.user_metadata?.responsible_name
-                        || authData.user.user_metadata?.full_name
-                        || companyByEmail.name || 'Administrateur',
-                      role: 'administrateur',
-                      is_active: true,
-                      permissions: defaultAdminPerms,
-                    }, { onConflict: 'email' })
+                  if (compByEmail) {
+                    companyId = compByEmail.id
+                  } else {
+                    const compName = meta.company_name?.trim() || meta.full_name?.trim() || `Entreprise ${authEmail.split('@')[0]}`
+                    const sectors = Array.isArray(meta.selected_sectors) && meta.selected_sectors.length > 0
+                      ? meta.selected_sectors
+                      : ['boutique']
+                    const defaultSector = sectors[0] || 'boutique'
+                    const now = new Date()
+                    const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
-                    ctx = await SectorLoader.loadTenantContext(authData.user.id, authEmail)
+                    const { data: newCompany } = await supabase
+                      .from('companies')
+                      .insert({
+                        name: compName,
+                        email: authEmail,
+                        phone: meta.phone || null,
+                        ifu_number: meta.ifu_number || '0000000000000',
+                        city: meta.city || 'Cotonou',
+                        country: meta.country || 'Bénin',
+                        active_sector: defaultSector,
+                        selected_sectors: sectors,
+                        sectors: sectors,
+                        subscription_status: 'trial',
+                        subscription_plan: 'multiservices',
+                        plan: 'multiservices',
+                        onboarding_completed: true,
+                        currency: 'FCFA'
+                      })
+                      .select()
+                      .maybeSingle()
+
+                    if (newCompany) {
+                      companyId = newCompany.id
+                    }
                   }
                 }
+
+                // 3. S'assurer que le profil administrateur existe et est lié
+                if (companyId) {
+                  const defaultAdminPerms = {
+                    admin: true, commercial: true, stock: true,
+                    treasury: true, purchases: true, reporting: true,
+                    accounting: true, hr: true,
+                    ventes: { view: true, create: true, edit: true, delete: true },
+                    finances: { view: true, caisse: true, tresorerie: true }
+                  }
+
+                  await supabase.from('user_profiles').upsert({
+                    company_id: companyId,
+                    auth_user_id: currentAuthUser.id,
+                    email: authEmail,
+                    username: authEmail,
+                    full_name: meta.responsible_name || meta.full_name || 'Administrateur',
+                    role: 'administrateur',
+                    is_active: true,
+                    permissions: defaultAdminPerms,
+                  }, { onConflict: 'email' })
+                }
+
+                // 4. Recharger le contexte locataire final
+                ctx = await SectorLoader.loadTenantContext(currentAuthUser.id, authEmail)
               } catch (healErr: any) {
                 console.error('[AuthStore] Erreur self-healing :', healErr)
               }
@@ -256,7 +290,7 @@ export const useAuthStore = create<AuthState>()(
             if (!ctx) {
               set({
                 status: 'error',
-                errorMessage: 'Profil entreprise introuvable. Exécutez la migration M015 dans Supabase SQL Editor, puis reconnectez-vous.',
+                errorMessage: 'Impossible de charger les données de votre entreprise. Veuillez actualiser la page ou contacter le support.',
               })
               return { success: false, error: 'Profil introuvable' }
             }

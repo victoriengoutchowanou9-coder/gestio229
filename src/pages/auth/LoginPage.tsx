@@ -154,17 +154,25 @@ const LoginPage: React.FC = () => {
       setIdentifier(urlEmail)
     }
 
-    // Détection d'un retour de lien magique ou confirmation de hash Supabase
-    if (window.location.hash.includes('access_token')) {
+    const code = searchParams.get('code')
+    if (code) {
       setConfirmedSuccess(true)
-      // Tenter de récupérer la session
+      supabase.auth.exchangeCodeForSession(code).then(({ data }) => {
+        if (data?.session?.user?.email) {
+          setIdentifier(data.session.user.email)
+        }
+      }).catch((e) => {
+        console.warn('[LoginPage] Code exchange warning:', e)
+      })
+    } else if (window.location.hash.includes('access_token') || isConfirmed) {
+      setConfirmedSuccess(true)
       supabase.auth.getSession().then(({ data: { session } }) => {
         if (session?.user?.email) {
           setIdentifier(session.user.email)
         }
       })
     }
-  }, [urlEmail])
+  }, [urlEmail, isConfirmed, searchParams])
 
   const isLoading = status === 'loading'
 

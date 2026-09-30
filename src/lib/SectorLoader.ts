@@ -147,6 +147,125 @@ export const SectorLoader = {
         if (c) company = c as Company
       }
 
+      // ── Auto-provisioning & Auto-healing résilient si profile ou company est manquant ──
+      if (!profile || !company) {
+        try {
+          const { data: authUserData } = await supabase.auth.getUser()
+          const authUser = authUserData?.user
+
+          if (authUser || authUserId) {
+            const currentAuthId = authUserId || authUser?.id
+            const currentEmail = (authUser?.email || emailHint || '').trim().toLowerCase()
+            const meta = authUser?.user_metadata || {}
+
+            // A. Résoudre ou auto-créer l'entreprise
+            if (!company && currentEmail) {
+              const { data: compByEmail } = await supabase
+                .from('companies')
+                .select('*')
+                .ilike('email', currentEmail)
+                .maybeSingle()
+
+              if (compByEmail) {
+                company = compByEmail as Company
+              } else {
+                const compName = meta.company_name?.trim() || meta.full_name?.trim() || (currentEmail ? `Entreprise ${currentEmail.split('@')[0]}` : 'Mon Entreprise')
+                const sectors = Array.isArray(meta.selected_sectors) && meta.selected_sectors.length > 0
+                  ? meta.selected_sectors
+                  : ['boutique']
+                const defaultSector = sectors[0] || 'boutique'
+                const now = new Date()
+                const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+
+                const { data: newComp } = await supabase
+                  .from('companies')
+                  .insert({
+                    name: compName,
+                    email: currentEmail,
+                    phone: meta.phone || null,
+                    ifu_number: meta.ifu_number || '0000000000000',
+                    city: meta.city || 'Cotonou',
+                    country: meta.country || 'Bénin',
+                    active_sector: defaultSector,
+                    selected_sectors: sectors,
+                    sectors: sectors,
+                    subscription_status: 'trial',
+                    subscription_plan: 'multiservices',
+                    plan: 'multiservices',
+                    onboarding_completed: true,
+                    currency: 'FCFA'
+                  })
+                  .select()
+                  .maybeSingle()
+
+                if (newComp) company = newComp as Company
+              }
+            }
+
+            // B. Résoudre ou auto-créer le profil administrateur
+            if (company) {
+              const defaultAdminPermissions = {
+                admin: true,
+                commercial: true,
+                stock: true,
+                treasury: true,
+                purchases: true,
+                reporting: true,
+                accounting: true,
+                hr: true,
+                ventes: { view: true, create: true, edit: true, delete: true },
+                finances: { view: true, caisse: true, tresorerie: true }
+              }
+
+              if (profile) {
+                const { data: updatedProf } = await supabase
+                  .from('user_profiles')
+                  .update({
+                    company_id: company.id,
+                    auth_user_id: currentAuthId,
+                    role: profile.role || 'administrateur',
+                    is_active: true,
+                    permissions: profile.permissions || defaultAdminPermissions,
+                    updated_at: new Date().toISOString()
+                  })
+                  .eq('id', profile.id)
+                  .select(`*, company:companies(*)`)
+                  .maybeSingle()
+
+                if (updatedProf) {
+                  profile = updatedProf
+                  company = (updatedProf.company as Company) || company
+                }
+              } else if (currentEmail) {
+                const fullName = meta.responsible_name?.trim() || meta.full_name?.trim() || company.name || 'Administrateur'
+                const { data: newProf } = await supabase
+                  .from('user_profiles')
+                  .insert({
+                    company_id: company.id,
+                    auth_user_id: currentAuthId || null,
+                    full_name: fullName,
+                    username: currentEmail,
+                    email: currentEmail,
+                    phone: meta.phone || company.phone || null,
+                    role: 'administrateur',
+                    is_active: true,
+                    permissions: defaultAdminPermissions
+                  })
+                  .select(`*, company:companies(*)`)
+                  .maybeSingle()
+
+                if (newProf) {
+                  profile = newProf
+                  company = (newProf.company as Company) || company
+                }
+              }
+            }
+          }
+        } catch (healErr) {
+          console.error('[SectorLoader] Erreur lors de l\'auto-provisioning de secours :', healErr)
+        }
+      }
+
       if (!profile || !company) {
         console.error('[SectorLoader] Impossible de charger le profil ou l\'entreprise :', {
           authUserId,

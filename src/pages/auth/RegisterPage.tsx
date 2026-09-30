@@ -129,6 +129,11 @@ export const RegisterPage: React.FC = () => {
           data: {
             company_name: form.company_name.trim(),
             responsible_name: form.responsible_name.trim(),
+            phone: form.phone.trim(),
+            ifu_number: form.ifu_number.trim(),
+            city: form.city.trim(),
+            country: form.country,
+            selected_sectors: form.selected_sectors,
             role: 'administrateur'
           },
           emailRedirectTo: `${window.location.origin}/login?confirmed=true`
@@ -172,7 +177,6 @@ export const RegisterPage: React.FC = () => {
             subscription_status: 'trial',
             subscription_plan: planCalc.slug,
             plan: planCalc.slug,
-            trial_ends_at: trialEndsDate.toISOString(),
             updated_at: new Date().toISOString()
           })
           .eq('id', existingComp.id)
@@ -190,7 +194,6 @@ export const RegisterPage: React.FC = () => {
             selected_sectors: form.selected_sectors,
             sectors: form.selected_sectors,
             subscription_status: 'trial',
-            trial_ends_at: trialEndsDate.toISOString(),
             onboarding_completed: true,
             currency: 'FCFA',
             subscription_plan: planCalc.slug,
@@ -401,6 +404,12 @@ export const RegisterPage: React.FC = () => {
             >
               <span>Accéder à la page de Connexion</span>
               <ArrowRight className="w-4 h-4" />
+            </Link>
+            <Link
+              to="/"
+              className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium text-xs flex items-center justify-center gap-1.5 transition"
+            >
+              <span>Retourner à l'accueil</span>
             </Link>
             <p className="text-[11px] text-slate-400">
               Après confirmation du mail, saisissez votre mot de passe pour ouvrir le HUB.

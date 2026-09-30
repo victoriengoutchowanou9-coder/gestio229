@@ -64,7 +64,14 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const status = useAuthStore((s) => s.status)
   const tenantCtx = useAuthStore((s) => s.tenantCtx)
-  if (status === 'authenticated' && tenantCtx) {
+
+  const isConfirmationOrSignupReturn = 
+    window.location.search.includes('confirmed=') || 
+    window.location.search.includes('registered=') ||
+    window.location.search.includes('code=') ||
+    window.location.hash.includes('access_token')
+
+  if (status === 'authenticated' && tenantCtx && !isConfirmationOrSignupReturn) {
     return <Navigate to={tenantCtx.routingDecision.redirectTo} replace />
   }
   return <>{children}</>
