@@ -62,7 +62,18 @@ export const useAuthStore = create<AuthState>()(
 
           if (session?.user) {
             const ctx = await SectorLoader.loadTenantContext(session.user.id, session.user.email)
-            if (ctx) {
+            if (ctx && ctx.company) {
+              const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
+              if (prevCompanyId && prevCompanyId !== ctx.company.id) {
+                try {
+                  localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
+                } catch (e) {}
+              }
+              try {
+                localStorage.removeItem('gestio229_hub_sectors_v3')
+                localStorage.setItem('gestio229_current_company_id', ctx.company.id)
+              } catch (e) {}
+
               set({
                 status: 'authenticated',
                 user: ctx.user,
@@ -82,7 +93,18 @@ export const useAuthStore = create<AuthState>()(
               currentUser.email,
               currentUser
             )
-            if (ctx) {
+            if (ctx && ctx.company) {
+              const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
+              if (prevCompanyId && prevCompanyId !== ctx.company.id) {
+                try {
+                  localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
+                } catch (e) {}
+              }
+              try {
+                localStorage.removeItem('gestio229_hub_sectors_v3')
+                localStorage.setItem('gestio229_current_company_id', ctx.company.id)
+              } catch (e) {}
+
               set({
                 status: 'authenticated',
                 user: ctx.user,
@@ -301,6 +323,18 @@ export const useAuthStore = create<AuthState>()(
               .update({ last_login: new Date().toISOString() })
               .eq('id', ctx.user.id)
 
+            // Isolation stricte du tenant et purge des anciens caches d'autres entreprises
+            const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
+            if (prevCompanyId && prevCompanyId !== ctx.company.id) {
+              try {
+                localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
+              } catch (e) {}
+            }
+            try {
+              localStorage.removeItem('gestio229_hub_sectors_v3')
+              localStorage.setItem('gestio229_current_company_id', ctx.company.id)
+            } catch (e) {}
+
             set({
               status: 'authenticated',
               user: ctx.user,
@@ -349,7 +383,7 @@ export const useAuthStore = create<AuthState>()(
             profile
           )
 
-          if (!ctx) {
+          if (!ctx || !ctx.company) {
             set({
               status: 'error',
               errorMessage: 'Entreprise rattachée introuvable pour ce profil.',
@@ -362,6 +396,18 @@ export const useAuthStore = create<AuthState>()(
             .from('user_profiles')
             .update({ last_login: new Date().toISOString() })
             .eq('id', profile.id)
+
+          // Isolation stricte du tenant et purge des anciens caches d'autres entreprises
+          const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
+          if (prevCompanyId && prevCompanyId !== ctx.company.id) {
+            try {
+              localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
+            } catch (e) {}
+          }
+          try {
+            localStorage.removeItem('gestio229_hub_sectors_v3')
+            localStorage.setItem('gestio229_current_company_id', ctx.company.id)
+          } catch (e) {}
 
           set({
             status: 'authenticated',
@@ -513,6 +559,24 @@ export const useAuthStore = create<AuthState>()(
         } catch (e) {
           // Ignorer si utilisateur interne non Supabase Auth
         }
+
+        try {
+          const keysToRemove: string[] = []
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i)
+            if (k && (
+              k.startsWith('gestio229_') ||
+              k.startsWith('gestio_') ||
+              k === 'gestio229-auth'
+            )) {
+              if (k !== 'gestio_pwa_installed' && k !== 'gestio_theme') {
+                keysToRemove.push(k)
+              }
+            }
+          }
+          keysToRemove.forEach((k) => localStorage.removeItem(k))
+        } catch (e) {}
+
         set({
           status: 'unauthenticated',
           user: null,

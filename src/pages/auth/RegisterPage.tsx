@@ -300,31 +300,28 @@ export const RegisterPage: React.FC = () => {
         })
       }
 
-      // 5. Initialiser les activités du HUB dans le cache local
+      // 5. Initialiser les activités de l'entreprise dans Supabase (company_activities)
       try {
-        const hubActivities = form.selected_sectors.map((sId) => {
+        for (const sId of form.selected_sectors) {
           const matched = ALL_SECTORS.find((s) => s.id === sId || s.slug === sId)
-          return {
-            id: `act-${sId}-${Date.now()}`,
-            sectorSlug: matched ? matched.slug : sId,
-            sectorLabel: matched ? matched.name : sId,
-            sectorIcon: matched ? matched.icon : 'Store',
-            sectorColor: matched ? matched.color : '#3B82F6',
-            name: `${form.company_name} — ${matched ? matched.name : sId}`,
-            location: form.city,
-            manager: form.responsible_name,
+          const slug = matched ? matched.slug : sId.replace(/^sec-/, '')
+          const actName = `${form.company_name} — ${matched ? matched.name : slug}`.toUpperCase()
+          await supabase.from('company_activities').insert({
+            company_id: company.id,
+            sector_slug: slug,
+            sector_code: slug.toUpperCase(),
+            activity_name: actName,
+            pos_location: form.city || 'Bénin',
+            manager_name: form.responsible_name || '',
             status: 'ACTIVE',
-            isConfigured: true,
-            revenue: 0,
-            expenses: 0,
-            netMargin: 0,
-            monthRevenue: 0,
-            monthExpenses: 0,
-            monthNetMargin: 0
-          }
-        })
-        localStorage.setItem('gestio229_hub_sectors_v3', JSON.stringify(hubActivities))
-      } catch (e) {}
+            is_active: true,
+            color: matched?.color || '#059669'
+          })
+        }
+        localStorage.removeItem('gestio229_hub_sectors_v3')
+      } catch (e) {
+        console.warn('[Register] Insertion company_activities:', e)
+      }
 
       // Déconnexion préventive de la session d'inscription
       try {

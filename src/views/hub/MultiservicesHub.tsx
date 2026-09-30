@@ -25,6 +25,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
+import { supabase } from '../../lib/supabase';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES & ÉTATS (PARTIE 9 — POLITIQUE DE CONSERVATION DES DONNÉES)
@@ -55,9 +56,11 @@ export interface ActivityEntry {
 }
 
 export interface MultiservicesHubProps {
+  companyId?: string;
   companyName?: string;
   companyIfu?: string;
   companyRegime?: string;
+  company?: any;
   onSelectSector?: (sectorSlug: string, activityId: string, activityName?: string, location?: string) => void;
   onOpenOnboarding?: (sectorSlug: string) => void;
   onLogout?: () => void;
@@ -65,10 +68,8 @@ export interface MultiservicesHubProps {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONSTANTES (SANS DONNÉES FICTIVES)
+// CONSTANTES & FORMULAIRE PAR DÉFAUT
 // ─────────────────────────────────────────────────────────────────────────────
-
-const STORAGE_KEY = 'gestio229_hub_sectors_v3';
 
 const EMPTY_FORM = {
   sectorSlug: '',
@@ -94,9 +95,11 @@ const getSectorMeta = (slug: string): SectorDefinition | undefined =>
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
+  companyId = '',
   companyName = '',
   companyIfu = '',
   companyRegime = 'Réel Normal',
+  company,
   onSelectSector,
   onOpenOnboarding,
   onLogout,
@@ -109,17 +112,22 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // Modals
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showSettingsModal, setShowSettingsModal] = useState<ActivityEntry | null>(null); // PARTIE 7
+  const [showSettingsModal, setShowSettingsModal] = useState<ActivityEntry | null>(null);
   const [showCompanySettingsModal, setShowCompanySettingsModal] = useState(false);
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
 
-  // Double confirmation suppression (PARTIE 9)
+  // Double confirmation suppression
   const [deleteStep1, setDeleteStep1] = useState<ActivityEntry | null>(null);
   const [deleteStep2, setDeleteStep2] = useState<ActivityEntry | null>(null);
 
   // Formulaire add/edit
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
+
+  // Clé localStorage strictement isolée par entreprise
+  const storageKey = useMemo(() => {
+    return companyId ? `gestio229_hub_sectors_${companyId}` : null;
+  }, [companyId]);
 
   // Mois en cours automatique (PARTIE 4)
   const currentMonthLabel = useMemo(() => {
@@ -132,38 +140,246 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   }, []);
 
-  // ── Persistence ────────────────────────────────────────────────────────────
+  // ── Nettoyage des anciennes clés globales non cloisonnées ──────────────────
   useEffect(() => {
-    const loadFromStorage = () => {
-      try {
-        localStorage.removeItem('gestio229_test_dataset_active');
-        const raw = localStorage.getItem(STORAGE_KEY);
-        if (raw) {
-          const parsed: ActivityEntry[] = JSON.parse(raw);
-          // Purger toute ancienne donnée de test si présente
-          const realOnly = parsed.filter((a) => !a.id.startsWith('test-act-'));
-          if (realOnly.length !== parsed.length) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(realOnly));
-          }
-          setActivities(realOnly);
-        }
-      } catch {
-        // ignore
+    try {
+      localStorage.removeItem('gestio229_hub_sectors_v3');
+      localStorage.removeItem('gestio229_test_dataset_active');
+    } catch (e) {}
+  }, []);
+
+  // ── Synchronisation Supabase company_activities ─────────────────────────────
+  const loadActivitiesFromSupabase = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const { data: dbActivities, error } = await supabase
+        .from('company_activities')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        console.error('[Hub] Erreur lecture company_activities Supabase:', error.message);
       }
+
+      if (dbActivities && dbActivities.length > 0) {
+        const mapped: ActivityEntry[] = dbActivities.map((row) => {
+          const rawSlug = (row.sector_slug || '').replace(/^sec-/, '');
+          const meta = getSectorMeta(rawSlug) || getSectorMeta(row.sector_slug) || getSectorMeta(row.sector_code?.toLowerCase());
+          return {
+            id: row.id,
+            sectorSlug: rawSlug || row.sector_slug,
+            sectorLabel: meta?.label || row.activity_name,
+            sectorIcon: meta?.icon ?? '🏢',
+            sectorColor: row.color || (meta?.color ?? '#059669'),
+            name: row.activity_name,
+            location: row.pos_location || 'Bénin',
+            manager: row.manager_name || '',
+            status: row.status as ActivityStatus,
+            isConfigured: true,
+            revenue: 0,
+            expenses: 0,
+            netMargin: 0,
+            monthRevenue: 0,
+            monthExpenses: 0,
+            monthNetMargin: 0,
+            archivedAt: row.archived_at || undefined,
+          };
+        });
+
+        setActivities(mapped);
+        if (storageKey) {
+          localStorage.setItem(storageKey, JSON.stringify(mapped));
+        }
+      } else {
+        // Auto-seed dans Supabase si aucune activité n'existe pour cette entreprise
+        const sectorsToSeed: string[] = [];
+        if (Array.isArray(company?.selected_sectors) && company.selected_sectors.length > 0) {
+          sectorsToSeed.push(...company.selected_sectors);
+        } else if (Array.isArray(company?.sectors) && company.sectors.length > 0) {
+          sectorsToSeed.push(...company.sectors);
+        } else if (company?.active_sector) {
+          sectorsToSeed.push(company.active_sector);
+        } else {
+          sectorsToSeed.push('boutique');
+        }
+
+        const seededRows: ActivityEntry[] = [];
+        for (const s of sectorsToSeed) {
+          const rawSlug = s.replace(/^sec-/, '');
+          const meta = getSectorMeta(rawSlug) || getSectorMeta(s);
+          const actName = `${companyName || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
+          const { data: newAct, error: actErr } = await supabase
+            .from('company_activities')
+            .insert({
+              company_id: companyId,
+              sector_slug: rawSlug,
+              sector_code: rawSlug.toUpperCase(),
+              activity_name: actName,
+              pos_location: company?.city || 'Bénin',
+              manager_name: company?.responsible_name || '',
+              status: 'ACTIVE',
+              is_active: true,
+              color: meta?.color || '#059669',
+            })
+            .select()
+            .single();
+
+          if (newAct) {
+            seededRows.push({
+              id: newAct.id,
+              sectorSlug: rawSlug,
+              sectorLabel: meta?.label || newAct.activity_name,
+              sectorIcon: meta?.icon ?? '🏢',
+              sectorColor: newAct.color || (meta?.color ?? '#059669'),
+              name: newAct.activity_name,
+              location: newAct.pos_location || 'Bénin',
+              manager: newAct.manager_name || '',
+              status: 'ACTIVE',
+              isConfigured: true,
+              revenue: 0,
+              expenses: 0,
+              netMargin: 0,
+              monthRevenue: 0,
+              monthExpenses: 0,
+              monthNetMargin: 0,
+            });
+          }
+        }
+
+        if (seededRows.length > 0) {
+          setActivities(seededRows);
+          if (storageKey) {
+            localStorage.setItem(storageKey, JSON.stringify(seededRows));
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Hub] Erreur sync Supabase:', err);
+      if (storageKey) {
+        try {
+          const raw = localStorage.getItem(storageKey);
+          if (raw) setActivities(JSON.parse(raw));
+        } catch (e) {}
+      }
+    }
+  }, [companyId, company, companyName, storageKey]);
+
+  // Chargement initial depuis cache local immédiat puis Supabase
+  useEffect(() => {
+    if (storageKey) {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setActivities(parsed);
+          }
+        }
+      } catch (e) {}
+    }
+    loadActivitiesFromSupabase();
+  }, [companyId, storageKey, loadActivitiesFromSupabase]);
+
+  // Synchronisation Realtime Supabase multi-appareils (PC / Mobile / Tablette)
+  useEffect(() => {
+    if (!companyId) return;
+
+    const channel = supabase
+      .channel(`company_activities_rt_${companyId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'company_activities',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          loadActivitiesFromSupabase();
+        }
+      )
+      .subscribe();
+
+    const handleFocus = () => {
+      loadActivitiesFromSupabase();
     };
+    window.addEventListener('focus', handleFocus);
 
-    // Chargement initial
-    loadFromStorage();
+    return () => {
+      supabase.removeChannel(channel);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [companyId, loadActivitiesFromSupabase]);
 
-    // Écouter les mises à jour externes (ex: auto-sync depuis HubPage)
-    window.addEventListener('storage', loadFromStorage);
-    return () => window.removeEventListener('storage', loadFromStorage);
-  }, []);
+  // ── Métriques financières réelles consolidées depuis Supabase ──────────────
+  const loadFinancialMetrics = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const now = new Date();
+      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
-  const persist = useCallback((data: ActivityEntry[]) => {
-    setActivities(data);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  }, []);
+      const [{ data: salesData }, { data: expData }] = await Promise.all([
+        supabase
+          .from('sales_orders')
+          .select('total_amount, sector_slug, created_at')
+          .eq('company_id', companyId)
+          .gte('created_at', startOfMonth),
+        supabase
+          .from('expenses')
+          .select('amount, sector_slug, created_at')
+          .eq('company_id', companyId)
+          .gte('created_at', startOfMonth),
+      ]);
+
+      const allSales = salesData || [];
+      const allExpenses = expData || [];
+
+      const todaySales = allSales.filter((s: any) => s.created_at >= startOfDay);
+      const todayExp = allExpenses.filter((e: any) => e.created_at >= startOfDay);
+
+      setActivities((prev) =>
+        prev.map((act) => {
+          const actTodaySales = todaySales.filter((s: any) => s.sector_slug === act.sectorSlug);
+          const actTodayExp = todayExp.filter((e: any) => e.sector_slug === act.sectorSlug);
+          const actDayRev = actTodaySales.reduce((sum: number, s: any) => sum + (Number(s.total_amount) || 0), 0);
+          const actDayExp = actTodayExp.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+
+          const actMonthSales = allSales.filter((s: any) => s.sector_slug === act.sectorSlug);
+          const actMonthExp = allExpenses.filter((e: any) => e.sector_slug === act.sectorSlug);
+          const actMonthRev = actMonthSales.reduce((sum: number, s: any) => sum + (Number(s.total_amount) || 0), 0);
+          const aMonthExp = actMonthExp.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
+
+          return {
+            ...act,
+            revenue: actDayRev,
+            expenses: actDayExp,
+            netMargin: actDayRev - actDayExp,
+            monthRevenue: actMonthRev,
+            monthExpenses: aMonthExp,
+            monthNetMargin: actMonthRev - aMonthExp,
+          };
+        })
+      );
+    } catch (e) {
+      console.warn('[Hub] Erreur métriques financières:', e);
+    }
+  }, [companyId]);
+
+  useEffect(() => {
+    loadFinancialMetrics();
+  }, [loadFinancialMetrics, activities.length]);
+
+  const persist = useCallback(
+    (data: ActivityEntry[]) => {
+      setActivities(data);
+      if (storageKey) {
+        localStorage.setItem(storageKey, JSON.stringify(data));
+      }
+    },
+    [storageKey]
+  );
 
   // ── Filtrage des activités actives vs archivées (PARTIE 9) ─────────────────
   const activeActivities = useMemo(
@@ -194,61 +410,140 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   }, [activeActivities]);
 
   // ── Actions : Ajout d'activité (PARTIE 6) ──────────────────────────────────
-  const handleAddSubmit = () => {
-    if (!form.sectorSlug) { setFormError('Veuillez sélectionner un secteur d\'activité.'); return; }
-    if (!form.name.trim()) { setFormError("Le nom de l'établissement est requis."); return; }
-    if (!form.location.trim()) { setFormError("Le lieu de l'établissement est requis."); return; }
+  const handleAddSubmit = async () => {
+    if (!form.sectorSlug) {
+      setFormError("Veuillez sélectionner un secteur d'activité.");
+      return;
+    }
+    if (!form.name.trim()) {
+      setFormError("Le nom de l'établissement est requis.");
+      return;
+    }
+    if (!form.location.trim()) {
+      setFormError("Le lieu de l'établissement est requis.");
+      return;
+    }
 
     const meta = getSectorMeta(form.sectorSlug);
-    if (!meta) { setFormError('Secteur introuvable.'); return; }
+    if (!meta) {
+      setFormError('Secteur introuvable.');
+      return;
+    }
 
-    const newEntry: ActivityEntry = {
-      id: generateId(),
-      sectorSlug: meta.slug,
-      sectorLabel: meta.label,
-      sectorIcon: meta.icon,
-      sectorColor: meta.color,
-      name: form.name.trim().toUpperCase(),
-      location: form.location.trim(),
-      manager: form.manager.trim(),
-      status: 'ACTIVE',
-      isConfigured: true,
-      revenue: 0,
-      expenses: 0,
-      netMargin: 0,
-      monthRevenue: 0,
-      monthExpenses: 0,
-      monthNetMargin: 0,
-    };
+    try {
+      let createdId = generateId();
+      if (companyId) {
+        const { data: newRow, error: insertErr } = await supabase
+          .from('company_activities')
+          .insert({
+            company_id: companyId,
+            sector_slug: meta.slug,
+            sector_code: meta.slug.toUpperCase(),
+            activity_name: form.name.trim().toUpperCase(),
+            pos_location: form.location.trim(),
+            manager_name: form.manager.trim(),
+            status: 'ACTIVE',
+            is_active: true,
+            color: meta.color,
+          })
+          .select()
+          .single();
 
-    persist([...activities, newEntry]);
-    setShowAddModal(false);
-    setForm(EMPTY_FORM);
-    setFormError('');
+        if (insertErr) throw insertErr;
+        if (newRow) createdId = newRow.id;
+
+        // Mettre à jour selected_sectors de la société si nécessaire
+        const currentSectors = Array.isArray(company?.selected_sectors) ? company.selected_sectors : [];
+        if (!currentSectors.includes(meta.slug) && !currentSectors.includes(`sec-${meta.slug}`)) {
+          await supabase
+            .from('companies')
+            .update({
+              selected_sectors: [...currentSectors, meta.slug],
+              sectors: [...currentSectors, meta.slug],
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', companyId);
+        }
+      }
+
+      const newEntry: ActivityEntry = {
+        id: createdId,
+        sectorSlug: meta.slug,
+        sectorLabel: meta.label,
+        sectorIcon: meta.icon,
+        sectorColor: meta.color,
+        name: form.name.trim().toUpperCase(),
+        location: form.location.trim(),
+        manager: form.manager.trim(),
+        status: 'ACTIVE',
+        isConfigured: true,
+        revenue: 0,
+        expenses: 0,
+        netMargin: 0,
+        monthRevenue: 0,
+        monthExpenses: 0,
+        monthNetMargin: 0,
+      };
+
+      persist([...activities, newEntry]);
+      setShowAddModal(false);
+      setForm(EMPTY_FORM);
+      setFormError('');
+    } catch (err: any) {
+      console.error('[Hub] Erreur création activité:', err);
+      setFormError(err.message || "Erreur lors de l'enregistrement dans la base de données.");
+    }
   };
 
   // ── Actions : Modification des paramètres (PARTIE 7) ──────────────────────
-  const handleSettingsSubmit = () => {
+  const handleSettingsSubmit = async () => {
     if (!showSettingsModal) return;
-    if (!form.name.trim()) { setFormError("Le nom de l'établissement est requis."); return; }
-    if (!form.location.trim()) { setFormError("Le lieu est requis."); return; }
+    if (!form.name.trim()) {
+      setFormError("Le nom de l'établissement est requis.");
+      return;
+    }
+    if (!form.location.trim()) {
+      setFormError('Le lieu est requis.');
+      return;
+    }
 
-    const updated = activities.map((a) =>
-      a.id === showSettingsModal.id
-        ? {
-            ...a,
-            name: form.name.trim().toUpperCase(),
-            location: form.location.trim(),
-            manager: form.manager.trim(),
+    try {
+      if (companyId) {
+        const { error: upErr } = await supabase
+          .from('company_activities')
+          .update({
+            activity_name: form.name.trim().toUpperCase(),
+            pos_location: form.location.trim(),
+            manager_name: form.manager.trim(),
             status: form.status,
-          }
-        : a
-    );
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', showSettingsModal.id)
+          .eq('company_id', companyId);
 
-    persist(updated);
-    setShowSettingsModal(null);
-    setForm(EMPTY_FORM);
-    setFormError('');
+        if (upErr) throw upErr;
+      }
+
+      const updated = activities.map((a) =>
+        a.id === showSettingsModal.id
+          ? {
+              ...a,
+              name: form.name.trim().toUpperCase(),
+              location: form.location.trim(),
+              manager: form.manager.trim(),
+              status: form.status,
+            }
+          : a
+      );
+
+      persist(updated);
+      setShowSettingsModal(null);
+      setForm(EMPTY_FORM);
+      setFormError('');
+    } catch (err: any) {
+      console.error('[Hub] Erreur modification activité:', err);
+      setFormError(err.message || 'Erreur lors de la mise à jour.');
+    }
   };
 
   // ── Actions : Suppression sécurisée avec double confirmation (PARTIE 9) ───
@@ -263,30 +558,61 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     setDeleteStep1(null);
   };
 
-  const confirmFinalSoftDelete = () => {
+  const confirmFinalSoftDelete = async () => {
     if (!deleteStep2) return;
-    // RÈGLE CRITIQUE PARTIE 9 : Pas de suppression physique destructrice.
-    // L'activité passe en statut 'ARCHIVEE' pour préserver l'historique financier et légal.
-    const updated = activities.map((a) =>
-      a.id === deleteStep2.id
-        ? {
-            ...a,
-            status: 'ARCHIVEE' as ActivityStatus,
-            archivedAt: new Date().toISOString(),
-          }
-        : a
-    );
-    persist(updated);
-    setDeleteStep2(null);
+    try {
+      if (companyId) {
+        await supabase
+          .from('company_activities')
+          .update({
+            status: 'ARCHIVEE',
+            is_active: false,
+            archived_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', deleteStep2.id)
+          .eq('company_id', companyId);
+      }
+      const updated = activities.map((a) =>
+        a.id === deleteStep2.id
+          ? {
+              ...a,
+              status: 'ARCHIVEE' as ActivityStatus,
+              archivedAt: new Date().toISOString(),
+            }
+          : a
+      );
+      persist(updated);
+    } catch (err) {
+      console.error('[Hub] Erreur archivage activité:', err);
+    } finally {
+      setDeleteStep2(null);
+    }
   };
 
-  const restoreActivity = (act: ActivityEntry) => {
-    const updated = activities.map((a) =>
-      a.id === act.id
-        ? { ...a, status: 'ACTIVE' as ActivityStatus, archivedAt: undefined }
-        : a
-    );
-    persist(updated);
+  const restoreActivity = async (act: ActivityEntry) => {
+    try {
+      if (companyId) {
+        await supabase
+          .from('company_activities')
+          .update({
+            status: 'ACTIVE',
+            is_active: true,
+            archived_at: null,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', act.id)
+          .eq('company_id', companyId);
+      }
+      const updated = activities.map((a) =>
+        a.id === act.id
+          ? { ...a, status: 'ACTIVE' as ActivityStatus, archivedAt: undefined }
+          : a
+      );
+      persist(updated);
+    } catch (err) {
+      console.error('[Hub] Erreur restauration activité:', err);
+    }
   };
 
   // ── Action : Ouvrir l'application métier (PARTIE 8) ────────────────────────
@@ -298,9 +624,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   };
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setIsRefreshing(true);
-    setTimeout(() => setIsRefreshing(false), 500);
+    await Promise.all([
+      loadActivitiesFromSupabase(),
+      loadFinancialMetrics(),
+    ]);
+    setTimeout(() => setIsRefreshing(false), 300);
   };
 
   // ─────────────────────────────────────────────────────────────────────────
