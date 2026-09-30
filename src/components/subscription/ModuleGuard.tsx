@@ -26,6 +26,24 @@ export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) 
   }
 
   const isStarter = access.reason === 'starter_restriction'
+  const isExpired = access.reason === 'expired'
+  const isSuspended = access.reason === 'suspended'
+
+  const badgeText = isExpired
+    ? "Période d'Essai de 30 Jours Expirée"
+    : isSuspended
+    ? 'Compte Suspendu'
+    : isStarter
+    ? 'Module Non Inclus dans le Plan Starter'
+    : 'Abonnement Requis'
+
+  const titleText = isExpired
+    ? 'Essai Gratuit Terminé'
+    : isSuspended
+    ? 'Accès Suspendu'
+    : isStarter
+    ? 'Débloquez les fonctionnalités avancées'
+    : 'Accès Restreint'
 
   return (
     <div className="min-h-[70vh] flex items-center justify-center p-4">
@@ -36,11 +54,11 @@ export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) 
 
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 mb-3">
           <ShieldAlert className="w-3.5 h-3.5" />
-          {isStarter ? 'Module Non Inclus dans le Plan Starter' : 'Abonnement Requis'}
+          {badgeText}
         </span>
 
         <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
-          {isStarter ? 'Débloquez les fonctionnalités avancées' : 'Accès Restreint'}
+          {titleText}
         </h2>
 
         <p className="text-slate-600 dark:text-slate-300 text-sm mt-2 leading-relaxed">
@@ -75,11 +93,11 @@ export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) 
 
         <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
           <Link
-            to="/dashboard/tableau-bord"
+            to="/hub"
             className="w-full sm:w-auto px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center justify-center gap-2 transition"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Tableau de bord</span>
+            <span>Retourner au HUB</span>
           </Link>
 
           <Link
@@ -87,7 +105,7 @@ export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) 
             className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition"
           >
             <Sparkles className="w-4 h-4" />
-            <span>Passer au Plan Supérieur</span>
+            <span>{isExpired || isSuspended ? 'Consulter les formules & Activer' : 'Passer au Plan Supérieur'}</span>
             <ArrowRight className="w-4 h-4" />
           </Link>
         </div>

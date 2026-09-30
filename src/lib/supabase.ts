@@ -4,17 +4,15 @@
 
 import { createClient } from '@supabase/supabase-js'
 
-let rawUrl = (import.meta.env.VITE_SUPABASE_URL as string) || ''
+const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : (typeof process !== 'undefined' ? process.env : {}) as any
+
+let rawUrl = (env.VITE_SUPABASE_URL as string) || 'https://inknljnhqmrykcrgglts.supabase.co'
 if (rawUrl && !rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
   rawUrl = `https://${rawUrl}`
 }
 
 const supabaseUrl = rawUrl
-const supabaseAnonKey = (import.meta.env.VITE_SUPABASE_ANON_KEY as string) || ''
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('[GESTIO229] Variables VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY manquantes !')
-}
+const supabaseAnonKey = (env.VITE_SUPABASE_ANON_KEY as string) || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

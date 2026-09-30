@@ -198,7 +198,6 @@ export const MoMoService = {
           subscription_status: 'active',
           subscription_plan: planSlug,
           plan: planSlug,
-          trial_ends_at: newExpiresAt.toISOString(),
           updated_at: now.toISOString()
         })
         .eq('id', companyId)

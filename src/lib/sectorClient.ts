@@ -55,19 +55,24 @@ export function getActiveSectorMeta() {
 export function isSectorSubscribed(sectorSlug: string, company?: Company | null): boolean {
   if (!company) return false
   
+  const normSlug = String(sectorSlug).replace(/^sec-/, '').toLowerCase()
+
   // Liste des secteurs souscrits dans company_sectors ou selected_sectors
-  const selected: string[] = []
+  const rawList: string[] = []
   if (Array.isArray((company as any).selected_sectors)) {
-    selected.push(...(company as any).selected_sectors)
+    rawList.push(...(company as any).selected_sectors)
   }
   if (Array.isArray((company as any).sectors)) {
-    selected.push(...(company as any).sectors)
+    rawList.push(...(company as any).sectors)
   }
   if ((company as any).active_sector) {
-    selected.push((company as any).active_sector)
+    rawList.push((company as any).active_sector)
   }
 
-  return selected.includes(sectorSlug) || selected.length === 0
+  if (rawList.length === 0) return true
+
+  const normalizedList = rawList.map((s) => String(s).replace(/^sec-/, '').toLowerCase())
+  return normalizedList.includes(normSlug)
 }
 
 /**

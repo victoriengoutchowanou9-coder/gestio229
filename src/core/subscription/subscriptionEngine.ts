@@ -203,6 +203,7 @@ export function checkModuleAccess(
     plan?: string
     selected_sectors?: string[]
     sectors?: string[]
+    created_at?: string
   } | null | undefined
 ): {
   allowed: boolean
@@ -210,34 +211,61 @@ export function checkModuleAccess(
   requiredPlan?: string
   message?: string
 } {
+  // L'accès au module d'abonnement est TOUJOURS autorisé afin de permettre le renouvellement
+  if (moduleId === 'abonnement') {
+    return { allowed: true }
+  }
+
   if (!company) {
     return { allowed: false, reason: 'suspended', message: 'Entreprise non authentifiée.' }
   }
 
-  // 1. Statut de compte suspendu ou expiré
-  const status = (company.subscription_status || '').toLowerCase()
-  if (status === 'suspended' || status === 'expired') {
-    if (moduleId === 'abonnement') {
-      return { allowed: true }
-    }
+  const status = (company.subscription_status || 'trial').toLowerCase()
+  const createdAt = company.created_at ? new Date(company.created_at) : new Date()
+  const trialEndsAt = new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000)
+  const now = new Date()
+  const hasTrialExpired = status === 'trial' && now.getTime() > trialEndsAt.getTime()
+
+  // 1. Compte expiré (soit statut 'expired' en base, soit 30 jours d'essai écoulés)
+  if (status === 'expired' || hasTrialExpired) {
     return {
       allowed: false,
-      reason: 'suspended',
-      message: 'Votre abonnement est expiré. Veuillez le renouveler pour accéder à ce module.'
+      reason: 'expired',
+      message: "Votre période d'essai gratuit de 30 jours est arrivée à échéance. Veuillez activer votre abonnement pour continuer à utiliser ce module."
     }
   }
 
-  // 2. Vérification plan Starter
-  const planSlug = (company.subscription_plan || company.plan || '').toLowerCase()
-  const isStarter = planSlug === 'starter' || planSlug === 'solo'
-
-  if (isStarter && ADVANCED_MODULES.includes(moduleId)) {
+  // 2. Compte suspendu
+  if (status === 'suspended') {
     return {
       allowed: false,
-      reason: 'starter_restriction',
-      requiredPlan: 'Plan Entreprise (10 000 FCFA/mois)',
-      message: 'Ce module est réservé au Plan Entreprise. Mettez à niveau votre abonnement pour y accéder.'
+      reason: 'suspended',
+      message: 'Votre compte est suspendu. Veuillez régulariser votre abonnement pour accéder à ce module.'
     }
+  }
+
+  // 3. Période d'essai active (<= 30 jours) :
+  // RÈGLE D'OR : Accès 100% débloqué à TOUS les modules de TOUS les secteurs choisis !
+  if (status === 'trial') {
+    return { allowed: true }
+  }
+
+  // 4. Compte Actif avec Abonnement Payé :
+  if (status === 'active') {
+    const planSlug = (company.subscription_plan || company.plan || '').toLowerCase()
+    const isStarter = planSlug === 'starter' || planSlug === 'solo'
+
+    // Le plan Starter exclut les modules avancés
+    if (isStarter && ADVANCED_MODULES.includes(moduleId)) {
+      return {
+        allowed: false,
+        reason: 'starter_restriction',
+        requiredPlan: 'Plan Entreprise (10 000 FCFA/mois)',
+        message: 'Ce module est réservé au Plan Entreprise. Mettez à niveau votre abonnement pour y accéder.'
+      }
+    }
+
+    return { allowed: true }
   }
 
   return { allowed: true }
@@ -261,19 +289,18 @@ export interface TrialInfo {
 
 export function getCompanySubscriptionInfo(company: any): TrialInfo {
   const status = (company?.subscription_status || 'trial').toLowerCase()
-  const isTrial = status === 'trial'
-  const isActive = status === 'active'
-  const isExpired = status === 'expired'
-  const isSuspended = status === 'suspended'
-
   const createdDate = company?.created_at ? new Date(company.created_at) : new Date()
-  const trialEndsDate = company?.trial_ends_at
-    ? new Date(company.trial_ends_at)
-    : new Date(createdDate.getTime() + 30 * 24 * 60 * 60 * 1000)
+  const trialEndsDate = new Date(createdDate.getTime() + 30 * 24 * 60 * 60 * 1000)
 
   const now = new Date()
   const diffTime = trialEndsDate.getTime() - now.getTime()
   const daysRemaining = Math.max(0, Math.ceil(diffTime / (1000 * 60 * 60 * 24)))
+
+  const hasTrialExpired = status === 'trial' && diffTime <= 0
+  const isTrial = status === 'trial' && !hasTrialExpired
+  const isActive = status === 'active'
+  const isExpired = status === 'expired' || hasTrialExpired
+  const isSuspended = status === 'suspended'
 
   const sectors = Array.isArray(company?.selected_sectors)
     ? company.selected_sectors

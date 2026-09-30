@@ -266,14 +266,23 @@ export const SectorLoader = {
         }
       }
 
-      if (!profile || !company) {
-        console.error('[SectorLoader] Impossible de charger le profil ou l\'entreprise :', {
-          authUserId,
-          emailHint,
-          hasProfile: !!profile,
-          hasCompany: !!company
-        })
-        return null
+      // 1.5. Contrôle et expiration automatique de la période d'essai gratuit de 1 mois (30 jours) côté serveur/BDD
+      if (company && (company.subscription_status === 'trial' || !company.subscription_status)) {
+        const createdAt = company.created_at ? new Date(company.created_at).getTime() : Date.now()
+        const trialDurationMs = 30 * 24 * 60 * 60 * 1000
+        const isExpired = Date.now() > (createdAt + trialDurationMs)
+
+        if (isExpired) {
+          company.subscription_status = 'expired'
+          try {
+            await supabase
+              .from('companies')
+              .update({ subscription_status: 'expired', updated_at: new Date().toISOString() })
+              .eq('id', company.id)
+          } catch (e) {
+            console.error('[SectorLoader] Erreur persistance statut expiré :', e)
+          }
+        }
       }
 
       const user = profile as UserProfile

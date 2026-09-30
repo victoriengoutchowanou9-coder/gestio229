@@ -6,11 +6,12 @@
 // =============================================================================
 
 import React from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { Lock, ArrowLeft, ShieldAlert } from 'lucide-react'
+import { Link, useParams, useLocation } from 'react-router-dom'
+import { Lock, ArrowLeft, ShieldAlert, Sparkles, Clock, AlertTriangle } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { getActiveSectorSlug, isSectorSubscribed } from '../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
+import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
 
 interface SectorGuardProps {
   children: React.ReactNode
@@ -19,7 +20,61 @@ interface SectorGuardProps {
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   const { company } = useAuthStore()
   const params = useParams<{ sectorSlug?: string }>()
-  
+  const location = useLocation()
+
+  // L'accès à la page d'abonnement est TOUJOURS autorisé (règle absolue pour permettre le renouvellement)
+  const isAbonnementRoute = location.pathname.includes('/abonnement')
+  if (isAbonnementRoute) {
+    return <>{children}</>
+  }
+
+  // Vérification de la période d'essai (30 jours) et de la validité de l'abonnement
+  const subInfo = getCompanySubscriptionInfo(company)
+  if (subInfo.isExpired || subInfo.isSuspended) {
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center p-4">
+        <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl border border-amber-200 dark:border-amber-900/60 p-8 shadow-xl text-center">
+          <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-5 shadow-sm">
+            <Clock className="w-8 h-8" />
+          </div>
+
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 mb-3">
+            <AlertTriangle className="w-3.5 h-3.5" />
+            {subInfo.isSuspended ? 'Compte Suspendu' : "Période d'Essai de 30 Jours Expirée"}
+          </span>
+
+          <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
+            {subInfo.isSuspended ? 'Accès Suspendu' : 'Essai Gratuit Terminé'}
+          </h2>
+
+          <p className="text-slate-600 dark:text-slate-300 text-sm mt-3 leading-relaxed">
+            {subInfo.isSuspended
+              ? 'Votre compte est suspendu. Veuillez régulariser votre abonnement pour continuer à exploiter vos données.'
+              : `Votre période d'essai gratuit de 30 jours pour ${company?.name || 'votre entreprise'} a pris fin le ${subInfo.endDate}. Veuillez activer une formule d'abonnement pour reprendre votre activité.`}
+          </p>
+
+          <div className="mt-6 flex flex-col gap-3">
+            <Link
+              to="/dashboard/abonnement"
+              className="w-full inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition"
+            >
+              <Sparkles className="w-4 h-4" />
+              Consulter les formules & Activer
+            </Link>
+
+            <Link
+              to="/hub"
+              className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm transition"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Retourner au HUB
+            </Link>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   // Le secteur ciblé vient soit de l'URL (/app/:sectorSlug/...) soit de l'état actif
   const targetSectorSlug = params.sectorSlug || getActiveSectorSlug()
   const allowed = isSectorSubscribed(targetSectorSlug, company)

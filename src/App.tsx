@@ -3,11 +3,12 @@
 // =============================================================================
 
 import React, { useEffect, Suspense, lazy } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import AppLayout from './components/layout/AppLayout'
 import ModuleGuard from './components/subscription/ModuleGuard'
 import SectorGuard from './components/subscription/SectorGuard'
+import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
 
 // ─── Lazy Loading des pages ─────────────────────────────────────────────────
 
@@ -89,25 +90,41 @@ const AppInitializer: React.FC = () => {
   return null
 }
 
-// ─── Page Suspendu ──────────────────────────────────────────────────────────
+// ─── Page Suspendu / Essai Expiré ────────────────────────────────────────────
 
 const SuspendedPage = () => {
   const company = useAuthStore((s) => s.company)
   const logout = useAuthStore((s) => s.logout)
+  const subInfo = getCompanySubscriptionInfo(company)
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-red-50">
-      <div className="bg-white rounded-2xl shadow-lg p-10 max-w-md text-center">
-        <div className="text-6xl mb-4">🔒</div>
-        <h1 className="text-2xl font-bold text-red-700 mb-2">Compte Suspendu</h1>
-        <p className="text-slate-600 mb-6">
-          Le compte <strong>{company?.name}</strong> est suspendu. Veuillez renouveler votre abonnement.
+    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
+      <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-700 p-8 sm:p-10 max-w-md w-full text-center">
+        <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-5 shadow-sm text-3xl">
+          🔒
+        </div>
+        <h1 className="text-2xl font-black text-slate-800 dark:text-slate-100 mb-2">
+          {subInfo.isSuspended ? 'Compte Suspendu' : "Période d'Essai de 30 Jours Expirée"}
+        </h1>
+        <p className="text-slate-600 dark:text-slate-300 text-sm mb-6 leading-relaxed">
+          {subInfo.isSuspended
+            ? `Le compte ${company?.name || 'de votre entreprise'} est actuellement suspendu. Veuillez régulariser votre abonnement.`
+            : `Votre période d'essai gratuit de 30 jours pour ${company?.name || 'votre entreprise'} est arrivée à échéance. Veuillez activer votre abonnement pour débloquer l'accès à vos sous-logiciels et données.`}
         </p>
-        <button
-          onClick={logout}
-          className="bg-red-600 text-white px-6 py-3 rounded-xl font-semibold hover:bg-red-700 transition"
-        >
-          Se déconnecter
-        </button>
+        <div className="flex flex-col gap-3">
+          <Link
+            to="/dashboard/abonnement"
+            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition"
+          >
+            Consulter les Formules & Renouveler
+          </Link>
+          <button
+            onClick={logout}
+            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 font-semibold text-sm transition"
+          >
+            Se déconnecter
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -124,7 +141,7 @@ const AppRoutes: React.FC = () => {
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
       <Route path="/inscription" element={<PublicRoute><RegisterPage /></PublicRoute>} />
 
-      {/* Compte suspendu */}
+      {/* Compte suspendu / Essai Expiré */}
       <Route path="/suspended" element={<SuspendedPage />} />
 
       {/* Hub multi-services */}
@@ -145,25 +162,25 @@ const AppRoutes: React.FC = () => {
         }
       >
         <Route index element={<Navigate to="tableau-bord" replace />} />
-        <Route path="tableau-bord"   element={<DashboardPage />} />
-        <Route path="dashboard"      element={<DashboardPage />} />
-        <Route path="vente"          element={<POSPage />} />
-        <Route path="vente-pos"      element={<POSPage />} />
-        <Route path="stocks"         element={<StocksPage />} />
-        <Route path="caisse"         element={<CaissePage />} />
+        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
+        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
+        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
+        <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
-        <Route path="clients"        element={<ClientsPage />} />
-        <Route path="achats"         element={<FournisseursPage />} />
-        <Route path="fournisseurs"   element={<FournisseursPage />} />
-        <Route path="depenses"       element={<DepensesPage />} />
+        <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
+        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
         <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
-        <Route path="configuration"  element={<ConfigPage />} />
-        <Route path="journal-audit"  element={<AuditPage />} />
-        <Route path="audit"          element={<AuditPage />} />
+        <Route path="configuration"  element={<ModuleGuard moduleId="configuration"><ConfigPage /></ModuleGuard>} />
+        <Route path="journal-audit"  element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
+        <Route path="audit"          element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
         <Route path="abonnement"     element={<AbonnementPage />} />
-        <Route path="utilisateurs"   element={<UtilisateursPage />} />
+        <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
       </Route>
 
       {/* Point 14 : Routes directes par secteur (Ex: /quincaillerie/tableau-bord, /poissonnerie/stocks...) */}
@@ -178,25 +195,25 @@ const AppRoutes: React.FC = () => {
         }
       >
         <Route index element={<Navigate to="tableau-bord" replace />} />
-        <Route path="tableau-bord"   element={<DashboardPage />} />
-        <Route path="dashboard"      element={<DashboardPage />} />
-        <Route path="vente"          element={<POSPage />} />
-        <Route path="vente-pos"      element={<POSPage />} />
-        <Route path="stocks"         element={<StocksPage />} />
-        <Route path="caisse"         element={<CaissePage />} />
+        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
+        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
+        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
+        <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
-        <Route path="clients"        element={<ClientsPage />} />
-        <Route path="achats"         element={<FournisseursPage />} />
-        <Route path="fournisseurs"   element={<FournisseursPage />} />
-        <Route path="depenses"       element={<DepensesPage />} />
+        <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
+        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
         <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
-        <Route path="configuration"  element={<ConfigPage />} />
-        <Route path="journal-audit"  element={<AuditPage />} />
-        <Route path="audit"          element={<AuditPage />} />
+        <Route path="configuration"  element={<ModuleGuard moduleId="configuration"><ConfigPage /></ModuleGuard>} />
+        <Route path="journal-audit"  element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
+        <Route path="audit"          element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
         <Route path="abonnement"     element={<AbonnementPage />} />
-        <Route path="utilisateurs"   element={<UtilisateursPage />} />
+        <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
       </Route>
 
       {/* Rétrocompatibilité /dashboard */}
@@ -205,23 +222,23 @@ const AppRoutes: React.FC = () => {
         element={<ProtectedRoute><AppLayout /></ProtectedRoute>}
       >
         <Route index element={<Navigate to="/dashboard/tableau-bord" replace />} />
-        <Route path="tableau-bord"   element={<DashboardPage />} />
-        <Route path="dashboard"      element={<DashboardPage />} />
-        <Route path="vente"          element={<POSPage />} />
-        <Route path="vente-pos"      element={<POSPage />} />
-        <Route path="stocks"         element={<StocksPage />} />
-        <Route path="caisse"         element={<CaissePage />} />
+        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
+        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
+        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
+        <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
-        <Route path="clients"        element={<ClientsPage />} />
-        <Route path="achats"         element={<FournisseursPage />} />
-        <Route path="fournisseurs"   element={<FournisseursPage />} />
-        <Route path="depenses"       element={<DepensesPage />} />
+        <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
+        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
         <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
-        <Route path="configuration"  element={<ConfigPage />} />
-        <Route path="journal-audit"  element={<AuditPage />} />
+        <Route path="configuration"  element={<ModuleGuard moduleId="configuration"><ConfigPage /></ModuleGuard>} />
+        <Route path="journal-audit"  element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
         <Route path="abonnement"     element={<AbonnementPage />} />
-        <Route path="utilisateurs"   element={<UtilisateursPage />} />
+        <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
       </Route>
 
       {/* Fallback */}
