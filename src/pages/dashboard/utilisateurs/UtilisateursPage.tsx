@@ -179,6 +179,11 @@ const UtilisateursPage: React.FC = () => {
   const [payMethod, setPayMethod] = useState<'especes' | 'virement' | 'momo' | 'cheque'>('especes')
   const [isPaying, setIsPaying] = useState(false)
 
+  // Modal Modification Mot de Passe Utilisateur Interne
+  const [resetPasswordUser, setResetPasswordUser] = useState<any | null>(null)
+  const [resetNewPassword, setResetNewPassword] = useState('')
+  const [resetLoading, setResetLoading] = useState(false)
+
   const emptyForm: NewUserForm = {
     full_name: '',
     login_identifier: '',
@@ -257,12 +262,57 @@ const UtilisateursPage: React.FC = () => {
 
   const loadSectors = async () => {
     if (!company?.id) return
-    const { data } = await supabase
-      .from('company_sectors')
-      .select('id, sector_name, sector_slug')
-      .eq('company_id', company.id)
+    try {
+      // 1. Priorité aux activités réelles configurées pour cette entreprise dans Supabase
+      const { data: activities, error: actErr } = await supabase
+        .from('company_activities')
+        .select('id, activity_name, sector_slug, sector_code')
+        .eq('company_id', company.id)
+        .eq('status', 'ACTIVE')
 
-    setSectors(data ?? [])
+      if (!actErr && activities && activities.length > 0) {
+        setSectors(
+          activities.map((a: any) => ({
+            id: a.id,
+            sector_name: a.activity_name,
+            sector_slug: (a.sector_slug || a.sector_code || '').toLowerCase().replace(/^sec-/, ''),
+          }))
+        )
+        return
+      }
+
+      // 2. Fallback company_sectors
+      const { data, error: secErr } = await supabase
+        .from('company_sectors')
+        .select('id, sector_name, sector_slug')
+        .eq('company_id', company.id)
+
+      if (!secErr && data && data.length > 0) {
+        setSectors(data)
+        return
+      }
+
+      // 3. Fallback selected_sectors de la société
+      const rawList: string[] = []
+      if (Array.isArray(company.selected_sectors)) rawList.push(...company.selected_sectors)
+      else if (Array.isArray(company.sectors)) rawList.push(...company.sectors)
+      else if (company.active_sector) rawList.push(company.active_sector)
+
+      if (rawList.length > 0) {
+        setSectors(
+          rawList.map((slug) => {
+            const cleanSlug = slug.replace(/^sec-/, '').toLowerCase()
+            return {
+              id: cleanSlug,
+              sector_name: cleanSlug.replace(/_/g, ' ').toUpperCase(),
+              sector_slug: cleanSlug,
+            }
+          })
+        )
+      }
+    } catch (e) {
+      console.error('[UtilisateursPage] Erreur chargement secteurs:', e)
+    }
   }
 
   const handleCreateUser = async (e: React.FormEvent) => {
@@ -288,26 +338,28 @@ const UtilisateursPage: React.FC = () => {
     try {
       if (!company?.id) throw new Error("Entreprise introuvable.")
 
+      const cleanIdent = form.login_identifier.trim().toLowerCase()
+
       const { data: existing } = await supabase
         .from('user_profiles')
         .select('id')
         .eq('company_id', company.id)
-        .eq('login_identifier', form.login_identifier.trim())
+        .eq('username', cleanIdent)
         .maybeSingle()
 
       if (existing) {
-        throw new Error(`L'identifiant "${form.login_identifier}" est déjà utilisé dans votre entreprise.`)
+        throw new Error(`L'identifiant "${cleanIdent}" est déjà utilisé dans votre entreprise.`)
       }
 
       const companyShort = company.id.substring(0, 8)
-      const internalEmail = `${form.login_identifier.toLowerCase().replace(/[^a-z0-9]/g, '_')}_${companyShort}@gestio229.internal`
+      const internalEmail = `${cleanIdent.replace(/[^a-z0-9]/g, '_')}_${companyShort}@gestio229.internal`
 
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: internalEmail,
         password: form.password,
         options: {
           data: {
-            full_name: form.full_name,
+            full_name: form.full_name.trim(),
             company_id: company.id,
             is_internal: true,
           }
@@ -319,25 +371,29 @@ const UtilisateursPage: React.FC = () => {
         authUserId = authData.user.id
       }
 
+      const permissionsPayload = {
+        ...(form.permissions || {}),
+        sector_id: form.sector_id || null,
+        is_internal_user: true,
+        created_by_admin_id: user?.id ?? null,
+      }
+
       const { error: profileErr } = await supabase.from('user_profiles').insert({
         company_id: company.id,
         auth_user_id: authUserId,
         full_name: form.full_name.trim(),
-        username: form.login_identifier.trim(),
-        login_identifier: form.login_identifier.trim(),
-        email: authUserId ? internalEmail : `${form.login_identifier}@${company.id}.internal`,
+        username: cleanIdent,
+        password_hash: form.password,
+        email: authUserId ? internalEmail : `${cleanIdent}@${company.id}.internal`,
         phone: form.phone.trim(),
         role: form.role,
         is_active: true,
-        is_internal_user: true,
-        created_by_admin_id: user?.id ?? null,
-        sector_id: form.sector_id || null,
-        permissions: form.permissions,
+        permissions: permissionsPayload,
       })
 
       if (profileErr) throw new Error('Erreur création profil : ' + profileErr.message)
 
-      setSuccess(`Utilisateur "${form.full_name}" créé avec succès ! Identifiant : ${form.login_identifier}`)
+      setSuccess(`Utilisateur "${form.full_name}" créé avec succès ! Identifiant : ${cleanIdent}`)
       setForm(emptyForm)
       setShowCreateForm(false)
       loadUsers()
@@ -346,6 +402,37 @@ const UtilisateursPage: React.FC = () => {
       setError(err.message || "Erreur lors de la création de l'utilisateur.")
     } finally {
       setCreating(false)
+    }
+  }
+
+  const handleConfirmPasswordReset = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!resetPasswordUser || !resetNewPassword || resetNewPassword.length < 6) {
+      setError('Le mot de passe doit comporter au moins 6 caractères.')
+      return
+    }
+    setResetLoading(true)
+    setError('')
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          password_hash: resetNewPassword,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', resetPasswordUser.id)
+        .eq('company_id', company?.id)
+
+      if (error) throw error
+
+      setSuccess(`Mot de passe mis à jour pour ${resetPasswordUser.full_name} !`)
+      setResetPasswordUser(null)
+      setResetNewPassword('')
+      loadUsers()
+    } catch (err: any) {
+      setError('Erreur mise à jour mot de passe : ' + err.message)
+    } finally {
+      setResetLoading(false)
     }
   }
 
@@ -900,9 +987,19 @@ const UtilisateursPage: React.FC = () => {
                         <p className="font-semibold text-slate-900 text-sm">{u.full_name}</p>
                         <div className="flex items-center gap-2 text-xs text-slate-500">
                           <Key className="w-3 h-3 text-slate-400" />
-                          <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{u.login_identifier}</span>
+                          <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded font-bold text-slate-800">
+                            {(u as any).username || u.login_identifier}
+                          </span>
                           <span>•</span>
                           <span className="capitalize font-medium text-emerald-700">{u.role}</span>
+                          {(u.permissions as any)?.sector_id && (
+                            <>
+                              <span>•</span>
+                              <span className="text-slate-500 font-medium">
+                                {sectors.find((s) => s.id === (u.permissions as any)?.sector_id)?.sector_name || 'Activité liée'}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -917,6 +1014,16 @@ const UtilisateursPage: React.FC = () => {
                       </span>
 
                       <button
+                        type="button"
+                        onClick={() => { setResetPasswordUser(u); setResetNewPassword(''); setError(''); }}
+                        className="p-2 text-slate-400 hover:text-emerald-700 rounded-lg hover:bg-emerald-50 transition-all"
+                        title="Changer le mot de passe"
+                      >
+                        <Key className="w-4 h-4" />
+                      </button>
+
+                      <button
+                        type="button"
                         onClick={() => toggleUserActive(u.id, u.is_active)}
                         className="p-2 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition-all"
                         title={u.is_active ? 'Désactiver le compte' : 'Réactiver'}
@@ -1619,6 +1726,68 @@ const UtilisateursPage: React.FC = () => {
           </div>
         )
       })()}
+
+      {/* Modal Modification Mot de Passe Utilisateur */}
+      {resetPasswordUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-200 overflow-hidden">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Key className="w-5 h-5 text-emerald-400" />
+                <h3 className="font-bold text-sm">Modifier le mot de passe</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetPasswordUser(null)}
+                className="text-slate-400 hover:text-white p-1 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmPasswordReset} className="p-6 space-y-4">
+              <div>
+                <p className="text-xs text-slate-500 mb-1">Utilisateur :</p>
+                <p className="text-sm font-bold text-slate-900">{resetPasswordUser.full_name}</p>
+                <p className="text-xs font-mono text-emerald-700 mt-0.5">Identifiant : {resetPasswordUser.username || resetPasswordUser.login_identifier}</p>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                  Nouveau Mot de Passe (min 6 caractères) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={6}
+                  value={resetNewPassword}
+                  onChange={(e) => setResetNewPassword(e.target.value)}
+                  placeholder="Ex: Pass2026@"
+                  className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="flex gap-2 pt-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setResetPasswordUser(null)}
+                  disabled={resetLoading}
+                  className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={resetLoading}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-md shadow-emerald-600/20 disabled:opacity-60"
+                >
+                  {resetLoading ? 'Enregistrement...' : 'Enregistrer le mot de passe'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

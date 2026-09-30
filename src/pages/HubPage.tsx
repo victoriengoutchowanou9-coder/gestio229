@@ -11,7 +11,7 @@ import { setActiveSector } from '../lib/sectorClient'
 
 const HubPage: React.FC = () => {
   const navigate = useNavigate()
-  const { company, tenantCtx, logout } = useAuthStore()
+  const { company, tenantCtx, logout, user } = useAuthStore()
 
   // ─── Nettoyage préventif des anciens caches globaux non cloisonnés ──────────
   useEffect(() => {
@@ -52,6 +52,8 @@ const HubPage: React.FC = () => {
     navigate('/dashboard/abonnement')
   }
 
+  const assignedActivityId = (user?.permissions as any)?.sector_id || user?.sector_id
+
   return (
     <MultiservicesHub
       companyId={company?.id}
@@ -59,6 +61,8 @@ const HubPage: React.FC = () => {
       companyIfu={(company as any)?.ifu_number}
       companyRegime={(company as any)?.regime_fiscal || 'Réel Normal'}
       company={company}
+      userRole={user?.role}
+      userAssignedActivityId={assignedActivityId}
       onSelectSector={handleSelectSector}
       onOpenOnboarding={handleOpenOnboarding}
       onLogout={handleLogout}

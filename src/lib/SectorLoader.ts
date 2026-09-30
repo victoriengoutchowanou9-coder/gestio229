@@ -405,11 +405,26 @@ export const SectorLoader = {
       }
     }
 
+    // Déterminer le slug du secteur affecté si présent
+    const assignedActivityOrSector = (user as any)?.permissions?.sector_id || (user as any)?.sector_id
+    let assignedSlug = ''
+    if (assignedActivityOrSector) {
+      const match = sectors.find(
+        (s) => s.id === assignedActivityOrSector || s.slug === assignedActivityOrSector
+      )
+      if (match) assignedSlug = match.slug
+    }
+    if (!assignedSlug && sectors.length > 0) {
+      assignedSlug = sectors[0].slug
+    }
+
+    const routePrefix = assignedSlug ? `/app/${assignedSlug}` : '/dashboard'
+
     // Cas Utilisateurs Internes selon rôle :
     if (user.role === 'caissier' || user.role === 'vendeur') {
       return {
         type: 'SOLO' as RoutingType,
-        redirectTo: '/dashboard/vente-pos',
+        redirectTo: `${routePrefix}/vente-pos`,
         activeSectors: sectors,
       }
     }
@@ -417,7 +432,7 @@ export const SectorLoader = {
     if (user.role === 'magasinier') {
       return {
         type: 'SOLO' as RoutingType,
-        redirectTo: '/dashboard/stocks',
+        redirectTo: `${routePrefix}/stocks`,
         activeSectors: sectors,
       }
     }
@@ -425,15 +440,15 @@ export const SectorLoader = {
     if (user.role === 'comptable') {
       return {
         type: 'SOLO' as RoutingType,
-        redirectTo: '/dashboard/syscohada',
+        redirectTo: `${routePrefix}/syscohada`,
         activeSectors: sectors,
       }
     }
 
-    // Par défaut pour les autres profils internes autorisés
+    // Par défaut pour les autres profils internes autorisés (gérant, responsable, etc.)
     return {
       type: 'SOLO' as RoutingType,
-      redirectTo: '/dashboard/vente-pos',
+      redirectTo: `${routePrefix}/tableau-bord`,
       activeSectors: sectors,
     }
   },

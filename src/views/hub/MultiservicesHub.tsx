@@ -61,6 +61,8 @@ export interface MultiservicesHubProps {
   companyIfu?: string;
   companyRegime?: string;
   company?: any;
+  userRole?: string;
+  userAssignedActivityId?: string;
   onSelectSector?: (sectorSlug: string, activityId: string, activityName?: string, location?: string) => void;
   onOpenOnboarding?: (sectorSlug: string) => void;
   onLogout?: () => void;
@@ -100,11 +102,15 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   companyIfu = '',
   companyRegime = 'Réel Normal',
   company,
+  userRole = 'administrateur',
+  userAssignedActivityId = '',
   onSelectSector,
   onOpenOnboarding,
   onLogout,
   onOpenSubscription,
 }) => {
+  const isAdmin = !userRole || userRole === 'administrateur' || userRole === 'super_admin';
+
   // ── State ──────────────────────────────────────────────────────────────────
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -382,14 +388,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   );
 
   // ── Filtrage des activités actives vs archivées (PARTIE 9) ─────────────────
+  const visibleActivities = useMemo(() => {
+    if (!isAdmin && userAssignedActivityId) {
+      const match = activities.filter(
+        (a) => a.id === userAssignedActivityId || a.sectorSlug === userAssignedActivityId
+      );
+      if (match.length > 0) return match;
+    }
+    return activities;
+  }, [activities, isAdmin, userAssignedActivityId]);
+
   const activeActivities = useMemo(
-    () => activities.filter((a) => a.status !== 'ARCHIVEE'),
-    [activities]
+    () => visibleActivities.filter((a) => a.status !== 'ARCHIVEE'),
+    [visibleActivities]
   );
 
   const archivedActivities = useMemo(
-    () => activities.filter((a) => a.status === 'ARCHIVEE'),
-    [activities]
+    () => visibleActivities.filter((a) => a.status === 'ARCHIVEE'),
+    [visibleActivities]
   );
 
   // ── CALCULS CONSOLIDÉS DU JOUR (PARTIE 3) & DU MOIS (PARTIE 4) ─────────────
@@ -686,24 +702,28 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             >
               <RefreshCw size={15} className={isRefreshing ? 'animate-spin text-emerald-400' : ''} />
             </button>
-            <button
-              onClick={() => setShowCompanySettingsModal(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-colors"
-            >
-              <Settings size={14} /> Entreprise
-            </button>
-            <button
-              onClick={onOpenSubscription || (() => setShowSubscriptionModal(true))}
-              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition-colors shadow-sm shadow-indigo-600/20"
-            >
-              <CreditCard size={14} /> Abonnement
-            </button>
-            <button
-              onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white transition-colors shadow-md shadow-emerald-500/20"
-            >
-              <Plus size={14} /> Ajouter une activité
-            </button>
+            {isAdmin && (
+              <>
+                <button
+                  onClick={() => setShowCompanySettingsModal(true)}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                >
+                  <Settings size={14} /> Entreprise
+                </button>
+                <button
+                  onClick={onOpenSubscription || (() => setShowSubscriptionModal(true))}
+                  className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition-colors shadow-sm shadow-indigo-600/20"
+                >
+                  <CreditCard size={14} /> Abonnement
+                </button>
+                <button
+                  onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white transition-colors shadow-md shadow-emerald-500/20"
+                >
+                  <Plus size={14} /> Ajouter une activité
+                </button>
+              </>
+            )}
             {onLogout && (
               <button
                 onClick={onLogout}
@@ -936,36 +956,38 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     <ExternalLink size={14} />
                   </button>
 
-                  {/* BOUTONS PARAMÈTRES & SUPPRIMER (PARTIE 7 & PARTIE 9) */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setForm({
-                          sectorSlug: act.sectorSlug,
-                          name: act.name,
-                          location: act.location,
-                          manager: act.manager,
-                          status: act.status,
-                        });
-                        setFormError('');
-                        setShowSettingsModal(act);
-                      }}
-                      className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700/60"
-                    >
-                      <Settings size={13} />
-                      <span>Paramètres</span>
-                    </button>
+                  {/* BOUTONS PARAMÈTRES & SUPPRIMER (RÉSERVÉS À L'ADMINISTRATEUR) */}
+                  {isAdmin && (
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForm({
+                            sectorSlug: act.sectorSlug,
+                            name: act.name,
+                            location: act.location,
+                            manager: act.manager,
+                            status: act.status,
+                          });
+                          setFormError('');
+                          setShowSettingsModal(act);
+                        }}
+                        className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700/60"
+                      >
+                        <Settings size={13} />
+                        <span>Paramètres</span>
+                      </button>
 
-                    <button
-                      type="button"
-                      onClick={() => initiateDelete(act)}
-                      className="py-2 px-3 bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700/60 hover:border-rose-800/40"
-                    >
-                      <Trash2 size={13} />
-                      <span>Supprimer</span>
-                    </button>
-                  </div>
+                      <button
+                        type="button"
+                        onClick={() => initiateDelete(act)}
+                        className="py-2 px-3 bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700/60 hover:border-rose-800/40"
+                      >
+                        <Trash2 size={13} />
+                        <span>Supprimer</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

@@ -347,19 +347,31 @@ export const useAuthStore = create<AuthState>()(
           }
 
           // ===================================================================
+          // ===================================================================
           // CAS B : UTILISATEURS INTERNES (Identifiant + mot de passe)
           // ===================================================================
-          // Recherche du profil par son identifiant unique (username)
-          const { data: profile, error: profileErr } = await supabase
+          // Recherche du profil par son identifiant unique (username ou email)
+          const { data: matchedProfiles, error: profileErr } = await supabase
             .from('user_profiles')
             .select(`*, company:companies(*)`)
-            .ilike('username', rawIdent)
-            .maybeSingle()
+            .or(`username.ilike.${rawIdent},email.ilike.${rawIdent}`)
 
-          if (profileErr || !profile) {
+          if (profileErr || !matchedProfiles || matchedProfiles.length === 0) {
             const notFoundMsg = `Identifiant "${rawIdent}" introuvable.`
             set({ status: 'unauthenticated', errorMessage: notFoundMsg })
             return { success: false, error: notFoundMsg }
+          }
+
+          // Si plusieurs profils correspondent à cet identifiant, sélectionner par correspondance de mot de passe
+          let profile = matchedProfiles.find((p: any) => p.password_hash === rawPassword)
+          if (!profile) {
+            if (matchedProfiles.length === 1) {
+              profile = matchedProfiles[0]
+            } else {
+              const invMsg = 'Identifiant ou mot de passe incorrect.'
+              set({ status: 'unauthenticated', errorMessage: invMsg })
+              return { success: false, error: invMsg }
+            }
           }
 
           // Vérifier si le compte est actif
@@ -407,6 +419,27 @@ export const useAuthStore = create<AuthState>()(
           try {
             localStorage.removeItem('gestio229_hub_sectors_v3')
             localStorage.setItem('gestio229_current_company_id', ctx.company.id)
+
+            // Déterminer et verrouiller le secteur / l'activité assignée
+            const assignedActivityId = (profile.permissions as any)?.sector_id || profile.sector_id
+            let assignedSlug = ctx.activeSectorSlug || 'boutique'
+
+            if (assignedActivityId) {
+              const { data: act } = await supabase
+                .from('company_activities')
+                .select('id, activity_name, sector_slug, sector_code')
+                .eq('id', assignedActivityId)
+                .maybeSingle()
+
+              if (act) {
+                assignedSlug = (act.sector_slug || act.sector_code || assignedSlug).toLowerCase().replace(/^sec-/, '')
+                localStorage.setItem('gestio229_active_activity_id', act.id)
+                localStorage.setItem('gestio229_active_activity_name', act.activity_name)
+              } else {
+                localStorage.setItem('gestio229_active_activity_id', assignedActivityId)
+              }
+            }
+            localStorage.setItem('gestio229_active_sector', assignedSlug)
           } catch (e) {}
 
           set({
