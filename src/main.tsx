@@ -11,6 +11,20 @@ if (typeof window !== 'undefined') {
   } else {
     document.documentElement.classList.remove('dark')
   }
+
+  // Enregistrement du Service Worker PWA
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('/sw.js')
+        .then((reg) => {
+          console.log('[GESTIO 229 PWA] Service Worker actif :', reg.scope)
+        })
+        .catch((err) => {
+          console.warn('[GESTIO 229 PWA] Échec enregistrement Service Worker :', err)
+        })
+    })
+  }
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

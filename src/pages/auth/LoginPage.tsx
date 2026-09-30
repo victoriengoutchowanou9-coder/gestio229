@@ -39,9 +39,20 @@ const LoginPage: React.FC = () => {
   const [currentTime, setCurrentTime] = useState<Date>(new Date())
 
   // Installation PWA (PC & Mobile)
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null)
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(
+    typeof window !== 'undefined' ? (window as any).__gestio_deferred_prompt || null : null
+  )
   const [showInstallGuide, setShowInstallGuide] = useState(false)
   const [isAppInstalled, setIsAppInstalled] = useState(false)
+
+  // Détection de la plateforme (iOS, Android, Desktop)
+  const userPlatform = useMemo<'ios' | 'android' | 'desktop'>(() => {
+    if (typeof navigator === 'undefined') return 'desktop'
+    const ua = navigator.userAgent.toLowerCase()
+    if (/iphone|ipad|ipod/.test(ua)) return 'ios'
+    if (/android/.test(ua)) return 'android'
+    return 'desktop'
+  }, [])
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000)
@@ -49,29 +60,88 @@ const LoginPage: React.FC = () => {
   }, [])
 
   useEffect(() => {
+    // 1. Vérification si déjà en mode application installée (standalone / PWA)
+    const checkInstalled = () => {
+      const isStandaloneMedia = window.matchMedia('(display-mode: standalone)').matches
+      const isNavigatorStandalone = (window.navigator as any).standalone === true
+      const isAndroidApp = document.referrer.startsWith('android-app://')
+      const isStoredInstalled = localStorage.getItem('gestio_pwa_installed') === 'true'
+
+      if (isStandaloneMedia || isNavigatorStandalone || isAndroidApp || isStoredInstalled) {
+        setIsAppInstalled(true)
+      }
+    }
+
+    checkInstalled()
+
+    // 2. Vérifier si un prompt a déjà été capturé avant le montage React
+    if ((window as any).__gestio_deferred_prompt) {
+      setDeferredPrompt((window as any).__gestio_deferred_prompt)
+    }
+
+    // 3. Écouter l'événement standard beforeinstallprompt
     const handleBeforeInstall = (e: Event) => {
       e.preventDefault()
+      ;(window as any).__gestio_deferred_prompt = e
       setDeferredPrompt(e)
     }
-    window.addEventListener('beforeinstallprompt', handleBeforeInstall)
 
-    if (window.matchMedia('(display-mode: standalone)').matches) {
-      setIsAppInstalled(true)
+    // 4. Écouter l'événement personnalisé dispatched par index.html
+    const handleCustomPrompt = (e: any) => {
+      if (e.detail) {
+        setDeferredPrompt(e.detail)
+      }
     }
+
+    // 5. Écouter la confirmation d'installation
+    const handleAppInstalled = () => {
+      setIsAppInstalled(true)
+      setDeferredPrompt(null)
+      ;(window as any).__gestio_deferred_prompt = null
+      try {
+        localStorage.setItem('gestio_pwa_installed', 'true')
+      } catch (e) {}
+    }
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstall)
+    window.addEventListener('gestio-pwa-installable', handleCustomPrompt)
+    window.addEventListener('appinstalled', handleAppInstalled)
+    window.addEventListener('gestio-pwa-installed', handleAppInstalled)
+
+    const mediaQuery = window.matchMedia('(display-mode: standalone)')
+    const handleMediaChange = (e: MediaQueryListEvent) => {
+      if (e.matches) setIsAppInstalled(true)
+    }
+    mediaQuery.addEventListener?.('change', handleMediaChange)
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
+      window.removeEventListener('gestio-pwa-installable', handleCustomPrompt)
+      window.removeEventListener('appinstalled', handleAppInstalled)
+      window.removeEventListener('gestio-pwa-installed', handleAppInstalled)
+      mediaQuery.removeEventListener?.('change', handleMediaChange)
     }
   }, [])
 
   const handleInstallClick = async () => {
-    if (deferredPrompt) {
-      deferredPrompt.prompt()
-      const { outcome } = await deferredPrompt.userChoice
-      if (outcome === 'accepted') {
-        setIsAppInstalled(true)
+    const prompt = deferredPrompt || (window as any).__gestio_deferred_prompt
+    if (prompt) {
+      try {
+        await prompt.prompt()
+        const { outcome } = await prompt.userChoice
+        if (outcome === 'accepted') {
+          setIsAppInstalled(true)
+          try {
+            localStorage.setItem('gestio_pwa_installed', 'true')
+          } catch (e) {}
+        }
+      } catch (err) {
+        console.warn('[PWA] Erreur lors de l\'installation native :', err)
+        setShowInstallGuide(true)
+      } finally {
+        setDeferredPrompt(null)
+        ;(window as any).__gestio_deferred_prompt = null
       }
-      setDeferredPrompt(null)
     } else {
       setShowInstallGuide(true)
     }
@@ -304,24 +374,33 @@ const LoginPage: React.FC = () => {
 
       {/* Panel droit — Formulaire unifié & Actions PWA */}
       <div className="flex-1 flex flex-col justify-between p-6 sm:p-8 bg-slate-50 dark:bg-slate-900 min-h-screen">
-        {/* Barre du haut : Bouton Installer l'application (PC & Mobile) */}
-        <div className="w-full max-w-md mx-auto flex items-center justify-between mb-4">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
-            <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-              {isAppInstalled ? 'Application installée' : 'Application disponible'}
+        {/* Barre du haut : Bouton Installer l'application (PC & Mobile) — Masqué si déjà installée */}
+        {!isAppInstalled ? (
+          <div className="w-full max-w-md mx-auto flex items-center justify-between mb-4 animate-fadeIn">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
+              <span className="text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                Application disponible
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleInstallClick}
+              className="flex items-center gap-2 px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
+              title="Installer GESTIO 229 sur votre ordinateur ou smartphone"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Installer l'application</span>
+            </button>
+          </div>
+        ) : (
+          <div className="w-full max-w-md mx-auto flex items-center justify-end mb-4 animate-fadeIn">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-full text-[11px] font-semibold border border-emerald-200 dark:border-emerald-800">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+              <span>Application installée</span>
             </span>
           </div>
-          <button
-            type="button"
-            onClick={handleInstallClick}
-            className="flex items-center gap-2 px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/20 transition-all hover:scale-[1.02] active:scale-[0.98] cursor-pointer"
-            title="Installer GESTIO 229 sur votre ordinateur ou smartphone"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Installer l'application</span>
-          </button>
-        </div>
+        )}
 
         <div className="w-full max-w-md mx-auto my-auto">
           {/* Logo & Bannière portuaire mobile avec Date/Heure et Pensée */}
@@ -609,40 +688,95 @@ const LoginPage: React.FC = () => {
               </button>
             </div>
 
-            <div className="space-y-4">
-              {/* Option PC (Chrome / Edge / Windows / Mac) */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">
-                  <Laptop className="w-4 h-4 text-emerald-600" />
-                  <span>Sur Ordinateur (Chrome, Edge, Brave)</span>
+            {/* Bouton direct si le prompt natif est disponible */}
+            {(deferredPrompt || (typeof window !== 'undefined' && (window as any).__gestio_deferred_prompt)) && (
+              <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 rounded-2xl border border-emerald-300 dark:border-emerald-700 mb-4 flex items-center justify-between">
+                <div>
+                  <p className="text-xs font-bold text-emerald-900 dark:text-emerald-200">Installation automatique prête</p>
+                  <p className="text-[11px] text-emerald-700 dark:text-emerald-300">Votre navigateur supporte l'installation directe en un clic.</p>
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                  1. Cliquez sur l'icône <strong>Installer</strong> (petit écran avec flèche) située dans la barre d'adresse tout à droite de votre navigateur.<br />
-                  2. Ou ouvrez le menu <strong>⋮ (trois points)</strong> en haut à droite &gt; <strong>« Installer GESTIO 229 »</strong>.
-                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInstallGuide(false)
+                    handleInstallClick()
+                  }}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-md shadow-emerald-600/30 flex items-center gap-1.5 transition"
+                >
+                  <Download className="w-4 h-4" />
+                  <span>Installer</span>
+                </button>
               </div>
+            )}
 
+            <div className="space-y-3.5">
               {/* Option Android */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">
-                  <Smartphone className="w-4 h-4 text-emerald-600" />
-                  <span>Sur Smartphone Android (Chrome)</span>
+              <div className={`p-4 rounded-2xl border transition ${
+                userPlatform === 'android'
+                  ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/20'
+                  : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700'
+              }`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+                    <Smartphone className="w-4 h-4 text-emerald-600" />
+                    <span>Sur Smartphone Android (Chrome)</span>
+                  </div>
+                  {userPlatform === 'android' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 dark:bg-emerald-800 dark:text-emerald-100">
+                      Votre appareil
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
                   1. Appuyez sur les <strong>3 points ⋮</strong> en haut à droite du navigateur.<br />
-                  2. Sélectionnez <strong>« Installer l'application »</strong> ou <strong>« Ajouter à l'écran d'accueil »</strong>.
+                  2. Sélectionnez <strong>« Installer l'application »</strong> ou <strong>« Ajouter à l'écran d'accueil »</strong>.<br />
+                  3. Validez : GESTIO 229 s'ouvrira en plein écran comme une application native.
                 </p>
               </div>
 
               {/* Option iPhone / iPad */}
-              <div className="p-4 bg-slate-50 dark:bg-slate-900/60 rounded-2xl border border-slate-200 dark:border-slate-700">
-                <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100 mb-1.5">
-                  <Smartphone className="w-4 h-4 text-indigo-600" />
-                  <span>Sur iPhone / iPad (Safari)</span>
+              <div className={`p-4 rounded-2xl border transition ${
+                userPlatform === 'ios'
+                  ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/20'
+                  : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700'
+              }`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+                    <Smartphone className="w-4 h-4 text-indigo-600" />
+                    <span>Sur iPhone / iPad (Safari)</span>
+                  </div>
+                  {userPlatform === 'ios' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-200 text-indigo-900 dark:bg-indigo-800 dark:text-indigo-100">
+                      Votre appareil
+                    </span>
+                  )}
                 </div>
                 <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                  1. Appuyez sur l'icône de <strong>Partage ⎋</strong> au bas de l'écran Safari.<br />
+                  1. Appuyez sur l'icône de <strong>Partage ⎋</strong> (carré avec flèche vers le haut) au bas de l'écran Safari.<br />
                   2. Faites défiler et appuyez sur <strong>« Sur l'écran d'accueil »</strong>, puis confirmez <strong>« Ajouter »</strong>.
+                </p>
+              </div>
+
+              {/* Option PC (Chrome / Edge / Windows / Mac) */}
+              <div className={`p-4 rounded-2xl border transition ${
+                userPlatform === 'desktop'
+                  ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/20'
+                  : 'bg-slate-50 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700'
+              }`}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2 text-sm font-bold text-slate-900 dark:text-slate-100">
+                    <Laptop className="w-4 h-4 text-emerald-600" />
+                    <span>Sur Ordinateur (Chrome, Edge, Brave)</span>
+                  </div>
+                  {userPlatform === 'desktop' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-900 dark:bg-emerald-800 dark:text-emerald-100">
+                      Votre appareil
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  1. Cliquez sur l'icône <strong>Installer</strong> (petit écran avec flèche) située dans la barre d'adresse tout à droite de votre navigateur.<br />
+                  2. Ou ouvrez le menu <strong>⋮ (trois points)</strong> en haut à droite &gt; <strong>« Installer GESTIO 229 »</strong>.
                 </p>
               </div>
             </div>

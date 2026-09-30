@@ -1,0 +1,62 @@
+{
+  "id": "/gestio229",
+  "name": "GESTIO 229 ERP - Logiciel de Gestion & Hub Commercial",
+  "short_name": "GESTIO 229",
+  "description": "Plateforme SaaS Multi-Secteurs & ERP : Facturation e-MECeF, POS, Stocks, Caisses & Comptabilité SYSCOHADA",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone", "minimal-ui"],
+  "background_color": "#0f172a",
+  "theme_color": "#059669",
+  "orientation": "any",
+  "lang": "fr-BJ",
+  "categories": ["business", "finance", "productivity"],
+  "icons": [
+    {
+      "src": "/icons/favicon.png",
+      "sizes": "96x96",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Connexion / HUB",
+      "short_name": "HUB",
+      "description": "Accéder à l'espace HUB GESTIO 229",
+      "url": "/login",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    },
+    {
+      "name": "Point de Vente POS",
+      "short_name": "POS",
+      "description": "Ouvrir la caisse et vente rapide",
+      "url": "/hub",
+      "icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+    }
+  ]
+}

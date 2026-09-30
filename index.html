@@ -7,10 +7,26 @@
   <meta name="theme-color" content="#059669" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GESTIO 229" />
   <meta name="application-name" content="GESTIO 229" />
+  <link rel="manifest" href="/manifest.json" />
   <link rel="icon" type="image/png" sizes="96x96" href="/icons/favicon.png" />
-  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+  <script>
+    // Capture anticipée du prompt d'installation PWA avant l'hydratation React
+    window.__gestio_deferred_prompt = null;
+    window.addEventListener('beforeinstallprompt', function(e) {
+      e.preventDefault();
+      window.__gestio_deferred_prompt = e;
+      window.dispatchEvent(new CustomEvent('gestio-pwa-installable', { detail: e }));
+    });
+    window.addEventListener('appinstalled', function() {
+      window.__gestio_deferred_prompt = null;
+      try { localStorage.setItem('gestio_pwa_installed', 'true'); } catch(e) {}
+      window.dispatchEvent(new CustomEvent('gestio-pwa-installed'));
+    });
+  </script>
 </head>
 <body class="h-full">
   <div id="root"></div>
