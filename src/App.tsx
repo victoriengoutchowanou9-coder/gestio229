@@ -7,6 +7,7 @@ import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-route
 import { useAuthStore } from './store/authStore'
 import AppLayout from './components/layout/AppLayout'
 import ModuleGuard from './components/subscription/ModuleGuard'
+import SectorGuard from './components/subscription/SectorGuard'
 
 // ─── Lazy Loading des pages ─────────────────────────────────────────────────
 
@@ -125,7 +126,73 @@ const AppRoutes: React.FC = () => {
         element={<ProtectedRoute><HubPage /></ProtectedRoute>}
       />
 
-      {/* Dashboard avec layout sidebar */}
+      {/* Espaces d'exploitation des Sous-Logiciels Spécialisés (Isolation Totale) */}
+      <Route
+        path="/app/:sectorSlug"
+        element={
+          <ProtectedRoute>
+            <SectorGuard>
+              <AppLayout />
+            </SectorGuard>
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Navigate to="tableau-bord" replace />} />
+        <Route path="tableau-bord"   element={<DashboardPage />} />
+        <Route path="dashboard"      element={<DashboardPage />} />
+        <Route path="vente"          element={<POSPage />} />
+        <Route path="vente-pos"      element={<POSPage />} />
+        <Route path="stocks"         element={<StocksPage />} />
+        <Route path="caisse"         element={<CaissePage />} />
+        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
+        <Route path="clients"        element={<ClientsPage />} />
+        <Route path="achats"         element={<FournisseursPage />} />
+        <Route path="fournisseurs"   element={<FournisseursPage />} />
+        <Route path="depenses"       element={<DepensesPage />} />
+        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
+        <Route path="configuration"  element={<ConfigPage />} />
+        <Route path="journal-audit"  element={<AuditPage />} />
+        <Route path="audit"          element={<AuditPage />} />
+        <Route path="abonnement"     element={<AbonnementPage />} />
+        <Route path="utilisateurs"   element={<UtilisateursPage />} />
+      </Route>
+
+      {/* Point 14 : Routes directes par secteur (Ex: /quincaillerie/tableau-bord, /poissonnerie/stocks...) */}
+      <Route
+        path="/:sectorSlug"
+        element={
+          <ProtectedRoute>
+            <SectorGuard>
+              <AppLayout />
+            </SectorGuard>
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<Navigate to="tableau-bord" replace />} />
+        <Route path="tableau-bord"   element={<DashboardPage />} />
+        <Route path="dashboard"      element={<DashboardPage />} />
+        <Route path="vente"          element={<POSPage />} />
+        <Route path="vente-pos"      element={<POSPage />} />
+        <Route path="stocks"         element={<StocksPage />} />
+        <Route path="caisse"         element={<CaissePage />} />
+        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
+        <Route path="clients"        element={<ClientsPage />} />
+        <Route path="achats"         element={<FournisseursPage />} />
+        <Route path="fournisseurs"   element={<FournisseursPage />} />
+        <Route path="depenses"       element={<DepensesPage />} />
+        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
+        <Route path="configuration"  element={<ConfigPage />} />
+        <Route path="journal-audit"  element={<AuditPage />} />
+        <Route path="audit"          element={<AuditPage />} />
+        <Route path="abonnement"     element={<AbonnementPage />} />
+        <Route path="utilisateurs"   element={<UtilisateursPage />} />
+      </Route>
+
+      {/* Rétrocompatibilité /dashboard */}
       <Route
         path="/dashboard"
         element={<ProtectedRoute><AppLayout /></ProtectedRoute>}

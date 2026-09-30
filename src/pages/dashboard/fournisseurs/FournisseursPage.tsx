@@ -5,6 +5,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   Truck, Plus, Search, CheckCircle, Clock, AlertCircle, FileText,
   Printer, ArrowUpRight, DollarSign, RefreshCw, X, ShieldAlert, Check,
@@ -13,6 +14,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
@@ -100,6 +102,8 @@ interface ReceptionRecord {
 export const FournisseursPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   const [activeTab, setActiveTab] = useState<'bc' | 'reception' | 'fournisseurs'>('bc')
 
@@ -145,7 +149,11 @@ export const FournisseursPage: React.FC = () => {
 
       if (sErr) throw sErr
 
-      const mappedSuppliers: Supplier[] = (sData || []).map((s: any) => ({
+      // Isolation stricte par sous-logiciel : filtrer par secteur
+      const sectorSuppliers = filterItemsForSector(sData || [], currentSectorSlug)
+      const sectorPo = filterItemsForSector(poData || [], currentSectorSlug)
+
+      const mappedSuppliers: Supplier[] = sectorSuppliers.map((s: any) => ({
         id: s.id,
         company_id: s.company_id,
         code: s.code || `FOURN-${s.id.slice(0, 4)}`,
@@ -169,7 +177,7 @@ export const FournisseursPage: React.FC = () => {
       setSuppliers(mappedSuppliers)
 
       if (poData && !poErr) {
-        const mappedPo: PurchaseOrder[] = poData.map((p: any) => ({
+        const mappedPo: PurchaseOrder[] = sectorPo.map((p: any) => ({
           id: p.id,
           reference: p.order_number || `BC-${p.id.slice(0, 6)}`,
           date: p.created_at || new Date().toISOString(),

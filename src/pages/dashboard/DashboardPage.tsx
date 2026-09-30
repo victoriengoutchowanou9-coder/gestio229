@@ -6,7 +6,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, DollarSign, Wallet, CreditCard,
   Package, ShoppingCart, ArrowUpRight, Clock, Store, RefreshCw,
@@ -15,7 +15,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
-import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
+import { getActiveSectorSlug, getActiveSectorMeta, filterItemsForSector } from '../../lib/sectorClient'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -33,15 +33,8 @@ interface TodaySale {
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate()
-  const {
-    company,
-    user,
-    tenantCtx,
-    activeSectorSlug,
-    activeActivityId,
-    activeActivityName,
-    activeActivityLocation
-  } = useAuthStore()
+  const params = useParams<{ sectorSlug?: string }>()
+  const { company, user, tenantCtx } = useAuthStore()
   const { toast } = useUIStore()
 
   const [loading, setLoading] = useState(true)
@@ -50,37 +43,10 @@ export const DashboardPage: React.FC = () => {
   const [totalProductsValue, setTotalProductsValue] = useState<number>(0)
   const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
 
-  // Déterminer le secteur d'activité actif (priorité à l'activité sélectionnée au HUB)
-  const currentSectorSlug =
-    activeSectorSlug ||
-    (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_sector') : null) ||
-    tenantCtx?.activeSectorSlug ||
-    company?.active_sector ||
-    'boutique'
-
-  const currentActivityName =
-    activeActivityName ||
-    (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null) ||
-    ''
-
-  const sectorDisplayName = useMemo(() => {
-    const meta = ALL_SECTORS_CATALOG.find((s) => s.slug === currentSectorSlug)
-    if (meta) return meta.name
-    const s = String(currentSectorSlug).toLowerCase()
-    if (s.includes('poisson')) return 'Poissonnerie & Surgelés'
-    if (s.includes('quincaillerie')) return 'Quincaillerie & Matériaux BTP'
-    if (s.includes('mercerie')) return 'Mercerie & Couture'
-    if (s.includes('brasserie') || s.includes('boisson')) return 'Brasserie & Dépôt de Boissons'
-    if (s.includes('pharmacie')) return 'Pharmacie & Parapharmacie'
-    if (s.includes('station')) return 'Station-Service & Hydrocarbures'
-    if (s.includes('restaurant') || s.includes('maquis')) return 'Restaurant & Maquis'
-    if (s.includes('boulangerie')) return 'Boulangerie & Pâtisserie'
-    if (s.includes('cosmetique')) return 'Cosmétique & Parfumerie'
-    if (s.includes('textile')) return 'Textile & Prêt-à-porter'
-    if (s.includes('electronique')) return 'Électronique & Informatique'
-    if (s.includes('boutique') || s.includes('commerce')) return 'Boutique & Commerce Général'
-    return currentSectorSlug.charAt(0).toUpperCase() + currentSectorSlug.slice(1)
-  }, [currentSectorSlug])
+  // Déterminer le sous-logiciel actif avec isolation stricte
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const sectorMeta = getActiveSectorMeta()
+  const sectorDisplayName = sectorMeta?.name || 'Sous-Logiciel'
 
   // Charger les indicateurs réels du jour pour l'entreprise & le secteur
   const loadDashboardData = useCallback(async () => {
@@ -138,21 +104,11 @@ export const DashboardPage: React.FC = () => {
         }
       })
 
-      // 1. Filtrer STRICTEMENT les ventes du jour par secteur actif (Zéro contamination inter-secteurs)
-      const sectorSales = (mappedSales || []).filter((sale) => {
-        const meta = sale.notes || {}
-        const saleSector = meta.s || meta.sector_slug || meta.sector
-        if (saleSector) {
-          return saleSector === currentSectorSlug
-        }
-        if (meta.act && activeActivityId) {
-          return meta.act === activeActivityId
-        }
-        return currentSectorSlug === (company?.activity_sector || 'boutique')
-      })
-      setSalesToday(sectorSales)
+      // 1. Ventes du jour réelles (filtrées par sous-logiciel)
+      const filteredSales = filterItemsForSector(mappedSales, currentSectorSlug)
+      setSalesToday(filteredSales)
 
-      // 2. Produits actifs réels filtrés STRICTEMENT par secteur actif
+      // 2. Produits actifs réels (filtrés par sous-logiciel)
       const { data: prodData, error: prodErr } = await supabase
         .from('products')
         .select('*')
@@ -160,17 +116,7 @@ export const DashboardPage: React.FC = () => {
         .eq('is_active', true)
 
       if (prodErr) throw prodErr
-      const prods = (prodData || []).filter((p: any) => {
-        const meta = p.sector_meta || {}
-        const prodSector = meta.s || meta.sector_slug || meta.sector || p.sector_slug
-        if (prodSector) {
-          return prodSector === currentSectorSlug
-        }
-        if (meta.act && activeActivityId) {
-          return meta.act === activeActivityId
-        }
-        return currentSectorSlug === (company?.activity_sector || 'boutique')
-      })
+      const prods = filterItemsForSector(prodData || [], currentSectorSlug)
       setActiveProductsCount(prods.length)
 
       const stockVal = prods.reduce((sum, p: any) => {
@@ -181,14 +127,15 @@ export const DashboardPage: React.FC = () => {
       }, 0)
       setTotalProductsValue(stockVal)
 
-      // 3. Total créances clients exigibles
+      // 3. Total créances clients exigibles (filtrées par sous-logiciel)
       const { data: custData } = await supabase
         .from('customers')
-        .select('current_debt')
+        .select('*')
         .eq('company_id', company.id)
 
       if (custData) {
-        const debtSum = custData.reduce((sum, c: any) => sum + (Number(c.current_debt) || 0), 0)
+        const filteredCusts = filterItemsForSector(custData, currentSectorSlug)
+        const debtSum = filteredCusts.reduce((sum, c: any) => sum + (Number(c.current_debt) || 0), 0)
         setTotalCustomersDebt(debtSum)
       }
     } catch (err: any) {
@@ -278,15 +225,11 @@ export const DashboardPage: React.FC = () => {
           </div>
           <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <LayoutDashboard className="w-6 h-6 text-emerald-600" />
-            <span>
-              {currentActivityName ? `${currentActivityName} — ` : ''}
-              {sectorDisplayName}
-            </span>
+            Tableau de Bord — {sectorDisplayName}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Indicateurs d'activité en temps réel pour l'établissement{' '}
-            <strong className="text-slate-700">{currentActivityName || company?.name || 'Entreprise'}</strong>
-            {activeActivityLocation && <span className="text-slate-400"> ({activeActivityLocation})</span>}
+            <strong className="text-slate-700">{company?.name || 'Entreprise'}</strong>
           </p>
         </div>
 

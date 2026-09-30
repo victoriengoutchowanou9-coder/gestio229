@@ -8,6 +8,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   BarChart3, TrendingUp, DollarSign, ArrowUpRight, ArrowDownRight,
   RefreshCw, Calendar, Printer, Filter, Users, Package,
@@ -17,6 +18,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { calculateTaxFromTTC } from '../../../utils/tax'
 
 const fmt = (n: number) =>
@@ -66,10 +68,10 @@ interface ProductRecord {
 }
 
 export const ReportingPage: React.FC = () => {
-  const { company, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
+  const { company } = useAuthStore()
   const { toast } = useUIStore()
-
-  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   // Filtre Période Exigé (Point 15) : Aujourd'hui | Hier | Cette semaine | Ce mois | Période personnalisée
   const [periodPreset, setPeriodPreset] = useState<'today' | 'yesterday' | 'week' | 'month' | 'custom'>('month')
@@ -109,7 +111,7 @@ export const ReportingPage: React.FC = () => {
           .order('expense_date', { ascending: false }),
         supabase
           .from('customers')
-          .select('id, name, current_debt')
+          .select('id, name, current_debt, sector_slug, sector_meta')
           .eq('company_id', company.id),
         supabase
           .from('products')
@@ -120,43 +122,13 @@ export const ReportingPage: React.FC = () => {
       if (salesErr) console.warn('Erreur chargement ventes:', salesErr)
       if (expErr) console.warn('Erreur chargement dépenses:', expErr)
 
-      // Filtrer les ventes strictement par secteur actif (isolation totale)
-      const filteredSalesData = (salesData || []).filter((s: any) => {
-        let meta: any = {}
-        try {
-          meta = typeof s.notes === 'string' ? JSON.parse(s.notes) : (s.notes || {})
-        } catch (e) {}
-        if (s.e_mecef_uid && s.e_mecef_uid.startsWith('{')) {
-          try {
-            meta = { ...meta, ...JSON.parse(s.e_mecef_uid) }
-          } catch (e) {}
-        }
-        const saleSector = s.sector_slug || meta.s || meta.sector_slug || meta.sector
-        if (saleSector) {
-          return saleSector === currentSectorSlug
-        }
-        if (meta.act && activeActivityId) {
-          return meta.act === activeActivityId
-        }
-        const defaultSector = company?.activity_sector || 'boutique'
-        return currentSectorSlug === defaultSector
-      })
+      // Isolation stricte par sous-logiciel (aucun mélange inter-secteurs)
+      const sectorSales = filterItemsForSector(salesData || [], currentSectorSlug)
+      const sectorExpenses = filterItemsForSector(expData || [], currentSectorSlug)
+      const sectorCustomers = filterItemsForSector(custData || [], currentSectorSlug)
+      const sectorProducts = filterItemsForSector(prodData || [], currentSectorSlug)
 
-      // Filtrer les produits strictement par secteur actif (isolation totale)
-      const filteredProdData = (prodData || []).filter((p: any) => {
-        const meta = p.sector_meta || {}
-        const prodSector = p.sector_slug || meta.s || meta.sector_slug || meta.sector
-        if (prodSector) {
-          return prodSector === currentSectorSlug
-        }
-        if (meta.act && activeActivityId) {
-          return meta.act === activeActivityId
-        }
-        const defaultSector = company?.activity_sector || 'boutique'
-        return currentSectorSlug === defaultSector
-      })
-
-      const parsedSales: SaleRecord[] = filteredSalesData.map((s: any) => {
+      const parsedSales: SaleRecord[] = sectorSales.map((s: any) => {
         let meta: any = {}
         if (s.notes) {
           try {
@@ -196,15 +168,15 @@ export const ReportingPage: React.FC = () => {
       })
 
       setSales(parsedSales)
-      setExpenses((expData as any) || [])
-      setCustomers((custData as any) || [])
-      setProducts((filteredProdData as any) || [])
+      setExpenses((sectorExpenses as any) || [])
+      setCustomers((sectorCustomers as any) || [])
+      setProducts((sectorProducts as any) || [])
     } catch (err: any) {
       toast.error('Erreur chargement rapports', err.message)
     } finally {
       setLoading(false)
     }
-  }, [company?.id, company?.activity_sector, currentSectorSlug, activeActivityId, toast])
+  }, [company?.id, currentSectorSlug, toast])
 
   useEffect(() => {
     loadData()
@@ -382,11 +354,6 @@ export const ReportingPage: React.FC = () => {
           <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <BarChart3 className="w-6 h-6 text-emerald-600" />
             Rapports & Analyses Financières
-            {(activeActivityName || currentSectorSlug) && (
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold border border-emerald-200">
-                {activeActivityName || currentSectorSlug.toUpperCase()}
-              </span>
-            )}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Indicateurs consolidés pour {company?.name || 'votre établissement'} — Période :{' '}

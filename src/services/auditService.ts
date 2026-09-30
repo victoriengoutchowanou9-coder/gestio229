@@ -7,7 +7,7 @@
 import { supabase } from '../lib/supabase'
 
 export interface AuditLogPayload {
-  companyId: string
+  companyId?: string
   userId?: string
   userName?: string
   userRole?: string
@@ -35,24 +35,29 @@ export function getBrowserInfo(): string {
 }
 
 /**
- * Enregistre un événement dans le journal d'audit
+ * Enregistre un événement dans le journal d'audit (Table audit_logs de Supabase)
  */
 export async function logAuditEvent(payload: AuditLogPayload): Promise<void> {
   try {
-    if (!payload.companyId) return
+    const authState = (typeof window !== 'undefined' && (window as any).__GESTIO_AUTH_STORE__)
+      ? (window as any).__GESTIO_AUTH_STORE__.getState?.()
+      : null
+
+    const compId = payload.companyId || authState?.company?.id || authState?.user?.company_id
+    if (!compId) return
 
     const browser = getBrowserInfo()
     const ipAddress = '127.0.0.1' // Accessible côté client local / IP privée
 
     const auditData: any = {
-      company_id: payload.companyId,
-      user_id: payload.userId || null,
-      user_name: payload.userName || 'Utilisateur',
+      company_id: compId,
+      user_id: payload.userId || authState?.user?.id || null,
+      user_name: payload.userName || authState?.user?.full_name || 'Utilisateur',
       action: payload.action,
       entity_name: payload.entityName || payload.module,
       entity_id: payload.entityId || null,
       details: {
-        role: payload.userRole || 'Utilisateur',
+        role: payload.userRole || authState?.user?.role || 'Utilisateur',
         sector: payload.sector || 'Général',
         module: payload.module,
         description: payload.description,

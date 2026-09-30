@@ -22,6 +22,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import SectorSelector, { ALL_SECTORS } from '../../components/auth/SectorSelector'
 import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
+import { rateLimiter } from '../../lib/rateLimiter'
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
@@ -95,6 +96,13 @@ export const RegisterPage: React.FC = () => {
   const handleFinalSubmit = async (chosenPlanSlug: string = 'entreprise') => {
     if (form.selected_sectors.length === 0) {
       setError('Veuillez sélectionner au moins un secteur d’activité.')
+      return
+    }
+
+    const regKey = `register:${form.email.trim().toLowerCase()}`
+    const check = rateLimiter.checkRateLimit(regKey, 5, 60000, 15 * 60 * 1000)
+    if (!check.allowed) {
+      setError(check.lockoutMessage || 'Trop de tentatives d’inscription. Veuillez réessayer plus tard.')
       return
     }
 

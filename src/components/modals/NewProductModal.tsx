@@ -19,6 +19,7 @@ import {
 } from '../../utils/batchPricing'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
+import { getActiveSectorSlug } from '../../lib/sectorClient'
 
 interface NewProductModalProps {
   isOpen: boolean
@@ -40,8 +41,7 @@ export const UV_UNITS = [
 ]
 
 export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess }) => {
-  const { company, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
-  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
+  const { company } = useAuthStore()
 
   // Formulaire Produit sans valeurs fictives (vides ou 0 réels)
   const [form, setForm] = useState({
@@ -223,10 +223,10 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
           }
         : null
 
+      const activeSectorSlug = getActiveSectorSlug()
       const sectorMeta = {
-        s: currentSectorSlug,
-        sector_slug: currentSectorSlug,
-        act: activeActivityId,
+        sector_slug: activeSectorSlug,
+        sector: activeSectorSlug,
         ucd: form.ucd,
         packaging: form.packaging,
         uv: form.uv,
@@ -248,10 +248,10 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         margin_uv_ht: marginUvHt,
       }
 
-      // 3. Préparation du payload pour Supabase
+      // 3. Préparation du payload pour Supabase (Isolation Totale Entreprise + Sous-Logiciel)
       const insertPayload: any = {
         company_id: company.id,
-        sector_slug: currentSectorSlug,
+        sector_slug: activeSectorSlug,
         code: finalCode,
         name: form.name.trim(),
         unit: form.uv,
@@ -269,8 +269,9 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
       let res = await supabase.from('products').insert(insertPayload).select().single()
 
-      // Si les colonnes stock_magasin/stock_vente ne sont pas présentes en colonne directe SQL
-      if (res.error && res.error.code === 'PGRST204') {
+      // Si les colonnes physiques optionnelles ne sont pas encore créées en direct
+      if (res.error && (res.error.code === 'PGRST204' || res.error.message?.includes('sector_slug') || res.error.message?.includes('stock_'))) {
+        delete insertPayload.sector_slug
         delete insertPayload.stock_magasin
         delete insertPayload.stock_vente
         res = await supabase.from('products').insert(insertPayload).select().single()

@@ -6,6 +6,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   Receipt, Plus, Search, Calendar, Tag, RefreshCw, X, ArrowDownRight,
   Filter, CheckCircle2, DollarSign
@@ -13,6 +14,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
 
 const fmt = (n: number) =>
@@ -49,6 +51,8 @@ export const CATEGORIES = [
 export const DepensesPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [usersList, setUsersList] = useState<{ id: string; name: string }[]>([])
@@ -99,7 +103,10 @@ export const DepensesPage: React.FC = () => {
         setUsersList(profiles.map((p: any) => ({ id: p.id, name: p.full_name || p.username || 'Utilisateur' })))
       }
 
-      const mapped = (data || []).map((exp: any) => ({
+      // Isolation stricte par sous-logiciel : filtrer par secteur actif
+      const sectorExpenses = filterItemsForSector(data || [], currentSectorSlug)
+
+      const mapped = sectorExpenses.map((exp: any) => ({
         ...exp,
         user_name: exp.created_by ? userMap.get(exp.created_by) || 'Utilisateur' : 'Non précisé'
       }))
@@ -112,7 +119,7 @@ export const DepensesPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id])
+  }, [company?.id, currentSectorSlug])
 
   useEffect(() => {
     loadExpenses()
@@ -125,8 +132,9 @@ export const DepensesPage: React.FC = () => {
     if (!company?.id || !form.title.trim() || !numAmount || numAmount <= 0) return
     setSaving(true)
     try {
-      const { error } = await supabase.from('expenses').insert({
+      const expensePayload = withSectorMeta({
         company_id: company.id,
+        sector_slug: currentSectorSlug,
         title: form.title.trim(),
         category: form.category,
         amount: numAmount,
@@ -134,18 +142,27 @@ export const DepensesPage: React.FC = () => {
         expense_date: form.expense_date,
         notes: form.notes.trim() || null,
         created_by: user?.id
-      })
+      }, currentSectorSlug)
 
-      if (error) throw error
+      const { error } = await supabase.from('expenses').insert(expensePayload)
 
-      // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse
+      if (error) {
+        // Fallback sans colonnes sector_slug si absentes
+        const { sector_slug, sector_meta, ...corePayload } = expensePayload
+        const { error: fbErr } = await supabase.from('expenses').insert(corePayload)
+        if (fbErr) throw fbErr
+      }
+
+      // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse du secteur
       if (form.payment_method === 'especes' && company?.id) {
         try {
-          const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+          const cashKey = `gestio_caisse_state_${company.id}_${currentSectorSlug}`
+          const cashStateRaw = localStorage.getItem(cashKey) ||
+            (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_caisse_state_${company.id}`) : null)
           if (cashStateRaw) {
             const cState = JSON.parse(cashStateRaw)
             cState.initialCash = Math.max(0, (Number(cState.initialCash) || 0) - numAmount)
-            localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
+            localStorage.setItem(cashKey, JSON.stringify(cState))
           }
         } catch (e) {}
       }

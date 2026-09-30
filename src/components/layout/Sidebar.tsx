@@ -3,7 +3,7 @@
 // =============================================================================
 
 import React, { useState } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import {
   ShoppingCart, Package, Landmark, Users, Truck, Receipt,
   BarChart3, ClipboardList, Shield, CreditCard, Settings,
@@ -14,6 +14,7 @@ import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
 import { GROUP_ORDER, GROUP_LABELS } from '../../core/modules/moduleRegistry'
 import SectorLoader from '../../lib/SectorLoader'
+import { getActiveSectorMeta } from '../../lib/sectorClient'
 import { ProfileModal } from '../auth/ProfileModal'
 import clsx from 'clsx'
 
@@ -74,12 +75,16 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
 
 const Sidebar: React.FC = () => {
   const navigate = useNavigate()
+  const params = useParams<{ sectorSlug?: string }>()
   const { company, user, logout } = useAuthStore()
   const { sidebarCollapsed, sidebarMobileOpen, toggleSidebar } = useUIStore()
   const [profileModalOpen, setProfileModalOpen] = useState(false)
 
-  // Construire la nav dynamiquement
-  const { grouped } = SectorLoader.getDefaultNav()
+  const currentSectorSlug = params.sectorSlug || localStorage.getItem('gestio229_active_sector') || undefined
+  const sectorMeta = getActiveSectorMeta()
+
+  // Construire la nav dynamiquement pour le sous-logiciel actif
+  const { grouped } = SectorLoader.getDefaultNav(currentSectorSlug)
 
   const handleLogout = async () => {
     await logout()
@@ -99,20 +104,28 @@ const Sidebar: React.FC = () => {
           'h-full'
         )}
       >
-        {/* ── Logo & Entreprise ──────────────────────────────────────── */}
+        {/* ── Logo & Entreprise & Badge Sous-logiciel ────────────────── */}
         <div className={clsx(
-          'flex items-center border-b border-slate-100 dark:border-slate-800 flex-shrink-0',
-          sidebarCollapsed ? 'p-3 justify-center' : 'p-4 gap-3'
+          'flex flex-col border-b border-slate-100 dark:border-slate-800 flex-shrink-0',
+          sidebarCollapsed ? 'p-3 items-center' : 'p-4 gap-2'
         )}>
-          <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center flex-shrink-0 shadow-sm">
-            <span className="text-white font-bold text-sm">G</span>
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center flex-shrink-0 shadow-sm">
+              <span className="text-white font-bold text-sm">G</span>
+            </div>
+            {!sidebarCollapsed && (
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
+                  {company?.name ?? 'GESTIO 229'}
+                </p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">SaaS Multi-Secteurs</p>
+              </div>
+            )}
           </div>
-          {!sidebarCollapsed && (
-            <div className="min-w-0">
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
-                {company?.name ?? 'GESTIO 229'}
-              </p>
-              <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">SaaS V3.0</p>
+          {!sidebarCollapsed && sectorMeta && (
+            <div className="mt-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-slate-800 flex items-center gap-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-slate-700">
+              <span className="text-base">{sectorMeta.emoji || '🏢'}</span>
+              <span className="truncate">{sectorMeta.name}</span>
             </div>
           )}
         </div>

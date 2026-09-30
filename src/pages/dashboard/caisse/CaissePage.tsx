@@ -8,6 +8,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
@@ -16,6 +17,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../components/modals'
 import { logAuditEvent } from '../../../services/auditService'
 
@@ -50,10 +52,10 @@ interface CashClosure {
 }
 
 export const CaissePage: React.FC = () => {
-  const { company, user, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-
-  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   // État de la caisse : Ouverte ou Fermée
   const [caisseStatus, setCaisseStatus] = useState<'OUVERTE' | 'FERMEE'>('FERMEE')
@@ -61,6 +63,8 @@ export const CaissePage: React.FC = () => {
   const [openedBy, setOpenedBy] = useState<string>('')
   const [initialCash, setInitialCash] = useState<number>(0)
   const [initialMomo, setInitialMomo] = useState<number>(0)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
+  const [cashRegisterId, setCashRegisterId] = useState<string | null>(null)
 
   // Données réelles des ventes et remboursements du jour
   const [salesToday, setSalesToday] = useState<any[]>([])
@@ -96,24 +100,19 @@ export const CaissePage: React.FC = () => {
     return openD !== todayD
   }, [caisseStatus, openedAt])
 
-  // Charger la persistance locale de l'état de la caisse pour le secteur actif
+  // Charger la persistance locale de l'état de la caisse (cloisonné par secteur)
   useEffect(() => {
     if (!company?.id) return
-    const sectorKey = `gestio_caisse_state_${company.id}_${currentSectorSlug}`
-    const legacyKey = `gestio_caisse_state_${company.id}`
-    const storedState = localStorage.getItem(sectorKey) || (currentSectorSlug === (company.activity_sector || 'boutique') ? localStorage.getItem(legacyKey) : null)
+    const storedState = localStorage.getItem(`gestio_caisse_state_${company.id}_${currentSectorSlug}`) ||
+      (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_caisse_state_${company.id}`) : null)
     if (storedState) {
       try {
         const parsed = JSON.parse(storedState)
         setCaisseStatus(parsed.status || 'FERMEE')
         setOpenedAt(parsed.openedAt || null)
         setOpenedBy(parsed.openedBy || '')
-        const cVal = Number(parsed.initialCash) || 0
-        const mVal = Number(parsed.initialMomo) || 0
-        setInitialCash(cVal)
-        setInitialMomo(mVal)
-        setOpenInputCash(cVal)
-        setOpenInputMomo(mVal)
+        setInitialCash(Number(parsed.initialCash) || 0)
+        setInitialMomo(Number(parsed.initialMomo) || 0)
       } catch (e) {
         console.error('Erreur lecture session caisse', e)
       }
@@ -123,54 +122,37 @@ export const CaissePage: React.FC = () => {
       setOpenedBy('')
       setInitialCash(0)
       setInitialMomo(0)
-      setOpenInputCash(0)
-      setOpenInputMomo(0)
     }
 
-    const sectorClosuresKey = `gestio_caisse_closures_${company.id}_${currentSectorSlug}`
-    const legacyClosuresKey = `gestio_caisse_closures_${company.id}`
-    const storedClosures = localStorage.getItem(sectorClosuresKey) || (currentSectorSlug === (company.activity_sector || 'boutique') ? localStorage.getItem(legacyClosuresKey) : null)
+    const storedClosures = localStorage.getItem(`gestio_caisse_closures_${company.id}_${currentSectorSlug}`) ||
+      (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_caisse_closures_${company.id}`) : null)
     if (storedClosures) {
       try {
         setClosuresHistory(JSON.parse(storedClosures))
-      } catch (e) {}
+      } catch (e) {
+        setClosuresHistory([])
+      }
     } else {
       setClosuresHistory([])
     }
 
-    const sectorRequestsKey = `gestio_treasury_requests_${company.id}_${currentSectorSlug}`
-    const globalRequestsKey = `gestio_treasury_requests_${company.id}`
-    const storedRequests = localStorage.getItem(sectorRequestsKey) || localStorage.getItem(globalRequestsKey)
+    const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`)
     if (storedRequests) {
       try {
-        const parsed = JSON.parse(storedRequests)
-        const filtered = Array.isArray(parsed)
-          ? parsed.filter((r: any) => !r.sector || r.sector === currentSectorSlug)
-          : []
-        setPendingRequests(filtered)
-      } catch (e) {}
+        setPendingRequests(JSON.parse(storedRequests))
+      } catch (e) {
+        setPendingRequests([])
+      }
     } else {
       setPendingRequests([])
     }
   }, [company?.id, currentSectorSlug])
 
-  // Sauvegarder l'état de session dans localStorage par secteur
-  const saveCaisseState = (status: 'OUVERTE' | 'FERMEE', opAt: string | null, opBy: string, initC: number, initM: number, lastClosedC?: number, lastClosedM?: number) => {
+  // Sauvegarder l'état de session dans localStorage cloisonné par secteur
+  const saveCaisseState = (status: 'OUVERTE' | 'FERMEE', opAt: string | null, opBy: string, initC: number, initM: number) => {
     if (!company?.id) return
-    const payload = {
-      status,
-      openedAt: opAt,
-      openedBy: opBy,
-      initialCash: initC,
-      initialMomo: initM,
-      lastClosedCash: lastClosedC !== undefined ? lastClosedC : initC,
-      lastClosedMomo: lastClosedM !== undefined ? lastClosedM : initM,
-      sector: currentSectorSlug
-    }
+    const payload = { status, openedAt: opAt, openedBy: opBy, initialCash: initC, initialMomo: initM, sector_slug: currentSectorSlug }
     localStorage.setItem(`gestio_caisse_state_${company.id}_${currentSectorSlug}`, JSON.stringify(payload))
-    if (currentSectorSlug === (company.activity_sector || 'boutique')) {
-      localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(payload))
-    }
     setCaisseStatus(status)
     setOpenedAt(opAt)
     setOpenedBy(opBy)
@@ -186,7 +168,67 @@ export const CaissePage: React.FC = () => {
       const now = new Date()
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
-      // 1. Ventes du jour réelles depuis Supabase
+      // 0. Synchronisation persistante Supabase : Caisse & Sessions réelles
+      try {
+        const { data: registers } = await supabase
+          .from('cash_registers')
+          .select('id, name, current_cash_balance, current_momo_balance')
+          .eq('company_id', company.id)
+          .limit(1)
+
+        if (registers && registers.length > 0) {
+          setCashRegisterId(registers[0].id)
+        }
+
+        // Vérifier si une session est ouverte dans Supabase
+        const { data: openSessions } = await supabase
+          .from('cash_sessions')
+          .select('*')
+          .eq('company_id', company.id)
+          .eq('status', 'ouverte')
+          .order('opened_at', { ascending: false })
+          .limit(1)
+
+        if (openSessions && openSessions.length > 0) {
+          const activeSess = openSessions[0]
+          setActiveSessionId(activeSess.id)
+          setCaisseStatus('OUVERTE')
+          setOpenedAt(activeSess.opened_at)
+          setOpenedBy(user?.full_name || 'Caissier')
+          setInitialCash(Number(activeSess.opening_cash) || 0)
+          setInitialMomo(Number(activeSess.opening_momo) || 0)
+        }
+
+        // Charger l'historique réel des clôtures archivées dans Supabase
+        const { data: closedSessions } = await supabase
+          .from('cash_sessions')
+          .select('*')
+          .eq('company_id', company.id)
+          .eq('status', 'cloturee')
+          .order('closed_at', { ascending: false })
+          .limit(30)
+
+        if (closedSessions && closedSessions.length > 0) {
+          const dbClosures: CashClosure[] = closedSessions.map((cs: any) => ({
+            id: cs.id,
+            closed_at: cs.closed_at || cs.opened_at,
+            closed_by: user?.full_name || 'Caissier',
+            caisse_name: `Caisse ${currentSectorSlug.toUpperCase()}`,
+            fond_especes_theorique: (Number(cs.closing_cash_counted) || 0) - (Number(cs.cash_discrepancy) || 0),
+            fond_especes_physique: Number(cs.closing_cash_counted) || 0,
+            ecart_especes: Number(cs.cash_discrepancy) || 0,
+            fond_momo: Number(cs.closing_momo_counted) || 0,
+            total_fermeture: (Number(cs.closing_cash_counted) || 0) + (Number(cs.closing_momo_counted) || 0),
+            notes: cs.closing_notes || 'Clôture archivée',
+            status: 'CLOTURE_VALIDEE',
+          }))
+          setClosuresHistory(dbClosures)
+        }
+      } catch (sessErr) {
+        console.warn('Fallback lecture cash_sessions Supabase:', sessErr)
+      }
+
+      // 1. Ventes du jour réelles depuis Supabase filtrées strictement par secteur
       const { data: sales, error } = await supabase
         .from('sales_orders')
         .select('*, customer:customers(id, name, ifu_number)')
@@ -195,37 +237,7 @@ export const CaissePage: React.FC = () => {
         .order('created_at', { ascending: false })
 
       if (error) console.warn('Erreur chargement sales_orders :', error)
-      const allSales = sales || []
-
-      // Filtrer strictement les ventes par secteur actif (isolation totale inter-secteurs)
-      const realSales = allSales.filter((s: any) => {
-        let saleSector = s.sector_slug || null
-        let actId = null
-        if (!saleSector && s.e_mecef_uid) {
-          try {
-            if (s.e_mecef_uid.startsWith('{')) {
-              const meta = JSON.parse(s.e_mecef_uid)
-              saleSector = meta.s || meta.sector_slug || meta.sector
-              actId = meta.act
-            }
-          } catch (e) {}
-        }
-        if (!saleSector && s.notes) {
-          try {
-            const nMeta = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
-            saleSector = nMeta.s || nMeta.sector_slug || nMeta.sector
-            if (!actId) actId = nMeta.act
-          } catch (e) {}
-        }
-        if (saleSector) {
-          return saleSector === currentSectorSlug
-        }
-        if (actId && activeActivityId) {
-          return actId === activeActivityId
-        }
-        // Attribuer les ventes non identifiées uniquement au secteur par défaut de l'entreprise
-        return currentSectorSlug === (company?.activity_sector || 'boutique')
-      })
+      const realSales = filterItemsForSector(sales || [], currentSectorSlug)
 
       // Parser les paiements de chaque vente (depuis notes, e_mecef_uid ou payment_status)
       const parsedSales = realSales.map((s: any) => {
@@ -332,18 +344,13 @@ export const CaissePage: React.FC = () => {
         }
       })
 
-      // Combiner avec les demandes de transfert de la session pour ce secteur
-      const sectorRequestsKey = `gestio_treasury_requests_${company.id}_${currentSectorSlug}`
-      const globalRequestsKey = `gestio_treasury_requests_${company.id}`
-      const storedReqs = localStorage.getItem(sectorRequestsKey) || localStorage.getItem(globalRequestsKey)
+      // Combiner avec les demandes de transfert de la session
+      const storedReqs = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
       let transferMovements: CashMovement[] = []
       if (storedReqs) {
         try {
           const reqs = JSON.parse(storedReqs)
-          const secReqs = Array.isArray(reqs)
-            ? reqs.filter((r: any) => !r.sector || r.sector === currentSectorSlug)
-            : []
-          transferMovements = secReqs.map((r: any) => ({
+          transferMovements = reqs.map((r: any) => ({
             id: r.id,
             created_at: r.created_at,
             user_name: r.requested_by,
@@ -352,7 +359,7 @@ export const CaissePage: React.FC = () => {
             amount: r.amount,
             motif: `Demande transfert trésorerie : ${r.motif}`,
             reference: `TR-${r.id.slice(0, 6)}`,
-            status: (r.status === 'APPROVED' || r.status === 'VALIDE' || r.status === 'EXECUTE') ? 'VALIDE' : (r.status === 'REJECTED' || r.status === 'REFUSE') ? 'REFUSE' : 'EN_ATTENTE'
+            status: r.status === 'APPROVED' ? 'VALIDE' : r.status === 'REJECTED' ? 'REFUSE' : 'EN_ATTENTE'
           }))
         } catch (e) {}
       }
@@ -370,7 +377,7 @@ export const CaissePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, currentSectorSlug])
+  }, [company?.id])
 
   useEffect(() => {
     loadCaisseData()
@@ -422,30 +429,22 @@ export const CaissePage: React.FC = () => {
   const totalEntreesDuJour = ventesEspeces + ventesMomo + remboursementsEspeces + remboursementsMomo
 
   // Total des retraits espèces exécutés vers trésorerie
-  // RÈGLE 4 : Ne diminuer la caisse qu'après validation effective !
   const totalRetraitsEspeces = useMemo(() => {
     return pendingRequests
-      .filter((r) => r.type === 'Espèces' && (r.status === 'APPROVED' || r.status === 'VALIDE' || r.status === 'EXECUTE'))
+      .filter((r) => r.type === 'Espèces' && r.status !== 'REFUSE')
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
   const totalRetraitsMomo = useMemo(() => {
     return pendingRequests
-      .filter((r) => r.type === 'MoMo' && (r.status === 'APPROVED' || r.status === 'VALIDE' || r.status === 'EXECUTE'))
+      .filter((r) => r.type === 'MoMo' && r.status !== 'REFUSE')
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
-  // Total des transferts en attente de validation (pour information sans déduction)
-  const totalRetraitsEnAttente = useMemo(() => {
-    return pendingRequests
-      .filter((r) => r.status === 'EN_ATTENTE')
-      .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
-  }, [pendingRequests])
-
-  // Fond actuel — Espèces (initial + ventes espèces + remboursements espèces - retraits validés)
+  // Fond actuel — Espèces (initial + ventes espèces + remboursements espèces - retraits)
   const fondActuelEspeces = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces
 
-  // Fond actuel — MoMo (initial + ventes MoMo + remboursements MoMo - retraits validés)
+  // Fond actuel — MoMo (initial + ventes MoMo + remboursements MoMo - retraits)
   const fondActuelMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo
 
   // 6. Fond initial global
@@ -460,18 +459,66 @@ export const CaissePage: React.FC = () => {
   }, [salesToday])
 
   // ─── Action : Ouvrir la Caisse ─────────────────────────────────────────────
-  // RÈGLE 3 : Préremplir automatiquement les fonds de la veille
-  const handleOpenCaisse = (e: React.FormEvent) => {
+  const handleOpenCaisse = async (e: React.FormEvent) => {
     e.preventDefault()
     const opBy = user?.full_name || 'Caissier'
     const nowIso = new Date().toISOString()
-    saveCaisseState('OUVERTE', nowIso, opBy, Number(openInputCash) || 0, Number(openInputMomo) || 0)
+    const initC = Number(openInputCash) || 0
+    const initM = Number(openInputMomo) || 0
+
+    let regId = cashRegisterId
+    if (!regId && company?.id) {
+      const { data: reg } = await supabase.from('cash_registers').select('id').eq('company_id', company.id).limit(1).maybeSingle()
+      if (reg?.id) {
+        regId = reg.id
+        setCashRegisterId(reg.id)
+      }
+    }
+
+    if (company?.id) {
+      try {
+        const { data: newSession } = await supabase.from('cash_sessions').insert({
+          company_id: company.id,
+          cash_register_id: regId || null,
+          opened_at: nowIso,
+          opening_cash: initC,
+          opening_momo: initM,
+          status: 'ouverte'
+        }).select().single()
+
+        if (newSession?.id) {
+          setActiveSessionId(newSession.id)
+        }
+
+        if (regId) {
+          await supabase.from('cash_registers').update({
+            current_cash_balance: initC,
+            current_momo_balance: initM,
+            is_active: true
+          }).eq('id', regId)
+        }
+      } catch (err) {
+        console.warn('Erreur ouverture cash_session Supabase:', err)
+      }
+    }
+
+    saveCaisseState('OUVERTE', nowIso, opBy, initC, initM)
     setShowOpenModal(false)
     toast.success('Caisse Ouverte avec succès !', `Fond initial tiroir : ${fmt(openInputCash)}`)
+
+    await logAuditEvent({
+      companyId: company?.id,
+      userId: user?.id,
+      userName: user?.full_name,
+      userRole: user?.role,
+      action: 'OUVERTURE_CAISSE',
+      module: 'CAISSE',
+      sector: currentSectorSlug.toUpperCase(),
+      description: `Ouverture de la caisse ${currentSectorSlug} par ${opBy}. Fond tiroir : ${fmt(initC)}, MoMo : ${fmt(initM)}`
+    })
   }
 
   // ─── Action : Fermer la Caisse (avec Clôture Rigoureuse et Audit) ─────────────
-  // RÈGLE 2 : Après la clôture, aucune fenêtre modale ne doit s'ouvrir automatiquement
   const handleConfirmCloseCaisse = async () => {
     const ecart = Number(closingPhysicalCash) - fondActuelEspeces
     if (ecart !== 0 && !closingNotes.trim()) {
@@ -509,7 +556,7 @@ export const CaissePage: React.FC = () => {
       id: `cloture-${Date.now()}`,
       closed_at: closedAt,
       closed_by: closedBy,
-      caisse_name: `Caisse ${activeActivityName || currentSectorSlug.toUpperCase()}`,
+      caisse_name: `Caisse ${currentSectorSlug.toUpperCase()}`,
       fond_especes_theorique: fondActuelEspeces,
       fond_especes_physique: Number(closingPhysicalCash),
       ecart_especes: ecart,
@@ -524,37 +571,66 @@ export const CaissePage: React.FC = () => {
     setClosuresHistory(updatedClosures)
     if (company?.id) {
       localStorage.setItem(`gestio_caisse_closures_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedClosures))
-      if (currentSectorSlug === (company.activity_sector || 'boutique')) {
-        localStorage.setItem(`gestio_caisse_closures_${company.id}`, JSON.stringify(updatedClosures))
+    }
+
+    // Le montant laissé en caisse devient le fond initial du lendemain
+    const nextDayFunds = Number(rolloverCash) || 0
+    saveCaisseState('FERMEE', null, '', nextDayFunds, fondActuelMomo)
+
+    // Enregistrer la clôture dans Supabase cash_sessions et mettre à jour cash_registers
+    if (company?.id) {
+      try {
+        if (activeSessionId) {
+          await supabase.from('cash_sessions').update({
+            closed_at: closedAt,
+            total_sales_cash: ventesEspeces,
+            total_sales_momo: ventesMomo,
+            total_credit_collected: remboursementsEspeces + remboursementsMomo,
+            total_transferred_to_treasury: totalRetraitsEspeces + totalRetraitsMomo,
+            closing_cash_counted: Number(closingPhysicalCash),
+            closing_momo_counted: fondActuelMomo,
+            cash_discrepancy: ecart,
+            status: 'cloturee',
+            closing_notes: closingNotes || 'Clôture de session normale',
+            email_report_sent: recipientEmails.length > 0
+          }).eq('id', activeSessionId)
+          setActiveSessionId(null)
+        }
+
+        if (cashRegisterId) {
+          await supabase.from('cash_registers').update({
+            current_cash_balance: nextDayFunds,
+            current_momo_balance: fondActuelMomo
+          }).eq('id', cashRegisterId)
+        }
+      } catch (sessUpdErr) {
+        console.warn('Erreur clôture cash_sessions Supabase:', sessUpdErr)
       }
     }
 
-    // Le montant restant en caisse devient le fond initial du lendemain
-    const nextDayFunds = Number(rolloverCash) > 0 ? Number(rolloverCash) : Number(closingPhysicalCash)
-    saveCaisseState('FERMEE', null, '', nextDayFunds, fondActuelMomo, Number(closingPhysicalCash), fondActuelMomo)
-    setOpenInputCash(nextDayFunds)
-    setOpenInputMomo(fondActuelMomo)
-
     // Traçabilité Audit Senior
     await logAuditEvent({
+      companyId: company?.id,
+      userId: user?.id,
+      userName: user?.full_name,
+      userRole: user?.role,
       action: 'CLOTURE_CAISSE',
       module: 'CAISSE',
       sector: currentSectorSlug.toUpperCase(),
-      description: `Clôture caisse par ${closedBy} [${activeActivityName || currentSectorSlug}]. Espèces comptées : ${fmt(closingPhysicalCash)} (Théorique : ${fmt(fondActuelEspeces)}, Écart : ${fmt(ecart)}). MoMo : ${fmt(fondActuelMomo)}. Fond reporté lendemain : ${fmt(nextDayFunds)}. Justification : ${closingNotes || 'RAS'}`
+      description: `Clôture caisse ${currentSectorSlug} par ${closedBy}. Espèces comptées : ${fmt(closingPhysicalCash)} (Théorique : ${fmt(fondActuelEspeces)}, Écart : ${fmt(ecart)}). MoMo : ${fmt(fondActuelMomo)}. Fond reporté lendemain : ${fmt(nextDayFunds)}. Justification : ${closingNotes || 'RAS'}`
     })
 
     setShowCloseModal(false)
     setActiveReportClosure(newClosure)
-    // CRITIQUE : après la clôture, AUCUNE fenêtre modale ne doit s'ouvrir automatiquement
-    setShowReportModal(false)
+    setShowReportModal(true)
 
     if (recipientEmails.length > 0) {
       toast.success(
-        'Caisse Clôturée avec Succès !',
-        `Rapport Z enregistré et archivé pour le lendemain. Destinataires : ${recipientEmails.join(', ')}`
+        'Caisse Clôturée !',
+        `Rapport Z généré et archivé. Destinataires : ${recipientEmails.join(', ')}`
       )
     } else {
-      toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été enregistré et archivé.')
+      toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été généré et archivé.')
     }
   }
 
@@ -570,34 +646,27 @@ export const CaissePage: React.FC = () => {
   }
 
   // ─── Action : Envoyer une Demande vers Trésorerie ───────────────────────────
-  // RÈGLE 4 : Ne diminue pas automatiquement le solde avant validation
   const handleSendWithdrawalRequest = (req: { type: string; amount: number; reason: string }) => {
     const newReq = {
       id: `req-${Date.now()}`,
       created_at: new Date().toISOString(),
       requested_by: user?.full_name || 'Caissier',
-      sector: currentSectorSlug,
       type: req.type,
       amount: req.amount,
       motif: req.reason,
-      status: 'EN_ATTENTE' // En attente de validation : solde non déduit avant acceptation
+      sector_slug: currentSectorSlug,
+      status: 'EN_ATTENTE' // En attente, Acceptée, Refusée, Exécutée
     }
 
     const updated = [newReq, ...pendingRequests]
     setPendingRequests(updated)
     if (company?.id) {
       localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updated))
-      try {
-        const rawGlob = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
-        const globList = rawGlob ? JSON.parse(rawGlob) : []
-        const updatedGlob = [newReq, ...globList.filter((x: any) => x.id !== newReq.id)]
-        localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedGlob))
-      } catch (e) {}
     }
 
     toast.success(
-      'Demande transmise à la Trésorerie',
-      `Demande de versement de ${fmt(req.amount)} (${req.type}) enregistrée (le solde sera débité dès validation effective).`
+      'Demande envoyée vers la Trésorerie',
+      `Demande de versement de ${fmt(req.amount)} (${req.type}) soumise à validation.`
     )
     loadCaisseData()
   }
@@ -674,19 +743,9 @@ export const CaissePage: React.FC = () => {
           <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2">
             <Wallet className="w-6 h-6 text-emerald-600" />
             Caisse Opérationnelle
-            {activeActivityName && (
-              <span className="text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-xl">
-                {activeActivityName}
-              </span>
-            )}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Gestion du tiroir espèces, réceptions Mobile Money, clôtures journalières et versements
-            {totalRetraitsEnAttente > 0 && (
-              <span className="ml-2 font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-lg inline-block">
-                ⏳ {fmt(totalRetraitsEnAttente)} en attente validation trésorerie
-              </span>
-            )}
           </p>
         </div>
 

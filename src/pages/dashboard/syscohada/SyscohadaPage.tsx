@@ -254,10 +254,10 @@ const SyscohadaPage: React.FC = () => {
   }
 
   const handleDeleteBudget = async (bId: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce budget et toutes ses lignes ?')) return
+    if (!confirm('Êtes-vous sûr de vouloir archiver ce budget et ses prévisions ?')) return
     const b = budgets.find((item) => item.id === bId)
     try {
-      await supabase.from('budgets').delete().eq('id', bId)
+      await supabase.from('budgets').update({ status: 'archive' }).eq('id', bId)
     } catch (_) {}
 
     const remaining = budgets.filter((item) => item.id !== bId)

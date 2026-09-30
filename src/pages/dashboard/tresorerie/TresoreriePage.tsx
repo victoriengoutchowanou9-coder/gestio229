@@ -7,6 +7,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   Landmark, Plus, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Building2, RefreshCw, Smartphone, Check, X, ShieldAlert,
@@ -15,7 +16,10 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { TreasuryDisbursementModal, ModalPortal } from '../../../components/modals'
+import { logAuditEvent } from '../../../services/auditService'
+
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -43,6 +47,8 @@ interface PendingTransfer {
 export const TresoreriePage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   const [accounts, setAccounts] = useState<TreasuryAccount[]>([])
   const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([])
@@ -74,69 +80,37 @@ export const TresoreriePage: React.FC = () => {
         .eq('company_id', company.id)
 
       if (!error && dbAccounts && dbAccounts.length > 0) {
-        setAccounts(dbAccounts)
+        const sectorAccs = filterItemsForSector(dbAccounts, currentSectorSlug)
+        setAccounts(sectorAccs)
       } else {
-        // Fallback local tenant
-        const stored = localStorage.getItem(`gestio_treasury_accounts_${company.id}`)
+        // Fallback local tenant cloisonné par secteur
+        const stored = localStorage.getItem(`gestio_treasury_accounts_${company.id}_${currentSectorSlug}`) ||
+          (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_treasury_accounts_${company.id}`) : null)
         if (stored) {
           try {
-            const parsed = JSON.parse(stored)
-            if (Array.isArray(parsed) && parsed.length > 0) {
-              setAccounts(parsed)
-            } else {
-              throw new Error('empty')
-            }
+            setAccounts(JSON.parse(stored))
           } catch (e) {
-            const defaultAccs: TreasuryAccount[] = [
-              { id: 'acc-vault-1', name: 'Coffre-fort Espèces', type: 'vault', institution: 'Coffre Principal Siège', account_number: 'CF-001', balance: 0, alert_threshold: 100000 },
-              { id: 'acc-momo-1', name: 'MoMo Marchand (MTN / Moov)', type: 'mobile_money', institution: 'MTN & Moov Bénin', account_number: 'MOMO-COMMERCE-01', balance: 0, alert_threshold: 50000 },
-              { id: 'acc-bank-1', name: 'Compte Bancaire Principal', type: 'bank', institution: 'Banque Locale Bénin', account_number: 'BJ66-0100-001', balance: 0, alert_threshold: 200000 }
-            ]
-            setAccounts(defaultAccs)
-            localStorage.setItem(`gestio_treasury_accounts_${company.id}`, JSON.stringify(defaultAccs))
+            setAccounts([])
           }
         } else {
-          // Comptes standards d'entreprise prêts à l'emploi
-          const defaultAccs: TreasuryAccount[] = [
-            { id: 'acc-vault-1', name: 'Coffre-fort Espèces', type: 'vault', institution: 'Coffre Principal Siège', account_number: 'CF-001', balance: 0, alert_threshold: 100000 },
-            { id: 'acc-momo-1', name: 'MoMo Marchand (MTN / Moov)', type: 'mobile_money', institution: 'MTN & Moov Bénin', account_number: 'MOMO-COMMERCE-01', balance: 0, alert_threshold: 50000 },
-            { id: 'acc-bank-1', name: 'Compte Bancaire Principal', type: 'bank', institution: 'Banque Locale Bénin', account_number: 'BJ66-0100-001', balance: 0, alert_threshold: 200000 }
-          ]
-          setAccounts(defaultAccs)
-          localStorage.setItem(`gestio_treasury_accounts_${company.id}`, JSON.stringify(defaultAccs))
+          // Espace vierge par défaut
+          setAccounts([])
         }
       }
 
-      // 2. Charger les demandes de versements caisse en attente (depuis la clé globale et les clés par secteur)
-      let allReqs: any[] = []
-      const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
+      // 2. Charger les demandes de versements caisse en attente du secteur
+      const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`) ||
+        (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_treasury_requests_${company.id}`) : null)
       if (storedRequests) {
         try {
-          allReqs = JSON.parse(storedRequests)
-        } catch (e) {}
-      }
-
-      // Scanner d'éventuelles demandes spécifiques de secteurs
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i)
-          if (k && k.startsWith(`gestio_treasury_requests_${company.id}_`)) {
-            const val = localStorage.getItem(k)
-            if (val) {
-              const secReqs = JSON.parse(val)
-              if (Array.isArray(secReqs)) {
-                secReqs.forEach((sr: any) => {
-                  if (!allReqs.some((x) => x.id === sr.id)) {
-                    allReqs.push(sr)
-                  }
-                })
-              }
-            }
-          }
+          const reqs = JSON.parse(storedRequests)
+          setPendingTransfers(reqs)
+        } catch (e) {
+          setPendingTransfers([])
         }
-      } catch (e) {}
-
-      setPendingTransfers(allReqs)
+      } else {
+        setPendingTransfers([])
+      }
     } catch (err: any) {
       console.error('Erreur chargement trésorerie :', err)
       setAccounts([])
@@ -144,27 +118,56 @@ export const TresoreriePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id])
+  }, [company?.id, currentSectorSlug])
 
   useEffect(() => {
     loadTreasuryData()
   }, [loadTreasuryData])
 
-  // Sauvegarder les comptes localement
+  // Sauvegarder les comptes localement par secteur
   const saveAccounts = (updated: TreasuryAccount[]) => {
     setAccounts(updated)
     if (company?.id) {
-      localStorage.setItem(`gestio_treasury_accounts_${company.id}`, JSON.stringify(updated))
+      localStorage.setItem(`gestio_treasury_accounts_${company.id}_${currentSectorSlug}`, JSON.stringify(updated))
     }
   }
 
   // Ajouter un nouveau compte réel
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newAccForm.name.trim()) return
+    if (!newAccForm.name.trim() || !company?.id) return
+
+    const fullAccNum = newAccForm.institution.trim()
+      ? `${newAccForm.institution.trim()} - ${newAccForm.account_number.trim() || 'Principal'}`
+      : (newAccForm.account_number.trim() || 'Principal')
+
+    let createdId = `acc-${Date.now()}`
+
+    // Insertion directe et persistante dans Supabase
+    try {
+      const { data: dbAcc, error } = await supabase
+        .from('treasury_accounts')
+        .insert({
+          company_id: company.id,
+          name: newAccForm.name.trim(),
+          type: newAccForm.type,
+          account_number: fullAccNum,
+          balance: Number(newAccForm.initial_balance) || 0,
+          syscohada_code: newAccForm.type === 'bank' ? '521000' : newAccForm.type === 'vault' ? '571000' : '521100',
+          is_active: true
+        })
+        .select()
+        .single()
+
+      if (dbAcc?.id) {
+        createdId = dbAcc.id
+      }
+    } catch (dbErr) {
+      console.warn('Fallback insertion Supabase treasury_accounts:', dbErr)
+    }
 
     const newAccount: TreasuryAccount = {
-      id: `acc-${Date.now()}`,
+      id: createdId,
       name: newAccForm.name.trim(),
       type: newAccForm.type,
       institution: newAccForm.institution.trim() || 'Établissement Financier',
@@ -176,20 +179,16 @@ export const TresoreriePage: React.FC = () => {
     const updated = [...accounts, newAccount]
     saveAccounts(updated)
 
-    // Tenter également insertion Supabase
-    if (company?.id) {
-      try {
-        await supabase.from('treasury_accounts').insert({
-          company_id: company.id,
-          name: newAccount.name,
-          type: newAccount.type,
-          institution: newAccount.institution,
-          account_number: newAccount.account_number,
-          balance: newAccount.balance,
-          alert_threshold: newAccount.alert_threshold
-        })
-      } catch (e) {}
-    }
+    await logAuditEvent({
+      companyId: company.id,
+      userId: user?.id,
+      userName: user?.full_name,
+      userRole: user?.role,
+      action: 'CREATION_COMPTE_TRESORERIE',
+      module: 'TRESORERIE',
+      sector: currentSectorSlug.toUpperCase(),
+      description: `Création du compte de trésorerie "${newAccount.name}" (${newAccount.type}) avec solde initial de ${fmt(newAccount.balance)}`
+    })
 
     toast.success('Compte de trésorerie créé avec succès !')
     setShowAddAccountModal(false)
@@ -204,17 +203,30 @@ export const TresoreriePage: React.FC = () => {
   }
 
   // Approuver une demande de versement envoyée par la caisse
-  const handleApproveTransfer = (transfer: PendingTransfer) => {
+  const handleApproveTransfer = async (transfer: PendingTransfer) => {
     // Trouver le compte de destination correspondant (ex: coffre pour espèces, momo pour momo)
     const target = accounts.find((a) =>
       transfer.type === 'Espèces' ? a.type === 'vault' : a.type === 'mobile_money'
     ) || accounts[0]
 
     if (target) {
+      const newBal = target.balance + Number(transfer.amount)
       const updatedAccounts = accounts.map((a) =>
-        a.id === target.id ? { ...a, balance: a.balance + Number(transfer.amount) } : a
+        a.id === target.id ? { ...a, balance: newBal } : a
       )
       saveAccounts(updatedAccounts)
+
+      // Mise à jour persistante Supabase
+      if (company?.id) {
+        try {
+          await supabase
+            .from('treasury_accounts')
+            .update({ balance: newBal })
+            .eq('id', target.id)
+        } catch (updErr) {
+          console.warn('Fallback mise à jour solde treasury_accounts:', updErr)
+        }
+      }
     }
 
     const updatedTransfers: PendingTransfer[] = pendingTransfers.map((t) =>
@@ -223,58 +235,48 @@ export const TresoreriePage: React.FC = () => {
     setPendingTransfers(updatedTransfers)
     if (company?.id) {
       localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
-      // Mettre également à jour les clés sectorielles pour synchroniser immédiatement la caisse
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i)
-          if (k && k.startsWith(`gestio_treasury_requests_${company.id}_`)) {
-            const raw = localStorage.getItem(k)
-            if (raw) {
-              const secList = JSON.parse(raw)
-              if (Array.isArray(secList)) {
-                const newSecList = secList.map((item: any) =>
-                  item.id === transfer.id ? { ...item, status: 'APPROVED' } : item
-                )
-                localStorage.setItem(k, JSON.stringify(newSecList))
-              }
-            }
-          }
-        }
-      } catch (e) {}
+      localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedTransfers))
     }
+
+    await logAuditEvent({
+      companyId: company?.id,
+      userId: user?.id,
+      userName: user?.full_name,
+      userRole: user?.role,
+      action: 'APPROBATION_TRANSFERT_CAISSE',
+      module: 'TRESORERIE',
+      sector: currentSectorSlug.toUpperCase(),
+      description: `Approbation du transfert de caisse de ${fmt(transfer.amount)} (${transfer.type}) vers le compte ${target?.name || 'Trésorerie'}`
+    })
 
     toast.success(
       'Fonds Encaissés en Trésorerie !',
-      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité sur ${target?.name || 'la trésorerie'}.`
+      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité.`
     )
   }
 
   // Rejeter une demande
-  const handleRejectTransfer = (transferId: string) => {
+  const handleRejectTransfer = async (transferId: string) => {
     const updatedTransfers: PendingTransfer[] = pendingTransfers.map((t) =>
       t.id === transferId ? { ...t, status: 'REJECTED' } : t
     )
     setPendingTransfers(updatedTransfers)
     if (company?.id) {
       localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
-      try {
-        for (let i = 0; i < localStorage.length; i++) {
-          const k = localStorage.key(i)
-          if (k && k.startsWith(`gestio_treasury_requests_${company.id}_`)) {
-            const raw = localStorage.getItem(k)
-            if (raw) {
-              const secList = JSON.parse(raw)
-              if (Array.isArray(secList)) {
-                const newSecList = secList.map((item: any) =>
-                  item.id === transferId ? { ...item, status: 'REJECTED' } : item
-                )
-                localStorage.setItem(k, JSON.stringify(newSecList))
-              }
-            }
-          }
-        }
-      } catch (e) {}
+      localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedTransfers))
     }
+
+    await logAuditEvent({
+      companyId: company?.id,
+      userId: user?.id,
+      userName: user?.full_name,
+      userRole: user?.role,
+      action: 'REJET_TRANSFERT_CAISSE',
+      module: 'TRESORERIE',
+      sector: currentSectorSlug.toUpperCase(),
+      description: `Rejet de la demande de transfert de caisse réf: ${transferId}`
+    })
+
     toast.info('Demande rejetée', 'Le caissier a été notifié.')
   }
 
@@ -607,29 +609,15 @@ export const TresoreriePage: React.FC = () => {
       <TreasuryDisbursementModal
         isOpen={showDisbursementModal}
         onClose={() => setShowDisbursementModal(false)}
-        accounts={accounts}
         onSuccess={(d) => {
-          let target = accounts.find((a) => {
-            if (d.accountId) return a.id === d.accountId
-            if (d.source === 'especes') return a.type === 'vault'
-            if (d.source === 'momo') return a.type === 'mobile_money'
-            if (d.source === 'banque') return a.type === 'bank'
-            return false
-          })
-          if (!target && accounts.length > 0) target = accounts[0]
-
-          if (target) {
-            const updated = accounts.map((a) =>
-              a.id === target!.id
-                ? { ...a, balance: Math.max(0, a.balance - Number(d.amount || 0)) }
-                : a
+          // Déduire du premier compte bancaire ou coffre
+          if (accounts.length > 0) {
+            const updated = accounts.map((a, i) =>
+              i === 0 ? { ...a, balance: Math.max(0, a.balance - Number(d.amount || 0)) } : a
             )
             saveAccounts(updated)
-            toast.success(
-              'Décaissement Exécuté !',
-              `Le compte ${target.name} a été débité de ${fmt(d.amount)} vers "${d.beneficiary}".`
-            )
           }
+          toast.success('Décaissement enregistré avec succès')
         }}
       />
     </div>

@@ -5,6 +5,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
@@ -15,6 +16,7 @@ import autoTable from 'jspdf-autotable'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
 import {
@@ -99,26 +101,10 @@ interface SaleRecord {
 }
 
 export const POSPage: React.FC = () => {
-  const {
-    company,
-    user,
-    activeSectorSlug,
-    activeActivityId,
-    activeActivityName,
-    activeActivityLocation
-  } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-
-  // Déterminer le secteur d'activité actif (priorité absolue au secteur sélectionné au HUB)
-  const currentSectorSlug =
-    activeSectorSlug ||
-    (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_sector') : null) ||
-    'boutique'
-
-  const currentActivityName =
-    activeActivityName ||
-    (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null) ||
-    ''
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   // Navigation interne
   const [activeTab, setActiveTab] = useState<'pos' | 'historique'>('pos')
@@ -144,14 +130,7 @@ export const POSPage: React.FC = () => {
   // Modal de paiement
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [isMultiMode, setIsMultiMode] = useState(false)
-  const [singleMethod, setSingleMethod] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'credit'>('especes')
-
-  // Paiement par plusieurs modes (Mode 1 + montant, Mode 2 + montant)
-  const [multiMode1, setMultiMode1] = useState<string>('especes')
-  const [multiAmount1, setMultiAmount1] = useState<number>(0)
-  const [multiMode2, setMultiMode2] = useState<string>('momo_mtn')
-  const [multiAmount2, setMultiAmount2] = useState<number>(0)
-
+  const [singleMethod, setSingleMethod] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'wave' | 'banque' | 'credit'>('especes')
   const [multiPayments, setMultiPayments] = useState<Record<string, number>>({
     especes: 0,
     momo_mtn: 0,
@@ -202,29 +181,20 @@ export const POSPage: React.FC = () => {
       if (prodErr) throw prodErr
       if (custErr) throw custErr
 
-      const mappedProds = (prods || [])
-        .filter((p: any) => {
-          const meta = p.sector_meta || {}
-          const prodSector = meta.s || meta.sector_slug || meta.sector || p.sector_slug
-          if (prodSector) {
-            return prodSector === currentSectorSlug
-          }
-          if (meta.act && activeActivityId) {
-            return meta.act === activeActivityId
-          }
-          return currentSectorSlug === (company.activity_sector || 'boutique')
-        })
-        .map((p: any) => ({
-          ...p,
-          selling_price: Number(p.selling_price) || 0,
-          cost_price: Number(p.cost_price) || 0,
-          stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
-          stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
-          coef: Number(p.coef || p.sector_meta?.coef || 1),
-          ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
-          uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
-          batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
-        }))
+      // Isolation stricte par sous-logiciel (aucun mélange inter-secteurs)
+      const sectorFilteredProds = filterItemsForSector(prods || [], currentSectorSlug)
+
+      const mappedProds = sectorFilteredProds.map((p: any) => ({
+        ...p,
+        selling_price: Number(p.selling_price) || 0,
+        cost_price: Number(p.cost_price) || 0,
+        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
+        stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
+        coef: Number(p.coef || p.sector_meta?.coef || 1),
+        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
+        uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
+        batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
+      }))
       setProducts(mappedProds)
 
       // Charger les clients avec métadonnées de crédit et remise
@@ -261,32 +231,11 @@ export const POSPage: React.FC = () => {
       })
       setCustomers(mappedCusts)
 
-      // Transformer les ventes réelles chargées depuis Supabase avec filtrage strict par secteur actif (Zéro contamination)
+      // Transformer les ventes réelles chargées depuis Supabase avec leurs lignes réelles
+      // Isolation stricte : ne charger que les ventes du sous-logiciel actif
       if (sales && !saleErr) {
-        const sectorSales = (sales || []).filter((s: any) => {
-          let parsedNotes: any = {}
-          try {
-            if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
-          } catch (e) {}
-
-          let metaFromUid: any = {}
-          if (s.e_mecef_uid) {
-            try {
-              if (s.e_mecef_uid.startsWith('{')) metaFromUid = JSON.parse(s.e_mecef_uid)
-            } catch (e) {}
-          }
-
-          const saleSector = metaFromUid.s || metaFromUid.sector_slug || metaFromUid.sector || parsedNotes.s || parsedNotes.sector_slug || parsedNotes.sector || s.sector_slug
-          if (saleSector) {
-            return saleSector === currentSectorSlug
-          }
-          if ((metaFromUid.act || parsedNotes.act) && activeActivityId) {
-            return (metaFromUid.act || parsedNotes.act) === activeActivityId
-          }
-          return currentSectorSlug === (company.activity_sector || 'boutique')
-        })
-
-        const mappedSales: SaleRecord[] = sectorSales.map((s: any) => {
+        const sectorFilteredSales = filterItemsForSector(sales, currentSectorSlug)
+        const mappedSales: SaleRecord[] = sectorFilteredSales.map((s: any) => {
           let parsedNotes: any = {}
           try {
             if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
@@ -577,38 +526,41 @@ export const POSPage: React.FC = () => {
     }
     setIsMultiMode(false)
     setSingleMethod('especes')
-    setMultiMode1('especes')
-    setMultiAmount1(totalNetTTC)
-    setMultiMode2('momo_mtn')
-    setMultiAmount2(0)
+    setMultiPayments({
+      especes: totalNetTTC,
+      momo_mtn: 0,
+      momo_moov: 0,
+      wave: 0,
+      banque: 0,
+      credit: 0,
+    })
     setCashReceivedInput(String(totalNetTTC))
     setShowPaymentModal(true)
   }
 
-  // Somme actuellement affectée pour multi-mode
+  // Somme actuellement affectée
   const sumAssigned = useMemo(() => {
     if (!isMultiMode) return totalNetTTC
-    return Math.round(((Number(multiAmount1) || 0) + (Number(multiAmount2) || 0)) * 100) / 100
-  }, [isMultiMode, multiAmount1, multiAmount2, totalNetTTC])
+    return Object.values(multiPayments).reduce((sum, v) => sum + (Number(v) || 0), 0)
+  }, [isMultiMode, multiPayments, totalNetTTC])
 
   const remainingToPay = Math.round((totalNetTTC - sumAssigned) * 100) / 100
 
-  const handleAmount1Change = (val: number) => {
-    const a1 = Math.max(0, val)
-    setMultiAmount1(a1)
-    const a2 = Math.max(0, Math.round((totalNetTTC - a1) * 100) / 100)
-    setMultiAmount2(a2)
-  }
-
-  const handleAmount2Change = (val: number) => {
-    setMultiAmount2(Math.max(0, val))
+  // Complément automatique sur un mode
+  const handleAutoComplement = (methodKey: string) => {
+    const currentSumWithoutThis = Object.entries(multiPayments)
+      .filter(([k]) => k !== methodKey)
+      .reduce((sum, [_, v]) => sum + (Number(v) || 0), 0)
+    const complement = Math.max(0, Math.round((totalNetTTC - currentSumWithoutThis) * 100) / 100)
+    setMultiPayments((prev) => ({
+      ...prev,
+      [methodKey]: complement,
+    }))
   }
 
   // Rendu de monnaie pour espèces
   const cashGiven = Number(cashReceivedInput) || 0
-  const cashAssigned = isMultiMode
-    ? (multiMode1 === 'especes' ? multiAmount1 : 0) + (multiMode2 === 'especes' ? multiAmount2 : 0)
-    : (singleMethod === 'especes' ? totalNetTTC : 0)
+  const cashAssigned = isMultiMode ? multiPayments.especes : (singleMethod === 'especes' ? totalNetTTC : 0)
   const cashChange = Math.max(0, cashGiven - cashAssigned)
 
   // ─── Validation de la Vente ────────────────────────────────────────────────
@@ -617,18 +569,21 @@ export const POSPage: React.FC = () => {
     // 1. Contrôle des montants
     if (isMultiMode) {
       if (Math.abs(remainingToPay) > 0.01) {
-        toast.error('Paiement incomplet', `La somme des règlements (${fmt(multiAmount1 + multiAmount2)}) doit être égale au Total TTC (${fmt(totalNetTTC)}). Reste : ${fmt(remainingToPay)}`)
+        toast.error('Paiement incomplet', `Le total des règlements doit être exactement égal à ${fmt(totalNetTTC)}. Reste : ${fmt(remainingToPay)}`)
         return
       }
-      if (multiAmount1 < 0 || multiAmount2 < 0) {
-        toast.error('Montant invalide', 'Les montants ne peuvent pas être négatifs.')
-        return
+      // Bloquer montants négatifs
+      for (const [k, v] of Object.entries(multiPayments)) {
+        if (v < 0) {
+          toast.error('Montant invalide', `Le montant en ${k} ne peut pas être négatif.`)
+          return
+        }
       }
     }
 
     // 2. Contrôle crédit obligatoire
     const creditAmount = isMultiMode
-      ? (multiMode1 === 'credit' ? multiAmount1 : 0) + (multiMode2 === 'credit' ? multiAmount2 : 0)
+      ? multiPayments.credit
       : singleMethod === 'credit'
       ? totalNetTTC
       : 0
@@ -649,10 +604,9 @@ export const POSPage: React.FC = () => {
       const orderNum = `VTE-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`
 
       const paymentsList: PaymentLine[] = isMultiMode
-        ? [
-            { method: multiMode1 as any, amount: multiAmount1 },
-            { method: multiMode2 as any, amount: multiAmount2 },
-          ].filter(p => p.amount > 0)
+        ? (Object.entries(multiPayments)
+            .filter(([_, v]) => v > 0)
+            .map(([k, v]) => ({ method: k as any, amount: v })))
         : [{ method: singleMethod, amount: totalNetTTC }]
 
       const primaryMethod = isMultiMode
@@ -662,8 +616,7 @@ export const POSPage: React.FC = () => {
       const totalCost = cart.reduce((sum, item) => sum + item.qty * (item.product.cost_price || 0), 0)
 
       const notesPayload = {
-        s: currentSectorSlug,
-        act: activeActivityId,
+        sector_slug: currentSectorSlug,
         payments: paymentsList,
         customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
         customer_ifu: selectedCustomer?.ifu_number || null,
@@ -691,18 +644,12 @@ export const POSPage: React.FC = () => {
       // 1. Insertion garantie en base de données Supabase dans sales_orders
       const custName = selectedCustomer ? selectedCustomer.name : 'Client Comptoir'
       const todayDate = new Date().toISOString().split('T')[0]
-      const encodedMeta = JSON.stringify({
-        s: currentSectorSlug,
-        act: activeActivityId,
-        pm: primaryMethod,
-        cl: custName.slice(0, 30),
-        st: isDeferred ? 'A_LIVRER' : 'COMPLET',
-        pay: paymentsList
-      })
+      const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferred ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
 
       // Payload avec colonnes de base garanties dans le schéma Supabase
       const baseSalePayload: any = {
         company_id: company.id,
+        sector_slug: currentSectorSlug,
         customer_id: selectedCustomer?.id || null,
         order_number: orderNum,
         order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
@@ -1436,9 +1383,8 @@ export const POSPage: React.FC = () => {
               )}
             </div>
 
-            {/* Pied du Panier & Encaissement DIRECT */}
-            <div className="p-3.5 border-t border-slate-200 bg-slate-50 space-y-3">
-              {/* Récapitulatif Fiscal & Total TTC */}
+            {/* Pied du Panier & Encaissement */}
+            <div className="p-3 border-t border-slate-200 bg-slate-50 space-y-2">
               <div className="space-y-1 text-xs">
                 <div className="flex justify-between text-slate-600">
                   <span>Sous-total HT :</span>
@@ -1454,198 +1400,19 @@ export const POSPage: React.FC = () => {
                     <span className="font-mono">{fmt(cartFiscalSummary.aib)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-base font-black text-slate-900 pt-1.5 border-t border-slate-200">
+                <div className="flex justify-between text-sm font-black text-slate-900 pt-1 border-t border-slate-200">
                   <span>TOTAL TTC :</span>
-                  <span className="font-mono text-emerald-700 text-lg">{fmt(totalNetTTC)}</span>
+                  <span className="font-mono text-emerald-700 text-base">{fmt(totalNetTTC)}</span>
                 </div>
               </div>
 
-              {/* ── SECTION MODE DE PAIEMENT APRÈS TOTAL TTC (EXIGENCE CRITIQUE GESTIO 229) ── */}
-              <div className="pt-2 border-t border-slate-200 space-y-2.5">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider">
-                    Mode de Paiement :
-                  </span>
-                  {/* Case à cocher : [ ] Paiement par plusieurs modes */}
-                  <label htmlFor="chk-multi-mode-cart" className="flex items-center gap-1.5 cursor-pointer text-xs font-bold text-slate-700 hover:text-emerald-700">
-                    <input
-                      type="checkbox"
-                      id="chk-multi-mode-cart"
-                      checked={isMultiMode}
-                      onChange={(e) => {
-                        const checked = e.target.checked
-                        setIsMultiMode(checked)
-                        if (checked) {
-                          setMultiMode1('especes')
-                          setMultiAmount1(totalNetTTC)
-                          setMultiMode2('momo_mtn')
-                          setMultiAmount2(0)
-                        }
-                      }}
-                      className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
-                    />
-                    <span>Paiement par plusieurs modes</span>
-                  </label>
-                </div>
-
-                {!isMultiMode ? (
-                  /* Choix Unique : 5 Modes de Paiement */
-                  <div className="space-y-2">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
-                      {[
-                        { id: 'especes', label: '💵 Espèces' },
-                        { id: 'momo_mtn', label: '📱 MoMo' },
-                        { id: 'momo_moov', label: '📱 Moov / Flooz' },
-                        { id: 'banque', label: '🏦 Banque' },
-                        { id: 'credit', label: '📝 Crédit' },
-                      ].map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setSingleMethod(m.id as any)}
-                          className={clsx(
-                            'p-2 rounded-xl border text-center font-bold transition text-[11px]',
-                            singleMethod === m.id
-                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
-                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
-                          )}
-                        >
-                          {m.label}
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Rendu monnaie espèces en mode simple */}
-                    {singleMethod === 'especes' && totalNetTTC > 0 && (
-                      <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1.5">
-                        <div className="flex items-center justify-between gap-2">
-                          <label className="text-[11px] font-bold text-slate-600">Espèces reçues :</label>
-                          <input
-                            type="number"
-                            min="0"
-                            value={cashReceivedInput}
-                            onChange={(e) => setCashReceivedInput(e.target.value)}
-                            placeholder="Montant client"
-                            className="w-28 p-1.5 border border-slate-300 rounded-lg font-mono text-xs text-right font-bold focus:border-emerald-500 focus:outline-none"
-                          />
-                        </div>
-                        {cashChange > 0 && (
-                          <div className="flex items-center justify-between text-[11px] font-black text-emerald-700 bg-emerald-50 px-2 py-1 rounded-lg">
-                            <span>Monnaie à rendre :</span>
-                            <span className="font-mono">{fmt(cashChange)}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  /* Mode Multi-Modes : Mode 1 + Montant & Mode 2 + Montant */
-                  <div className="p-3 bg-emerald-50/40 rounded-2xl border-2 border-emerald-300 space-y-2.5">
-                    {/* Mode 1 */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between items-center text-[11px] font-bold text-slate-700">
-                        <span>Mode 1 :</span>
-                        <span className="font-mono text-emerald-800">{fmt(multiAmount1)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <select
-                          value={multiMode1}
-                          onChange={(e) => setMultiMode1(e.target.value)}
-                          className="w-1/2 p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none"
-                        >
-                          <option value="especes">💵 Espèces</option>
-                          <option value="momo_mtn">📱 MoMo</option>
-                          <option value="momo_moov">📱 Moov Money/Flooz</option>
-                          <option value="banque">🏦 Banque</option>
-                          <option value="credit">📝 Crédit</option>
-                        </select>
-                        <input
-                          type="number"
-                          min="0"
-                          value={multiAmount1 || ''}
-                          onChange={(e) => handleAmount1Change(Number(e.target.value))}
-                          placeholder="Montant 1"
-                          className="flex-1 p-1.5 bg-white border border-slate-300 rounded-lg font-mono text-right font-bold text-xs"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Mode 2 */}
-                    <div className="space-y-1">
-                      <div className="flex justify-between items-center text-[11px] font-bold text-slate-700">
-                        <span>Mode 2 :</span>
-                        <span className="font-mono text-emerald-800">{fmt(multiAmount2)}</span>
-                      </div>
-                      <div className="flex items-center gap-1.5">
-                        <select
-                          value={multiMode2}
-                          onChange={(e) => setMultiMode2(e.target.value)}
-                          className="w-1/2 p-1.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:outline-none"
-                        >
-                          <option value="momo_mtn">📱 MoMo</option>
-                          <option value="momo_moov">📱 Moov Money/Flooz</option>
-                          <option value="especes">💵 Espèces</option>
-                          <option value="banque">🏦 Banque</option>
-                          <option value="credit">📝 Crédit</option>
-                        </select>
-                        <input
-                          type="number"
-                          min="0"
-                          value={multiAmount2 || ''}
-                          onChange={(e) => handleAmount2Change(Number(e.target.value))}
-                          placeholder="Montant 2"
-                          className="flex-1 p-1.5 bg-white border border-slate-300 rounded-lg font-mono text-right font-bold text-xs"
-                        />
-                      </div>
-                    </div>
-
-                    {/* Calcul en temps réel du reste à payer ou équilibre */}
-                    <div className="pt-1.5 border-t border-emerald-200">
-                      {Math.abs(remainingToPay) < 0.01 ? (
-                        <div className="flex items-center justify-between text-xs font-black text-emerald-700 bg-emerald-100/70 p-2 rounded-xl">
-                          <span>✓ Règlements équilibrés :</span>
-                          <span className="font-mono">{fmt(multiAmount1 + multiAmount2)}</span>
-                        </div>
-                      ) : remainingToPay > 0 ? (
-                        <div className="flex items-center justify-between text-xs font-black text-rose-700 bg-rose-50 border border-rose-200 p-2 rounded-xl">
-                          <span>⚠️ Reste à percevoir :</span>
-                          <span className="font-mono">{fmt(remainingToPay)}</span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-between text-xs font-black text-amber-700 bg-amber-50 border border-amber-200 p-2 rounded-xl">
-                          <span>⚠️ Trop perçu :</span>
-                          <span className="font-mono">{fmt(Math.abs(remainingToPay))}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* BOUTON DE VALIDATION DIRECTE DE LA VENTE */}
-              {/* Le bouton reste strictement désactivé tant que la somme des montants n'est pas égale au Total TTC */}
               <button
-                disabled={
-                  cart.length === 0 ||
-                  paying ||
-                  (isMultiMode && Math.abs(remainingToPay) > 0.01)
-                }
-                onClick={handleValidateSale}
-                className={clsx(
-                  'w-full py-3.5 rounded-xl font-extrabold text-xs transition flex items-center justify-center gap-2 shadow-md',
-                  cart.length === 0 || paying || (isMultiMode && Math.abs(remainingToPay) > 0.01)
-                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed shadow-none'
-                    : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200'
-                )}
+                disabled={cart.length === 0}
+                onClick={handleOpenPaymentModal}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 text-white font-extrabold rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-sm"
               >
                 <Check className="w-4 h-4" />
-                <span>
-                  {paying
-                    ? 'Enregistrement de la vente...'
-                    : isMultiMode && Math.abs(remainingToPay) > 0.01
-                    ? `Validation impossible : Somme ≠ Total TTC (Reste ${fmt(remainingToPay)})`
-                    : `Valider la Vente (${fmt(totalNetTTC)})`}
-                </span>
+                <span>Paiement / Encaissement ({fmt(totalNetTTC)})</span>
               </button>
             </div>
           </div>
@@ -1963,30 +1730,35 @@ export const POSPage: React.FC = () => {
                     const checked = e.target.checked
                     setIsMultiMode(checked)
                     if (checked) {
-                      setMultiMode1('especes')
-                      setMultiAmount1(totalNetTTC)
-                      setMultiMode2('momo_mtn')
-                      setMultiAmount2(0)
+                      setMultiPayments({
+                        especes: totalNetTTC,
+                        momo_mtn: 0,
+                        momo_moov: 0,
+                        wave: 0,
+                        banque: 0,
+                        credit: 0,
+                      })
                     }
                   }}
                   className="w-4 h-4 accent-emerald-600 cursor-pointer"
                 />
-                <span>Paiement par plusieurs modes</span>
+                <span>Paiement en plusieurs modes</span>
               </label>
-              <span className="text-[10px] text-slate-500 font-semibold">Fractionnement</span>
+              <span className="text-[10px] text-slate-400">Fractionnement</span>
             </div>
 
             {!isMultiMode ? (
               /* MODE SIMPLE : Sélection unique */
               <div className="space-y-3">
-                <label className="block font-bold text-slate-700">Mode de paiement :</label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <label className="block font-bold text-slate-700">Sélectionnez le mode unique :</label>
+                <div className="grid grid-cols-2 gap-2">
                   {[
                     { id: 'especes', label: '💵 Espèces' },
-                    { id: 'momo_mtn', label: '📱 MoMo' },
-                    { id: 'momo_moov', label: '📱 Moov Money/Flooz' },
-                    { id: 'banque', label: '🏦 Banque' },
-                    { id: 'credit', label: '📝 Crédit' },
+                    { id: 'momo_mtn', label: '📱 MTN MoMo' },
+                    { id: 'momo_moov', label: '📱 Moov Money' },
+                    { id: 'wave', label: '🌊 Wave Bénin' },
+                    { id: 'banque', label: '🏦 Banque / Chèque' },
+                    { id: 'credit', label: '📝 Vente à Crédit' },
                   ].map((m) => (
                     <button
                       key={m.id}
@@ -1995,7 +1767,7 @@ export const POSPage: React.FC = () => {
                       className={clsx(
                         'p-2.5 rounded-xl border text-left font-bold transition text-xs',
                         singleMethod === m.id
-                          ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm ring-1 ring-emerald-500'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-800 shadow-sm'
                           : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                       )}
                     >
@@ -2005,74 +1777,48 @@ export const POSPage: React.FC = () => {
                 </div>
               </div>
             ) : (
-              /* MULTI-MODES : Mode 1 + Montant & Mode 2 + Montant */
-              <div className="space-y-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
-                <div className="flex justify-between items-center pb-2 border-b border-slate-200">
-                  <span className="font-bold text-slate-800">Ventilation en deux modes :</span>
-                  <span className={clsx('font-mono font-bold text-xs', Math.abs(remainingToPay) < 0.01 ? 'text-emerald-700' : 'text-rose-600')}>
-                    {Math.abs(remainingToPay) < 0.01 ? '✓ Règlements équilibrés' : `Reste à régler : ${fmt(remainingToPay)}`}
+              /* MULTI-MODES : Lignes de règlements ventilées */
+              <div className="space-y-2.5">
+                <div className="flex justify-between items-center text-slate-600">
+                  <span className="font-bold">Ventilation des règlements :</span>
+                  <span className={clsx('font-mono font-bold', remainingToPay === 0 ? 'text-emerald-700' : 'text-rose-600')}>
+                    Reste : {fmt(remainingToPay)}
                   </span>
                 </div>
 
-                {/* Mode 1 */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-600">Mode 1 + montant :</label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={multiMode1}
-                      onChange={(e) => setMultiMode1(e.target.value)}
-                      className="w-1/2 p-2 bg-white border border-slate-300 rounded-xl font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 cursor-pointer text-xs"
-                    >
-                      <option value="especes">💵 Espèces</option>
-                      <option value="momo_mtn">📱 MoMo</option>
-                      <option value="momo_moov">📱 Moov Money/Flooz</option>
-                      <option value="banque">🏦 Banque</option>
-                      <option value="credit">📝 Crédit</option>
-                    </select>
+                {[
+                  { id: 'especes', label: '💵 Espèces', color: 'text-slate-800' },
+                  { id: 'momo_mtn', label: '📱 MTN MoMo', color: 'text-amber-700' },
+                  { id: 'momo_moov', label: '📱 Moov Money', color: 'text-blue-700' },
+                  { id: 'wave', label: '🌊 Wave Bénin', color: 'text-sky-700' },
+                  { id: 'banque', label: '🏦 Banque / Virement', color: 'text-indigo-700' },
+                  { id: 'credit', label: '📝 Vente à Crédit', color: 'text-rose-700' },
+                ].map((item) => (
+                  <div key={item.id} className="flex items-center gap-2">
+                    <span className={clsx('w-36 font-semibold truncate', item.color)}>{item.label}</span>
                     <input
                       type="number"
                       min="0"
-                      value={multiAmount1 || ''}
-                      onChange={(e) => handleAmount1Change(Number(e.target.value))}
-                      placeholder="Montant Mode 1"
-                      className="flex-1 p-2 bg-white border border-slate-300 rounded-xl font-mono text-right font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-xs"
+                      value={multiPayments[item.id] || ''}
+                      onChange={(e) =>
+                        setMultiPayments({
+                          ...multiPayments,
+                          [item.id]: Math.max(0, Number(e.target.value)),
+                        })
+                      }
+                      placeholder="0"
+                      className="flex-1 p-1.5 border border-slate-200 rounded-lg font-mono text-xs text-right focus:ring-1 focus:ring-emerald-500"
                     />
-                  </div>
-                </div>
-
-                {/* Mode 2 */}
-                <div className="space-y-1">
-                  <label className="text-[11px] font-bold text-slate-600">Mode 2 + montant :</label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      value={multiMode2}
-                      onChange={(e) => setMultiMode2(e.target.value)}
-                      className="w-1/2 p-2 bg-white border border-slate-300 rounded-xl font-semibold text-slate-800 focus:outline-none focus:border-emerald-500 cursor-pointer text-xs"
+                    <button
+                      type="button"
+                      onClick={() => handleAutoComplement(item.id)}
+                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] font-bold text-slate-600"
+                      title="Affecter automatiquement le solde restant à ce mode"
                     >
-                      <option value="momo_mtn">📱 MoMo</option>
-                      <option value="momo_moov">📱 Moov Money/Flooz</option>
-                      <option value="especes">💵 Espèces</option>
-                      <option value="banque">🏦 Banque</option>
-                      <option value="credit">📝 Crédit</option>
-                    </select>
-                    <input
-                      type="number"
-                      min="0"
-                      value={multiAmount2 || ''}
-                      onChange={(e) => handleAmount2Change(Number(e.target.value))}
-                      placeholder="Montant Mode 2"
-                      className="flex-1 p-2 bg-white border border-slate-300 rounded-xl font-mono text-right font-bold text-slate-900 focus:outline-none focus:border-emerald-500 text-xs"
-                    />
+                      Solde
+                    </button>
                   </div>
-                </div>
-
-                {/* Alerte non équilibré */}
-                {Math.abs(remainingToPay) > 0.01 && (
-                  <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-[11px] font-bold flex items-center gap-1.5">
-                    <AlertCircle className="w-4 h-4 shrink-0" />
-                    <span>La somme des 2 modes ({fmt(multiAmount1 + multiAmount2)}) doit être strictement égale au Total TTC ({fmt(totalNetTTC)}).</span>
-                  </div>
-                )}
+                ))}
               </div>
             )}
 

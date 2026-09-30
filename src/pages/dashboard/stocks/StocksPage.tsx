@@ -5,6 +5,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   Package, Plus, Search, AlertTriangle, CheckCircle, RefreshCw,
   Printer, ArrowRightLeft, ClipboardCheck, FileSpreadsheet, Download,
@@ -14,6 +15,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { NewProductModal, StockSheetModal, ModalPortal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
@@ -74,10 +76,10 @@ interface DailyStockRow {
 }
 
 export const StocksPage: React.FC = () => {
-  const { company, user, activeSectorSlug, activeActivityId, activeActivityName } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-
-  const currentSectorSlug = activeSectorSlug || company?.activity_sector || 'boutique'
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   const [activeTab, setActiveTab] = useState<'double_stock' | 'inventaire' | 'fiche_journaliere'>('double_stock')
 
@@ -138,26 +140,15 @@ export const StocksPage: React.FC = () => {
         .from('products')
         .select('*, category:product_categories(id, name)')
         .eq('company_id', company.id)
+        .neq('is_active', false)
         .order('name')
 
       if (error) throw error
 
-      // Filtrer strictement les produits par secteur actif (isolation totale inter-secteurs)
-      const filtered = (data || []).filter((p: any) => {
-        const meta = p.sector_meta || {}
-        const prodSector = p.sector_slug || meta.s || meta.sector_slug || meta.sector
-        if (prodSector) {
-          return prodSector === currentSectorSlug
-        }
-        if (meta.act && activeActivityId) {
-          return meta.act === activeActivityId
-        }
-        // Attribuer les produits non tagués/historiques uniquement au secteur par défaut de l'entreprise
-        const defaultSector = company?.activity_sector || 'boutique'
-        return currentSectorSlug === defaultSector
-      })
+      // Isolation stricte par sous-logiciel (aucun mélange de données)
+      const sectorFilteredData = filterItemsForSector(data || [], currentSectorSlug)
 
-      const mapped: ProductStock[] = filtered.map((p: any) => ({
+      const mapped: ProductStock[] = sectorFilteredData.map((p: any) => ({
         id: p.id,
         code: p.code,
         name: p.name,
@@ -182,7 +173,7 @@ export const StocksPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, company?.activity_sector, currentSectorSlug, activeActivityId, toast])
+  }, [company?.id, toast])
 
   useEffect(() => {
     loadData()
@@ -278,53 +269,36 @@ export const StocksPage: React.FC = () => {
         .gte('created_at', startIso)
         .lte('created_at', endIso)
 
-      // Filtrer les ventes selon le secteur actif (isolation stricte)
-      const filteredSales = (sales || []).filter((s: any) => {
-        let meta: any = {}
-        try {
-          meta = typeof s.notes === 'string' ? JSON.parse(s.notes) : (s.notes || {})
-        } catch (e) {
-          meta = {}
-        }
-        const saleSector = s.sector_slug || meta.s || meta.sector_slug || meta.sector
-        if (saleSector) {
-          return saleSector === currentSectorSlug
-        }
-        if (meta.act && activeActivityId) {
-          return meta.act === activeActivityId
-        }
-        const defaultSector = company?.activity_sector || 'boutique'
-        return currentSectorSlug === defaultSector
-      })
-
       const salesMap: Record<string, number> = {}
-      filteredSales.forEach((s: any) => {
-        if (s.items && Array.isArray(s.items) && s.items.length > 0) {
-          s.items.forEach((it: any) => {
-            const pId = it.product_id
-            if (pId) {
-              salesMap[pId] = (salesMap[pId] || 0) + (Number(it.quantity) || 0)
-            }
-          })
-        } else if (s.notes) {
-          try {
-            const parsed = JSON.parse(s.notes)
-            if (Array.isArray(parsed.lines)) {
-              parsed.lines.forEach((l: any) => {
-                const pId = l.product?.id || l.productId
-                if (pId) {
-                  salesMap[pId] = (salesMap[pId] || 0) + (Number(l.qty) || 0)
-                }
-              })
-            }
-          } catch (e) {}
-        }
-      })
+      if (sales) {
+        sales.forEach((s: any) => {
+          if (s.items && Array.isArray(s.items) && s.items.length > 0) {
+            s.items.forEach((it: any) => {
+              const pId = it.product_id
+              if (pId) {
+                salesMap[pId] = (salesMap[pId] || 0) + (Number(it.quantity) || 0)
+              }
+            })
+          } else if (s.notes) {
+            try {
+              const parsed = JSON.parse(s.notes)
+              if (Array.isArray(parsed.lines)) {
+                parsed.lines.forEach((l: any) => {
+                  const pId = l.product?.id || l.productId
+                  if (pId) {
+                    salesMap[pId] = (salesMap[pId] || 0) + (Number(l.qty) || 0)
+                  }
+                })
+              }
+            } catch (e) {}
+          }
+        })
+      }
       setPeriodSalesItems(salesMap)
     } catch (e) {
       console.warn('Erreur chargement activite periode stock', e)
     }
-  }, [company?.id, company?.activity_sector, currentSectorSlug, activeActivityId, dateFilterMode, customDate, startDate, endDate])
+  }, [company?.id, dateFilterMode, customDate, startDate, endDate])
 
   useEffect(() => {
     if (activeTab === 'fiche_journaliere') {
@@ -630,22 +604,38 @@ export const StocksPage: React.FC = () => {
   }
 
   const handleDeleteProduct = async (p: ProductStock) => {
-    if (!window.confirm(`Confirmez-vous la suppression définitive du produit "${p.name}" (${p.code}) ?`)) {
+    if (!window.confirm(`Confirmez-vous l'archivage / suppression du produit "${p.name}" (${p.code}) ?`)) {
       return
     }
     try {
-      const { error } = await supabase.from('products').delete().eq('id', p.id)
+      const { error } = await supabase
+        .from('products')
+        .update({
+          is_active: false,
+          sector_meta: {
+            ...((p as any).sector_meta || {}),
+            deleted_at: new Date().toISOString(),
+            deleted_by: user?.id || null,
+            deletion_reason: 'Archivage / suppression logique utilisateur'
+          }
+        })
+        .eq('id', p.id)
+
       if (error) throw error
 
       await logAuditEvent({
-        action: 'SUPPRESSION_PRODUIT',
+        companyId: company?.id,
+        userId: user?.id,
+        userName: user?.full_name,
+        userRole: user?.role,
+        action: 'SUPPRESSION_LOGIQUE_PRODUIT',
         module: 'STOCKS',
-        sector: 'COMMERCIAL',
-        description: `Suppression du produit "${p.name}" (${p.code}) par ${user?.full_name || 'Utilisateur'}`
+        sector: currentSectorSlug.toUpperCase(),
+        description: `Suppression logique (soft delete) du produit "${p.name}" (${p.code}) par ${user?.full_name || 'Utilisateur'}`
       })
 
       setProducts((prev) => prev.filter((item) => item.id !== p.id))
-      toast.success('Produit supprimé', `Le produit ${p.name} a été retiré avec succès.`)
+      toast.success('Produit retiré', `Le produit ${p.name} a été archivé des stocks actifs tout en préservant l'historique comptable.`)
     } catch (e: any) {
       toast.error('Erreur suppression', e.message)
     }
@@ -784,11 +774,6 @@ export const StocksPage: React.FC = () => {
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Package className="w-5 h-5 text-emerald-600" />
             Stocks & Inventaire
-            {(activeActivityName || currentSectorSlug) && (
-              <span className="text-xs px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold border border-emerald-200">
-                {activeActivityName || currentSectorSlug.toUpperCase()}
-              </span>
-            )}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
             Double Stock (Magasin UCD & Vente UV), Transferts, Inventaire avec écarts et Valorisation Achat/Vente

@@ -20,6 +20,9 @@ import {
   Fish,
   Sprout,
   Sparkles,
+  Scissors,
+  Croissant,
+  Truck,
   Layers,
   CheckCircle2,
   ArrowRight
@@ -39,19 +42,10 @@ export interface SectorItem {
 
 export const ALL_SECTORS: SectorItem[] = [
   {
-    id: 'sec-boutique',
-    slug: 'boutique',
-    name: 'Boutique & Commerce Général',
-    description: 'Vente au détail, épicerie, alimentation générale, bazar et prêt-à-porter.',
-    icon: 'Store',
-    color: '#3B82F6',
-    popular: true
-  },
-  {
     id: 'sec-quincaillerie',
     slug: 'quincaillerie',
     name: 'Quincaillerie & Matériaux',
-    description: 'Ciment, fer à béton, outillage, plomberie, électricité, vente en gros et détail.',
+    description: 'Ciment, fer à béton, outillage, plomberie, électricité, vente gros/détail et suivi chantiers.',
     icon: 'Hammer',
     color: '#F59E0B',
     popular: true
@@ -68,7 +62,7 @@ export const ALL_SECTORS: SectorItem[] = [
   {
     id: 'sec-restaurant',
     slug: 'restaurant',
-    name: 'Restaurant, Maquis & Fast-Food',
+    name: 'Bar, Restaurant, Maquis & Fast Food',
     description: 'Gestion des tables, commandes cuisine, menus du jour, livraisons et boissons.',
     icon: 'UtensilsCrossed',
     color: '#EF4444',
@@ -80,7 +74,8 @@ export const ALL_SECTORS: SectorItem[] = [
     name: 'Supermarché & Supérette',
     description: 'Multiples rayons, douchette code-barres rapide, gestion des DLC et promotions.',
     icon: 'ShoppingBasket',
-    color: '#10B981'
+    color: '#10B981',
+    popular: true
   },
   {
     id: 'sec-pharmacie',
@@ -88,7 +83,8 @@ export const ALL_SECTORS: SectorItem[] = [
     name: 'Pharmacie & Dépôt Médical',
     description: 'Gestion des ordonnances, numéros de lot, dates de péremption et alertes santé.',
     icon: 'Pill',
-    color: '#8B5CF6'
+    color: '#8B5CF6',
+    popular: true
   },
   {
     id: 'sec-station',
@@ -116,7 +112,7 @@ export const ALL_SECTORS: SectorItem[] = [
   },
   {
     id: 'sec-location',
-    slug: 'location',
+    slug: 'immobilier',
     name: 'Gestion Locative & Immobilier',
     description: 'Contrats de bail, suivi des loyers mensuels, quittances et relances impayés.',
     icon: 'Home',
@@ -132,7 +128,7 @@ export const ALL_SECTORS: SectorItem[] = [
   },
   {
     id: 'sec-impression',
-    slug: 'impression',
+    slug: 'imprimerie',
     name: 'Imprimerie & Sérigraphie',
     description: 'Devis sur mesure, suivi des BAT, tirages offset/numérique et sous-traitance.',
     icon: 'Printer',
@@ -156,19 +152,52 @@ export const ALL_SECTORS: SectorItem[] = [
   },
   {
     id: 'sec-agro',
-    slug: 'agroalimentaire',
+    slug: 'agrobusiness',
     name: 'Agro-Business & Élevage',
-    description: 'Production agricole, intrants, provendes, récoltes et ventes en gros.',
+    description: 'Production agricole, intrants, provendes, cheptel, récoltes et ventes en gros.',
     icon: 'Sprout',
     color: '#22C55E'
   },
   {
     id: 'sec-cosmetique',
-    slug: 'cosmetique',
-    name: 'Cosmétique & Salon de Beauté',
-    description: 'Prestations de soins, produits de beauté, coiffure et packs esthétiques.',
+    slug: 'cosmetiques',
+    name: 'Cosmétiques & Salons de Beauté',
+    description: 'Prestations de soins, produits de beauté, coiffure et forfaits esthétiques.',
     icon: 'Sparkles',
     color: '#F43F5E'
+  },
+  {
+    id: 'sec-mercerie',
+    slug: 'mercerie',
+    name: 'Mercerie & Couture',
+    description: 'Tissus au mètre, boutons, fermetures, commandes sur-mesure et retouches.',
+    icon: 'Scissors',
+    color: '#DB2777'
+  },
+  {
+    id: 'sec-boutique',
+    slug: 'boutique',
+    name: 'Boutique & Magasin',
+    description: 'Vente au détail, prêt-à-porter, alimentation générale, bazar et accessoires.',
+    icon: 'Store',
+    color: '#3B82F6',
+    popular: true
+  },
+  {
+    id: 'sec-boulangerie',
+    slug: 'boulangerie',
+    name: 'Boulangerie & Pâtisserie',
+    description: 'Pains, viennoiseries, pâtisseries, gestion des fournées et invendus.',
+    icon: 'Croissant',
+    color: '#D97706'
+  },
+  {
+    id: 'sec-transport',
+    slug: 'transport',
+    name: 'Transport & Logistique',
+    description: 'Flotte de véhicules, suivi des trajets, bordereaux de livraison et fret.',
+    icon: 'Truck',
+    color: '#2563EB'
   }
 ]
 
@@ -209,6 +238,9 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
       case 'Banknote': return <Banknote {...props} />
       case 'Sprout': return <Sprout {...props} />
       case 'Sparkles': return <Sparkles {...props} />
+      case 'Scissors': return <Scissors {...props} />
+      case 'Croissant': return <Croissant {...props} />
+      case 'Truck': return <Truck {...props} />
       default: return <Layers {...props} />
     }
   }

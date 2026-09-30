@@ -7,6 +7,7 @@ import { useLocation, Link } from 'react-router-dom'
 import { Menu, Bell, ChevronRight, ArrowLeft, Sun, Moon } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
+import { getActiveSectorMeta } from '../../lib/sectorClient'
 import clsx from 'clsx'
 
 // Mapping route → titre de page
@@ -33,10 +34,11 @@ const Header: React.FC = () => {
   const notifications = useUIStore((s) => s.notifications)
   const toggleMobileSidebar = useUIStore((s) => s.toggleMobileSidebar)
   const { darkMode, toggleDarkMode } = useUIStore()
+  const sectorMeta = getActiveSectorMeta()
 
   // Extraire le module actif depuis la route
   const parts = location.pathname.split('/')
-  const activeRoute = parts[2] ?? ''
+  const activeRoute = parts[parts.length - 1] || 'tableau-bord'
   const pageInfo = PAGE_TITLES[activeRoute] ?? { title: 'Tableau de bord' }
 
   return (
@@ -64,6 +66,11 @@ const Header: React.FC = () => {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 mb-0.5">
           <span className="truncate max-w-[120px] font-semibold text-slate-600 dark:text-slate-300">{company?.name ?? 'Entreprise'}</span>
+          <ChevronRight className="w-3 h-3 flex-shrink-0" />
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-800">
+            <span>{sectorMeta.emoji || '🏢'}</span>
+            <span className="truncate max-w-[140px]">{sectorMeta.name}</span>
+          </span>
           <ChevronRight className="w-3 h-3 flex-shrink-0" />
           <span className="text-slate-800 dark:text-slate-100 font-bold truncate">{pageInfo.title}</span>
         </div>

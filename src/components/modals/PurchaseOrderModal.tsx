@@ -10,6 +10,7 @@ import ModalPortal from './ModalPortal'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { formatFCFA } from '../../utils/tax'
+import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../lib/sectorClient'
 import clsx from 'clsx'
 
 interface PurchaseOrderModalProps {
@@ -51,12 +52,16 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     if (!company?.id || !isOpen) return
 
     const fetchResources = async () => {
+      const activeSector = getActiveSectorSlug()
       const [{ data: sData }, { data: pData }] = await Promise.all([
-        supabase.from('suppliers').select('id, company_name, phone, city').eq('company_id', company.id).order('company_name'),
-        supabase.from('products').select('id, code, name, unit, cost_price, stock_magasin, sector_meta').eq('company_id', company.id).order('name')
+        supabase.from('suppliers').select('id, company_name, phone, city, sector_slug, sector_meta').eq('company_id', company.id).order('company_name'),
+        supabase.from('products').select('id, code, name, unit, cost_price, stock_magasin, sector_slug, sector_meta').eq('company_id', company.id).order('name')
       ])
 
-      const mappedSuppliers = (sData || []).map((s: any) => ({
+      const filteredSData = filterItemsForSector(sData || [], activeSector)
+      const filteredPData = filterItemsForSector(pData || [], activeSector)
+
+      const mappedSuppliers = filteredSData.map((s: any) => ({
         id: s.id,
         name: s.company_name || s.name,
         company_name: s.company_name || s.name,
@@ -64,7 +69,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         city: s.city
       }))
 
-      const mappedProducts = (pData || []).map((p: any) => ({
+      const mappedProducts = filteredPData.map((p: any) => ({
         ...p,
         ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
         unit: p.unit || p.sector_meta?.uv || 'Pièce',
@@ -226,6 +231,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       date: new Date().toISOString(),
       supplierId: selectedSupplierId,
       supplierName: selectedSupplier?.name || 'Fournisseur',
+      sector_slug: getActiveSectorSlug(),
       totalTtc: totalBcTtc,
       items: orderItems,
       // Champs de compatibilité racine pour premier article

@@ -5,6 +5,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
   Users, Plus, Search, Phone, MapPin, AlertCircle, RefreshCw, X,
   DollarSign, MessageCircle, FileText, Printer, CheckCircle2, ArrowDownCircle,
@@ -13,6 +14,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import clsx from 'clsx'
@@ -86,6 +88,8 @@ const initialFormState: CustomerFormState = {
 const ClientsPage: React.FC = () => {
   const { company } = useAuthStore()
   const { toast } = useUIStore()
+  const params = useParams<{ sectorSlug?: string }>()
+  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
@@ -131,13 +135,19 @@ const ClientsPage: React.FC = () => {
 
       if (error) throw error
 
+      // Isolation stricte par sous-logiciel : filtrer pour le secteur actif
+      const sectorFiltered = filterItemsForSector(data || [], currentSectorSlug)
+
       // Charger métadonnées locales (fallback colonnes schema cache)
       let localMeta: Record<string, any> = {}
       try {
-        localMeta = JSON.parse(localStorage.getItem(`gestio_customers_meta_${company.id}`) || '{}')
+        localMeta = JSON.parse(
+          localStorage.getItem(`gestio_customers_meta_${company.id}_${currentSectorSlug}`) ||
+          (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_customers_meta_${company.id}`) : '{}') || '{}'
+        )
       } catch (e) {}
 
-      const mapped: Customer[] = (data || []).map((c: any) => {
+      const mapped: Customer[] = sectorFiltered.map((c: any) => {
         const meta = localMeta[c.id] || localMeta[c.code] || {}
         const creditLimit = Number(c.credit_limit) || 0
         const isCreditAuth =
@@ -267,8 +277,9 @@ const ClientsPage: React.FC = () => {
       const isDiscountEligible = Boolean(form.discount_eligible)
       const discountRate = isDiscountEligible ? Number(form.discount_rate) : 0
 
-      const fullPayload = {
+      const fullPayload = withSectorMeta({
         company_id: company.id,
+        sector_slug: currentSectorSlug,
         code: autoCode,
         name: form.name.trim(),
         ifu_number: trimmedIfu || null,
@@ -283,7 +294,7 @@ const ClientsPage: React.FC = () => {
         payment_terms_days: Number(form.payment_terms_days) || 30,
         current_debt: 0,
         is_active: true,
-      }
+      }, currentSectorSlug)
 
       let savedRecord: any = null
 
@@ -304,7 +315,7 @@ const ClientsPage: React.FC = () => {
           insertErr.message?.includes('does not exist')
 
         if (isSchemaCacheError) {
-          const { credit_authorized, discount_eligible, discount_rate, ...corePayload } = fullPayload
+          const { credit_authorized, discount_eligible, discount_rate, sector_slug, sector_meta, ...corePayload } = fullPayload
           const { data: fallbackData, error: fallbackErr } = await supabase
             .from('customers')
             .insert(corePayload)
@@ -319,13 +330,14 @@ const ClientsPage: React.FC = () => {
 
       // Persistance métadonnées locales pour réactivité instantanée dans l'interface et le POS
       try {
-        const metaKey = `gestio_customers_meta_${company.id}`
+        const metaKey = `gestio_customers_meta_${company.id}_${currentSectorSlug}`
         const existingMeta = JSON.parse(localStorage.getItem(metaKey) || '{}')
         const clientMeta = {
           credit_authorized: isCreditAuthorized,
           credit_limit: creditLimit,
           discount_eligible: isDiscountEligible,
           discount_rate: discountRate,
+          sector_slug: currentSectorSlug,
         }
         if (savedRecord?.id) {
           existingMeta[savedRecord.id] = clientMeta
@@ -447,10 +459,22 @@ const ClientsPage: React.FC = () => {
         } catch (e) {}
       }
 
-      // 3. Entrée immédiate dans la caisse opérationnelle
+      // 3. Entrée immédiate dans la caisse opérationnelle (Supabase & local)
       if (company?.id) {
         try {
-          const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
+          const { data: reg } = await supabase.from('cash_registers').select('id, current_cash_balance, current_momo_balance').eq('company_id', company.id).limit(1).maybeSingle()
+          if (reg) {
+            if (paymentMode === 'cash') {
+              await supabase.from('cash_registers').update({ current_cash_balance: (Number(reg.current_cash_balance) || 0) + paymentAmount }).eq('id', reg.id)
+            } else if (['momo', 'moov', 'wave'].includes(paymentMode)) {
+              await supabase.from('cash_registers').update({ current_momo_balance: (Number(reg.current_momo_balance) || 0) + paymentAmount }).eq('id', reg.id)
+            }
+          }
+        } catch (e) {}
+
+        try {
+          const cashKey = `gestio_caisse_state_${company.id}_${currentSectorSlug}`
+          const cashStateRaw = localStorage.getItem(cashKey) || localStorage.getItem(`gestio_caisse_state_${company.id}`)
           if (cashStateRaw) {
             const cState = JSON.parse(cashStateRaw)
             if (paymentMode === 'cash') {
@@ -458,7 +482,7 @@ const ClientsPage: React.FC = () => {
             } else if (['momo', 'moov', 'wave'].includes(paymentMode)) {
               cState.initialMomo = (Number(cState.initialMomo) || 0) + paymentAmount
             }
-            localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
+            localStorage.setItem(cashKey, JSON.stringify(cState))
           }
         } catch (e) {}
       }

@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { supabase } from '../../lib/supabase'
-import { getPortoNovoNow } from '../../utils/datePortoNovo'
+import { rateLimiter } from '../../lib/rateLimiter'
 
 const LoginPage: React.FC = () => {
   const navigate = useNavigate()
@@ -26,6 +26,7 @@ const LoginPage: React.FC = () => {
   const [password, setPassword] = useState('')
   const [showPwd, setShowPwd] = useState(false)
   const [confirmedSuccess, setConfirmedSuccess] = useState(isConfirmed)
+  const [rateLimitError, setRateLimitError] = useState<string | null>(null)
 
   // Modal Mot de passe oublié
   const [showForgotModal, setShowForgotModal] = useState(false)
@@ -76,13 +77,25 @@ const LoginPage: React.FC = () => {
     }
   }
 
-  // Formatage date et heure dynamique réelle fuseau Africa/Porto-Novo (Bénin)
-  const portoNovoData = useMemo(() => getPortoNovoNow(currentTime), [currentTime])
-  const formattedDateTime = portoNovoData.fullDisplay
+  // Formatage date en français avec majuscule : Mardi 29 septembre 2026 — 14:35
+  const formattedDateTime = useMemo(() => {
+    const days = ['Dimanche', 'Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi']
+    const months = [
+      'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
+      'juillet', 'août', 'septembre', 'octobre', 'novembre', 'décembre'
+    ]
+    const dayName = days[currentTime.getDay()]
+    const dayNum = currentTime.getDate()
+    const monthName = months[currentTime.getMonth()]
+    const year = currentTime.getFullYear()
+    const hours = String(currentTime.getHours()).padStart(2, '0')
+    const minutes = String(currentTime.getMinutes()).padStart(2, '0')
+    return `${dayName} ${dayNum} ${monthName} ${year} — ${hours}:${minutes}`
+  }, [currentTime])
 
-  // Pensée de l'entrepreneur avec rotation jour (05h-17h) / soir (18h-04h) basée sur heure Porto-Novo
+  // Pensée de l'entrepreneur avec rotation jour (05h-17h) / soir (18h-04h)
   const entrepreneurQuote = useMemo(() => {
-    const hour = portoNovoData.hour
+    const hour = currentTime.getHours()
     const isMorning = hour >= 5 && hour < 18
     const morningQuotes = [
       { text: "Le succès en affaires n'est pas le fruit du hasard, mais de la constance dans l'effort et de la maîtrise quotidienne de ses chiffres.", author: "Discipline Commerciale & Croissance" },
@@ -112,6 +125,13 @@ const LoginPage: React.FC = () => {
       return
     }
 
+    const resetKey = `reset:${forgotEmail.trim().toLowerCase()}`
+    const check = rateLimiter.checkRateLimit(resetKey, 5, 60000, 15 * 60 * 1000)
+    if (!check.allowed) {
+      setForgotError(check.lockoutMessage || 'Trop de tentatives. Réessayez dans quelques minutes.')
+      return
+    }
+
     setForgotLoading(true)
     setForgotError('')
     try {
@@ -119,8 +139,10 @@ const LoginPage: React.FC = () => {
         redirectTo: `${window.location.origin}/login`
       })
       if (error) throw error
+      rateLimiter.resetLimit(resetKey)
       setForgotSuccess(true)
     } catch (err: any) {
+      rateLimiter.recordFailure(resetKey, 5, 60000, 15 * 60 * 1000)
       setForgotError(err.message || 'Impossible d\'envoyer le lien de réinitialisation.')
     } finally {
       setForgotLoading(false)
@@ -149,11 +171,25 @@ const LoginPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
+    setRateLimitError(null)
+
+    const limiterKey = `login:${identifier.trim().toLowerCase()}`
+    const check = rateLimiter.checkRateLimit(limiterKey, 5, 60000, 15 * 60 * 1000)
+    if (!check.allowed) {
+      setRateLimitError(check.lockoutMessage || 'Trop de tentatives. Veuillez patienter avant de réessayer.')
+      return
+    }
 
     const result = await login(identifier, password)
     if (result.success) {
+      rateLimiter.resetLimit(limiterKey)
       const target = result.redirectTo || '/hub'
       navigate(target, { replace: true })
+    } else {
+      const failStatus = rateLimiter.recordFailure(limiterKey, 5, 60000, 15 * 60 * 1000)
+      if (!failStatus.allowed) {
+        setRateLimitError(failStatus.lockoutMessage || null)
+      }
     }
   }
 
@@ -346,11 +382,11 @@ const LoginPage: React.FC = () => {
               </div>
             )}
 
-            {/* Message d'erreur */}
-            {errorMessage && (
+            {/* Message d'erreur ou blocage Rate Limit */}
+            {(rateLimitError || errorMessage) && (
               <div className="flex items-start gap-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-2xl p-4 mb-6 animate-shake">
                 <AlertCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">{errorMessage}</p>
+                <p className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">{rateLimitError || errorMessage}</p>
               </div>
             )}
 

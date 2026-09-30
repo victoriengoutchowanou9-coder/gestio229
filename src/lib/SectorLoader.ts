@@ -312,12 +312,14 @@ export const SectorLoader = {
 
   // ─── Résolution Nav Globale (sans secteur — modules communs) ─────────────
 
-  getDefaultNav(): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
+  getDefaultNav(sectorSlug?: string): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',
       'fournisseurs', 'depenses', 'rapports', 'syscohada',
       'configuration', 'utilisateurs', 'audit', 'abonnement',
     ]
+
+    const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
 
     const flat: NavItem[] = commonModuleIds
       .map((id) => {
@@ -327,7 +329,7 @@ export const SectorLoader = {
           id: mod.id,
           label: mod.label,
           icon: mod.icon,
-          href: `/dashboard/${id === 'dashboard' ? 'tableau-bord' : id === 'ventes' ? 'vente-pos' : id === 'stock' ? 'stocks' : id === 'finances' ? 'tresorerie' : id === 'rapports' ? 'reporting' : id === 'audit' ? 'journal-audit' : mod.path}`,
+          href: `${prefix}/${id === 'dashboard' ? 'tableau-bord' : id === 'ventes' ? 'vente-pos' : id === 'stock' ? 'stocks' : id === 'finances' ? 'tresorerie' : id === 'rapports' ? 'reporting' : id === 'audit' ? 'journal-audit' : mod.path}`,
           group: mod.group,
         } as NavItem
       })

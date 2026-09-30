@@ -28,18 +28,11 @@ interface AuthState {
   tenantCtx: TenantContext | null
   errorMessage: string | null
 
-  // Secteur & Activité active pour isolation stricte
-  activeSectorSlug: string | null
-  activeActivityId: string | null
-  activeActivityName: string | null
-  activeActivityLocation: string | null
-
   // Actions
   initialize: () => Promise<void>
   login: (identifier: string, password: string) => Promise<{ success: boolean; redirectTo?: string; error?: string }>
   logout: () => Promise<void>
   refreshTenantContext: () => Promise<void>
-  setActiveSector: (slug: string, activityId?: string, activityName?: string, location?: string) => void
   updatePassword: (newPassword: string) => Promise<{ success: boolean; error?: string }>
   updateUsername: (newUsername: string) => Promise<{ success: boolean; error?: string }>
   updateProfile: (data: Partial<UserProfile>) => Promise<{ success: boolean; error?: string }>
@@ -58,28 +51,6 @@ export const useAuthStore = create<AuthState>()(
       company: null,
       tenantCtx: null,
       errorMessage: null,
-      activeSectorSlug: typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_sector') : null,
-      activeActivityId: typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_id') : null,
-      activeActivityName: typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null,
-      activeActivityLocation: typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_location') : null,
-
-      setActiveSector: (slug: string, activityId?: string, activityName?: string, location?: string) => {
-        try {
-          localStorage.setItem('gestio229_active_sector', slug)
-          if (activityId) localStorage.setItem('gestio229_active_activity_id', activityId)
-          else localStorage.removeItem('gestio229_active_activity_id')
-          if (activityName) localStorage.setItem('gestio229_active_activity_name', activityName)
-          else localStorage.removeItem('gestio229_active_activity_name')
-          if (location) localStorage.setItem('gestio229_active_activity_location', location)
-          else localStorage.removeItem('gestio229_active_activity_location')
-        } catch (e) {}
-        set({
-          activeSectorSlug: slug,
-          activeActivityId: activityId || null,
-          activeActivityName: activityName || null,
-          activeActivityLocation: location || null,
-        })
-      },
 
       // ─── Initialisation au démarrage de l'app ─────────────────────────────
 
@@ -557,3 +528,8 @@ supabase.auth.onAuthStateChange((event, session) => {
     })
   }
 })
+
+if (typeof window !== 'undefined') {
+  (window as any).__GESTIO_AUTH_STORE__ = useAuthStore
+}
+
