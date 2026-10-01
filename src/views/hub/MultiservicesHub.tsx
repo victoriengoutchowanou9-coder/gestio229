@@ -295,18 +295,35 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       const [{ data: salesData }, { data: expData }] = await Promise.all([
         supabase
           .from('sales_orders')
-          .select('total_amount, sector_slug, created_at')
+          .select('total_amount, e_mecef_uid, created_at')
           .eq('company_id', companyId)
           .gte('created_at', startOfMonth),
         supabase
           .from('expenses')
-          .select('amount, sector_slug, created_at')
+          .select('amount, notes, created_at')
           .eq('company_id', companyId)
           .gte('created_at', startOfMonth),
       ]);
 
-      const allSales = salesData || [];
-      const allExpenses = expData || [];
+      const allSales = (salesData || []).map((s: any) => {
+        let sec = (s as any).sector_slug || '';
+        if (!sec && s.e_mecef_uid) {
+          const match = s.e_mecef_uid.match(/SEC:([^|]+)/);
+          if (match && match[1]) sec = match[1];
+        }
+        return { ...s, sector_slug: sec };
+      });
+
+      const allExpenses = (expData || []).map((e: any) => {
+        let sec = (e as any).sector_slug || '';
+        if (!sec && e.notes) {
+          try {
+            const parsed = typeof e.notes === 'string' ? JSON.parse(e.notes) : e.notes;
+            if (parsed?.sector_slug) sec = parsed.sector_slug;
+          } catch (x) {}
+        }
+        return { ...e, sector_slug: sec };
+      });
 
       const todaySales = allSales.filter((s: any) => s.created_at >= startOfDay);
       const todayExp = allExpenses.filter((e: any) => e.created_at >= startOfDay);

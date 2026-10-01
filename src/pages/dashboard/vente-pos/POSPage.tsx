@@ -665,10 +665,9 @@ export const POSPage: React.FC = () => {
       const todayDate = new Date().toISOString().split('T')[0]
       const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferred ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
 
-      // Payload avec colonnes de base garanties dans le schéma Supabase
+      // Payload strictement conforme aux colonnes réelles de sales_orders dans Supabase
       const baseSalePayload: any = {
         company_id: company.id,
-        sector_slug: currentSectorSlug,
         customer_id: selectedCustomer?.id || null,
         order_number: orderNum,
         order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
@@ -685,9 +684,10 @@ export const POSPage: React.FC = () => {
         created_by: user?.id || null
       }
 
-      // Payload enrichi si la migration M018 a été exécutée
+      // Payload étendu si des colonnes optionnelles ont été ajoutées (ex: M014/M018)
       const fullSalePayload: any = {
         ...baseSalePayload,
+        sector_slug: currentSectorSlug,
         payment_method: primaryMethod,
         customer_name: custName,
         status: isDeferred ? 'pending_delivery' : 'COMPLET',
@@ -696,7 +696,7 @@ export const POSPage: React.FC = () => {
 
       let savedDbSale: any = null
 
-      // Tentative insertion payload complet d'abord
+      // Tentative avec colonnes étendues d'abord
       const { data: dbSale, error: dbSaleErr } = await supabase
         .from('sales_orders')
         .insert(fullSalePayload)
@@ -706,7 +706,7 @@ export const POSPage: React.FC = () => {
       if (!dbSaleErr && dbSale) {
         savedDbSale = dbSale
       } else {
-        // Fallback sécurisé sur les colonnes natives de sales_orders
+        // Fallback garanti sur le schéma natif Supabase (sans sector_slug ni colonnes manquantes)
         const { data: fbSale, error: fbErr } = await supabase
           .from('sales_orders')
           .insert(baseSalePayload)

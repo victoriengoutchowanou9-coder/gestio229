@@ -111,7 +111,7 @@ export const ReportingPage: React.FC = () => {
           .order('expense_date', { ascending: false }),
         supabase
           .from('customers')
-          .select('id, name, current_debt, sector_slug, sector_meta')
+          .select('*')
           .eq('company_id', company.id),
         supabase
           .from('products')
