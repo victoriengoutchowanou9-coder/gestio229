@@ -475,8 +475,9 @@ export const FournisseursPage: React.FC = () => {
       created_at: createdSup.created_at,
       updated_at: createdSup.updated_at
     }
-    setSuppliers((prev) => [mapped, ...prev])
+    setSuppliers((prev) => [mapped, ...prev.filter(s => s.id !== mapped.id)])
     setActiveTab('fournisseurs')
+    loadData()
   }
 
   // Règlement dette fournisseur (colonne réelle current_payable)

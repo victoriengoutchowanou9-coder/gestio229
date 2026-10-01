@@ -1951,7 +1951,29 @@ export const StocksPage: React.FC = () => {
       <NewProductModal
         isOpen={showNewProductModal}
         onClose={() => setShowNewProductModal(false)}
-        onSuccess={() => {
+        onSuccess={(savedProduct: any) => {
+          if (savedProduct) {
+            setProducts((prev) => [
+              {
+                id: savedProduct.id,
+                code: savedProduct.code,
+                name: savedProduct.name,
+                unit: savedProduct.unit || 'Pièce',
+                ucd: savedProduct.ucd || 'Carton',
+                uv: savedProduct.uv || 'Pièce',
+                coef: Number(savedProduct.coef) || 1,
+                cost_price: Number(savedProduct.cost_price) || 0,
+                selling_price: Number(savedProduct.selling_price) || 0,
+                stock_magasin: Number(savedProduct.stock_magasin) || 0,
+                stock_vente: Number(savedProduct.stock_vente) || 0,
+                min_stock_alert: Number(savedProduct.min_stock_alert) || 5,
+                category: savedProduct.category,
+                batch_pricing: savedProduct.sector_meta?.batch_pricing || null,
+                sector_meta: savedProduct.sector_meta,
+              },
+              ...prev.filter(p => p.id !== savedProduct.id)
+            ])
+          }
           loadData()
         }}
       />

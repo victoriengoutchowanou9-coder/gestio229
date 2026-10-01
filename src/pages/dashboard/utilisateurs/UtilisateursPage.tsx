@@ -173,6 +173,7 @@ const UtilisateursPage: React.FC = () => {
     bonus: '0',
     hireDate: new Date().toISOString().split('T')[0],
   })
+  const [savingStaff, setSavingStaff] = useState(false)
 
   // Modal Payer Salaire
   const [payingEmployee, setPayingEmployee] = useState<any | null>(null)
@@ -673,86 +674,91 @@ const UtilisateursPage: React.FC = () => {
       return
     }
 
-    let createdStaffId = `staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
-    if (company?.id) {
-      try {
-        const { data: dbStaff } = await supabase
-          .from('staff_members')
-          .insert({
-            company_id: company.id,
-            full_name: newStaffForm.fullName.trim(),
-            job_title: newStaffForm.jobTitle.trim(),
-            phone: newStaffForm.phone.trim() || null,
-            cnss_number: newStaffForm.cnssNumber.trim() || null,
-            base_salary: Number(newStaffForm.baseSalary) || 0,
-            transport_allowance: Number(newStaffForm.transportAllowance) || 0,
-            housing_allowance: Number(newStaffForm.housingAllowance) || 0,
-            bonus: Number(newStaffForm.bonus) || 0,
-            hire_date: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
-            is_active: true
-          })
-          .select()
-          .maybeSingle()
-
-        if (dbStaff?.id) createdStaffId = dbStaff.id
-      } catch (err) {
-        // Fallback user_profiles
+    setSavingStaff(true)
+    try {
+      let createdStaffId = `staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      if (company?.id) {
         try {
-          const { data: uStaff } = await supabase
-            .from('user_profiles')
+          const { data: dbStaff } = await supabase
+            .from('staff_members')
             .insert({
               company_id: company.id,
               full_name: newStaffForm.fullName.trim(),
-              username: `emp_${Date.now()}`,
+              job_title: newStaffForm.jobTitle.trim(),
               phone: newStaffForm.phone.trim() || null,
-              role: 'employe',
-              is_active: true,
-              permissions: {
-                job_title: newStaffForm.jobTitle.trim(),
-                base_salary: Number(newStaffForm.baseSalary) || 0,
-                transport_allowance: Number(newStaffForm.transportAllowance) || 0,
-                housing_allowance: Number(newStaffForm.housingAllowance) || 0,
-                bonus: Number(newStaffForm.bonus) || 0,
-                cnss_number: newStaffForm.cnssNumber.trim() || null
-              }
+              cnss_number: newStaffForm.cnssNumber.trim() || null,
+              base_salary: Number(newStaffForm.baseSalary) || 0,
+              transport_allowance: Number(newStaffForm.transportAllowance) || 0,
+              housing_allowance: Number(newStaffForm.housingAllowance) || 0,
+              bonus: Number(newStaffForm.bonus) || 0,
+              hire_date: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
+              is_active: true
             })
             .select()
             .maybeSingle()
-          if (uStaff?.id) createdStaffId = uStaff.id
-        } catch (e2) {}
+
+          if (dbStaff?.id) createdStaffId = dbStaff.id
+        } catch (err) {
+          // Fallback user_profiles
+          try {
+            const { data: uStaff } = await supabase
+              .from('user_profiles')
+              .insert({
+                company_id: company.id,
+                full_name: newStaffForm.fullName.trim(),
+                username: `emp_${Date.now()}`,
+                phone: newStaffForm.phone.trim() || null,
+                role: 'employe',
+                is_active: true,
+                permissions: {
+                  job_title: newStaffForm.jobTitle.trim(),
+                  base_salary: Number(newStaffForm.baseSalary) || 0,
+                  transport_allowance: Number(newStaffForm.transportAllowance) || 0,
+                  housing_allowance: Number(newStaffForm.housingAllowance) || 0,
+                  bonus: Number(newStaffForm.bonus) || 0,
+                  cnss_number: newStaffForm.cnssNumber.trim() || null
+                }
+              })
+              .select()
+              .maybeSingle()
+            if (uStaff?.id) createdStaffId = uStaff.id
+          } catch (e2) {}
+        }
       }
+
+      const newStaff: StaffMember = {
+        id: createdStaffId,
+        fullName: newStaffForm.fullName.trim(),
+        jobTitle: newStaffForm.jobTitle.trim(),
+        phone: newStaffForm.phone.trim(),
+        cnssNumber: newStaffForm.cnssNumber.trim() || `CNSS-${(company?.id || '').slice(0, 4)}-${Math.floor(1000 + Math.random() * 9000)}`,
+        baseSalary: Number(newStaffForm.baseSalary) || 0,
+        transportAllowance: Number(newStaffForm.transportAllowance) || 0,
+        housingAllowance: Number(newStaffForm.housingAllowance) || 0,
+        bonus: Number(newStaffForm.bonus) || 0,
+        hireDate: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
+        advancePayment: 0,
+      }
+
+      const updated = [newStaff, ...additionalStaff]
+      setAdditionalStaff(updated)
+
+      setSuccess(`Nouveau personnel "${newStaff.fullName}" enregistré avec succès !`)
+      setShowNewStaffModal(false)
+      setNewStaffForm({
+        fullName: '',
+        jobTitle: '',
+        baseSalary: '',
+        phone: '',
+        cnssNumber: '',
+        transportAllowance: '15000',
+        housingAllowance: '0',
+        bonus: '0',
+        hireDate: new Date().toISOString().split('T')[0],
+      })
+    } finally {
+      setSavingStaff(false)
     }
-
-    const newStaff: StaffMember = {
-      id: createdStaffId,
-      fullName: newStaffForm.fullName.trim(),
-      jobTitle: newStaffForm.jobTitle.trim(),
-      phone: newStaffForm.phone.trim(),
-      cnssNumber: newStaffForm.cnssNumber.trim() || `CNSS-${(company?.id || '').slice(0, 4)}-${Math.floor(1000 + Math.random() * 9000)}`,
-      baseSalary: Number(newStaffForm.baseSalary) || 0,
-      transportAllowance: Number(newStaffForm.transportAllowance) || 0,
-      housingAllowance: Number(newStaffForm.housingAllowance) || 0,
-      bonus: Number(newStaffForm.bonus) || 0,
-      hireDate: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
-      advancePayment: 0,
-    }
-
-    const updated = [newStaff, ...additionalStaff]
-    setAdditionalStaff(updated)
-
-    setSuccess(`Nouveau personnel "${newStaff.fullName}" enregistré avec succès !`)
-    setShowNewStaffModal(false)
-    setNewStaffForm({
-      fullName: '',
-      jobTitle: '',
-      baseSalary: '',
-      phone: '',
-      cnssNumber: '',
-      transportAllowance: '15000',
-      housingAllowance: '0',
-      bonus: '0',
-      hireDate: new Date().toISOString().split('T')[0],
-    })
   }
 
   // Payer le salaire pour la période sélectionnée (avec impact Dépenses & Trésorerie)
@@ -778,16 +784,18 @@ const UtilisateursPage: React.FC = () => {
       const net = Math.max(0, gross - cnssSal - adv)
 
       // 1. Enregistrer dans la table `expenses` Supabase pour cette période
+      const expNum = `SAL-${payrollPeriod.replace('-', '')}-${String(Math.floor(1000 + Math.random() * 9000))}`
       const { data: expData, error: expErr } = await supabase.from('expenses').insert({
         company_id: company.id,
-        title: `Salaire ${payrollPeriod} — ${payingEmployee.fullName}`,
+        expense_number: expNum,
+        beneficiary: payingEmployee.fullName,
         category: 'Salaires & Rémunérations',
         amount: net,
         payment_method: payMethod,
-        expense_date: expenseDate,
         notes: JSON.stringify({
           type: 'PAIE_SALAIRE',
           period: payrollPeriod,
+          expense_date: expenseDate,
           employee_id: payingEmployee.id,
           employee_name: payingEmployee.fullName,
           job_title: payingEmployee.jobTitle,
@@ -800,7 +808,7 @@ const UtilisateursPage: React.FC = () => {
           net_salary: net,
           payment_method: payMethod
         }),
-        created_by: user?.id
+        created_by: user?.id || null
       }).select().maybeSingle()
 
       if (expErr) {
@@ -1111,9 +1119,15 @@ const UtilisateursPage: React.FC = () => {
                   <button
                     type="submit"
                     disabled={creating}
-                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-all disabled:opacity-60"
+                    className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-all disabled:opacity-60 flex items-center gap-1.5"
                   >
-                    {creating ? 'Création en cours...' : 'Valider & Enregistrer'}
+                    {creating ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Création en cours...
+                      </>
+                    ) : (
+                      'Valider & Enregistrer'
+                    )}
                   </button>
                   <button
                     type="button"
@@ -1747,9 +1761,16 @@ const UtilisateursPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-md shadow-emerald-600/20"
+                  disabled={savingStaff}
+                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-md shadow-emerald-600/20 disabled:opacity-50 flex items-center gap-1.5"
                 >
-                  Enregistrer le Personnel
+                  {savingStaff ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Enregistrement...
+                    </>
+                  ) : (
+                    'Enregistrer le Personnel'
+                  )}
                 </button>
               </div>
             </form>

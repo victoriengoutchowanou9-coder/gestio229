@@ -248,10 +248,9 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         margin_uv_ht: marginUvHt,
       }
 
-      // 3. Préparation du payload pour Supabase (Isolation Totale Entreprise + Sous-Logiciel)
+      // 3. Préparation du payload pour Supabase (Colonnes réelles vérifiées)
       const insertPayload: any = {
         company_id: company.id,
-        sector_slug: activeSectorSlug,
         code: finalCode,
         name: form.name.trim(),
         unit: form.uv,
@@ -263,19 +262,9 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         min_stock_alert: 5,
         sector_meta: sectorMeta,
         is_active: true,
-        stock_magasin: parsedMagasin,
-        stock_vente: parsedVente,
       }
 
       let res = await supabase.from('products').insert(insertPayload).select().single()
-
-      // Si les colonnes physiques optionnelles ne sont pas encore créées en direct
-      if (res.error && (res.error.code === 'PGRST204' || res.error.message?.includes('sector_slug') || res.error.message?.includes('stock_'))) {
-        delete insertPayload.sector_slug
-        delete insertPayload.stock_magasin
-        delete insertPayload.stock_vente
-        res = await supabase.from('products').insert(insertPayload).select().single()
-      }
 
       // 4. Contrôle strict des erreurs (zéro erreur silencieuse)
       if (res.error || !res.data) {

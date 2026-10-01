@@ -256,9 +256,8 @@ const ClientsPage: React.FC = () => {
       const isDiscountEligible = Boolean(form.discount_eligible)
       const discountRate = isDiscountEligible ? Number(form.discount_rate) : 0
 
-      const fullPayload = withSectorMeta({
+      const corePayload = {
         company_id: company.id,
-        sector_slug: currentSectorSlug,
         code: autoCode,
         name: form.name.trim(),
         ifu_number: trimmedIfu || null,
@@ -266,51 +265,36 @@ const ClientsPage: React.FC = () => {
         email: form.email.trim() || null,
         address: form.address.trim() || null,
         city: form.city.trim() || 'Cotonou',
-        credit_authorized: isCreditAuthorized,
         credit_limit: creditLimit,
-        discount_eligible: isDiscountEligible,
-        discount_rate: discountRate,
         payment_terms_days: Number(form.payment_terms_days) || 30,
         current_debt: 0,
         is_active: true,
-      }, currentSectorSlug)
-
-      let savedRecord: any = null
-
-      // Tentative d'insertion avec colonnes complètes (PostgreSQL M017)
-      const { data: insertedData, error: insertErr } = await supabase
-        .from('customers')
-        .insert(fullPayload)
-        .select()
-
-      if (!insertErr && insertedData && insertedData.length > 0) {
-        savedRecord = insertedData[0]
-      } else if (insertErr) {
-        // En cas de cache schéma Supabase avant exécution de la migration M017
-        const isSchemaCacheError =
-          insertErr.code === 'PGRST204' ||
-          insertErr.code === '42703' ||
-          insertErr.message?.includes('schema cache') ||
-          insertErr.message?.includes('does not exist')
-
-        if (isSchemaCacheError) {
-          const { credit_authorized, discount_eligible, discount_rate, sector_slug, sector_meta, ...corePayload } = fullPayload
-          const { data: fallbackData, error: fallbackErr } = await supabase
-            .from('customers')
-            .insert(corePayload)
-            .select()
-
-          if (fallbackErr) throw fallbackErr
-          savedRecord = fallbackData?.[0]
-        } else {
-          throw insertErr
-        }
       }
 
-      toast.success('Client enregistré avec succès', `${form.name.trim()} (${autoCode})`)
+      const { data: insertedData, error: insertErr } = await supabase
+        .from('customers')
+        .insert(corePayload)
+        .select()
+        .single()
+
+      if (insertErr || !insertedData) {
+        throw new Error(insertErr?.message || "Échec d'enregistrement du client dans Supabase.")
+      }
+
+      const savedRecord = insertedData
+      const newCustomer: Customer = {
+        ...savedRecord,
+        credit_limit: creditLimit,
+        credit_authorized: isCreditAuthorized,
+        discount_eligible: isDiscountEligible,
+        discount_rate: discountRate,
+      }
+
+      // Mise à jour immédiate de la liste locale (Optimistic UI)
+      setCustomers((prev) => [newCustomer, ...prev.filter(c => c.id !== newCustomer.id)])
       setShowModal(false)
       setForm(initialFormState)
-      loadCustomers()
+      toast.success('Client enregistré avec succès', `${form.name.trim()} (${autoCode})`)
     } catch (err: any) {
       toast.error('Erreur enregistrement client', err.message || 'Impossible d\'enregistrer le client.')
     } finally {
@@ -994,9 +978,15 @@ const ClientsPage: React.FC = () => {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-sm"
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-sm flex items-center gap-2"
                 >
-                  {saving ? 'Enregistrement...' : 'Enregistrer le client'}
+                  {saving ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" /> Enregistrement...
+                    </>
+                  ) : (
+                    'Enregistrer le client'
+                  )}
                 </button>
               </div>
             </form>

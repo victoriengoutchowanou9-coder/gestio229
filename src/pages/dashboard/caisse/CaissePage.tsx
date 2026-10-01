@@ -82,6 +82,7 @@ export const CaissePage: React.FC = () => {
   const [showReportModal, setShowReportModal] = useState(false)
   const [activeReportClosure, setActiveReportClosure] = useState<CashClosure | null>(null)
   const [customReportEmail, setCustomReportEmail] = useState<string>('')
+  const [isOperatingCaisse, setIsOperatingCaisse] = useState<boolean>(false)
 
   // Saisie ouverture
   const [openInputCash, setOpenInputCash] = useState<number>(0)
@@ -461,61 +462,66 @@ export const CaissePage: React.FC = () => {
   // ─── Action : Ouvrir la Caisse ─────────────────────────────────────────────
   const handleOpenCaisse = async (e: React.FormEvent) => {
     e.preventDefault()
+    setIsOperatingCaisse(true)
     const opBy = user?.full_name || 'Caissier'
     const nowIso = new Date().toISOString()
     const initC = Number(openInputCash) || 0
     const initM = Number(openInputMomo) || 0
 
-    let regId = cashRegisterId
-    if (!regId && company?.id) {
-      const { data: reg } = await supabase.from('cash_registers').select('id').eq('company_id', company.id).limit(1).maybeSingle()
-      if (reg?.id) {
-        regId = reg.id
-        setCashRegisterId(reg.id)
-      }
-    }
-
-    if (company?.id) {
-      try {
-        const { data: newSession } = await supabase.from('cash_sessions').insert({
-          company_id: company.id,
-          cash_register_id: regId || null,
-          opened_at: nowIso,
-          opening_cash: initC,
-          opening_momo: initM,
-          status: 'ouverte'
-        }).select().single()
-
-        if (newSession?.id) {
-          setActiveSessionId(newSession.id)
+    try {
+      let regId = cashRegisterId
+      if (!regId && company?.id) {
+        const { data: reg } = await supabase.from('cash_registers').select('id').eq('company_id', company.id).limit(1).maybeSingle()
+        if (reg?.id) {
+          regId = reg.id
+          setCashRegisterId(reg.id)
         }
-
-        if (regId) {
-          await supabase.from('cash_registers').update({
-            current_cash_balance: initC,
-            current_momo_balance: initM,
-            is_active: true
-          }).eq('id', regId)
-        }
-      } catch (err) {
-        console.warn('Erreur ouverture cash_session Supabase:', err)
       }
+
+      if (company?.id) {
+        try {
+          const { data: newSession } = await supabase.from('cash_sessions').insert({
+            company_id: company.id,
+            cash_register_id: regId || null,
+            opened_at: nowIso,
+            opening_cash: initC,
+            opening_momo: initM,
+            status: 'ouverte'
+          }).select().single()
+
+          if (newSession?.id) {
+            setActiveSessionId(newSession.id)
+          }
+
+          if (regId) {
+            await supabase.from('cash_registers').update({
+              current_cash_balance: initC,
+              current_momo_balance: initM,
+              is_active: true
+            }).eq('id', regId)
+          }
+        } catch (err) {
+          console.warn('Erreur ouverture cash_session Supabase:', err)
+        }
+      }
+
+      saveCaisseState('OUVERTE', nowIso, opBy, initC, initM)
+      setShowOpenModal(false)
+      toast.success('Caisse Ouverte avec succès !', `Fond initial tiroir : ${fmt(openInputCash)}`)
+
+      await logAuditEvent({
+        companyId: company?.id,
+        userId: user?.id,
+        userName: user?.full_name,
+        userRole: user?.role,
+        action: 'OUVERTURE_CAISSE',
+        module: 'CAISSE',
+        sector: currentSectorSlug.toUpperCase(),
+        description: `Ouverture de la caisse ${currentSectorSlug} par ${opBy}. Fond tiroir : ${fmt(initC)}, MoMo : ${fmt(initM)}`
+      })
+    } finally {
+      setIsOperatingCaisse(false)
     }
-
-    saveCaisseState('OUVERTE', nowIso, opBy, initC, initM)
-    setShowOpenModal(false)
-    toast.success('Caisse Ouverte avec succès !', `Fond initial tiroir : ${fmt(openInputCash)}`)
-
-    await logAuditEvent({
-      companyId: company?.id,
-      userId: user?.id,
-      userName: user?.full_name,
-      userRole: user?.role,
-      action: 'OUVERTURE_CAISSE',
-      module: 'CAISSE',
-      sector: currentSectorSlug.toUpperCase(),
-      description: `Ouverture de la caisse ${currentSectorSlug} par ${opBy}. Fond tiroir : ${fmt(initC)}, MoMo : ${fmt(initM)}`
-    })
   }
 
   // ─── Action : Fermer la Caisse (avec Clôture Rigoureuse et Audit) ─────────────
@@ -526,7 +532,9 @@ export const CaissePage: React.FC = () => {
       return
     }
 
-    const closedAt = new Date().toISOString()
+    setIsOperatingCaisse(true)
+    try {
+      const closedAt = new Date().toISOString()
     const closedBy = user?.full_name || 'Caissier'
 
     // Récupérer les adresses emails de notification configurées
@@ -613,7 +621,10 @@ export const CaissePage: React.FC = () => {
     } else {
       toast.success('Caisse Clôturée avec Succès !', 'Le Z de caisse a été généré et archivé.')
     }
+  } finally {
+    setIsOperatingCaisse(false)
   }
+}
 
   const handleSendReportByEmail = () => {
     if (!customReportEmail.trim() || !activeReportClosure) return
@@ -1231,9 +1242,11 @@ export const CaissePage: React.FC = () => {
               </button>
               <button
                 type="submit"
-                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md"
+                disabled={isOperatingCaisse}
+                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
               >
-                <Check className="w-4 h-4" /> Confirmer l'Ouverture
+                {isOperatingCaisse ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                <span>{isOperatingCaisse ? "Ouverture..." : "Confirmer l'Ouverture"}</span>
               </button>
             </div>
           </form>
@@ -1333,10 +1346,12 @@ export const CaissePage: React.FC = () => {
               </button>
               <button
                 type="button"
+                disabled={isOperatingCaisse}
                 onClick={handleConfirmCloseCaisse}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md"
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
               >
-                <Check className="w-4 h-4" /> Valider Clôture
+                {isOperatingCaisse ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
+                <span>{isOperatingCaisse ? "Clôture..." : "Valider Clôture"}</span>
               </button>
             </div>
           </div>

@@ -86,7 +86,7 @@ export const DepensesPage: React.FC = () => {
           .from('expenses')
           .select('*')
           .eq('company_id', company.id)
-          .order('expense_date', { ascending: false }),
+          .order('created_at', { ascending: false }),
         supabase
           .from('user_profiles')
           .select('id, full_name, username')
@@ -108,10 +108,11 @@ export const DepensesPage: React.FC = () => {
 
       const mapped = sectorExpenses.map((exp: any) => ({
         ...exp,
+        title: exp.title || exp.beneficiary || exp.notes || 'Dépense',
+        expense_date: exp.expense_date || (exp.created_at ? exp.created_at.split('T')[0] : ''),
         user_name: exp.created_by ? userMap.get(exp.created_by) || 'Utilisateur' : 'Non précisé'
       }))
 
-      // AUCUNE donnée fictive en fallback
       setExpenses(mapped)
     } catch (err: any) {
       console.error('Erreur chargement dépenses :', err)
@@ -132,25 +133,26 @@ export const DepensesPage: React.FC = () => {
     if (!company?.id || !form.title.trim() || !numAmount || numAmount <= 0) return
     setSaving(true)
     try {
-      const expensePayload = withSectorMeta({
+      const expNum = `DEP-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`
+      const corePayload = {
         company_id: company.id,
-        sector_slug: currentSectorSlug,
-        title: form.title.trim(),
+        expense_number: expNum,
         category: form.category,
+        beneficiary: form.title.trim(),
         amount: numAmount,
         payment_method: form.payment_method,
-        expense_date: form.expense_date,
-        notes: form.notes.trim() || null,
-        created_by: user?.id
-      }, currentSectorSlug)
+        notes: form.notes.trim() ? `${form.notes.trim()} (Date: ${form.expense_date})` : `Date: ${form.expense_date}`,
+        created_by: user?.id || null
+      }
 
-      const { error } = await supabase.from('expenses').insert(expensePayload)
+      const { data: insData, error: insErr } = await supabase
+        .from('expenses')
+        .insert(corePayload)
+        .select()
+        .single()
 
-      if (error) {
-        // Fallback sans colonnes sector_slug si absentes
-        const { sector_slug, sector_meta, ...corePayload } = expensePayload
-        const { error: fbErr } = await supabase.from('expenses').insert(corePayload)
-        if (fbErr) throw fbErr
+      if (insErr || !insData) {
+        throw new Error(insErr?.message || "Échec d'enregistrement de la dépense.")
       }
 
       // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse dans Supabase
@@ -173,6 +175,16 @@ export const DepensesPage: React.FC = () => {
         } catch (e) {}
       }
 
+      const newExp = {
+        ...insData,
+        title: form.title.trim(),
+        expense_date: form.expense_date,
+        user_name: user?.full_name || user?.username || 'Utilisateur'
+      }
+
+      // Optimistic UI : affichage immédiat
+      setExpenses((prev) => [newExp, ...prev.filter(x => x.id !== newExp.id)])
+
       toast.success(
         'Dépense enregistrée avec succès !',
         form.payment_method === 'especes'
@@ -188,7 +200,6 @@ export const DepensesPage: React.FC = () => {
         expense_date: new Date().toISOString().split('T')[0],
         notes: ''
       })
-      await loadExpenses()
     } catch (err: any) {
       toast.error('Erreur lors de l’enregistrement de la dépense', err.message)
     } finally {
@@ -605,9 +616,16 @@ export const DepensesPage: React.FC = () => {
               <button
                 type="submit"
                 disabled={saving}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-md disabled:opacity-50"
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition shadow-md disabled:opacity-50 flex items-center justify-center gap-1.5"
               >
-                {saving ? 'Enregistrement...' : 'Enregistrer la Dépense'}
+                {saving ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Enregistrement...</span>
+                  </>
+                ) : (
+                  <span>Enregistrer la Dépense</span>
+                )}
               </button>
             </div>
           </form>

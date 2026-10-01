@@ -1986,7 +1986,11 @@ export const POSPage: React.FC = () => {
                     : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
                 )}
               >
-                <Check className="w-4 h-4" />
+                {paying ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Check className="w-4 h-4" />
+                )}
                 <span>{validationButtonText}</span>
               </button>
             </div>

@@ -127,10 +127,9 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
     return !isFish
   }
 
-  // 4. Pour TOUT AUTRE SECTEUR (Quincaillerie, Imprimerie, Supermarché, Pharmacie, etc.) :
-  // Si l'élément n'a pas été explicitement créé dans ce secteur, IL EST EXCLU !
-  // Ceci garantit qu'un espace nouvellement ouvert commence 100% VIERGE.
-  return false
+  // 4. Si l'élément n'a AUCUN marqueur sectoriel spécifique (ex: clients, fournisseurs ou données d'entreprise) :
+  // Il est rattaché à l'entreprise et doit être visible dans son espace.
+  return true
 }
 
 /**

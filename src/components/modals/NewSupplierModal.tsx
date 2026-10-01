@@ -119,11 +119,8 @@ export const NewSupplierModal: React.FC<NewSupplierModalProps> = ({
 
     setIsSubmitting(true)
     try {
-      const activeSector = getActiveSectorSlug()
-      // Préparation du payload avec la structure exacte de la table "suppliers" dans Supabase
-      const payload = withSectorMeta({
+      const corePayload = {
         company_id: company.id,
-        sector_slug: activeSector,
         code: form.code.trim().toUpperCase() || defaultCode,
         company_name: form.company_name.trim(),
         contact_person: form.contact_person.trim() || null,
@@ -136,28 +133,19 @@ export const NewSupplierModal: React.FC<NewSupplierModalProps> = ({
         payment_terms_days: Math.max(0, parseInt(String(form.payment_terms_days), 10) || 0),
         current_payable: Math.max(0, parseFloat(String(form.current_payable)) || 0),
         is_active: form.is_active
-      }, activeSector)
+      }
 
-      let data: any = null
       const { data: insData, error } = await supabase
         .from('suppliers')
-        .insert(payload)
+        .insert(corePayload)
         .select()
         .single()
 
-      if (!error && insData) {
-        data = insData
-      } else if (error) {
-        // Fallback sans colonnes sector_slug si absentes
-        const { sector_slug, sector_meta, ...corePayload } = payload
-        const { data: fbData, error: fbErr } = await supabase
-          .from('suppliers')
-          .insert(corePayload)
-          .select()
-          .single()
-        if (fbErr) throw fbErr
-        data = fbData
+      if (error || !insData) {
+        throw new Error(error?.message || "Échec de l'enregistrement du fournisseur dans Supabase.")
       }
+
+      const data = insData
 
       toast.success(
         'Fournisseur Enregistré !',
