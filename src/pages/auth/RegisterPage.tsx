@@ -318,7 +318,6 @@ export const RegisterPage: React.FC = () => {
             color: matched?.color || '#059669'
           })
         }
-        localStorage.removeItem('gestio229_hub_sectors_v3')
       } catch (e) {
         console.warn('[Register] Insertion company_activities:', e)
       }

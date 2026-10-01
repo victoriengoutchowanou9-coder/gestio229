@@ -153,16 +153,22 @@ export const DepensesPage: React.FC = () => {
         if (fbErr) throw fbErr
       }
 
-      // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse du secteur
+      // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse dans Supabase
       if (form.payment_method === 'especes' && company?.id) {
         try {
-          const cashKey = `gestio_caisse_state_${company.id}_${currentSectorSlug}`
-          const cashStateRaw = localStorage.getItem(cashKey) ||
-            (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_caisse_state_${company.id}`) : null)
-          if (cashStateRaw) {
-            const cState = JSON.parse(cashStateRaw)
-            cState.initialCash = Math.max(0, (Number(cState.initialCash) || 0) - numAmount)
-            localStorage.setItem(cashKey, JSON.stringify(cState))
+          const { data: reg } = await supabase
+            .from('cash_registers')
+            .select('id, current_cash_balance')
+            .eq('company_id', company.id)
+            .limit(1)
+            .maybeSingle()
+          if (reg) {
+            await supabase
+              .from('cash_registers')
+              .update({
+                current_cash_balance: Math.max(0, (Number(reg.current_cash_balance) || 0) - numAmount)
+              })
+              .eq('id', reg.id)
           }
         } catch (e) {}
       }

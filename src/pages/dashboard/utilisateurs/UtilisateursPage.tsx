@@ -236,22 +236,122 @@ const UtilisateursPage: React.FC = () => {
       })
       setPayrollProfiles(initialProfiles)
 
-      // Charger le personnel enregistré localement / persistant
-      const storedStaff = localStorage.getItem(`gestio_staff_members_${company.id}`)
-      if (storedStaff) {
-        try {
-          const parsedStaff = JSON.parse(storedStaff)
-          if (Array.isArray(parsedStaff)) setAdditionalStaff(parsedStaff)
-        } catch (e) {}
+      // Charger le personnel enregistré depuis Supabase
+      try {
+        const { data: dbStaff } = await supabase
+          .from('staff_members')
+          .select('*')
+          .eq('company_id', company.id)
+          .order('full_name')
+
+        if (dbStaff && dbStaff.length > 0) {
+          setAdditionalStaff(dbStaff.map((s: any) => ({
+            id: s.id,
+            fullName: s.full_name,
+            jobTitle: s.job_title,
+            phone: s.phone || '',
+            cnssNumber: s.cnss_number || '',
+            baseSalary: Number(s.base_salary) || 0,
+            transportAllowance: Number(s.transport_allowance) || 0,
+            housingAllowance: Number(s.housing_allowance) || 0,
+            bonus: Number(s.bonus) || 0,
+            hireDate: s.hire_date || '',
+            advancePayment: Number(s.advance_payment) || 0,
+          })))
+        } else {
+          // Fallback user_profiles avec rôle employé
+          const { data: empProfiles } = await supabase
+            .from('user_profiles')
+            .select('*')
+            .eq('company_id', company.id)
+            .eq('role', 'employe')
+
+          if (empProfiles && empProfiles.length > 0) {
+            setAdditionalStaff(empProfiles.map((p: any) => {
+              const perm = (typeof p.permissions === 'object' && p.permissions) ? p.permissions : {}
+              return {
+                id: p.id,
+                fullName: p.full_name,
+                jobTitle: perm.job_title || 'Employé',
+                phone: p.phone || '',
+                cnssNumber: perm.cnss_number || '',
+                baseSalary: Number(perm.base_salary) || 60000,
+                transportAllowance: Number(perm.transport_allowance) || 15000,
+                housingAllowance: Number(perm.housing_allowance) || 0,
+                bonus: Number(perm.bonus) || 0,
+                hireDate: p.created_at?.split('T')[0] || '',
+                advancePayment: 0,
+              }
+            }))
+          } else {
+            setAdditionalStaff([])
+          }
+        }
+      } catch (e) {
+        setAdditionalStaff([])
       }
 
-      // Charger les paiements de paie enregistrés
-      const storedPayments = localStorage.getItem(`gestio_payroll_payments_${company.id}`)
-      if (storedPayments) {
-        try {
-          const parsedPayments = JSON.parse(storedPayments)
-          if (Array.isArray(parsedPayments)) setPayrollPayments(parsedPayments)
-        } catch (e) {}
+      // Charger les paiements de paie enregistrés depuis Supabase (payroll_records ou expenses)
+      try {
+        const { data: dbPayrolls } = await supabase
+          .from('payroll_records')
+          .select('*')
+          .eq('company_id', company.id)
+          .order('paid_at', { ascending: false })
+
+        if (dbPayrolls && dbPayrolls.length > 0) {
+          setPayrollPayments(dbPayrolls.map((pr: any) => ({
+            id: pr.id,
+            employeeId: pr.staff_id,
+            employeeName: pr.employee_name,
+            period: pr.period,
+            baseSalary: Number(pr.base_salary) || 0,
+            grossSalary: Number(pr.gross_salary) || 0,
+            cnssSalariale: Number(pr.cnss_salariale) || 0,
+            netSalary: Number(pr.net_salary) || 0,
+            paymentMethod: pr.payment_method || 'especes',
+            expenseId: pr.expense_id,
+            paidAt: pr.paid_at,
+            paidBy: pr.paid_by || 'Direction'
+          })))
+        } else {
+          // Fallback dépenses salariales
+          const { data: expSalaries } = await supabase
+            .from('expenses')
+            .select('*')
+            .eq('company_id', company.id)
+            .eq('category', 'Salaires & Rémunérations')
+            .order('created_at', { ascending: false })
+
+          if (expSalaries && expSalaries.length > 0) {
+            setPayrollPayments(expSalaries.map((e: any) => {
+              let parsedNotes: any = {}
+              if (e.notes) {
+                try {
+                  parsedNotes = typeof e.notes === 'string' ? JSON.parse(e.notes) : e.notes
+                } catch (err) {}
+              }
+              return {
+                id: `pay-${e.id}`,
+                employeeId: parsedNotes.employee_id || e.id,
+                employeeName: parsedNotes.employee_name || e.title?.replace('Salaire ', '') || 'Employé',
+                period: parsedNotes.period || 'Mois en cours',
+                baseSalary: Number(parsedNotes.base_salary) || Number(e.amount) || 0,
+                grossSalary: Number(parsedNotes.gross_salary) || Number(e.amount) || 0,
+                cnssSalariale: Number(parsedNotes.cnss_salariale) || 0,
+                netSalary: Number(e.amount) || 0,
+                paymentMethod: e.payment_method || 'especes',
+                expenseId: e.id,
+                paidAt: e.created_at,
+                paidBy: 'Direction'
+              }
+            }))
+          } else {
+            setPayrollPayments([])
+          }
+        }
+      } catch (e) {
+        setPayrollPayments([])
       }
     } catch (err: any) {
       setError('Erreur chargement utilisateurs : ' + err.message)
@@ -566,15 +666,65 @@ const UtilisateursPage: React.FC = () => {
   }, [allStaffList, payrollPayments, payrollPeriod])
 
   // Enregistrer un nouveau personnel
-  const handleSaveNewStaff = (e: React.FormEvent) => {
+  const handleSaveNewStaff = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newStaffForm.fullName.trim() || !newStaffForm.jobTitle.trim() || !newStaffForm.baseSalary) {
       setError('Veuillez remplir les champs obligatoires (Nom, Poste, Salaire de base).')
       return
     }
 
+    let createdStaffId = `staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    if (company?.id) {
+      try {
+        const { data: dbStaff } = await supabase
+          .from('staff_members')
+          .insert({
+            company_id: company.id,
+            full_name: newStaffForm.fullName.trim(),
+            job_title: newStaffForm.jobTitle.trim(),
+            phone: newStaffForm.phone.trim() || null,
+            cnss_number: newStaffForm.cnssNumber.trim() || null,
+            base_salary: Number(newStaffForm.baseSalary) || 0,
+            transport_allowance: Number(newStaffForm.transportAllowance) || 0,
+            housing_allowance: Number(newStaffForm.housingAllowance) || 0,
+            bonus: Number(newStaffForm.bonus) || 0,
+            hire_date: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
+            is_active: true
+          })
+          .select()
+          .maybeSingle()
+
+        if (dbStaff?.id) createdStaffId = dbStaff.id
+      } catch (err) {
+        // Fallback user_profiles
+        try {
+          const { data: uStaff } = await supabase
+            .from('user_profiles')
+            .insert({
+              company_id: company.id,
+              full_name: newStaffForm.fullName.trim(),
+              username: `emp_${Date.now()}`,
+              phone: newStaffForm.phone.trim() || null,
+              role: 'employe',
+              is_active: true,
+              permissions: {
+                job_title: newStaffForm.jobTitle.trim(),
+                base_salary: Number(newStaffForm.baseSalary) || 0,
+                transport_allowance: Number(newStaffForm.transportAllowance) || 0,
+                housing_allowance: Number(newStaffForm.housingAllowance) || 0,
+                bonus: Number(newStaffForm.bonus) || 0,
+                cnss_number: newStaffForm.cnssNumber.trim() || null
+              }
+            })
+            .select()
+            .maybeSingle()
+          if (uStaff?.id) createdStaffId = uStaff.id
+        } catch (e2) {}
+      }
+    }
+
     const newStaff: StaffMember = {
-      id: `staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      id: createdStaffId,
       fullName: newStaffForm.fullName.trim(),
       jobTitle: newStaffForm.jobTitle.trim(),
       phone: newStaffForm.phone.trim(),
@@ -589,9 +739,6 @@ const UtilisateursPage: React.FC = () => {
 
     const updated = [newStaff, ...additionalStaff]
     setAdditionalStaff(updated)
-    if (company?.id) {
-      localStorage.setItem(`gestio_staff_members_${company.id}`, JSON.stringify(updated))
-    }
 
     setSuccess(`Nouveau personnel "${newStaff.fullName}" enregistré avec succès !`)
     setShowNewStaffModal(false)
@@ -660,21 +807,44 @@ const UtilisateursPage: React.FC = () => {
         console.warn('Erreur insertion expenses :', expErr)
       }
 
-      // 2. Décaissement en Trésorerie / Caisse si espèces
+      // 2. Décaissement en Caisse si espèces dans Supabase cash_registers
       if (payMethod === 'especes') {
-        const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
-        if (cashStateRaw) {
-          try {
-            const cState = JSON.parse(cashStateRaw)
-            cState.initialCash = Math.max(0, (Number(cState.initialCash) || 0) - net)
-            localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
-          } catch (e) {}
-        }
+        try {
+          const { data: reg } = await supabase.from('cash_registers').select('id, current_cash_balance').eq('company_id', company.id).limit(1).maybeSingle()
+          if (reg) {
+            await supabase.from('cash_registers').update({ current_cash_balance: Math.max(0, (Number(reg.current_cash_balance) || 0) - net) }).eq('id', reg.id)
+          }
+        } catch (e) {}
       }
 
-      // 3. Mémoriser le paiement de paie rattaché à la période
+      // 3. Mémoriser le paiement de paie rattaché à la période dans Supabase payroll_records
+      let createdPayId = `pay-${Date.now()}`
+      try {
+        const { data: dbPay } = await supabase
+          .from('payroll_records')
+          .insert({
+            company_id: company.id,
+            staff_id: payingEmployee.id.startsWith('staff-') ? null : payingEmployee.id,
+            employee_name: payingEmployee.fullName,
+            period: payrollPeriod,
+            base_salary: base,
+            gross_salary: gross,
+            cnss_salariale: cnssSal,
+            cnss_patronale: cnssPat,
+            vps_benin: vps,
+            net_salary: net,
+            payment_method: payMethod,
+            expense_id: expData?.id || null,
+            paid_by: user?.full_name || 'Direction'
+          })
+          .select()
+          .maybeSingle()
+
+        if (dbPay?.id) createdPayId = dbPay.id
+      } catch (pErr) {}
+
       const newPayment: PayrollPayment = {
-        id: `pay-${Date.now()}`,
+        id: createdPayId,
         employeeId: payingEmployee.id,
         employeeName: payingEmployee.fullName,
         period: payrollPeriod,
@@ -690,7 +860,6 @@ const UtilisateursPage: React.FC = () => {
 
       const updated = [newPayment, ...payrollPayments]
       setPayrollPayments(updated)
-      localStorage.setItem(`gestio_payroll_payments_${company.id}`, JSON.stringify(updated))
 
       setSuccess(`Salaire de ${payingEmployee.fullName} pour ${payrollPeriod} (${fmt(net)}) payé avec succès !`)
       setPayingEmployee(null)

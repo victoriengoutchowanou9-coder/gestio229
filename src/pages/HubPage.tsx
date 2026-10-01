@@ -3,7 +3,7 @@
 // Architecture Tenant Strict & Synchronisation Supabase Temps Réel
 // =============================================================================
 
-import React, { useEffect } from 'react'
+import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MultiservicesHub } from '../views/hub/MultiservicesHub'
 import { useAuthStore } from '../store/authStore'
@@ -13,13 +13,6 @@ const HubPage: React.FC = () => {
   const navigate = useNavigate()
   const { company, tenantCtx, logout, user } = useAuthStore()
 
-  // ─── Nettoyage préventif des anciens caches globaux non cloisonnés ──────────
-  useEffect(() => {
-    try {
-      localStorage.removeItem('gestio229_hub_sectors_v3')
-      localStorage.removeItem('gestio229_test_dataset_active')
-    } catch (e) {}
-  }, [])
 
   // ─── Routage : vers le dashboard du secteur sélectionné ────────────────────
   const handleSelectSector = (

@@ -138,32 +138,11 @@ const ClientsPage: React.FC = () => {
       // Isolation stricte par sous-logiciel : filtrer pour le secteur actif
       const sectorFiltered = filterItemsForSector(data || [], currentSectorSlug)
 
-      // Charger métadonnées locales (fallback colonnes schema cache)
-      let localMeta: Record<string, any> = {}
-      try {
-        localMeta = JSON.parse(
-          localStorage.getItem(`gestio_customers_meta_${company.id}_${currentSectorSlug}`) ||
-          (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_customers_meta_${company.id}`) : '{}') || '{}'
-        )
-      } catch (e) {}
-
       const mapped: Customer[] = sectorFiltered.map((c: any) => {
-        const meta = localMeta[c.id] || localMeta[c.code] || {}
         const creditLimit = Number(c.credit_limit) || 0
-        const isCreditAuth =
-          c.credit_authorized !== undefined && c.credit_authorized !== null
-            ? Boolean(c.credit_authorized)
-            : (meta.credit_authorized !== undefined ? Boolean(meta.credit_authorized) : (creditLimit > 0))
-
-        const isDiscount =
-          c.discount_eligible !== undefined && c.discount_eligible !== null
-            ? Boolean(c.discount_eligible)
-            : Boolean(meta.discount_eligible)
-
-        const discountRate =
-          c.discount_rate !== undefined && c.discount_rate !== null
-            ? Number(c.discount_rate)
-            : (Number(meta.discount_rate) || 0)
+        const isCreditAuth = Boolean(c.credit_authorized) || (creditLimit > 0)
+        const isDiscount = Boolean(c.discount_eligible)
+        const discountRate = Number(c.discount_rate) || 0
 
         return {
           ...c,
@@ -328,26 +307,6 @@ const ClientsPage: React.FC = () => {
         }
       }
 
-      // Persistance métadonnées locales pour réactivité instantanée dans l'interface et le POS
-      try {
-        const metaKey = `gestio_customers_meta_${company.id}_${currentSectorSlug}`
-        const existingMeta = JSON.parse(localStorage.getItem(metaKey) || '{}')
-        const clientMeta = {
-          credit_authorized: isCreditAuthorized,
-          credit_limit: creditLimit,
-          discount_eligible: isDiscountEligible,
-          discount_rate: discountRate,
-          sector_slug: currentSectorSlug,
-        }
-        if (savedRecord?.id) {
-          existingMeta[savedRecord.id] = clientMeta
-        }
-        existingMeta[autoCode] = clientMeta
-        localStorage.setItem(metaKey, JSON.stringify(existingMeta))
-      } catch (e) {
-        console.warn('LocalStorage meta error:', e)
-      }
-
       toast.success('Client enregistré avec succès', `${form.name.trim()} (${autoCode})`)
       setShowModal(false)
       setForm(initialFormState)
@@ -439,27 +398,7 @@ const ClientsPage: React.FC = () => {
         console.warn('Fallback insertion customer_repayments :', repErr)
       }
 
-      // Persistance locale des remboursements
-      if (company?.id) {
-        try {
-          const key = `gestio_customer_repayments_${company.id}`
-          const existing = JSON.parse(localStorage.getItem(key) || '[]')
-          existing.push({
-            id: `rep-${Date.now()}`,
-            company_id: company.id,
-            customer_id: selectedCustomer.id,
-            customer_name: selectedCustomer.name,
-            amount: paymentAmount,
-            payment_method: normalizedMethod,
-            reference: receiptNumber,
-            notes: paymentNotes || 'Remboursement créance',
-            created_at: new Date().toISOString()
-          })
-          localStorage.setItem(key, JSON.stringify(existing))
-        } catch (e) {}
-      }
-
-      // 3. Entrée immédiate dans la caisse opérationnelle (Supabase & local)
+      // 3. Entrée immédiate dans la caisse opérationnelle (Supabase)
       if (company?.id) {
         try {
           const { data: reg } = await supabase.from('cash_registers').select('id, current_cash_balance, current_momo_balance').eq('company_id', company.id).limit(1).maybeSingle()
@@ -469,20 +408,6 @@ const ClientsPage: React.FC = () => {
             } else if (['momo', 'moov', 'wave'].includes(paymentMode)) {
               await supabase.from('cash_registers').update({ current_momo_balance: (Number(reg.current_momo_balance) || 0) + paymentAmount }).eq('id', reg.id)
             }
-          }
-        } catch (e) {}
-
-        try {
-          const cashKey = `gestio_caisse_state_${company.id}_${currentSectorSlug}`
-          const cashStateRaw = localStorage.getItem(cashKey) || localStorage.getItem(`gestio_caisse_state_${company.id}`)
-          if (cashStateRaw) {
-            const cState = JSON.parse(cashStateRaw)
-            if (paymentMode === 'cash') {
-              cState.initialCash = (Number(cState.initialCash) || 0) + paymentAmount
-            } else if (['momo', 'moov', 'wave'].includes(paymentMode)) {
-              cState.initialMomo = (Number(cState.initialMomo) || 0) + paymentAmount
-            }
-            localStorage.setItem(cashKey, JSON.stringify(cState))
           }
         } catch (e) {}
       }

@@ -198,28 +198,11 @@ export const POSPage: React.FC = () => {
       setProducts(mappedProds)
 
       // Charger les clients avec métadonnées de crédit et remise
-      let localCustMeta: Record<string, any> = {}
-      try {
-        localCustMeta = JSON.parse(localStorage.getItem(`gestio_customers_meta_${company.id}`) || '{}')
-      } catch (e) {}
-
       const mappedCusts: Customer[] = (custs || []).map((c: any) => {
-        const meta = localCustMeta[c.id] || localCustMeta[c.code] || {}
         const creditLimit = Number(c.credit_limit) || 0
-        const isCreditAuth =
-          c.credit_authorized !== undefined && c.credit_authorized !== null
-            ? Boolean(c.credit_authorized)
-            : (meta.credit_authorized !== undefined ? Boolean(meta.credit_authorized) : (creditLimit > 0))
-
-        const isDiscount =
-          c.discount_eligible !== undefined && c.discount_eligible !== null
-            ? Boolean(c.discount_eligible)
-            : Boolean(meta.discount_eligible)
-
-        const discountRate =
-          c.discount_rate !== undefined && c.discount_rate !== null
-            ? Number(c.discount_rate)
-            : (Number(meta.discount_rate) || 0)
+        const isCreditAuth = Boolean(c.credit_authorized) || (creditLimit > 0)
+        const isDiscount = Boolean(c.discount_eligible)
+        const discountRate = Number(c.discount_rate) || 0
 
         return {
           ...c,
@@ -869,15 +852,6 @@ export const POSPage: React.FC = () => {
           console.warn('Avertissement cash_registers Supabase:', e)
         }
       }
-
-      // Mise à jour de la session locale de caisse
-      try {
-        const cashStateRaw = localStorage.getItem(`gestio_caisse_state_${company.id}`)
-        const cState = cashStateRaw ? JSON.parse(cashStateRaw) : { status: 'OUVERTE', todaySalesCash: 0, todaySalesMomo: 0 }
-        cState.todaySalesCash = (Number(cState.todaySalesCash) || 0) + paidCash
-        cState.todaySalesMomo = (Number(cState.todaySalesMomo) || 0) + paidMomo
-        localStorage.setItem(`gestio_caisse_state_${company.id}`, JSON.stringify(cState))
-      } catch (e) {}
 
       // 6. Traçabilité Journal d'Audit automatique dans Supabase
       try {

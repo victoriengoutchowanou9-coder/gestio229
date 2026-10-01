@@ -63,17 +63,6 @@ export const useAuthStore = create<AuthState>()(
           if (session?.user) {
             const ctx = await SectorLoader.loadTenantContext(session.user.id, session.user.email)
             if (ctx && ctx.company) {
-              const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
-              if (prevCompanyId && prevCompanyId !== ctx.company.id) {
-                try {
-                  localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
-                } catch (e) {}
-              }
-              try {
-                localStorage.removeItem('gestio229_hub_sectors_v3')
-                localStorage.setItem('gestio229_current_company_id', ctx.company.id)
-              } catch (e) {}
-
               set({
                 status: 'authenticated',
                 user: ctx.user,
@@ -94,17 +83,6 @@ export const useAuthStore = create<AuthState>()(
               currentUser
             )
             if (ctx && ctx.company) {
-              const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
-              if (prevCompanyId && prevCompanyId !== ctx.company.id) {
-                try {
-                  localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
-                } catch (e) {}
-              }
-              try {
-                localStorage.removeItem('gestio229_hub_sectors_v3')
-                localStorage.setItem('gestio229_current_company_id', ctx.company.id)
-              } catch (e) {}
-
               set({
                 status: 'authenticated',
                 user: ctx.user,
@@ -323,18 +301,6 @@ export const useAuthStore = create<AuthState>()(
               .update({ last_login: new Date().toISOString() })
               .eq('id', ctx.user.id)
 
-            // Isolation stricte du tenant et purge des anciens caches d'autres entreprises
-            const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
-            if (prevCompanyId && prevCompanyId !== ctx.company.id) {
-              try {
-                localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
-              } catch (e) {}
-            }
-            try {
-              localStorage.removeItem('gestio229_hub_sectors_v3')
-              localStorage.setItem('gestio229_current_company_id', ctx.company.id)
-            } catch (e) {}
-
             set({
               status: 'authenticated',
               user: ctx.user,
@@ -409,18 +375,8 @@ export const useAuthStore = create<AuthState>()(
             .update({ last_login: new Date().toISOString() })
             .eq('id', profile.id)
 
-          // Isolation stricte du tenant et purge des anciens caches d'autres entreprises
-          const prevCompanyId = localStorage.getItem('gestio229_current_company_id')
-          if (prevCompanyId && prevCompanyId !== ctx.company.id) {
-            try {
-              localStorage.removeItem(`gestio229_hub_sectors_${prevCompanyId}`)
-            } catch (e) {}
-          }
+          // Déterminer et verrouiller le secteur / l'activité assignée
           try {
-            localStorage.removeItem('gestio229_hub_sectors_v3')
-            localStorage.setItem('gestio229_current_company_id', ctx.company.id)
-
-            // Déterminer et verrouiller le secteur / l'activité assignée
             const assignedActivityId = (profile.permissions as any)?.sector_id || profile.sector_id
             let assignedSlug = ctx.activeSectorSlug || 'boutique'
 

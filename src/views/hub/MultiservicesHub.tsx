@@ -130,11 +130,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
 
-  // Clé localStorage strictement isolée par entreprise
-  const storageKey = useMemo(() => {
-    return companyId ? `gestio229_hub_sectors_${companyId}` : null;
-  }, [companyId]);
-
   // Mois en cours automatique (PARTIE 4)
   const currentMonthLabel = useMemo(() => {
     try {
@@ -146,13 +141,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   }, []);
 
-  // ── Nettoyage des anciennes clés globales non cloisonnées ──────────────────
-  useEffect(() => {
-    try {
-      localStorage.removeItem('gestio229_hub_sectors_v3');
-      localStorage.removeItem('gestio229_test_dataset_active');
-    } catch (e) {}
-  }, []);
+
 
   // ── Synchronisation Supabase company_activities ─────────────────────────────
   const loadActivitiesFromSupabase = useCallback(async () => {
@@ -194,9 +183,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         });
 
         setActivities(mapped);
-        if (storageKey) {
-          localStorage.setItem(storageKey, JSON.stringify(mapped));
-        }
       } else {
         // Auto-seed dans Supabase si aucune activité n'existe pour cette entreprise
         const sectorsToSeed: string[] = [];
@@ -255,37 +241,17 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
         if (seededRows.length > 0) {
           setActivities(seededRows);
-          if (storageKey) {
-            localStorage.setItem(storageKey, JSON.stringify(seededRows));
-          }
         }
       }
     } catch (err) {
       console.error('[Hub] Erreur sync Supabase:', err);
-      if (storageKey) {
-        try {
-          const raw = localStorage.getItem(storageKey);
-          if (raw) setActivities(JSON.parse(raw));
-        } catch (e) {}
-      }
     }
-  }, [companyId, company, companyName, storageKey]);
+  }, [companyId, company, companyName]);
 
-  // Chargement initial depuis cache local immédiat puis Supabase
+  // Chargement initial depuis Supabase uniquement
   useEffect(() => {
-    if (storageKey) {
-      try {
-        const raw = localStorage.getItem(storageKey);
-        if (raw) {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setActivities(parsed);
-          }
-        }
-      } catch (e) {}
-    }
     loadActivitiesFromSupabase();
-  }, [companyId, storageKey, loadActivitiesFromSupabase]);
+  }, [companyId, loadActivitiesFromSupabase]);
 
   // Synchronisation Realtime Supabase multi-appareils (PC / Mobile / Tablette)
   useEffect(() => {
@@ -380,11 +346,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const persist = useCallback(
     (data: ActivityEntry[]) => {
       setActivities(data);
-      if (storageKey) {
-        localStorage.setItem(storageKey, JSON.stringify(data));
-      }
     },
-    [storageKey]
+    []
   );
 
   // ── Filtrage des activités actives vs archivées (PARTIE 9) ─────────────────

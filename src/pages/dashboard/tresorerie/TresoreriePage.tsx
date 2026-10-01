@@ -83,32 +83,43 @@ export const TresoreriePage: React.FC = () => {
         const sectorAccs = filterItemsForSector(dbAccounts, currentSectorSlug)
         setAccounts(sectorAccs)
       } else {
-        // Fallback local tenant cloisonné par secteur
-        const stored = localStorage.getItem(`gestio_treasury_accounts_${company.id}_${currentSectorSlug}`) ||
-          (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_treasury_accounts_${company.id}`) : null)
-        if (stored) {
-          try {
-            setAccounts(JSON.parse(stored))
-          } catch (e) {
-            setAccounts([])
-          }
-        } else {
-          // Espace vierge par défaut
-          setAccounts([])
-        }
+        setAccounts([])
       }
 
-      // 2. Charger les demandes de versements caisse en attente du secteur
-      const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`) ||
-        (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_treasury_requests_${company.id}`) : null)
-      if (storedRequests) {
-        try {
-          const reqs = JSON.parse(storedRequests)
-          setPendingTransfers(reqs)
-        } catch (e) {
-          setPendingTransfers([])
+      // 2. Charger les demandes de versements caisse en attente du secteur depuis Supabase
+      try {
+        const { data: dbTransfers } = await supabase
+          .from('treasury_transfers')
+          .select('*')
+          .eq('company_id', company.id)
+          .order('created_at', { ascending: false })
+        if (dbTransfers && dbTransfers.length > 0) {
+          setPendingTransfers(dbTransfers)
+        } else {
+          const { data: auditTransfers } = await supabase
+            .from('audit_logs')
+            .select('*')
+            .eq('company_id', company.id)
+            .eq('action', 'DEMANDE_TRANSFERT_TRESORERIE')
+            .order('created_at', { ascending: false })
+          if (auditTransfers && auditTransfers.length > 0) {
+            setPendingTransfers(auditTransfers.map((a: any) => {
+              const det = typeof a.details === 'string' ? JSON.parse(a.details) : (a.details || {})
+              return {
+                id: a.id,
+                created_at: a.created_at,
+                requested_by: a.user_name || 'Caissier',
+                type: det.type || 'Espèces',
+                amount: Number(det.amount) || 0,
+                motif: det.motif || '',
+                status: det.status || 'EN_ATTENTE'
+              }
+            }))
+          } else {
+            setPendingTransfers([])
+          }
         }
-      } else {
+      } catch (e) {
         setPendingTransfers([])
       }
     } catch (err: any) {
@@ -124,12 +135,9 @@ export const TresoreriePage: React.FC = () => {
     loadTreasuryData()
   }, [loadTreasuryData])
 
-  // Sauvegarder les comptes localement par secteur
+  // Mettre à jour les comptes dans l'état local
   const saveAccounts = (updated: TreasuryAccount[]) => {
     setAccounts(updated)
-    if (company?.id) {
-      localStorage.setItem(`gestio_treasury_accounts_${company.id}_${currentSectorSlug}`, JSON.stringify(updated))
-    }
   }
 
   // Ajouter un nouveau compte réel
@@ -233,9 +241,14 @@ export const TresoreriePage: React.FC = () => {
       t.id === transfer.id ? { ...t, status: 'APPROVED' } : t
     )
     setPendingTransfers(updatedTransfers)
+
     if (company?.id) {
-      localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
-      localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedTransfers))
+      try {
+        await supabase
+          .from('treasury_transfers')
+          .update({ status: 'APPROVED', approved_by: user?.full_name || 'Direction', approved_at: new Date().toISOString() })
+          .eq('id', transfer.id)
+      } catch (e) {}
     }
 
     await logAuditEvent({
@@ -261,9 +274,14 @@ export const TresoreriePage: React.FC = () => {
       t.id === transferId ? { ...t, status: 'REJECTED' } : t
     )
     setPendingTransfers(updatedTransfers)
+
     if (company?.id) {
-      localStorage.setItem(`gestio_treasury_requests_${company.id}`, JSON.stringify(updatedTransfers))
-      localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedTransfers))
+      try {
+        await supabase
+          .from('treasury_transfers')
+          .update({ status: 'REJECTED' })
+          .eq('id', transferId)
+      } catch (e) {}
     }
 
     await logAuditEvent({

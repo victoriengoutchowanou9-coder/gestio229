@@ -204,15 +204,43 @@ export const StocksPage: React.FC = () => {
     }
   }, [company?.id, loadData])
 
-  // Charger l'historique des inventaires
+  // Charger l'historique des inventaires depuis Supabase
   useEffect(() => {
     if (!company?.id) return
-    const storedHistory = localStorage.getItem(`gestio_inventory_history_${company.id}`)
-    if (storedHistory) {
+    const fetchHistory = async () => {
       try {
-        setInventoryHistory(JSON.parse(storedHistory))
-      } catch (e) {}
+        const { data: sessions } = await supabase
+          .from('inventory_sessions')
+          .select('*')
+          .eq('company_id', company.id)
+          .order('created_at', { ascending: false })
+
+        if (sessions && sessions.length > 0) {
+          const mapped: InventoryHistoryRecord[] = sessions.map((s: any) => {
+            let items: any[] = []
+            if (s.notes) {
+              try {
+                items = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+              } catch (e) {}
+            }
+            return {
+              id: s.id,
+              date: s.validated_at || s.created_at,
+              validated_by: s.inventory_number || 'Responsable Stock',
+              items_count: Array.isArray(items) ? items.length : 0,
+              total_ecart_valeur: Number(s.total_discrepancy_value) || 0,
+              items: Array.isArray(items) ? items : []
+            }
+          })
+          setInventoryHistory(mapped)
+        } else {
+          setInventoryHistory([])
+        }
+      } catch (e) {
+        setInventoryHistory([])
+      }
     }
+    fetchHistory()
   }, [company?.id])
 
   // Synchroniser la grille d'inventaire quand les produits réels changent
@@ -701,9 +729,31 @@ export const StocksPage: React.FC = () => {
       await loadData()
       const totalEcarts = inventoryList.reduce((s, i) => s + i.valeurEcart, 0)
 
-      // Archiver la fiche d'inventaire dans l'historique
+      // Archiver la fiche d'inventaire dans Supabase inventory_sessions
+      let createdId = `inv-${Date.now()}`
+      if (company?.id) {
+        try {
+          const invNum = `INV-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`
+          const { data: dbInv } = await supabase
+            .from('inventory_sessions')
+            .insert({
+              company_id: company.id,
+              inventory_number: invNum,
+              status: 'valide',
+              total_discrepancy_value: totalEcarts,
+              notes: JSON.stringify(inventoryList),
+              validated_at: new Date().toISOString()
+            })
+            .select()
+            .maybeSingle()
+          if (dbInv?.id) createdId = dbInv.id
+        } catch (dbErr) {
+          console.warn('Fallback insertion inventory_sessions Supabase:', dbErr)
+        }
+      }
+
       const newRecord: InventoryHistoryRecord = {
-        id: `inv-${Date.now()}`,
+        id: createdId,
         date: new Date().toISOString(),
         validated_by: user?.full_name || 'Responsable Stock',
         items_count: inventoryList.length,
@@ -712,9 +762,6 @@ export const StocksPage: React.FC = () => {
       }
       const updatedHistory = [newRecord, ...inventoryHistory]
       setInventoryHistory(updatedHistory)
-      if (company?.id) {
-        localStorage.setItem(`gestio_inventory_history_${company.id}`, JSON.stringify(updatedHistory))
-      }
 
       toast.success(
         'Inventaire validé !',

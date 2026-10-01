@@ -100,59 +100,8 @@ export const CaissePage: React.FC = () => {
     return openD !== todayD
   }, [caisseStatus, openedAt])
 
-  // Charger la persistance locale de l'état de la caisse (cloisonné par secteur)
-  useEffect(() => {
-    if (!company?.id) return
-    const storedState = localStorage.getItem(`gestio_caisse_state_${company.id}_${currentSectorSlug}`) ||
-      (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_caisse_state_${company.id}`) : null)
-    if (storedState) {
-      try {
-        const parsed = JSON.parse(storedState)
-        setCaisseStatus(parsed.status || 'FERMEE')
-        setOpenedAt(parsed.openedAt || null)
-        setOpenedBy(parsed.openedBy || '')
-        setInitialCash(Number(parsed.initialCash) || 0)
-        setInitialMomo(Number(parsed.initialMomo) || 0)
-      } catch (e) {
-        console.error('Erreur lecture session caisse', e)
-      }
-    } else {
-      setCaisseStatus('FERMEE')
-      setOpenedAt(null)
-      setOpenedBy('')
-      setInitialCash(0)
-      setInitialMomo(0)
-    }
-
-    const storedClosures = localStorage.getItem(`gestio_caisse_closures_${company.id}_${currentSectorSlug}`) ||
-      (currentSectorSlug === 'boutique' ? localStorage.getItem(`gestio_caisse_closures_${company.id}`) : null)
-    if (storedClosures) {
-      try {
-        setClosuresHistory(JSON.parse(storedClosures))
-      } catch (e) {
-        setClosuresHistory([])
-      }
-    } else {
-      setClosuresHistory([])
-    }
-
-    const storedRequests = localStorage.getItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`)
-    if (storedRequests) {
-      try {
-        setPendingRequests(JSON.parse(storedRequests))
-      } catch (e) {
-        setPendingRequests([])
-      }
-    } else {
-      setPendingRequests([])
-    }
-  }, [company?.id, currentSectorSlug])
-
-  // Sauvegarder l'état de session dans localStorage cloisonné par secteur
+  // Mettre à jour l'état de session caisse en mémoire
   const saveCaisseState = (status: 'OUVERTE' | 'FERMEE', opAt: string | null, opBy: string, initC: number, initM: number) => {
-    if (!company?.id) return
-    const payload = { status, openedAt: opAt, openedBy: opBy, initialCash: initC, initialMomo: initM, sector_slug: currentSectorSlug }
-    localStorage.setItem(`gestio_caisse_state_${company.id}_${currentSectorSlug}`, JSON.stringify(payload))
     setCaisseStatus(status)
     setOpenedAt(opAt)
     setOpenedBy(opBy)
@@ -291,15 +240,26 @@ export const CaissePage: React.FC = () => {
       } catch (err) {
         console.warn('Fallback customer_repayments :', err)
       }
-      // Combiner avec local storage si présent
-      const storedRep = localStorage.getItem(`gestio_customer_repayments_${company.id}`)
-      if (storedRep) {
+      // Si la table customer_repayments est indisponible, interroger audit_logs Supabase
+      if (repList.length === 0) {
         try {
-          const parsedLocal = JSON.parse(storedRep)
-          if (Array.isArray(parsedLocal)) {
-            parsedLocal.filter((r: any) => r.created_at >= startOfDay).forEach((r: any) => {
-              if (!repList.some((x) => x.id === r.id)) {
-                repList.push(r)
+          const { data: auditReps } = await supabase
+            .from('audit_logs')
+            .select('*')
+            .eq('company_id', company.id)
+            .eq('action', 'REMBOURSEMENT_CREANCE')
+            .gte('created_at', startOfDay)
+            .order('created_at', { ascending: false })
+          if (auditReps && auditReps.length > 0) {
+            repList = auditReps.map((a: any) => {
+              const det = typeof a.details === 'string' ? JSON.parse(a.details) : (a.details || {})
+              return {
+                id: a.id,
+                created_at: a.created_at,
+                customer_name: det.customer_name || 'Client',
+                amount: Number(det.amount) || 0,
+                payment_method: det.payment_method || 'especes',
+                reference: det.reference || `RC-${a.id.slice(0, 6)}`
               }
             })
           }
@@ -344,25 +304,65 @@ export const CaissePage: React.FC = () => {
         }
       })
 
-      // Combiner avec les demandes de transfert de la session
-      const storedReqs = localStorage.getItem(`gestio_treasury_requests_${company.id}`)
+      // Charger les demandes de transfert directement depuis Supabase (treasury_transfers ou audit_logs)
       let transferMovements: CashMovement[] = []
-      if (storedReqs) {
-        try {
-          const reqs = JSON.parse(storedReqs)
-          transferMovements = reqs.map((r: any) => ({
+      try {
+        const { data: dbTransfers } = await supabase
+          .from('treasury_transfers')
+          .select('*')
+          .eq('company_id', company.id)
+          .gte('created_at', startOfDay)
+          .order('created_at', { ascending: false })
+        if (dbTransfers && dbTransfers.length > 0) {
+          setPendingRequests(dbTransfers)
+          transferMovements = dbTransfers.map((r: any) => ({
             id: r.id,
             created_at: r.created_at,
             user_name: r.requested_by,
             type: 'RETRAIT',
             payment_channel: r.type,
-            amount: r.amount,
+            amount: Number(r.amount) || 0,
             motif: `Demande transfert trésorerie : ${r.motif}`,
             reference: `TR-${r.id.slice(0, 6)}`,
             status: r.status === 'APPROVED' ? 'VALIDE' : r.status === 'REJECTED' ? 'REFUSE' : 'EN_ATTENTE'
           }))
-        } catch (e) {}
-      }
+        } else {
+          // Requête vers audit_logs pour les demandes
+          const { data: auditTransfers } = await supabase
+            .from('audit_logs')
+            .select('*')
+            .eq('company_id', company.id)
+            .eq('action', 'DEMANDE_TRANSFERT_TRESORERIE')
+            .gte('created_at', startOfDay)
+            .order('created_at', { ascending: false })
+          if (auditTransfers && auditTransfers.length > 0) {
+            const mapped = auditTransfers.map((a: any) => {
+              const det = typeof a.details === 'string' ? JSON.parse(a.details) : (a.details || {})
+              return {
+                id: a.id,
+                created_at: a.created_at,
+                requested_by: a.user_name || 'Caissier',
+                type: det.type || 'Espèces',
+                amount: Number(det.amount) || 0,
+                motif: det.motif || '',
+                status: det.status || 'EN_ATTENTE'
+              }
+            })
+            setPendingRequests(mapped)
+            transferMovements = mapped.map((r: any) => ({
+              id: r.id,
+              created_at: r.created_at,
+              user_name: r.requested_by,
+              type: 'RETRAIT',
+              payment_channel: r.type,
+              amount: r.amount,
+              motif: `Demande transfert trésorerie : ${r.motif}`,
+              reference: `TR-${r.id.slice(0, 6)}`,
+              status: r.status === 'APPROVED' ? 'VALIDE' : r.status === 'REJECTED' ? 'REFUSE' : 'EN_ATTENTE'
+            }))
+          }
+        }
+      } catch (e) {}
 
       setMovementsHistory(
         [...transferMovements, ...repaymentMovements, ...saleMovements].sort(
@@ -536,22 +536,6 @@ export const CaissePage: React.FC = () => {
     if ((company as any)?.closure_email_3) recipientEmails.push((company as any).closure_email_3.trim())
     if (recipientEmails.length === 0 && company?.email) recipientEmails.push(company.email.trim())
 
-    if (company?.id) {
-      try {
-        const rawLocal = localStorage.getItem(`gestio_closure_emails_${company.id}`)
-        if (rawLocal) {
-          const parsed = JSON.parse(rawLocal)
-          if (Array.isArray(parsed)) {
-            parsed.forEach((em: string) => {
-              if (em && em.trim() && !recipientEmails.includes(em.trim())) {
-                recipientEmails.push(em.trim())
-              }
-            })
-          }
-        }
-      } catch (e) {}
-    }
-
     const newClosure: CashClosure = {
       id: `cloture-${Date.now()}`,
       closed_at: closedAt,
@@ -569,9 +553,6 @@ export const CaissePage: React.FC = () => {
 
     const updatedClosures = [newClosure, ...closuresHistory]
     setClosuresHistory(updatedClosures)
-    if (company?.id) {
-      localStorage.setItem(`gestio_caisse_closures_${company.id}_${currentSectorSlug}`, JSON.stringify(updatedClosures))
-    }
 
     // Le montant laissé en caisse devient le fond initial du lendemain
     const nextDayFunds = Number(rolloverCash) || 0
@@ -646,7 +627,7 @@ export const CaissePage: React.FC = () => {
   }
 
   // ─── Action : Envoyer une Demande vers Trésorerie ───────────────────────────
-  const handleSendWithdrawalRequest = (req: { type: string; amount: number; reason: string }) => {
+  const handleSendWithdrawalRequest = async (req: { type: string; amount: number; reason: string }) => {
     const newReq = {
       id: `req-${Date.now()}`,
       created_at: new Date().toISOString(),
@@ -660,8 +641,30 @@ export const CaissePage: React.FC = () => {
 
     const updated = [newReq, ...pendingRequests]
     setPendingRequests(updated)
+
     if (company?.id) {
-      localStorage.setItem(`gestio_treasury_requests_${company.id}_${currentSectorSlug}`, JSON.stringify(updated))
+      try {
+        await supabase.from('treasury_transfers').insert({
+          company_id: company.id,
+          sector_slug: currentSectorSlug,
+          requested_by: user?.full_name || 'Caissier',
+          type: req.type,
+          amount: req.amount,
+          motif: req.reason,
+          status: 'EN_ATTENTE'
+        })
+      } catch (e) {
+        try {
+          await supabase.from('audit_logs').insert({
+            company_id: company.id,
+            user_id: user?.id,
+            user_name: user?.full_name,
+            action: 'DEMANDE_TRANSFERT_TRESORERIE',
+            entity_name: 'treasury',
+            details: JSON.stringify({ type: req.type, amount: req.amount, motif: req.reason, status: 'EN_ATTENTE', sector_slug: currentSectorSlug })
+          })
+        } catch (err) {}
+      }
     }
 
     toast.success(

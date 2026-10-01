@@ -152,12 +152,6 @@ export const ConfigPage: React.FC = () => {
 
       if (error) throw error
 
-      // Persistance locale des adresses emails de clôture
-      localStorage.setItem(
-        `gestio_closure_emails_${company.id}`,
-        JSON.stringify([form.closure_email_1, form.closure_email_2, form.closure_email_3].filter(Boolean))
-      )
-
       toast.success('Configuration sauvegardée avec succès')
       await refreshTenantContext()
     } catch (err: any) {
