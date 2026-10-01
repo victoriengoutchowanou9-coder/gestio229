@@ -82,11 +82,50 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
 
   if (!isAdmin && user) {
     const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
-    const userSector = (perm.sector_slug || perm.sector_id || user.sector_id || '').toLowerCase().replace(/^sec-/, '')
-    const targetClean = (targetSectorSlug || '').toLowerCase().replace(/^sec-/, '')
+    const userSector = (perm.sector_slug || perm.sector_id || user.sector_id || '').toLowerCase().replace(/^sec-/, '').trim()
+    const targetClean = (targetSectorSlug || '').toLowerCase().replace(/^sec-/, '').trim()
+
+    // 1. Si le secteur assigné de l'utilisateur n'est pas souscrit par l'entreprise : blocage immédiat
+    if (!userSector || !isSectorSubscribed(userSector, company)) {
+      return (
+        <div className="min-h-[75vh] flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl border border-red-200 dark:border-red-900/60 p-8 shadow-xl text-center">
+            <div className="w-16 h-16 rounded-2xl bg-red-100 dark:bg-red-950/80 text-red-600 dark:text-red-400 flex items-center justify-center mx-auto mb-5 shadow-sm">
+              <ShieldAlert className="w-8 h-8" />
+            </div>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300 mb-3">
+              Accès Interdit
+            </span>
+            <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
+              Secteur Non Souscrit
+            </h2>
+            <p className="text-slate-600 dark:text-slate-300 text-sm mt-3 leading-relaxed">
+              Secteur non souscrit, contactez l'administrateur.
+            </p>
+            <div className="mt-6">
+              <button
+                onClick={() => useAuthStore.getState().logout()}
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-md transition"
+              >
+                Se déconnecter
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // 2. Si l'utilisateur tente de naviguer vers un autre secteur que son secteur assigné : redirection directe
     if (userSector && targetClean && userSector !== targetClean) {
-      // Redirection immédiate vers son unique secteur assigné
-      return <Navigate to={`/app/${userSector}/tableau-bord`} replace />
+      let dest = 'tableau-bord'
+      if (user.role === 'caissier' || user.role === 'vendeur') {
+        dest = 'vente-pos'
+      } else if (user.role === 'magasinier') {
+        dest = 'stocks'
+      } else if (user.role === 'comptable') {
+        dest = 'syscohada'
+      }
+      return <Navigate to={`/app/${userSector}/${dest}`} replace />
     }
   }
 
@@ -121,20 +160,31 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
         </p>
 
         <div className="mt-6 flex flex-col gap-3">
-          <Link
-            to="/hub"
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-md transition"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Retourner au HUB GESTIO 229
-          </Link>
+          {isAdmin ? (
+            <>
+              <Link
+                to="/hub"
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-md transition"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Retourner au HUB GESTIO 229
+              </Link>
 
-          <Link
-            to="/dashboard/abonnement"
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold text-sm hover:bg-emerald-100 transition"
-          >
-            Souscrire à ce secteur
-          </Link>
+              <Link
+                to="/dashboard/abonnement"
+                className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 font-bold text-sm hover:bg-emerald-100 transition"
+              >
+                Souscrire à ce secteur
+              </Link>
+            </>
+          ) : (
+            <button
+              onClick={() => useAuthStore.getState().logout()}
+              className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm shadow-md transition"
+            >
+              Se déconnecter
+            </button>
+          )}
         </div>
       </div>
     </div>

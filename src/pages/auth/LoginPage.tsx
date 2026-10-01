@@ -27,6 +27,10 @@ const LoginPage: React.FC = () => {
   const [showPwd, setShowPwd] = useState(false)
   const [confirmedSuccess, setConfirmedSuccess] = useState(isConfirmed)
   const [rateLimitError, setRateLimitError] = useState<string | null>(null)
+  const errorParam = searchParams.get('error')
+  const [urlError, setUrlError] = useState<string | null>(
+    errorParam === 'sector_unsubscribed' ? "Secteur non souscrit, contactez l'administrateur." : null
+  )
 
   // Modal Mot de passe oublié
   const [showForgotModal, setShowForgotModal] = useState(false)
@@ -249,6 +253,7 @@ const LoginPage: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     clearError()
+    setUrlError(null)
     setRateLimitError(null)
 
     const limiterKey = `login:${identifier.trim().toLowerCase()}`
@@ -469,11 +474,11 @@ const LoginPage: React.FC = () => {
               </div>
             )}
 
-            {/* Message d'erreur ou blocage Rate Limit */}
-            {(rateLimitError || errorMessage) && (
+            {/* Message d'erreur, secteur non souscrit ou blocage Rate Limit */}
+            {(urlError || rateLimitError || errorMessage) && (
               <div className="flex items-start gap-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-2xl p-4 mb-6 animate-shake">
                 <AlertCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">{rateLimitError || errorMessage}</p>
+                <p className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">{urlError || rateLimitError || errorMessage}</p>
               </div>
             )}
 

@@ -606,6 +606,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           })
           .eq('id', deleteStep2.id)
           .eq('company_id', companyId);
+
+        // Désactivation automatique des collaborateurs internes liés à ce secteur/activité
+        const targetSlug = (deleteStep2.sectorSlug || '').toLowerCase().replace(/^sec-/, '').trim();
+        if (targetSlug) {
+          try {
+            await supabase
+              .from('user_profiles')
+              .update({
+                is_active: false,
+                updated_at: new Date().toISOString(),
+              })
+              .eq('company_id', companyId)
+              .neq('role', 'administrateur')
+              .or(`sector_id.eq.${targetSlug},permissions->>sector_slug.eq.${targetSlug},permissions->>activity_id.eq.${deleteStep2.id}`);
+          } catch (deactErr) {
+            console.error('[Hub] Erreur désactivation collaborateurs liés:', deactErr);
+          }
+        }
       }
       const updated = activities.map((a) =>
         a.id === deleteStep2.id

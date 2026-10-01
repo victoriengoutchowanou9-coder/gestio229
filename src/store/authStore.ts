@@ -8,6 +8,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
 import SectorLoader, { TenantContext } from '../lib/SectorLoader'
+import { isSectorSubscribed } from '../lib/sectorClient'
 import type { UserProfile, Company } from '../types/tenant'
 
 // =============================================================================
@@ -375,28 +376,56 @@ export const useAuthStore = create<AuthState>()(
             .update({ last_login: new Date().toISOString() })
             .eq('id', profile.id)
 
-          // Déterminer et verrouiller le secteur / l'activité assignée
-          try {
-            const assignedActivityId = (profile.permissions as any)?.sector_id || profile.sector_id
-            let assignedSlug = ctx.activeSectorSlug || 'boutique'
+          // 1. Déterminer et valider le secteur assigné à l'utilisateur interne
+          const perm = (typeof profile.permissions === 'object' && profile.permissions) ? profile.permissions : {}
+          let assignedSector = (perm.sector_slug || perm.sector_id || profile.sector_id || '').toLowerCase().replace(/^sec-/, '').trim()
 
-            if (assignedActivityId) {
+          if (!assignedSector && perm.activity_id) {
+            try {
               const { data: act } = await supabase
                 .from('company_activities')
                 .select('id, activity_name, sector_slug, sector_code')
-                .eq('id', assignedActivityId)
+                .eq('id', perm.activity_id)
                 .maybeSingle()
 
               if (act) {
-                assignedSlug = (act.sector_slug || act.sector_code || assignedSlug).toLowerCase().replace(/^sec-/, '')
+                assignedSector = (act.sector_slug || act.sector_code || '').toLowerCase().replace(/^sec-/, '').trim()
                 localStorage.setItem('gestio229_active_activity_id', act.id)
                 localStorage.setItem('gestio229_active_activity_name', act.activity_name)
-              } else {
-                localStorage.setItem('gestio229_active_activity_id', assignedActivityId)
               }
-            }
-            localStorage.setItem('gestio229_active_sector', assignedSlug)
-          } catch (e) {}
+            } catch (e) {}
+          }
+
+          // 2. Vérifier obligatoirement que ce secteur existe dans les souscriptions réelles de l'entreprise
+          const isSubscribed = Boolean(assignedSector && isSectorSubscribed(assignedSector, ctx.company))
+          if (!isSubscribed) {
+            const unsubMsg = "Secteur non souscrit, contactez l'administrateur."
+            await supabase.auth.signOut().catch(() => {})
+            set({
+              status: 'unauthenticated',
+              user: null,
+              company: null,
+              tenantCtx: null,
+              errorMessage: unsubMsg,
+            })
+            return { success: false, error: unsubMsg }
+          }
+
+          // 3. Verrouiller le sous-logiciel dans le client
+          localStorage.setItem('gestio229_active_sector', assignedSector)
+          if (perm.activity_id) localStorage.setItem('gestio229_active_activity_id', perm.activity_id)
+          if (perm.activity_name) localStorage.setItem('gestio229_active_activity_name', perm.activity_name)
+
+          // 4. Redirection directe vers /app/[sector_slug]/[module] (Accès au HUB formellement interdit)
+          let destModule = 'tableau-bord'
+          if (profile.role === 'caissier' || profile.role === 'vendeur') {
+            destModule = 'vente-pos'
+          } else if (profile.role === 'magasinier') {
+            destModule = 'stocks'
+          } else if (profile.role === 'comptable') {
+            destModule = 'syscohada'
+          }
+          const targetRoute = `/app/${assignedSector}/${destModule}`
 
           set({
             status: 'authenticated',
@@ -406,7 +435,7 @@ export const useAuthStore = create<AuthState>()(
             errorMessage: null,
           })
 
-          return { success: true, redirectTo: ctx.routingDecision.redirectTo }
+          return { success: true, redirectTo: targetRoute }
         } catch (err: any) {
           const msg = err.message ?? 'Erreur lors de la connexion'
           set({ status: 'error', errorMessage: msg })

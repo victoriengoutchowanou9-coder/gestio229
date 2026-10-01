@@ -4,12 +4,15 @@
 // =============================================================================
 
 import React, { useState, useEffect, useMemo } from 'react'
+import { useParams, useLocation } from 'react-router-dom'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
+import { isSectorSubscribed } from '../../../lib/sectorClient'
+import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
-  BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check
+  BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock
 } from 'lucide-react'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
@@ -198,7 +201,10 @@ const UtilisateursPage: React.FC = () => {
   const [form, setForm] = useState<NewUserForm>(emptyForm)
 
   // ── Isolation stricte par activité ──
-  const currentSectorSlug = (typeof window !== 'undefined' ? (localStorage.getItem('gestio229_active_sector') || 'boutique') : 'boutique').toLowerCase().replace(/^sec-/, '')
+  const params = useParams<{ sectorSlug?: string }>()
+  const location = useLocation()
+  const isSubSoftwareRoute = Boolean(params.sectorSlug || location.pathname.startsWith('/app/'))
+  const currentSectorSlug = (params.sectorSlug || (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_sector') : '') || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
   const currentActivityId = typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_id') : null
   const currentActivityName = typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null
 
@@ -394,7 +400,24 @@ const UtilisateursPage: React.FC = () => {
   const loadSectors = async () => {
     if (!company?.id) return
     try {
-      // 1. Priorité aux activités réelles configurées pour cette entreprise dans Supabase
+      // 1. Si l'admin est DANS un sous-logiciel (ex: /app/quincaillerie)
+      // La liste déroulante doit afficher UNIQUEMENT le secteur courant et être verrouillée.
+      if (isSubSoftwareRoute && currentSectorSlug) {
+        const catMeta = ALL_SECTORS_CATALOG.find((s) => s.slug === currentSectorSlug)
+        const currentSectorEntry = {
+          id: currentSectorSlug,
+          sector_name: catMeta?.name || currentSectorSlug.toUpperCase(),
+          sector_slug: currentSectorSlug,
+        }
+        setSectors([currentSectorEntry])
+        setForm((prev) => ({ ...prev, sector_id: currentSectorSlug }))
+        return
+      }
+
+      // 2. Si l'admin est sur le HUB : afficher UNIQUEMENT les secteurs réellement souscrits par son entreprise
+      const subscribedList: { id: string; sector_name: string; sector_slug: string }[] = []
+
+      // A. Activités réelles configurées pour cette entreprise dans Supabase (company_activities)
       const { data: activities, error: actErr } = await supabase
         .from('company_activities')
         .select('id, activity_name, sector_slug, sector_code')
@@ -402,44 +425,59 @@ const UtilisateursPage: React.FC = () => {
         .eq('status', 'ACTIVE')
 
       if (!actErr && activities && activities.length > 0) {
-        setSectors(
-          activities.map((a: any) => ({
-            id: a.id,
-            sector_name: a.activity_name,
-            sector_slug: (a.sector_slug || a.sector_code || '').toLowerCase().replace(/^sec-/, ''),
-          }))
-        )
-        return
+        activities.forEach((a: any) => {
+          const cleanSlug = (a.sector_slug || a.sector_code || '').toLowerCase().replace(/^sec-/, '').trim()
+          if (cleanSlug && isSectorSubscribed(cleanSlug, company)) {
+            const catMeta = ALL_SECTORS_CATALOG.find((c) => c.slug === cleanSlug)
+            subscribedList.push({
+              id: a.id,
+              sector_name: a.activity_name || catMeta?.name || cleanSlug.toUpperCase(),
+              sector_slug: cleanSlug,
+            })
+          }
+        })
       }
 
-      // 2. Fallback company_sectors
-      const { data, error: secErr } = await supabase
+      // B. company_sectors
+      const { data: secData, error: secErr } = await supabase
         .from('company_sectors')
         .select('id, sector_name, sector_slug')
         .eq('company_id', company.id)
 
-      if (!secErr && data && data.length > 0) {
-        setSectors(data)
-        return
+      if (!secErr && secData && secData.length > 0) {
+        secData.forEach((s: any) => {
+          const cleanSlug = (s.sector_slug || '').toLowerCase().replace(/^sec-/, '').trim()
+          if (cleanSlug && !subscribedList.some((x) => x.sector_slug === cleanSlug) && isSectorSubscribed(cleanSlug, company)) {
+            subscribedList.push({
+              id: s.id,
+              sector_name: s.sector_name,
+              sector_slug: cleanSlug,
+            })
+          }
+        })
       }
 
-      // 3. Fallback selected_sectors de la société
-      const rawList: string[] = []
-      if (Array.isArray(company.selected_sectors)) rawList.push(...company.selected_sectors)
-      else if (Array.isArray(company.sectors)) rawList.push(...company.sectors)
-      else if (company.active_sector) rawList.push(company.active_sector)
+      // C. selected_sectors / sectors de l'entreprise
+      const rawCompanySectors: string[] = []
+      if (Array.isArray(company.selected_sectors)) rawCompanySectors.push(...company.selected_sectors)
+      if (Array.isArray(company.sectors)) rawCompanySectors.push(...company.sectors)
+      if (company.active_sector) rawCompanySectors.push(company.active_sector)
 
-      if (rawList.length > 0) {
-        setSectors(
-          rawList.map((slug) => {
-            const cleanSlug = slug.replace(/^sec-/, '').toLowerCase()
-            return {
-              id: cleanSlug,
-              sector_name: cleanSlug.replace(/_/g, ' ').toUpperCase(),
-              sector_slug: cleanSlug,
-            }
+      rawCompanySectors.forEach((rawSlug) => {
+        const cleanSlug = String(rawSlug).toLowerCase().replace(/^sec-/, '').trim()
+        if (cleanSlug && !subscribedList.some((x) => x.sector_slug === cleanSlug) && isSectorSubscribed(cleanSlug, company)) {
+          const catMeta = ALL_SECTORS_CATALOG.find((c) => c.slug === cleanSlug)
+          subscribedList.push({
+            id: cleanSlug,
+            sector_name: catMeta?.name || cleanSlug.toUpperCase(),
+            sector_slug: cleanSlug,
           })
-        )
+        }
+      })
+
+      setSectors(subscribedList)
+      if (subscribedList.length > 0 && !form.sector_id) {
+        setForm((prev) => ({ ...prev, sector_id: subscribedList[0].sector_slug }))
       }
     } catch (e) {
       console.error('[UtilisateursPage] Erreur chargement secteurs:', e)
@@ -502,7 +540,25 @@ const UtilisateursPage: React.FC = () => {
         authUserId = authData.user.id
       }
 
-      const assignedSectorSlug = (form.sector_id || currentSectorSlug || 'boutique').toLowerCase().replace(/^sec-/, '')
+      const assignedSectorSlug = (isSubSoftwareRoute ? currentSectorSlug : form.sector_id)
+        .toLowerCase()
+        .replace(/^sec-/, '')
+        .trim()
+
+      if (!assignedSectorSlug) {
+        throw new Error("Veuillez sélectionner un secteur d'affectation.")
+      }
+
+      // 1. Validation code obligatoire : rejet de tout secteur différent du contexte admin si dans un sous-logiciel
+      if (isSubSoftwareRoute && assignedSectorSlug !== currentSectorSlug) {
+        throw new Error(`Création refusée : vous devez créer l'utilisateur exclusivement dans le secteur courant (${currentSectorSlug}).`)
+      }
+
+      // 2. Validation code obligatoire : rejet de tout secteur non souscrit par l'entreprise
+      if (!isSectorSubscribed(assignedSectorSlug, company)) {
+        throw new Error(`Création refusée : le secteur "${assignedSectorSlug}" n'a pas été souscrit par votre entreprise.`)
+      }
+
       const permissionsPayload = {
         ...(form.permissions || {}),
         sector_id: assignedSectorSlug,
@@ -522,6 +578,7 @@ const UtilisateursPage: React.FC = () => {
         email: authUserId ? internalEmail : `${cleanIdent}@${company.id}.internal`,
         phone: form.phone.trim(),
         role: form.role,
+        sector_id: assignedSectorSlug,
         is_active: true,
         permissions: permissionsPayload,
       })
@@ -996,7 +1053,16 @@ const UtilisateursPage: React.FC = () => {
         <div className="space-y-6">
           <div className="flex justify-end">
             <button
-              onClick={() => { setShowCreateForm(true); setError(''); setSuccess('') }}
+              onClick={() => {
+                setShowCreateForm(true)
+                setError('')
+                setSuccess('')
+                if (isSubSoftwareRoute && currentSectorSlug) {
+                  setForm((p) => ({ ...p, sector_id: currentSectorSlug }))
+                } else if (sectors.length > 0 && !form.sector_id) {
+                  setForm((p) => ({ ...p, sector_id: sectors[0].sector_slug || sectors[0].id }))
+                }
+              }}
               className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition-all text-xs"
             >
               <UserPlus className="w-4 h-4" /> Nouvel Utilisateur
@@ -1097,19 +1163,32 @@ const UtilisateursPage: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                      Secteur d'Affectation
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5 flex items-center justify-between">
+                      <span>Secteur d'Affectation *</span>
+                      {isSubSoftwareRoute && (
+                        <span className="text-[10px] font-semibold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                          Verrouillé au sous-logiciel actif
+                        </span>
+                      )}
                     </label>
-                    <select
-                      value={form.sector_id}
-                      onChange={(e) => setForm((p) => ({ ...p, sector_id: e.target.value }))}
-                      className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                    >
-                      <option value="">Tous les secteurs</option>
-                      {sectors.map((s) => (
-                        <option key={s.id} value={s.id}>{s.sector_name}</option>
-                      ))}
-                    </select>
+                    {isSubSoftwareRoute ? (
+                      <div className="w-full px-4 py-2.5 bg-slate-100 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 flex items-center justify-between cursor-not-allowed select-none">
+                        <span>{sectors[0]?.sector_name || (ALL_SECTORS_CATALOG.find((s) => s.slug === currentSectorSlug)?.name) || currentSectorSlug.toUpperCase()}</span>
+                        <Lock className="w-4 h-4 text-slate-400" />
+                      </div>
+                    ) : (
+                      <select
+                        required
+                        value={form.sector_id}
+                        onChange={(e) => setForm((p) => ({ ...p, sector_id: e.target.value }))}
+                        className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      >
+                        <option value="">-- Sélectionner un secteur souscrit --</option>
+                        {sectors.map((s) => (
+                          <option key={s.id} value={s.sector_slug || s.id}>{s.sector_name}</option>
+                        ))}
+                      </select>
+                    )}
                   </div>
                 </div>
 

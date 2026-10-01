@@ -14,9 +14,11 @@ import {
   NavItem,
   GROUP_ORDER,
   GROUP_LABELS,
+  ALL_SECTORS_CATALOG,
 } from '../core/modules/moduleRegistry'
 import type { Company, Sector, UserProfile, RoutingDecision, RoutingType } from '../types/tenant'
 import { checkModuleAccess } from '../core/subscription/subscriptionEngine'
+import { isSectorSubscribed } from './sectorClient'
 
 // =============================================================================
 // TYPES INTERNES
@@ -307,29 +309,54 @@ export const SectorLoader = {
 
       // B. Si aucun secteur trouvé, utiliser les champs de la table companies
       if (rawSectors.length === 0) {
-        const targetSlugs: string[] = []
+        const rawTargetSlugs: string[] = []
         if (Array.isArray(company.selected_sectors) && company.selected_sectors.length > 0) {
-          targetSlugs.push(...company.selected_sectors)
+          rawTargetSlugs.push(...company.selected_sectors)
         } else if (Array.isArray(company.sectors) && company.sectors.length > 0) {
-          targetSlugs.push(...company.sectors)
+          rawTargetSlugs.push(...company.sectors)
         } else if (company.active_sector) {
-          targetSlugs.push(company.active_sector)
+          rawTargetSlugs.push(company.active_sector)
         }
 
-        if (targetSlugs.length > 0) {
+        // Nettoyage strict des slugs (suppression du préfixe 'sec-')
+        const normalizedSlugs = Array.from(
+          new Set(
+            rawTargetSlugs
+              .map((s) => String(s).replace(/^sec-/, '').toLowerCase().trim())
+              .filter(Boolean)
+          )
+        )
+
+        if (normalizedSlugs.length > 0) {
           const { data: matchedSectors } = await supabase
             .from('sectors')
             .select('*')
-            .in('slug', targetSlugs)
+            .in('slug', normalizedSlugs)
 
           if (matchedSectors && matchedSectors.length > 0) {
             rawSectors = matchedSectors as Sector[]
           }
+
+          // Pour tout slug souscrit absent de la table 'sectors', le synthétiser depuis le catalogue officiel
+          for (const sSlug of normalizedSlugs) {
+            if (!rawSectors.some((r) => r.slug === sSlug)) {
+              const catMeta = ALL_SECTORS_CATALOG.find((c) => c.slug === sSlug)
+              rawSectors.push({
+                id: `synth-${sSlug}`,
+                name: catMeta?.name || sSlug.charAt(0).toUpperCase() + sSlug.slice(1),
+                slug: sSlug,
+                description: catMeta?.description || '',
+                is_active: true,
+                modules: ['ventes', 'caisse', 'stock', 'clients', 'depenses', 'reporting'],
+              } as any)
+            }
+          }
         }
       }
 
-      // C. Fallback : secteurs par défaut de la base
-      if (rawSectors.length === 0) {
+      // C. Fallback : UNIQUEMENT pour administrateur si l'entreprise n'a absolument aucun secteur configuré
+      const isUserAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
+      if (rawSectors.length === 0 && isUserAdmin) {
         const { data: defaultSectors } = await supabase
           .from('sectors')
           .select('*')
@@ -381,7 +408,8 @@ export const SectorLoader = {
    * Règle absolue GESTIO 229 :
    * - Compte suspendu → /suspended
    * - Administrateur / Gérant multi-secteurs → /hub
-   * - Utilisateur interne orienté caisse/vente → /dashboard/vente-pos
+   * - Utilisateur interne non-admin → Redirection STRICTE vers son /app/[sector_slug]/[module]
+   *   (Accès au HUB formellement interdit)
    */
   resolveRoute(company: Company, sectors: Sector[], user?: UserProfile): RoutingDecision {
     // Cas : compte suspendu
@@ -405,44 +433,35 @@ export const SectorLoader = {
       }
     }
 
-    // Déterminer le slug du secteur affecté si présent
-    const assignedActivityOrSector = (user as any)?.permissions?.sector_id || (user as any)?.sector_id
-    let assignedSlug = ''
-    if (assignedActivityOrSector) {
-      const match = sectors.find(
-        (s) => s.id === assignedActivityOrSector || s.slug === assignedActivityOrSector
-      )
-      if (match) assignedSlug = match.slug
-    }
-    if (!assignedSlug && sectors.length > 0) {
-      assignedSlug = sectors[0].slug
+    // ── Cas Utilisateurs Internes (rôle != admin) : Redirection stricte par sous-logiciel ──
+    const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
+    const userSector = (perm.sector_slug || perm.sector_id || user.sector_id || '').toLowerCase().replace(/^sec-/, '')
+
+    // Vérifier si le secteur de l'utilisateur interne est bien souscrit par l'entreprise
+    const isSubscribed = Boolean(userSector && isSectorSubscribed(userSector, company))
+    if (!isSubscribed) {
+      return {
+        type: 'UNAUTHORIZED' as RoutingType,
+        redirectTo: '/login?error=sector_unsubscribed',
+        activeSectors: [],
+      }
     }
 
-    const routePrefix = assignedSlug ? `/app/${assignedSlug}` : '/dashboard'
-
-    // Cas Utilisateurs Internes selon rôle :
+    // Déterminer le module de destination selon le métier assigné
+    const routePrefix = `/app/${userSector}`
+    let destModule = 'tableau-bord'
     if (user.role === 'caissier' || user.role === 'vendeur') {
-      return {
-        type: 'SOLO' as RoutingType,
-        redirectTo: `${routePrefix}/vente-pos`,
-        activeSectors: sectors,
-      }
+      destModule = 'vente-pos'
+    } else if (user.role === 'magasinier') {
+      destModule = 'stocks'
+    } else if (user.role === 'comptable') {
+      destModule = 'syscohada'
     }
 
-    if (user.role === 'magasinier') {
-      return {
-        type: 'SOLO' as RoutingType,
-        redirectTo: `${routePrefix}/stocks`,
-        activeSectors: sectors,
-      }
-    }
-
-    if (user.role === 'comptable') {
-      return {
-        type: 'SOLO' as RoutingType,
-        redirectTo: `${routePrefix}/syscohada`,
-        activeSectors: sectors,
-      }
+    return {
+      type: 'SOLO' as RoutingType,
+      redirectTo: `${routePrefix}/${destModule}`,
+      activeSectors: sectors.filter((s) => s.slug === userSector),
     }
 
     // Par défaut pour les autres profils internes autorisés (gérant, responsable, etc.)
