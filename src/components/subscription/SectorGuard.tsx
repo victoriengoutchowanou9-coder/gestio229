@@ -6,7 +6,7 @@
 // =============================================================================
 
 import React from 'react'
-import { Link, useParams, useLocation } from 'react-router-dom'
+import { Link, useParams, useLocation, Navigate } from 'react-router-dom'
 import { Lock, ArrowLeft, ShieldAlert, Sparkles, Clock, AlertTriangle } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { getActiveSectorSlug, isSectorSubscribed } from '../../lib/sectorClient'
@@ -75,8 +75,21 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
     )
   }
 
-  // Le secteur ciblé vient soit de l'URL (/app/:sectorSlug/...) soit de l'état actif
+  // Vérification de l'assignation sectorielle pour les utilisateurs internes (Non-admin)
+  const user = useAuthStore((s) => s.user)
+  const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
   const targetSectorSlug = params.sectorSlug || getActiveSectorSlug()
+
+  if (!isAdmin && user) {
+    const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
+    const userSector = (perm.sector_slug || perm.sector_id || user.sector_id || '').toLowerCase().replace(/^sec-/, '')
+    const targetClean = (targetSectorSlug || '').toLowerCase().replace(/^sec-/, '')
+    if (userSector && targetClean && userSector !== targetClean) {
+      // Redirection immédiate vers son unique secteur assigné
+      return <Navigate to={`/app/${userSector}/tableau-bord`} replace />
+    }
+  }
+
   const allowed = isSectorSubscribed(targetSectorSlug, company)
 
   if (allowed) {

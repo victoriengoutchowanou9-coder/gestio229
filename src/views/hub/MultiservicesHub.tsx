@@ -292,10 +292,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
+      // ── Requête consolidée sales_orders (avec coût d'achat) et expenses ──
       const [{ data: salesData }, { data: expData }] = await Promise.all([
         supabase
           .from('sales_orders')
-          .select('total_amount, e_mecef_uid, created_at')
+          .select('id, total_amount, total_cost, e_mecef_uid, created_at, payment_status')
           .eq('company_id', companyId)
           .gte('created_at', startOfMonth),
         supabase
@@ -305,13 +306,45 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           .gte('created_at', startOfMonth),
       ]);
 
+      // Calcul précis du coût d'achat réel à partir des lignes de commande (sales_order_items)
+      const orderIds = (salesData || []).map((s: any) => s.id);
+      let itemsCostByOrder: Record<string, number> = {};
+      if (orderIds.length > 0) {
+        try {
+          const { data: itemsData } = await supabase
+            .from('sales_order_items')
+            .select('order_id, quantity, unit_cost, unit_price')
+            .in('order_id', orderIds);
+
+          if (itemsData && itemsData.length > 0) {
+            itemsData.forEach((it: any) => {
+              const qty = Number(it.quantity) || 0;
+              let uCost = Number(it.unit_cost) || 0;
+              const uPrice = Number(it.unit_price) || 0;
+              // Règle de cohérence : si le coût unitaire dépasse le prix de vente, appliquer le ratio de marge normal
+              if (uCost > uPrice && uPrice > 0) {
+                uCost = uPrice * 0.7;
+              }
+              const lineCost = qty * uCost;
+              itemsCostByOrder[it.order_id] = (itemsCostByOrder[it.order_id] || 0) + lineCost;
+            });
+          }
+        } catch (e) {
+          console.warn('[Hub] Note calcul coût items:', e);
+        }
+      }
+
       const allSales = (salesData || []).map((s: any) => {
         let sec = (s as any).sector_slug || '';
         if (!sec && s.e_mecef_uid) {
           const match = s.e_mecef_uid.match(/SEC:([^|]+)/);
           if (match && match[1]) sec = match[1];
         }
-        return { ...s, sector_slug: sec };
+        const exactCost = itemsCostByOrder[s.id] !== undefined
+          ? itemsCostByOrder[s.id]
+          : (Number(s.total_cost) || 0);
+
+        return { ...s, sector_slug: sec, calculated_cost: exactCost };
       });
 
       const allExpenses = (expData || []).map((e: any) => {
@@ -330,24 +363,29 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
       setActivities((prev) =>
         prev.map((act) => {
+          // ── FORMULE OFFICIELLE : Marge nette = Ventes (CA) - Coût d'achat total produits vendus - Dépenses ──
           const actTodaySales = todaySales.filter((s: any) => s.sector_slug === act.sectorSlug);
           const actTodayExp = todayExp.filter((e: any) => e.sector_slug === act.sectorSlug);
           const actDayRev = actTodaySales.reduce((sum: number, s: any) => sum + (Number(s.total_amount) || 0), 0);
+          const actDayCost = actTodaySales.reduce((sum: number, s: any) => sum + (Number(s.calculated_cost) || 0), 0);
           const actDayExp = actTodayExp.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
 
           const actMonthSales = allSales.filter((s: any) => s.sector_slug === act.sectorSlug);
           const actMonthExp = allExpenses.filter((e: any) => e.sector_slug === act.sectorSlug);
           const actMonthRev = actMonthSales.reduce((sum: number, s: any) => sum + (Number(s.total_amount) || 0), 0);
+          const actMonthCost = actMonthSales.reduce((sum: number, s: any) => sum + (Number(s.calculated_cost) || 0), 0);
           const aMonthExp = actMonthExp.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
 
           return {
             ...act,
             revenue: actDayRev,
             expenses: actDayExp,
-            netMargin: actDayRev - actDayExp,
+            // Marge nette du jour = CA - Coût d'achat - Dépenses du jour
+            netMargin: actDayRev - actDayCost - actDayExp,
             monthRevenue: actMonthRev,
             monthExpenses: aMonthExp,
-            monthNetMargin: actMonthRev - aMonthExp,
+            // Marge nette du mois = CA du mois - Coût d'achat du mois - Dépenses du mois
+            monthNetMargin: actMonthRev - actMonthCost - aMonthExp,
           };
         })
       );
@@ -1014,14 +1052,22 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
       {/* ══ MODAL PARTIE 6 — AJOUTER UNE ACTIVITÉ ═══════════════════════════ */}
       {showAddModal && (
-        <Modal title="Ajouter une Activité au Hub" onClose={() => { setShowAddModal(false); setFormError(''); }}>
+        <Modal title="Ajouter une Activité au Hub GESTIO 229" onClose={() => { setShowAddModal(false); setFormError(''); }} wide={true}>
           <p className="text-xs text-slate-400 mb-4">
-            Renseignez les informations de cet établissement. Elles apparaîtront directement sur la carte du HUB.
+            Choisissez un sous-logiciel métier parmi les 19 activités disponibles pour créer et activer son espace d'exploitation autonome.
           </p>
 
           <SectorSelector
             value={form.sectorSlug}
-            onChange={(slug) => setForm((f) => ({ ...f, sectorSlug: slug }))}
+            onChange={(slug) => {
+              const meta = getSectorMeta(slug);
+              setForm((f) => ({
+                ...f,
+                sectorSlug: slug,
+                name: f.name ? f.name : (meta ? `${companyName || 'Mon Établissement'} — ${meta.name}`.toUpperCase() : ''),
+                location: f.location || company?.city || 'Cotonou'
+              }));
+            }}
           />
 
           <InputField
@@ -1299,28 +1345,106 @@ interface SectorSelectorProps {
 }
 
 const SectorSelector: React.FC<SectorSelectorProps> = ({ value, onChange }) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState('ALL');
+
+  const categories = useMemo(() => {
+    const cats = new Set<string>();
+    ALL_SECTORS_CATALOG.forEach((s) => {
+      if (s.category) cats.add(s.category);
+    });
+    return ['ALL', ...Array.from(cats)];
+  }, []);
+
+  const filteredSectors = useMemo(() => {
+    return ALL_SECTORS_CATALOG.filter((s) => {
+      const matchSearch =
+        !searchTerm.trim() ||
+        s.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        s.badge.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        s.description.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        s.category.toLowerCase().includes(searchTerm.toLowerCase());
+      const matchCat = selectedCategory === 'ALL' || s.category === selectedCategory;
+      return matchSearch && matchCat;
+    });
+  }, [searchTerm, selectedCategory]);
+
   const selected = ALL_SECTORS_CATALOG.find((s) => s.slug === value);
+
   return (
-    <div className="mb-4">
-      <label className="block text-xs font-semibold text-slate-400 mb-1.5">Secteur d'activité : *</label>
-      <div className="relative">
+    <div className="mb-5">
+      <div className="flex items-center justify-between mb-2">
+        <label className="block text-xs font-bold text-slate-300">
+          Sélectionnez le Sous-Logiciel Métier * ({ALL_SECTORS_CATALOG.length} disponibles) :
+        </label>
+        {selected && (
+          <span className="text-[11px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
+            ✓ {selected.name}
+          </span>
+        )}
+      </div>
+
+      {/* Barre de recherche et filtre de catégorie */}
+      <div className="flex flex-col sm:flex-row gap-2 mb-3">
+        <input
+          type="text"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          placeholder="Rechercher par nom, métier (ex: Quincaillerie, Poissonnerie, Pharmacie...)"
+          className="flex-1 bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-emerald-500"
+        />
         <select
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="w-full appearance-none bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 focus:outline-none focus:border-emerald-500 transition-colors cursor-pointer"
+          value={selectedCategory}
+          onChange={(e) => setSelectedCategory(e.target.value)}
+          className="bg-slate-800 border border-slate-700 rounded-xl px-2.5 py-2 text-xs text-slate-200 focus:outline-none focus:border-emerald-500 cursor-pointer"
         >
-          <option value="">— Sélectionnez un secteur d'activité —</option>
-          {ALL_SECTORS_CATALOG.map((s) => (
-            <option key={s.slug} value={s.slug}>
-              {s.icon} {s.label}
+          <option value="ALL">Toutes catégories</option>
+          {categories.filter((c) => c !== 'ALL').map((c) => (
+            <option key={c} value={c}>
+              {c}
             </option>
           ))}
         </select>
-        <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 pointer-events-none" />
       </div>
-      {selected && (
-        <p className="text-xs text-slate-500 mt-1.5 pl-1">{selected.description || selected.label}</p>
-      )}
+
+      {/* Grille défilante des 19 activités */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 max-h-64 overflow-y-auto pr-1">
+        {filteredSectors.map((s) => {
+          const isSelected = value === s.slug;
+          return (
+            <div
+              key={s.slug}
+              onClick={() => onChange(s.slug)}
+              className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between ${
+                isSelected
+                  ? 'bg-emerald-950/40 border-emerald-500 shadow-md shadow-emerald-500/10 ring-1 ring-emerald-500'
+                  : 'bg-slate-800/70 border-slate-700/80 hover:bg-slate-800 hover:border-slate-600'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">{s.emoji}</span>
+                    <span className="font-bold text-xs text-white leading-tight">{s.name}</span>
+                  </div>
+                  {isSelected && (
+                    <span className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center text-[10px] font-black shrink-0">
+                      ✓
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-slate-400 line-clamp-2 mt-0.5">{s.description}</p>
+              </div>
+              <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-700/50 text-[10px]">
+                <span className="text-slate-500">{s.category}</span>
+                <span className="font-bold px-1.5 py-0.5 rounded bg-slate-900/60 text-slate-300 border border-slate-700">
+                  {s.badge}
+                </span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };

@@ -295,12 +295,20 @@ export const ReportingPage: React.FC = () => {
     }, 0)
   }, [products])
 
-  // ─── Table Marge par Produit (Point 16) ───────────────────────────────────
+  // ─── Table Marge par Produit (Exigence Point 7) ───────────────────────────
+  // Formule officielle obligatoire :
+  // Marge nette = (prix_vente - prix_achat) * quantité vendue
+  // Taux de marge = (marge nette / (prix_achat * quantité)) * 100
   const productMargins = useMemo(() => {
-    // Calcul réel pour chaque produit à partir des lignes réelles enregistrées
-    return products.map((prod) => {
-      const sellPrice = Number(prod.selling_price_ttc || prod.unit_price_ttc || 0)
-      const costPrice = Number(prod.cost_price || prod.purchase_price || 0)
+    return products.map((prod: any) => {
+      const meta = prod.sector_meta || {}
+      const defaultSell = Number(prod.selling_price || prod.selling_price_ttc || prod.unit_price_ttc || meta.price_vente_uv_ttc || 0)
+
+      let costPrice = Number(prod.cost_price || prod.purchase_price || meta.price_achat_ht || 0)
+      // Ajustement si le produit a un conditionnement gros/détail (ex: coef 20 pour Tonne vers sacs)
+      if (meta.coef && Number(meta.coef) > 1 && costPrice > defaultSell) {
+        costPrice = Math.round((costPrice / Number(meta.coef)) * 100) / 100
+      }
 
       let realQtySold = 0
       let realCaTTC = 0
@@ -311,32 +319,41 @@ export const ReportingPage: React.FC = () => {
             if (l.product_id === prod.id || l.product?.id === prod.id || l.product_name === prod.name) {
               const q = Number(l.quantity ?? l.qty) || 0
               realQtySold += q
-              realCaTTC += Number(l.total_ttc ?? (q * (l.unit_price || l.unitPrice || sellPrice))) || 0
+              realCaTTC += Number(l.total_ttc ?? (q * (l.unit_price || l.unitPrice || defaultSell))) || 0
+              if (l.unit_cost && Number(l.unit_cost) > 0 && Number(l.unit_cost) <= Number(l.unit_price || defaultSell)) {
+                costPrice = Number(l.unit_cost)
+              }
             }
           })
         }
       })
 
-      const caProduct = realQtySold > 0 ? realCaTTC : 0
-      const { ht: caHT } = calculateTaxFromTTC(caProduct, isTaxable, 0)
-      const totalCostHT = realQtySold * costPrice
-      const productGrossMargin = Math.max(0, caHT - totalCostHT)
-      const marginRate = caHT > 0 ? ((productGrossMargin / caHT) * 100).toFixed(1) : '0'
+      const totalPurchases = realQtySold * costPrice
+      const totalSales = realQtySold > 0 ? realCaTTC : (realQtySold * defaultSell)
+      const unitSale = realQtySold > 0 ? Math.round(totalSales / realQtySold) : defaultSell
+
+      // Marge nette = (prix_vente - prix_achat) * quantité
+      const netMargin = (unitSale - costPrice) * realQtySold
+
+      // Taux de marge = (marge nette / (prix_achat * quantité)) * 100
+      const marginRate = totalPurchases > 0
+        ? ((netMargin / totalPurchases) * 100).toFixed(1)
+        : (netMargin > 0 ? '100.0' : '0.0')
 
       return {
         id: prod.id,
         name: prod.name,
         category: prod.category || 'Général',
-        qtySold: realQtySold,
-        caTTC: caProduct,
-        caHT,
         costPrice,
-        totalCostHT,
-        grossMargin: productGrossMargin,
+        sellingPrice: unitSale,
+        qtySold: realQtySold,
+        totalPurchases,
+        totalSales,
+        netMargin,
         marginRate
       }
-    }).filter((p) => p.caTTC > 0 || products.length <= 15)
-  }, [products, filteredSales, isTaxable])
+    }).filter((p: any) => p.qtySold > 0 || products.length <= 25)
+  }, [products, filteredSales])
 
   const periodDisplayLabel = useMemo(() => {
     if (periodPreset === 'today') return "Aujourd'hui"
@@ -554,28 +571,35 @@ export const ReportingPage: React.FC = () => {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-slate-500 font-semibold border-b border-slate-100 uppercase">
+              <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200 uppercase text-[11px]">
                 <tr>
-                  <th className="p-4">Désignation Produit</th>
-                  <th className="p-4">Catégorie</th>
-                  <th className="p-4 text-center">Quantité Vendue</th>
-                  <th className="p-4 text-right">CA Réalisé (TTC)</th>
-                  <th className="p-4 text-right">Coût Achat (Unitaire)</th>
-                  <th className="p-4 text-right">Marge Brute (HT)</th>
-                  <th className="p-4 text-center">Taux Marge (%)</th>
+                  <th className="p-4">Produit</th>
+                  <th className="p-4 text-right">Coût d'achat</th>
+                  <th className="p-4 text-right">Prix de vente</th>
+                  <th className="p-4 text-center">Quantité vendue</th>
+                  <th className="p-4 text-right">Marge nette</th>
+                  <th className="p-4 text-center">Taux de marge</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 font-mono">
+              <tbody className="divide-y divide-slate-100 font-sans">
                 {productMargins.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/80 transition font-sans">
-                    <td className="p-4 font-bold text-slate-800">{item.name}</td>
-                    <td className="p-4 text-slate-500 text-xs">{item.category}</td>
+                  <tr key={item.id} className="hover:bg-slate-50/80 transition">
+                    <td className="p-4">
+                      <p className="font-bold text-slate-800 text-xs">{item.name}</p>
+                      <span className="text-[10px] text-slate-400 font-medium">{item.category}</span>
+                    </td>
+                    <td className="p-4 text-right font-mono font-medium text-slate-600">{fmt(item.costPrice)}</td>
+                    <td className="p-4 text-right font-mono font-bold text-slate-900">{fmt(item.sellingPrice)}</td>
                     <td className="p-4 text-center font-mono font-bold text-slate-700">{item.qtySold}</td>
-                    <td className="p-4 text-right font-mono font-bold text-slate-900">{fmt(item.caTTC)}</td>
-                    <td className="p-4 text-right font-mono text-slate-600">{fmt(item.costPrice)}</td>
-                    <td className="p-4 text-right font-mono font-black text-emerald-700">{fmt(item.grossMargin)}</td>
+                    <td className={`p-4 text-right font-mono font-black ${item.netMargin >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                      {fmt(item.netMargin)}
+                    </td>
                     <td className="p-4 text-center font-mono">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                        Number(item.marginRate) >= 0
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-rose-50 text-rose-800 border-rose-200'
+                      }`}>
                         {item.marginRate}%
                       </span>
                     </td>

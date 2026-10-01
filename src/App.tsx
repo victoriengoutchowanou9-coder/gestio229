@@ -60,6 +60,27 @@ const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) =
 }
 
 /**
+ * AdminHubGuard : Bloque l'accès au HUB aux utilisateurs internes non-admin
+ * Redirige directement vers leur espace d'activité assigné
+ */
+const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { user, status } = useAuthStore()
+  if (status === 'idle' || status === 'loading') return <FullPageLoader />
+  const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
+  if (!isAdmin) {
+    const perm = (typeof user?.permissions === 'object' && user.permissions) ? user.permissions : {}
+    const assignedSector = (perm.sector_slug || perm.sector_id || user?.sector_id || localStorage.getItem('gestio229_active_sector') || 'boutique').toLowerCase().replace(/^sec-/, '')
+    const role = user?.role?.toLowerCase() || ''
+    let targetModule = 'tableau-bord'
+    if (role === 'caissier' || role === 'vendeur') targetModule = 'vente-pos'
+    else if (role === 'magasinier') targetModule = 'stocks'
+    else if (role === 'comptable') targetModule = 'syscohada'
+    return <Navigate to={`/app/${assignedSector}/${targetModule}`} replace />
+  }
+  return <>{children}</>
+}
+
+/**
  * PublicRoute : redirige vers /dashboard si déjà connecté
  */
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -144,10 +165,16 @@ const AppRoutes: React.FC = () => {
       {/* Compte suspendu / Essai Expiré */}
       <Route path="/suspended" element={<SuspendedPage />} />
 
-      {/* Hub multi-services */}
+      {/* Hub multi-services (Réservé exclusivement aux administrateurs) */}
       <Route
         path="/hub"
-        element={<ProtectedRoute><HubPage /></ProtectedRoute>}
+        element={
+          <ProtectedRoute>
+            <AdminHubGuard>
+              <HubPage />
+            </AdminHubGuard>
+          </ProtectedRoute>
+        }
       />
 
       {/* Espaces d'exploitation des Sous-Logiciels Spécialisés (Isolation Totale) */}

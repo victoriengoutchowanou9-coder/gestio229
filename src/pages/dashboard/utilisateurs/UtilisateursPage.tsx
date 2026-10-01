@@ -197,12 +197,17 @@ const UtilisateursPage: React.FC = () => {
 
   const [form, setForm] = useState<NewUserForm>(emptyForm)
 
+  // ── Isolation stricte par activité ──
+  const currentSectorSlug = (typeof window !== 'undefined' ? (localStorage.getItem('gestio229_active_sector') || 'boutique') : 'boutique').toLowerCase().replace(/^sec-/, '')
+  const currentActivityId = typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_id') : null
+  const currentActivityName = typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null
+
   useEffect(() => {
     if (company?.id) {
       loadUsers()
       loadSectors()
     }
-  }, [company?.id])
+  }, [company?.id, currentSectorSlug, currentActivityId])
 
   const loadUsers = async () => {
     if (!company?.id) return
@@ -216,10 +221,23 @@ const UtilisateursPage: React.FC = () => {
         .order('created_at', { ascending: false })
 
       if (err) throw err
-      const userList = data ?? []
+      const rawUserList = data ?? []
+
+      // ── ISOLATION TOTALE PAR ACTIVITÉ (Règle critique) ──
+      // Un utilisateur créé dans l'activité A ne doit JAMAIS apparaître dans l'activité B.
+      const userList = rawUserList.filter((u: any) => {
+        const perm = (typeof u.permissions === 'object' && u.permissions) ? u.permissions : {}
+        const uSector = (perm.sector_slug || perm.sector_id || u.sector_id || '').toLowerCase().replace(/^sec-/, '')
+        const uActId = perm.activity_id || perm.sector_id
+        if (!uSector && !uActId) {
+          return currentSectorSlug === 'boutique'
+        }
+        return uSector === currentSectorSlug || (currentActivityId && (uActId === currentActivityId))
+      })
+
       setUsers(userList)
 
-      // Initialiser profils de paie par défaut pour chaque utilisateur
+      // Initialiser profils de paie par défaut pour chaque utilisateur isolé
       const initialProfiles: Record<string, EmployeePayrollProfile> = {}
       userList.forEach((u: any, idx: number) => {
         initialProfiles[u.id] = {
@@ -237,7 +255,7 @@ const UtilisateursPage: React.FC = () => {
       })
       setPayrollProfiles(initialProfiles)
 
-      // Charger le personnel enregistré depuis Supabase
+      // Charger le personnel enregistré depuis Supabase isolé par activité
       try {
         const { data: dbStaff } = await supabase
           .from('staff_members')
@@ -246,7 +264,19 @@ const UtilisateursPage: React.FC = () => {
           .order('full_name')
 
         if (dbStaff && dbStaff.length > 0) {
-          setAdditionalStaff(dbStaff.map((s: any) => ({
+          const filteredStaff = dbStaff.filter((s: any) => {
+            let sec = s.sector_slug || ''
+            if (!sec && s.notes) {
+              try {
+                const p = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+                if (p?.sector_slug) sec = p.sector_slug
+              } catch (x) {}
+            }
+            if (!sec) return currentSectorSlug === 'boutique'
+            return sec.toLowerCase().replace(/^sec-/, '') === currentSectorSlug
+          })
+
+          setAdditionalStaff(filteredStaff.map((s: any) => ({
             id: s.id,
             fullName: s.full_name,
             jobTitle: s.job_title,
@@ -472,9 +502,13 @@ const UtilisateursPage: React.FC = () => {
         authUserId = authData.user.id
       }
 
+      const assignedSectorSlug = (form.sector_id || currentSectorSlug || 'boutique').toLowerCase().replace(/^sec-/, '')
       const permissionsPayload = {
         ...(form.permissions || {}),
-        sector_id: form.sector_id || null,
+        sector_id: assignedSectorSlug,
+        sector_slug: assignedSectorSlug,
+        activity_id: currentActivityId || assignedSectorSlug,
+        activity_name: currentActivityName || assignedSectorSlug,
         is_internal_user: true,
         created_by_admin_id: user?.id ?? null,
       }
@@ -692,7 +726,8 @@ const UtilisateursPage: React.FC = () => {
               housing_allowance: Number(newStaffForm.housingAllowance) || 0,
               bonus: Number(newStaffForm.bonus) || 0,
               hire_date: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
-              is_active: true
+              is_active: true,
+              notes: JSON.stringify({ sector_slug: currentSectorSlug, activity_id: currentActivityId })
             })
             .select()
             .maybeSingle()
@@ -716,7 +751,9 @@ const UtilisateursPage: React.FC = () => {
                   transport_allowance: Number(newStaffForm.transportAllowance) || 0,
                   housing_allowance: Number(newStaffForm.housingAllowance) || 0,
                   bonus: Number(newStaffForm.bonus) || 0,
-                  cnss_number: newStaffForm.cnssNumber.trim() || null
+                  cnss_number: newStaffForm.cnssNumber.trim() || null,
+                  sector_slug: currentSectorSlug,
+                  activity_id: currentActivityId
                 }
               })
               .select()

@@ -31,6 +31,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
 const Header: React.FC = () => {
   const location = useLocation()
   const company = useAuthStore((s) => s.company)
+  const user = useAuthStore((s) => s.user)
   const notifications = useUIStore((s) => s.notifications)
   const toggleMobileSidebar = useUIStore((s) => s.toggleMobileSidebar)
   const { darkMode, toggleDarkMode } = useUIStore()
@@ -51,16 +52,18 @@ const Header: React.FC = () => {
         <Menu className="w-5 h-5" />
       </button>
 
-      {/* Bouton Retour au HUB Exigé par le CDC (visible PC, tablette et mobile) */}
-      <Link
-        to="/hub"
-        className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition shadow-sm shrink-0"
-        title="Revenir au HUB multi-secteurs de GESTIO 229"
-      >
-        <ArrowLeft className="w-3.5 h-3.5" />
-        <span className="hidden sm:inline">← Retour au HUB</span>
-        <span className="sm:hidden">HUB</span>
-      </Link>
+      {/* Bouton Retour au HUB Exigé par le CDC (visible PC, tablette et mobile pour les Administrateurs uniquement) */}
+      {(!user || user.role === 'administrateur' || user.role === 'super_admin') && (
+        <Link
+          to="/hub"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition shadow-sm shrink-0"
+          title="Revenir au HUB multi-secteurs de GESTIO 229"
+        >
+          <ArrowLeft className="w-3.5 h-3.5" />
+          <span className="hidden sm:inline">← Retour au HUB</span>
+          <span className="sm:hidden">HUB</span>
+        </Link>
+      )}
 
       {/* Breadcrumb */}
       <div className="flex-1 min-w-0">

@@ -49,6 +49,9 @@ export async function logAuditEvent(payload: AuditLogPayload): Promise<void> {
     const browser = getBrowserInfo()
     const ipAddress = '127.0.0.1' // Accessible côté client local / IP privée
 
+    const activeSector = payload.sector || (typeof window !== 'undefined' ? (localStorage.getItem('gestio229_active_sector') || 'Général') : 'Général')
+    const activeActivityId = typeof window !== 'undefined' ? (localStorage.getItem('gestio229_active_activity_id') || null) : null
+
     const auditData: any = {
       company_id: compId,
       user_id: payload.userId || authState?.user?.id || null,
@@ -58,7 +61,9 @@ export async function logAuditEvent(payload: AuditLogPayload): Promise<void> {
       entity_id: payload.entityId || null,
       details: {
         role: payload.userRole || authState?.user?.role || 'Utilisateur',
-        sector: payload.sector || 'Général',
+        sector: activeSector,
+        sector_slug: activeSector,
+        activity_id: activeActivityId,
         module: payload.module,
         description: payload.description,
         browser,

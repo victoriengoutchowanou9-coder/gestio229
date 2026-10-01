@@ -792,7 +792,22 @@ export const StocksPage: React.FC = () => {
     })
   }, [products])
 
-  // ─── Métriques de Valorisation Réelle des Stocks ───────────────────────────
+  // =============================================================================
+  // AUDIT & FORMULES FINANCIÈRES GESTION DES STOCKS & VALORISATION :
+  // 1. Stock restant total par article = Stock Magasin (UCD) + Stock Rayon Vente (UV)
+  // 2. Conversion conditionnement :
+  //    - Magasin -> Vente : Stock_Vente_Ajouté = Quantité_Magasin * Coeff_Conversion
+  //    - Vente -> Magasin : Stock_Magasin_Ajouté = Quantité_Vente / Coeff_Conversion
+  // 3. Valorisation d'achat du Stock :
+  //    - Valeur Magasin au Coût d'Achat = Somme(stock_magasin * prix_achat_unitaire)
+  //    - Valeur Vente au Coût d'Achat = Somme(stock_vente * prix_achat_unitaire)
+  //    - Valeur Globale Achat = Valeur Magasin Achat + Valeur Vente Achat
+  // 4. Valorisation Potentielle de Vente (Chiffre d'Affaires projeté) :
+  //    - Valeur Rayon Vente = Somme(stock_vente * prix_vente_unitaire_TTC)
+  // 5. Inventaire Physique & Écarts :
+  //    - Écart Quantité = Stock_Physique_Dénombré - Stock_Théorique
+  //    - Valeur de l'Écart = Écart Quantité * Coût d'Achat Unitaire
+  // =============================================================================
 
   // Stock Magasin : quantité et valeur au prix d'achat
   const totalMagasinQty = products.reduce((sum, p) => sum + (p.stock_magasin || 0), 0)

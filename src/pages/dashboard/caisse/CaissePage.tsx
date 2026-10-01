@@ -384,7 +384,19 @@ export const CaissePage: React.FC = () => {
     loadCaisseData()
   }, [loadCaisseData])
 
-  // ─── 7 COMPTEURS JOURNALIERS SÉPARÉS (RÈGLE DU CAHIER DES CHARGES) ───────────
+  // =============================================================================
+  // AUDIT & FORMULES FINANCIÈRES CAISSE OPÉRATIONNELLE :
+  // 1. Fond initial global = Fond_Initial_Espèces + Fond_Initial_MoMo (déclaré à l'ouverture)
+  // 2. Total des entrées du jour = Ventes_Espèces + Ventes_MoMo + Recouvrements_Espèces + Recouvrements_MoMo
+  // 3. Fond théorique actuel Espèces = Fond_Initial_Espèces + Ventes_Espèces + Recouvrements_Espèces - Retraits_Espèces_Validés
+  // 4. Fond théorique actuel MoMo = Fond_Initial_MoMo + Ventes_MoMo + Recouvrements_MoMo - Retraits_MoMo_Validés
+  // 5. Fond théorique global = Fond_Actuel_Espèces + Fond_Actuel_MoMo
+  // 6. Écart de caisse à la clôture (Z de caisse) :
+  //    - Écart Espèces = Fond_Physique_Espèces_Compté - Fond_Théorique_Espèces
+  //      * Si Écart = 0 : Caisse parfaitement équilibrée
+  //      * Si Écart < 0 : Manquant de caisse injustifié
+  //      * Si Écart > 0 : Excédent de caisse
+  // =============================================================================
 
   // 1. Ventes en espèces
   const ventesEspeces = useMemo(() => {

@@ -9,7 +9,7 @@ import { useParams } from 'react-router-dom'
 import {
   Users, Plus, Search, Phone, MapPin, AlertCircle, RefreshCw, X,
   DollarSign, MessageCircle, FileText, Printer, CheckCircle2, ArrowDownCircle,
-  CreditCard, Smartphone, ShieldCheck, History, Edit3
+  CreditCard, Smartphone, ShieldCheck, History, Edit3, Trash2, AlertTriangle
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -121,6 +121,68 @@ const ClientsPage: React.FC = () => {
   // Relevé de compte client
   const [statementCustomer, setStatementCustomer] = useState<Customer | null>(null)
 
+  // Modal Suppression Client (Contrôle d'intégrité & Soft/Hard delete)
+  const [deleteCustomerModal, setDeleteCustomerModal] = useState<Customer | null>(null)
+  const [customerHasSales, setCustomerHasSales] = useState<boolean | null>(null)
+  const [checkingSales, setCheckingSales] = useState<boolean>(false)
+  const [deletingCustomer, setDeletingCustomer] = useState<boolean>(false)
+
+  const handleOpenDeleteModal = async (c: Customer) => {
+    setDeleteCustomerModal(c)
+    setCheckingSales(true)
+    setCustomerHasSales(null)
+    try {
+      const { data: sales } = await supabase
+        .from('sales_orders')
+        .select('id')
+        .eq('company_id', company?.id)
+        .eq('customer_id', c.id)
+        .limit(1)
+
+      setCustomerHasSales(Boolean(sales && sales.length > 0))
+    } catch (e) {
+      setCustomerHasSales(false)
+    } finally {
+      setCheckingSales(false)
+    }
+  }
+
+  const handleConfirmDeleteCustomer = async (softDeleteOnly: boolean) => {
+    if (!deleteCustomerModal || !company?.id) return
+    setDeletingCustomer(true)
+    try {
+      if (softDeleteOnly || customerHasSales) {
+        // Soft delete : conservation historique légale des factures
+        const { error } = await supabase
+          .from('customers')
+          .update({ is_active: false })
+          .eq('id', deleteCustomerModal.id)
+          .eq('company_id', company.id)
+
+        if (error) throw error
+        toast.success('Client archivé', `Le client ${deleteCustomerModal.name} a été désactivé (facturation conservée).`)
+      } else {
+        // Hard delete si aucune vente n'est associée
+        const { error } = await supabase
+          .from('customers')
+          .delete()
+          .eq('id', deleteCustomerModal.id)
+          .eq('company_id', company.id)
+
+        if (error) throw error
+        toast.success('Client supprimé', `Le client ${deleteCustomerModal.name} a été supprimé.`)
+      }
+
+      setCustomers((prev) => prev.filter((c) => c.id !== deleteCustomerModal.id))
+      setDeleteCustomerModal(null)
+      loadCustomers()
+    } catch (err: any) {
+      toast.error('Erreur suppression client', err.message || 'Impossible de supprimer ce client.')
+    } finally {
+      setDeletingCustomer(false)
+    }
+  }
+
   const [form, setForm] = useState<CustomerFormState>(initialFormState)
 
   const loadCustomers = useCallback(async () => {
@@ -131,6 +193,7 @@ const ClientsPage: React.FC = () => {
         .from('customers')
         .select('*')
         .eq('company_id', company.id)
+        .neq('is_active', false)
         .order('name')
 
       if (error) throw error
@@ -646,6 +709,13 @@ const ClientsPage: React.FC = () => {
                               </button>
                             </>
                           )}
+                          <button
+                            onClick={() => handleOpenDeleteModal(item)}
+                            title="Supprimer ce client"
+                            className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-xl transition shadow-sm border border-slate-200 hover:border-rose-200"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -1291,6 +1361,101 @@ const ClientsPage: React.FC = () => {
               >
                 Fermer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6: Confirmation de Suppression Client (Vérification contraintes & Soft/Hard Delete) */}
+      {deleteCustomerModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 animate-fadeIn">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+              <div className="flex items-center gap-2 text-rose-600">
+                <Trash2 className="w-5 h-5" />
+                <h3 className="font-bold text-slate-900 text-base">Supprimer un client</h3>
+              </div>
+              <button
+                onClick={() => setDeleteCustomerModal(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs text-slate-600">
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                <p className="font-bold text-sm text-slate-900">{deleteCustomerModal.name}</p>
+                <p className="text-slate-500 font-mono">Code : {deleteCustomerModal.code} • Tél : {deleteCustomerModal.phone}</p>
+                {deleteCustomerModal.current_debt > 0 && (
+                  <p className="text-rose-600 font-bold mt-1">⚠️ Solde débiteur en cours : {fmt(deleteCustomerModal.current_debt)}</p>
+                )}
+              </div>
+
+              {checkingSales ? (
+                <div className="flex items-center justify-center gap-2 p-4 text-slate-500">
+                  <RefreshCw className="w-4 h-4 animate-spin text-emerald-600" />
+                  <span>Vérification des ventes et factures associées...</span>
+                </div>
+              ) : customerHasSales ? (
+                <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 space-y-1.5">
+                  <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <span>Factures & Ventes Liées Détectées</span>
+                  </div>
+                  <p className="text-[11px] leading-relaxed">
+                    Ce client est référencé dans l'historique des ventes. Pour garantir la conformité légale et comptable SYSCOHADA, une <strong>suppression douce (archivage / désactivation : is_active = false)</strong> sera effectuée. Ses factures resteront archivées en sécurité.
+                  </p>
+                </div>
+              ) : (
+                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl text-slate-700">
+                  <p>
+                    Ce client n'a aucune vente enregistrée. Vous pouvez le supprimer définitivement ou simplement le désactiver.
+                  </p>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6 flex flex-col sm:flex-row items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setDeleteCustomerModal(null)}
+                className="w-full sm:w-auto px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition"
+              >
+                Annuler
+              </button>
+
+              {customerHasSales ? (
+                <button
+                  type="button"
+                  disabled={deletingCustomer || checkingSales}
+                  onClick={() => handleConfirmDeleteCustomer(true)}
+                  className="w-full sm:w-auto px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-amber-600/20 disabled:opacity-50"
+                >
+                  {deletingCustomer ? <RefreshCw className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                  <span>Archiver & Désactiver</span>
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={deletingCustomer || checkingSales}
+                    onClick={() => handleConfirmDeleteCustomer(true)}
+                    className="w-full sm:w-auto px-3.5 py-2.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl text-xs font-semibold transition"
+                  >
+                    Désactiver uniquement
+                  </button>
+                  <button
+                    type="button"
+                    disabled={deletingCustomer || checkingSales}
+                    onClick={() => handleConfirmDeleteCustomer(false)}
+                    className="w-full sm:w-auto px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm shadow-rose-600/20 disabled:opacity-50"
+                  >
+                    {deletingCustomer ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                    <span>Supprimer définitivement</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>

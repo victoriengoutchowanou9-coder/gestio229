@@ -34,6 +34,10 @@ export const AuditPage: React.FC = () => {
   const { company } = useAuthStore()
   const { toast } = useUIStore()
 
+  // Isolation par activité
+  const activeSector = typeof window !== 'undefined' ? (localStorage.getItem('gestio229_active_sector') || 'boutique') : 'boutique'
+  const activeActivityName = typeof window !== 'undefined' ? (localStorage.getItem('gestio229_active_activity_name') || null) : null
+
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -58,7 +62,7 @@ export const AuditPage: React.FC = () => {
         .select('*')
         .eq('company_id', company.id)
         .order('created_at', { ascending: false })
-        .limit(300)
+        .limit(400)
 
       if (error) throw error
       setLogs(data || [])
@@ -73,37 +77,47 @@ export const AuditPage: React.FC = () => {
     loadAuditLogs()
   }, [loadAuditLogs])
 
+  // Isolation par activité : Ne conserver que les logs de ce sous-logiciel ou système général
+  const activityLogs = useMemo(() => {
+    const cleanActive = activeSector.toLowerCase().replace(/^sec-/, '')
+    return logs.filter((l) => {
+      const logSec = (l.details?.sector_slug || l.details?.sector || '').toLowerCase().replace(/^sec-/, '')
+      if (!logSec || logSec === 'général' || logSec === 'general') return true
+      return logSec === cleanActive
+    })
+  }, [logs, activeSector])
+
   // Extraction des valeurs uniques pour les sélecteurs
   const availableModules = useMemo(() => {
     const s = new Set<string>()
-    logs.forEach((l) => {
+    activityLogs.forEach((l) => {
       const m = l.details?.module || l.entity_name
       if (m) s.add(String(m).toUpperCase())
     })
     return Array.from(s).sort()
-  }, [logs])
+  }, [activityLogs])
 
   const availableRoles = useMemo(() => {
     const s = new Set<string>()
-    logs.forEach((l) => {
+    activityLogs.forEach((l) => {
       const r = l.details?.role || l.user_role
       if (r) s.add(String(r))
     })
     return Array.from(s).sort()
-  }, [logs])
+  }, [activityLogs])
 
   const availableSectors = useMemo(() => {
     const s = new Set<string>()
-    logs.forEach((l) => {
+    activityLogs.forEach((l) => {
       const sec = l.details?.sector
       if (sec) s.add(String(sec))
     })
     return Array.from(s).sort()
-  }, [logs])
+  }, [activityLogs])
 
   // Filtrage combiné multi-critères
   const filteredLogs = useMemo(() => {
-    return logs.filter((log) => {
+    return activityLogs.filter((log) => {
       const userName = log.user_name || log.user_email || 'Automatique'
       const role = log.details?.role || log.user_role || 'Opérateur'
       const sector = log.details?.sector || 'Général'

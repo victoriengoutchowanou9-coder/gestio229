@@ -128,8 +128,8 @@ export const POSPage: React.FC = () => {
   const [selectedProductForDetail, setSelectedProductForDetail] = useState<Product | null>(null)
   const [detailQty, setDetailQty] = useState<number>(1)
 
-  // Modale Bottom Sheet Panier & Checkout (Animation fluide du haut vers le bas)
-  const [isCartSheetOpen, setIsCartSheetOpen] = useState(false)
+  // Panneau Panier & Checkout Intégré Glissant (Toujours visible par défaut sur grand écran)
+  const [isCartVisible, setIsCartVisible] = useState(true)
   const [isMultiMode, setIsMultiMode] = useState(false)
   const [singleMethod, setSingleMethod] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'credit'>('especes')
 
@@ -414,6 +414,7 @@ export const POSPage: React.FC = () => {
 
     setSelectedProductForDetail(null)
     setDetailQty(1)
+    setIsCartVisible(true) // Glissement immédiat et visibilité du panier à droite lors de l'ajout
   }
 
   const updateCartItemQty = (productId: string, newQty: number) => {
@@ -451,7 +452,26 @@ export const POSPage: React.FC = () => {
     setIsDeferred(false)
   }
 
-  // ─── Calculs Financiers du Panier ──────────────────────────────────────────
+  // =============================================================================
+  // AUDIT & FORMULES FINANCIÈRES VENTE & POINT DE VENTE (POS) :
+  // 1. Sous-total TTC brut :
+  //    Somme(quantité * prix_unitaire_TTC)
+  // 2. Remise totale :
+  //    Somme(quantité * remise_unitaire)
+  // 3. Total Net TTC à payer :
+  //    Max(0, Sous-total TTC brut - Remise totale)
+  // 4. Décomposition fiscale stricte (UEMOA / Bénin DGI) :
+  //    - Pour les articles assujettis TVA (taux standard 18%) :
+  //      * HT = Ligne TTC / (1 + taux_tva / 100) = Ligne TTC / 1.18
+  //      * TVA = Ligne TTC - Ligne HT
+  //      * AIB (si applicable, 1% pour commerçants immatriculés IFU ou 5% non immatriculés) = Ligne HT * (taux_aib / 100)
+  //    - Pour les articles exonérés de TVA :
+  //      * HT = Ligne TTC, TVA = 0 FCFA
+  // 5. Encaissement Espèces & Monnaie :
+  //    - Monnaie à rendre = Max(0, Espèces remises - Total Net TTC)
+  // 6. Règle multi-modes de paiement :
+  //    - Équilibre strict obligatoire : Mode 1 (montant) + Mode 2 (montant) === Total Net TTC
+  // =============================================================================
 
   const subtotalTTC = useMemo(() => {
     return cart.reduce((sum, i) => sum + i.qty * i.unitPrice, 0)
@@ -891,7 +911,6 @@ export const POSPage: React.FC = () => {
 
       setSalesHistory([newSale, ...salesHistory.filter(s => s.id !== newSale.id)])
       setCurrentSale(newSale)
-      setIsCartSheetOpen(false)
       setShowInvoiceModal(true)
       clearCart()
       toast.success('Vente enregistrée avec succès !', `Réf : ${orderNum}`)
@@ -1188,10 +1207,11 @@ export const POSPage: React.FC = () => {
       </div>
 
       {activeTab === 'pos' ? (
-        /* ── VUE 1 : POINT DE VENTE (CATALOGUE ÉLARGI AVEC PANIER BOTTOM SHEET) ── */
-        <div className="relative">
-          <div className="flex flex-col bg-white rounded-2xl border border-slate-200 shadow-sm p-4 overflow-hidden h-[calc(100vh-13rem)]">
-            <div className="flex gap-2 mb-3">
+        /* ── VUE 1 : POINT DE VENTE (CATALOGUE & PANIER INTÉGRÉ GLISSANT À DROITE) ── */
+        <div className="flex flex-col lg:flex-row gap-4 items-start relative">
+          {/* CATALOGUE GAUCHE */}
+          <div className="flex-1 w-full min-w-0 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 overflow-hidden h-[calc(100vh-13rem)] flex flex-col">
+            <div className="flex items-center gap-2 mb-3">
               <div className="relative flex-1">
                 <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
                 <input
@@ -1209,10 +1229,38 @@ export const POSPage: React.FC = () => {
               >
                 <RefreshCw className={clsx('w-4 h-4 text-slate-500', loading && 'animate-spin')} />
               </button>
+
+              {/* Bouton bascule Panier (Permet d'agrandir le catalogue à 100% ou de rouvrir le panier) */}
+              <button
+                type="button"
+                onClick={() => setIsCartVisible(!isCartVisible)}
+                className={clsx(
+                  'px-3 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm',
+                  isCartVisible
+                    ? 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
+                    : 'bg-emerald-600 text-white hover:bg-emerald-700 shadow-emerald-600/20'
+                )}
+                title={isCartVisible ? 'Masquer le panneau panier' : 'Afficher le panneau panier'}
+              >
+                <ShoppingCart className="w-4 h-4" />
+                <span className="hidden sm:inline">
+                  {isCartVisible ? 'Masquer Panier' : `Panier (${cart.length})`}
+                </span>
+                {cart.length > 0 && !isCartVisible && (
+                  <span className="bg-white text-emerald-700 text-[10px] font-black rounded-full px-1.5 py-0.5 ml-1">
+                    {fmt(totalNetTTC)}
+                  </span>
+                )}
+              </button>
             </div>
 
             {/* Grille des articles sous forme de cartes professionnelles */}
-            <div className="flex-1 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 pr-1 pb-16">
+            <div className={clsx(
+              'flex-1 overflow-y-auto grid gap-3 pr-1 pb-4',
+              isCartVisible
+                ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4'
+                : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
+            )}>
               {filteredProducts.length === 0 ? (
                 <div className="col-span-full p-8 text-center text-slate-400 text-xs">
                   {loading ? 'Chargement des articles...' : 'Aucun produit actif disponible.'}
@@ -1285,36 +1333,382 @@ export const POSPage: React.FC = () => {
             </div>
           </div>
 
-          {/* ── BARRE FLOTTANTE PANIER & CHECKOUT (ACCÈS PERMANENT) ── */}
-          <div className="fixed bottom-4 left-4 right-4 sm:left-auto sm:right-6 sm:w-auto z-40">
-            <button
-              onClick={() => setIsCartSheetOpen(true)}
-              className="w-full sm:w-auto flex items-center justify-between sm:justify-start gap-4 px-5 py-3.5 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl shadow-2xl border border-slate-700 font-bold transition transform active:scale-95"
-            >
-              <div className="flex items-center gap-3">
-                <div className="relative">
-                  <ShoppingCart className="w-5 h-5 text-emerald-400" />
+          {/* ── PANNEAU PANIER GLISSANT & ENCAISSEMENT DIRECTEMENT INTÉGRÉ À DROITE ── */}
+          {isCartVisible && (
+            <div className="w-full lg:w-[400px] xl:w-[440px] flex-shrink-0 bg-white rounded-2xl border border-slate-200 shadow-sm flex flex-col h-[calc(100vh-13rem)] overflow-hidden transition-all duration-300">
+              {/* En-tête Panier */}
+              <div className="flex justify-between items-center px-4 py-3 border-b border-slate-100 bg-slate-50/90 shrink-0">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-sm">
+                    <ShoppingCart className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="font-extrabold text-slate-900 text-xs">Panier & Encaissement</h3>
+                    <p className="text-[10px] text-slate-500 font-medium">
+                      {cart.length === 0 ? 'Aucun article' : `${cart.length} article${cart.length > 1 ? 's' : ''} au panier`}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
                   {cart.length > 0 && (
-                    <span className="absolute -top-2 -right-2 bg-emerald-500 text-white text-[10px] font-black rounded-full w-4 h-4 flex items-center justify-center">
-                      {cart.length}
-                    </span>
+                    <button
+                      type="button"
+                      onClick={clearCart}
+                      className="text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg hover:bg-rose-50 transition"
+                      title="Vider tout le panier"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" /> Vider
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsCartVisible(false)}
+                    className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-200/60 transition"
+                    title="Masquer le panneau panier"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Corps Défilable Interne : Client, Articles, Totaux Fiscaux, Règlements */}
+              <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 text-xs">
+                {/* 1. Sélection Client & Vente Différée */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
+                    <select
+                      value={selectedCustomerId}
+                      onChange={(e) => setSelectedCustomerId(e.target.value)}
+                      className="flex-1 text-xs border border-slate-200 rounded-xl p-2 bg-white font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="">👤 Client Comptoir (Par défaut)</option>
+                      {customers.map((c) => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} {c.current_debt > 0 ? `(Dette : ${fmt(c.current_debt)})` : ''}
+                          {c.credit_authorized === false ? ' [Crédit non autorisé]' : ''}
+                          {c.discount_eligible && (c.discount_rate || 0) > 0 ? ` [Remise ${c.discount_rate}%]` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {selectedCustomer && selectedCustomer.discount_eligible && (selectedCustomer.discount_rate || 0) > 0 && (
+                    <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1 rounded-xl border border-amber-200">
+                      <span>🏷️ Remise Client : -{selectedCustomer.discount_rate}% accordée</span>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-xs pt-0.5">
+                    <label className="flex items-center gap-2 cursor-pointer text-slate-700 font-semibold">
+                      <input
+                        type="checkbox"
+                        checked={isDeferred}
+                        onChange={(e) => setIsDeferred(e.target.checked)}
+                        className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                      />
+                      <span>📦 Vente Différée (Bon de Livraison)</span>
+                    </label>
+                  </div>
+                </div>
+
+                {/* 2. Liste des lignes du Panier */}
+                <div className="space-y-1.5">
+                  <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    Articles au Panier ({cart.length})
+                  </h4>
+
+                  {cart.length === 0 ? (
+                    <div className="p-5 text-center text-slate-400 bg-slate-50 rounded-2xl border border-slate-100">
+                      <ShoppingCart className="w-7 h-7 mb-1.5 stroke-[1.5] text-slate-300 mx-auto" />
+                      <p className="font-semibold text-xs text-slate-600">Panier vide</p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">Cliquez sur un produit du catalogue à gauche</p>
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 max-h-40 overflow-y-auto pr-1">
+                      {cart.map((item) => {
+                        const lineTotal = item.qty * item.unitPrice - item.qty * item.discount
+                        return (
+                          <div key={item.product.id} className="py-2 first:pt-0 flex items-center justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-xs text-slate-800 truncate">{item.product.name}</p>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="text-[10px] text-slate-500 font-mono">
+                                  {fmt(item.unitPrice)} / {item.product.unit || 'Pièce'}
+                                </p>
+                                {item.batchTierLabel && (
+                                  <span className="text-[9px] bg-emerald-100 text-emerald-800 font-semibold px-1 rounded">
+                                    {item.batchTierLabel}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+
+                            <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl">
+                              <button
+                                type="button"
+                                onClick={() => updateCartItemQty(item.product.id, item.qty - 1)}
+                                className="w-5 h-5 bg-white rounded-lg flex items-center justify-center font-bold text-slate-700 hover:bg-slate-200 transition"
+                              >
+                                <Minus className="w-2.5 h-2.5" />
+                              </button>
+                              <input
+                                type="number"
+                                step="any"
+                                value={item.qty}
+                                onChange={(e) => updateCartItemQty(item.product.id, Number(e.target.value))}
+                                className="w-10 text-center text-xs font-mono font-bold bg-transparent border-0 focus:ring-0 p-0"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => updateCartItemQty(item.product.id, item.qty + 1)}
+                                className="w-5 h-5 bg-white rounded-lg flex items-center justify-center font-bold text-slate-700 hover:bg-slate-200 transition"
+                              >
+                                <Plus className="w-2.5 h-2.5" />
+                              </button>
+                            </div>
+
+                            <div className="text-right min-w-[70px]">
+                              <p className="font-bold text-xs text-slate-900 font-mono">{fmt(lineTotal)}</p>
+                              <button
+                                type="button"
+                                onClick={() => removeFromCart(item.product.id)}
+                                className="text-[10px] text-rose-500 hover:text-rose-700 font-semibold"
+                              >
+                                Retirer
+                              </button>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
                   )}
                 </div>
-                <div className="text-left">
-                  <p className="text-[11px] text-slate-300">
-                    {cart.length === 0 ? 'Panier vide' : `${cart.length} article${cart.length > 1 ? 's' : ''}`}
-                  </p>
-                  <p className="text-sm font-black text-emerald-400 font-mono">
-                    {fmt(totalNetTTC)}
-                  </p>
+
+                {/* 3. Récapitulatif Sous-total, TVA, Total TTC */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
+                  <div className="flex justify-between text-slate-600 text-[11px]">
+                    <span>Sous-total HT :</span>
+                    <span className="font-mono font-bold">{fmt(cartFiscalSummary.ht)}</span>
+                  </div>
+                  <div className="flex justify-between text-slate-600 text-[11px]">
+                    <span>TVA (18%) :</span>
+                    <span className="font-mono font-bold">{fmt(cartFiscalSummary.tva)}</span>
+                  </div>
+                  {cartFiscalSummary.aib > 0 && (
+                    <div className="flex justify-between text-slate-600 text-[11px]">
+                      <span>AIB (Calculé sur HT) :</span>
+                      <span className="font-mono font-bold">{fmt(cartFiscalSummary.aib)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between items-center text-sm font-black text-slate-900 pt-1.5 border-t border-slate-200">
+                    <span className="text-slate-800 uppercase tracking-tight text-xs">TOTAL TTC :</span>
+                    <span className="font-mono text-emerald-700 text-base font-black">{fmt(totalNetTTC)}</span>
+                  </div>
+                </div>
+
+                {/* 4. VISIBILITÉ DIRECTE SOUS LE TOTAL TTC (MODES DE RÈGLEMENT) */}
+                <div className="pt-1 border-t border-slate-200 space-y-2.5">
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                    <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-800 flex items-center gap-1">
+                      <CreditCard className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Mode de Paiement</span>
+                    </h4>
+
+                    {/* Case à cocher ☐ Paiement par plusieurs modes */}
+                    <label className="flex items-center gap-1.5 cursor-pointer bg-slate-100 hover:bg-slate-200 px-2 py-1 rounded-lg border border-slate-200 transition">
+                      <input
+                        type="checkbox"
+                        checked={isMultiMode}
+                        onChange={(e) => handleToggleMultiMode(e.target.checked)}
+                        className="w-3.5 h-3.5 accent-emerald-600 cursor-pointer rounded"
+                      />
+                      <span className="text-[10px] font-bold text-slate-800">Plusieurs modes</span>
+                    </label>
+                  </div>
+
+                  {!isMultiMode ? (
+                    /* DÉCOCHÉE (MODE UNIQUE) : 5 boutons de paiement directs */
+                    <div className="space-y-2">
+                      <div className="grid grid-cols-3 gap-1.5">
+                        {[
+                          { id: 'especes', label: '💵 Espèces' },
+                          { id: 'momo_mtn', label: '📱 MTN MoMo' },
+                          { id: 'momo_moov', label: '📱 Moov' },
+                          { id: 'banque', label: '🏦 Banque' },
+                          { id: 'credit', label: '📝 Crédit' },
+                        ].map((m) => (
+                          <button
+                            key={m.id}
+                            type="button"
+                            onClick={() => setSingleMethod(m.id as any)}
+                            className={clsx(
+                              'p-2 rounded-xl border text-[11px] font-bold transition flex items-center justify-center gap-1 shadow-sm',
+                              singleMethod === m.id
+                                ? 'bg-emerald-600 border-emerald-600 text-white shadow-emerald-600/20'
+                                : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                            )}
+                          >
+                            <span>{m.label}</span>
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Si Espèces sélectionné : champ « Espèces reçues » + Monnaie à rendre en temps réel */}
+                      {singleMethod === 'especes' && (
+                        <div className="p-2.5 bg-emerald-50/70 rounded-xl border border-emerald-200 space-y-1.5">
+                          <div className="flex items-center justify-between gap-1.5">
+                            <label className="text-[11px] font-bold text-emerald-950 flex items-center gap-1">
+                              <DollarSign className="w-3.5 h-3.5 text-emerald-700" />
+                              <span>Espèces reçues :</span>
+                            </label>
+                            <div className="flex items-center gap-1">
+                              <input
+                                type="number"
+                                min="0"
+                                value={cashReceivedInput}
+                                onChange={(e) => setCashReceivedInput(e.target.value)}
+                                placeholder={String(totalNetTTC)}
+                                className="w-28 p-1 border border-emerald-300 rounded-lg font-mono text-xs font-bold text-right bg-white focus:ring-2 focus:ring-emerald-500"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => setCashReceivedInput(String(totalNetTTC))}
+                                className="px-1.5 py-1 bg-emerald-200/80 hover:bg-emerald-300 text-emerald-900 rounded-md text-[9px] font-black"
+                                title="Montant exact remis"
+                              >
+                                Exact
+                              </button>
+                            </div>
+                          </div>
+
+                          {cashGiven >= totalNetTTC ? (
+                            <div className="flex justify-between items-center pt-1 border-t border-emerald-200/80 text-[11px] font-bold">
+                              <span className="text-emerald-900">Monnaie à rendre :</span>
+                              <span className="font-mono text-emerald-700 text-xs font-black">
+                                👉 {fmt(cashChange)}
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex justify-between items-center pt-1 border-t border-rose-200 text-[11px] font-bold text-rose-700">
+                              <span>⚠️ Manque :</span>
+                              <span className="font-mono font-black">
+                                {fmt(totalNetTTC - cashGiven)}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    /* COCHÉE (MULTI-MODES) : Mode 1 et Mode 2 équilibrés */
+                    <div className="p-2.5 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                      <p className="text-[10px] font-bold text-slate-700">
+                        Ventilation des règlements sur 2 modes :
+                      </p>
+
+                      {/* Mode 1 */}
+                      <div className="bg-white p-2 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[9px] font-black uppercase text-slate-400">MODE 1</span>
+                        <div className="grid grid-cols-12 gap-1.5">
+                          <select
+                            value={multiMode1Canal}
+                            onChange={(e) => setMultiMode1Canal(e.target.value as any)}
+                            className="col-span-6 p-1.5 border border-slate-200 rounded-lg text-[11px] font-bold bg-white"
+                          >
+                            <option value="especes">💵 Espèces</option>
+                            <option value="momo_mtn">📱 MTN MoMo</option>
+                            <option value="momo_moov">📱 Moov</option>
+                            <option value="banque">🏦 Banque</option>
+                            <option value="credit">📝 Crédit</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            value={multiMode1Amount || ''}
+                            onChange={(e) => handleMode1AmountChange(Number(e.target.value))}
+                            placeholder="Montant 1"
+                            className="col-span-6 p-1.5 border border-slate-200 rounded-lg font-mono text-[11px] font-bold text-right"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Mode 2 */}
+                      <div className="bg-white p-2 rounded-lg border border-slate-200 space-y-1">
+                        <span className="text-[9px] font-black uppercase text-slate-400">MODE 2 (AJUSTÉ)</span>
+                        <div className="grid grid-cols-12 gap-1.5">
+                          <select
+                            value={multiMode2Canal}
+                            onChange={(e) => setMultiMode2Canal(e.target.value as any)}
+                            className="col-span-6 p-1.5 border border-slate-200 rounded-lg text-[11px] font-bold bg-white"
+                          >
+                            <option value="especes">💵 Espèces</option>
+                            <option value="momo_mtn">📱 MTN MoMo</option>
+                            <option value="momo_moov">📱 Moov</option>
+                            <option value="banque">🏦 Banque</option>
+                            <option value="credit">📝 Crédit</option>
+                          </select>
+                          <input
+                            type="number"
+                            min="0"
+                            value={multiMode2Amount || ''}
+                            onChange={(e) => handleMode2AmountChange(Number(e.target.value))}
+                            placeholder="Montant 2"
+                            className="col-span-6 p-1.5 border border-slate-200 rounded-lg font-mono text-[11px] font-bold text-right"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Contrôle équilibre */}
+                      <div className="pt-0.5">
+                        {multiDiff > 0 && (
+                          <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-bold">
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            <span>⚠️ Reste à percevoir : {fmt(multiDiff)}</span>
+                          </div>
+                        )}
+                        {multiDiff < 0 && (
+                          <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[10px] font-bold">
+                            <AlertTriangle className="w-3.5 h-3.5 text-rose-600 shrink-0" />
+                            <span>⚠️ Trop perçu : {fmt(Math.abs(multiDiff))}</span>
+                          </div>
+                        )}
+                        {multiDiff === 0 && totalNetTTC > 0 && (
+                          <div className="flex items-center gap-1 px-2 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-700 text-[10px] font-bold">
+                            <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            <span>✓ Équilibré ({fmt(totalNetTTC)})</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
-              <div className="flex items-center gap-1.5 pl-3 border-l border-slate-700 text-xs font-extrabold text-emerald-400">
-                <span>Ouvrir le Panier / Checkout</span>
-                <ChevronRight className="w-4 h-4" />
+
+              {/* Pied du Panier : Bouton Valider la Vente en 1 clic */}
+              <div className="p-3 bg-slate-50 border-t border-slate-200 shrink-0">
+                <button
+                  type="button"
+                  disabled={!canValidateSale}
+                  onClick={handleValidateSale}
+                  className={clsx(
+                    'w-full py-3 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-sm',
+                    canValidateSale
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-600/20'
+                      : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                  )}
+                >
+                  {paying ? (
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Check className="w-4 h-4" />
+                  )}
+                  <span>{validationButtonText}</span>
+                </button>
               </div>
-            </button>
-          </div>
+            </div>
+          )}
         </div>
       ) : (
         /* ── VUE 2 : HISTORIQUE DES VENTES & AVOIRS ──────────────────────────── */
@@ -1604,399 +1998,6 @@ export const POSPage: React.FC = () => {
         </ModalPortal>
       )}
 
-      {/* ── MODALE BOTTOM SHEET : PANIER, RECAPITULATIF & CHECKOUT DIRECTEMENT SOUS LE TOTAL TTC ── */}
-      <ModalPortal isOpen={isCartSheetOpen} onClose={() => setIsCartSheetOpen(false)} id="modal-pos-cart-sheet">
-        <div
-          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 transition-opacity duration-300"
-          onClick={() => setIsCartSheetOpen(false)}
-        />
-        <div className="fixed inset-x-0 top-0 sm:top-6 sm:inset-x-auto sm:left-1/2 sm:-translate-x-1/2 z-50 w-full sm:max-w-2xl px-2 sm:px-0 pointer-events-none">
-          <div className="bg-white rounded-b-3xl sm:rounded-3xl shadow-2xl border border-slate-200 pointer-events-auto flex flex-col max-h-[92vh] overflow-hidden transform transition-all duration-300 animate-in slide-in-from-top duration-300 ease-out">
-            {/* En-tête Bottom Sheet */}
-            <div className="flex justify-between items-center px-5 py-3.5 border-b border-slate-100 bg-slate-50/90">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center shadow-sm">
-                  <ShoppingCart className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="font-extrabold text-slate-900 text-sm">Panier & Encaissement</h3>
-                  <p className="text-[11px] text-slate-500 font-medium">
-                    {cart.length === 0 ? 'Aucun article' : `${cart.length} article${cart.length > 1 ? 's' : ''} au panier`}
-                  </p>
-                </div>
-              </div>
-
-              <div className="flex items-center gap-2">
-                {cart.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={clearCart}
-                    className="text-rose-600 hover:text-rose-700 font-bold flex items-center gap-1 text-[11px] px-2.5 py-1 rounded-lg hover:bg-rose-50 transition"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" /> Vider
-                  </button>
-                )}
-                <button
-                  type="button"
-                  onClick={() => setIsCartSheetOpen(false)}
-                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-200/60 transition"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Corps Défilable Interne */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4 text-xs">
-              {/* 1. Sélection Client & Vente Différée */}
-              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2.5">
-                <div className="flex items-center gap-2">
-                  <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
-                  <select
-                    value={selectedCustomerId}
-                    onChange={(e) => setSelectedCustomerId(e.target.value)}
-                    className="flex-1 text-xs border border-slate-200 rounded-xl p-2 bg-white font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                  >
-                    <option value="">👤 Client Comptoir (Par défaut)</option>
-                    {customers.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name} {c.current_debt > 0 ? `(Dette : ${fmt(c.current_debt)})` : ''}
-                        {c.credit_authorized === false ? ' [Crédit non autorisé]' : ''}
-                        {c.discount_eligible && (c.discount_rate || 0) > 0 ? ` [Remise ${c.discount_rate}%]` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                {selectedCustomer && selectedCustomer.discount_eligible && (selectedCustomer.discount_rate || 0) > 0 && (
-                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1.5 rounded-xl border border-amber-200">
-                    <span>🏷️ Remise Client accordée : -{selectedCustomer.discount_rate}% sur cette vente</span>
-                  </div>
-                )}
-
-                <div className="flex items-center justify-between text-xs pt-0.5">
-                  <label className="flex items-center gap-2 cursor-pointer text-slate-700 font-semibold">
-                    <input
-                      type="checkbox"
-                      checked={isDeferred}
-                      onChange={(e) => setIsDeferred(e.target.checked)}
-                      className="rounded text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                    />
-                    <span>📦 Vente Différée (Bon de Livraison en attente)</span>
-                  </label>
-                </div>
-              </div>
-
-              {/* 2. Liste des lignes du Panier */}
-              <div className="space-y-2">
-                <h4 className="text-[11px] font-black uppercase tracking-wider text-slate-400">
-                  Articles Sélectionnés ({cart.length})
-                </h4>
-
-                {cart.length === 0 ? (
-                  <div className="p-6 text-center text-slate-400 bg-slate-50 rounded-2xl border border-slate-100">
-                    <ShoppingCart className="w-8 h-8 mb-2 stroke-[1.5] text-slate-300 mx-auto" />
-                    <p className="font-semibold text-xs text-slate-600">Panier vide</p>
-                    <p className="text-[11px] text-slate-400 mt-0.5">Cliquez sur un produit du catalogue pour l'ajouter</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-100 max-h-48 overflow-y-auto pr-1">
-                    {cart.map((item) => {
-                      const lineTotal = item.qty * item.unitPrice - item.qty * item.discount
-                      return (
-                        <div key={item.product.id} className="py-2.5 first:pt-0 flex items-center justify-between gap-3">
-                          <div className="flex-1 min-w-0">
-                            <p className="font-bold text-xs text-slate-800 truncate">{item.product.name}</p>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <p className="text-[10px] text-slate-500 font-mono">
-                                {fmt(item.unitPrice)} / {item.product.unit || 'Pièce'}
-                              </p>
-                              {item.batchTierLabel && (
-                                <span className="text-[9px] bg-emerald-100 text-emerald-800 font-semibold px-1 rounded">
-                                  {item.batchTierLabel}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-
-                          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-                            <button
-                              type="button"
-                              onClick={() => updateCartItemQty(item.product.id, item.qty - 1)}
-                              className="w-6 h-6 bg-white rounded-lg flex items-center justify-center font-bold text-slate-700 hover:bg-slate-200 transition"
-                            >
-                              <Minus className="w-3 h-3" />
-                            </button>
-                            <input
-                              type="number"
-                              step="any"
-                              value={item.qty}
-                              onChange={(e) => updateCartItemQty(item.product.id, Number(e.target.value))}
-                              className="w-12 text-center text-xs font-mono font-bold bg-transparent border-0 focus:ring-0 p-0"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => updateCartItemQty(item.product.id, item.qty + 1)}
-                              className="w-6 h-6 bg-white rounded-lg flex items-center justify-center font-bold text-slate-700 hover:bg-slate-200 transition"
-                            >
-                              <Plus className="w-3 h-3" />
-                            </button>
-                          </div>
-
-                          <div className="text-right min-w-[75px]">
-                            <p className="font-bold text-xs text-slate-900 font-mono">{fmt(lineTotal)}</p>
-                            <button
-                              type="button"
-                              onClick={() => removeFromCart(item.product.id)}
-                              className="text-[10px] text-rose-500 hover:text-rose-700 font-semibold"
-                            >
-                              Supprimer
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* 3. Récapitulatif Sous-total, TVA, Total TTC */}
-              <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
-                <div className="flex justify-between text-slate-600">
-                  <span>Sous-total HT :</span>
-                  <span className="font-mono font-bold">{fmt(cartFiscalSummary.ht)}</span>
-                </div>
-                <div className="flex justify-between text-slate-600">
-                  <span>TVA (18%) :</span>
-                  <span className="font-mono font-bold">{fmt(cartFiscalSummary.tva)}</span>
-                </div>
-                {cartFiscalSummary.aib > 0 && (
-                  <div className="flex justify-between text-slate-600">
-                    <span>AIB (Calculé sur HT) :</span>
-                    <span className="font-mono font-bold">{fmt(cartFiscalSummary.aib)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between items-center text-sm font-black text-slate-900 pt-2 border-t border-slate-200">
-                  <span className="text-slate-800 uppercase tracking-tight">TOTAL TTC :</span>
-                  <span className="font-mono text-emerald-700 text-lg font-black">{fmt(totalNetTTC)}</span>
-                </div>
-              </div>
-
-              {/* 4. VISIBILITÉ DIRECTE SOUS LE TOTAL TTC (SANS MODAL INTERMÉDIAIRE) */}
-              <div className="pt-2 border-t border-slate-200 space-y-3">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
-                    <CreditCard className="w-4 h-4 text-emerald-600" />
-                    <span>Mode de Paiement</span>
-                  </h4>
-
-                  {/* Case à cocher ☐ Paiement par plusieurs modes (Positionnée en évidence à côté du titre) */}
-                  <label className="flex items-center gap-2 cursor-pointer bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-xl border border-slate-200 transition">
-                    <input
-                      type="checkbox"
-                      checked={isMultiMode}
-                      onChange={(e) => handleToggleMultiMode(e.target.checked)}
-                      className="w-4 h-4 accent-emerald-600 cursor-pointer rounded"
-                    />
-                    <span className="text-xs font-bold text-slate-800">Paiement par plusieurs modes</span>
-                  </label>
-                </div>
-
-                {!isMultiMode ? (
-                  /* DÉCOCHÉE (MODE UNIQUE) : Présentation des 5 boutons de paiement directs */
-                  <div className="space-y-2.5">
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {[
-                        { id: 'especes', label: '💵 Espèces' },
-                        { id: 'momo_mtn', label: '📱 MoMo (MTN MoMo)' },
-                        { id: 'momo_moov', label: '📱 Moov / Flooz' },
-                        { id: 'banque', label: '🏦 Banque' },
-                        { id: 'credit', label: '📝 Crédit' },
-                      ].map((m) => (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setSingleMethod(m.id as any)}
-                          className={clsx(
-                            'p-2.5 rounded-xl border text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm',
-                            singleMethod === m.id
-                              ? 'bg-emerald-600 border-emerald-600 text-white shadow-emerald-600/20'
-                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                          )}
-                        >
-                          <span>{m.label}</span>
-                        </button>
-                      ))}
-                    </div>
-
-                    {/* Si Espèces sélectionné : champ « Espèces reçues » + Monnaie à rendre en temps réel */}
-                    {singleMethod === 'especes' && (
-                      <div className="p-3 bg-emerald-50/70 rounded-2xl border border-emerald-200 space-y-2">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                          <label className="text-xs font-bold text-emerald-950 flex items-center gap-1">
-                            <DollarSign className="w-4 h-4 text-emerald-700" />
-                            <span>Espèces reçues :</span>
-                          </label>
-                          <div className="flex items-center gap-1.5">
-                            <input
-                              type="number"
-                              min="0"
-                              value={cashReceivedInput}
-                              onChange={(e) => setCashReceivedInput(e.target.value)}
-                              placeholder={String(totalNetTTC)}
-                              className="w-36 p-1.5 border border-emerald-300 rounded-xl font-mono text-xs font-bold text-right bg-white focus:ring-2 focus:ring-emerald-500"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setCashReceivedInput(String(totalNetTTC))}
-                              className="px-2 py-1.5 bg-emerald-200/80 hover:bg-emerald-300 text-emerald-900 rounded-lg text-[10px] font-extrabold"
-                              title="Montant exact remis"
-                            >
-                              Exact
-                            </button>
-                          </div>
-                        </div>
-
-                        {cashGiven >= totalNetTTC ? (
-                          <div className="flex justify-between items-center pt-1 border-t border-emerald-200/80 text-xs font-bold">
-                            <span className="text-emerald-900">Monnaie à rendre :</span>
-                            <span className="font-mono text-emerald-700 text-sm font-black">
-                              👉 {fmt(cashChange)}
-                            </span>
-                          </div>
-                        ) : (
-                          <div className="flex justify-between items-center pt-1 border-t border-rose-200 text-xs font-bold text-rose-700">
-                            <span>⚠️ Espèces insuffisantes :</span>
-                            <span className="font-mono font-black">
-                              Manque {fmt(totalNetTTC - cashGiven)}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  /* COCHÉE (MULTI-MODES) : Déploiement instantané Mode 1 et Mode 2 */
-                  <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-                    <p className="text-xs font-bold text-slate-700">
-                      Ventilation des règlements sur 2 modes :
-                    </p>
-
-                    {/* Mode 1 : Sélecteur de canal + champ Montant */}
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
-                      <span className="text-[10px] font-black uppercase text-slate-400">MODE 1 : CANAL & MONTANT</span>
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                        <select
-                          value={multiMode1Canal}
-                          onChange={(e) => setMultiMode1Canal(e.target.value as any)}
-                          className="sm:col-span-6 p-2 border border-slate-200 rounded-xl text-xs font-bold bg-white focus:ring-2 focus:ring-emerald-500"
-                        >
-                          <option value="especes">💵 Espèces</option>
-                          <option value="momo_mtn">📱 MoMo (MTN MoMo)</option>
-                          <option value="momo_moov">📱 Moov / Flooz</option>
-                          <option value="banque">🏦 Banque</option>
-                          <option value="credit">📝 Crédit</option>
-                        </select>
-                        <div className="sm:col-span-6 relative">
-                          <input
-                            type="number"
-                            min="0"
-                            value={multiMode1Amount || ''}
-                            onChange={(e) => handleMode1AmountChange(Number(e.target.value))}
-                            placeholder="Montant 1"
-                            className="w-full p-2 border border-slate-200 rounded-xl font-mono text-xs font-bold text-right focus:ring-2 focus:ring-emerald-500"
-                          />
-                          <span className="absolute right-2 top-2 text-[10px] text-slate-400 pointer-events-none font-bold">FCFA</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Mode 2 : Sélecteur de canal + champ Montant (ajusté automatiquement) */}
-                    <div className="bg-white p-2.5 rounded-xl border border-slate-200 space-y-1">
-                      <span className="text-[10px] font-black uppercase text-slate-400">MODE 2 : CANAL & MONTANT (AJUSTÉ AUTOMATIQUEMENT)</span>
-                      <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
-                        <select
-                          value={multiMode2Canal}
-                          onChange={(e) => setMultiMode2Canal(e.target.value as any)}
-                          className="sm:col-span-6 p-2 border border-slate-200 rounded-xl text-xs font-bold bg-white focus:ring-2 focus:ring-emerald-500"
-                        >
-                          <option value="especes">💵 Espèces</option>
-                          <option value="momo_mtn">📱 MoMo (MTN MoMo)</option>
-                          <option value="momo_moov">📱 Moov / Flooz</option>
-                          <option value="banque">🏦 Banque</option>
-                          <option value="credit">📝 Crédit</option>
-                        </select>
-                        <div className="sm:col-span-6 relative">
-                          <input
-                            type="number"
-                            min="0"
-                            value={multiMode2Amount || ''}
-                            onChange={(e) => handleMode2AmountChange(Number(e.target.value))}
-                            placeholder="Montant 2"
-                            className="w-full p-2 border border-slate-200 rounded-xl font-mono text-xs font-bold text-right focus:ring-2 focus:ring-emerald-500"
-                          />
-                          <span className="absolute right-2 top-2 text-[10px] text-slate-400 pointer-events-none font-bold">FCFA</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Badges de contrôle d'équilibre en temps réel */}
-                    <div className="pt-1">
-                      {multiDiff > 0 && (
-                        <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
-                          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>⚠️ Reste à percevoir : {fmt(multiDiff)}</span>
-                        </div>
-                      )}
-                      {multiDiff < 0 && (
-                        <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-bold">
-                          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
-                          <span>⚠️ Trop perçu : {fmt(Math.abs(multiDiff))}</span>
-                        </div>
-                      )}
-                      {multiDiff === 0 && totalNetTTC > 0 && (
-                        <div className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-bold">
-                          <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                          <span>✓ Règlements équilibrés (Total TTC = {fmt(totalNetTTC)})</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Pied du Bottom Sheet : Verrouillage strict du bouton de validation */}
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex gap-2">
-              <button
-                type="button"
-                onClick={() => setIsCartSheetOpen(false)}
-                className="px-4 py-3 border border-slate-200 rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-100 transition"
-              >
-                Fermer
-              </button>
-              <button
-                type="button"
-                disabled={!canValidateSale}
-                onClick={handleValidateSale}
-                className={clsx(
-                  'flex-1 py-3 px-4 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-sm',
-                  canValidateSale
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-600/20'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
-                )}
-              >
-                {paying ? (
-                  <RefreshCw className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Check className="w-4 h-4" />
-                )}
-                <span>{validationButtonText}</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      </ModalPortal>
 
       {/* ── MODAL 3 : FACTURE COMMERCIALE STANDARD GESTIO 229 (AUCUN FAUX E-MECEF) */}
       <ModalPortal isOpen={showInvoiceModal && !!currentSale} onClose={() => setShowInvoiceModal(false)} id="modal-invoice-standard">
