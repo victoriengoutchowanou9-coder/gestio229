@@ -43,8 +43,19 @@ const REAL_MODULES_LIST = [
   { id: 'syscohada', name: 'Comptabilité SYSCOHADA', description: 'Livre Journal, Grand Livre, Balance 6 colonnes et SMT' },
 ]
 
+const formatDateSafe = (dateVal: any): string => {
+  if (!dateVal) return '-'
+  try {
+    const d = new Date(dateVal)
+    if (isNaN(d.getTime())) return '-'
+    return d.toLocaleDateString('fr-BJ')
+  } catch {
+    return '-'
+  }
+}
+
 export const AbonnementPage: React.FC = () => {
-  const { company, refreshTenantContext } = useAuthStore()
+  const { company, status, refreshTenantContext } = useAuthStore()
   const { toast } = useUIStore()
 
   // Calcul des données d'abonnement / essai
@@ -52,12 +63,12 @@ export const AbonnementPage: React.FC = () => {
 
   // Sélecteur pour calculatrice dynamique (>3 activités)
   const [interactiveActivities, setInteractiveActivities] = useState<number>(
-    subInfo.activityCount > 3 ? subInfo.activityCount : 4
+    (subInfo?.activityCount || 1) > 3 ? subInfo.activityCount : 4
   )
 
   // Plan sélectionné pour renouvellement
   const [selectedPlanSlug, setSelectedPlanSlug] = useState<string>(
-    subInfo.planSlug.includes('starter') ? 'starter' : 'entreprise'
+    (subInfo?.planSlug || '').includes('starter') ? 'starter' : 'entreprise'
   )
 
   // Modal de renouvellement
@@ -80,16 +91,20 @@ export const AbonnementPage: React.FC = () => {
     if (!company?.id) return
     setLoadingHistory(true)
     try {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('subscription_payments')
         .select('*')
         .eq('company_id', company.id)
         .order('created_at', { ascending: false })
         .limit(10)
 
-      setPaymentHistory(data || [])
-    } catch (e) {
-      // Ignorer si la table est vide
+      if (!error && Array.isArray(data)) {
+        setPaymentHistory(data)
+      } else {
+        setPaymentHistory([])
+      }
+    } catch {
+      setPaymentHistory([])
     } finally {
       setLoadingHistory(false)
     }
@@ -206,6 +221,24 @@ export const AbonnementPage: React.FC = () => {
     return calculateSubscriptionPrice(interactiveActivities)
   }, [interactiveActivities])
 
+  if (status === 'idle' || status === 'loading') {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
+
+  if (!company) {
+    return (
+      <div className="p-8 text-center bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 max-w-md mx-auto my-12 shadow-sm">
+        <AlertCircle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
+        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Aucune entreprise associée</h3>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Veuillez vous reconnecter pour accéder aux détails de votre abonnement.</p>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-8 max-w-6xl mx-auto pb-12">
       {/* ─── En-tête de la Page ───────────────────────────────────────── */}
@@ -299,7 +332,7 @@ export const AbonnementPage: React.FC = () => {
           {/* Bouton d'action principal */}
           <div className="shrink-0 flex flex-col sm:flex-row lg:flex-col gap-2">
             <button
-              onClick={() => openRenewModal(calculateSubscriptionPrice(subInfo.activityCount, subInfo.planSlug.includes('starter') ? 'starter' : 'entreprise'))}
+              onClick={() => openRenewModal(calculateSubscriptionPrice(subInfo.activityCount, (subInfo?.planSlug || '').includes('starter') ? 'starter' : 'entreprise'))}
               className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-2xl shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition"
             >
               <Zap className="w-4 h-4 fill-white" />
@@ -711,7 +744,7 @@ export const AbonnementPage: React.FC = () => {
                 {paymentHistory.map((item) => (
                   <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
                     <td className="px-5 py-3 text-slate-500 dark:text-slate-400">
-                      {new Date(item.created_at).toLocaleDateString('fr-BJ')}
+                      {formatDateSafe(item.created_at)}
                     </td>
                     <td className="px-5 py-3 font-mono font-medium text-slate-700 dark:text-slate-300">
                       {item.reference}

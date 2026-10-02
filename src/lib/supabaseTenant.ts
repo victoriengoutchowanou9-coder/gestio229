@@ -65,43 +65,136 @@ export interface TenantQueryClient {
   raw: () => any
 }
 
-function attachSelectFallback(query: any, physicalTable: string, companyId: string, cleanSlug: string, isHub?: boolean) {
-  const origThen = query.then.bind(query)
-  query.then = function (onfulfilled?: any, onrejected?: any) {
-    return origThen(async (res: any) => {
-      // Si la colonne sector_slug n'existe pas encore dans le schéma SQL Supabase
-      if (res?.error && res.error.code === 'PGRST204' && String(res.error.message).includes('sector_slug')) {
-        let fallbackQuery = supabase.from(physicalTable).select('*')
-        if (companyId) {
-          fallbackQuery = fallbackQuery.eq('company_id', companyId)
-        }
-        const fbRes = await fallbackQuery
-        if (fbRes.error) {
-          return onfulfilled ? onfulfilled(fbRes) : fbRes
-        }
-        const isolatedData = filterItemsForSector(fbRes.data || [], cleanSlug)
-        const customRes = { ...fbRes, data: isolatedData, count: isolatedData.length }
-        return onfulfilled ? onfulfilled(customRes) : customRes
+// Tables dont la colonne physique sector_slug existe avec certitude dans le schéma PostgreSQL Supabase
+export const TABLES_WITH_PHYSICAL_SECTOR_SLUG = new Set<string>([
+  'company_activities',
+  'company_sectors',
+  'sectors',
+  'caisses',
+  'caisse_clotures',
+  'caisse_mouvements',
+  'coffre_fort',
+  'vente_lignes',
+])
+
+export function markTableHasPhysicalSectorSlug(table: string) {
+  TABLES_WITH_PHYSICAL_SECTOR_SLUG.add(resolveTableName(table))
+}
+
+export function isTablePhysicalSectorSlug(table: string): boolean {
+  return TABLES_WITH_PHYSICAL_SECTOR_SLUG.has(resolveTableName(table))
+}
+
+function wrapQueryWithSectorIsolation(
+  query: any,
+  physicalTable: string,
+  companyId: string,
+  cleanSlug: string,
+  isHub?: boolean,
+  hadPhysicalCol?: boolean
+): any {
+  let isSingle = false
+  let isMaybeSingle = false
+
+  const handler: ProxyHandler<any> = {
+    get(target, prop, receiver) {
+      if (prop === 'single') {
+        isSingle = true
+        const orig = target.single.bind(target)
+        return (...args: any[]) => wrapQueryWithSectorIsolation(orig(...args), physicalTable, companyId, cleanSlug, isHub, hadPhysicalCol)
       }
-      return onfulfilled ? onfulfilled(res) : res
-    }, onrejected)
+      if (prop === 'maybeSingle') {
+        isMaybeSingle = true
+        const orig = target.maybeSingle.bind(target)
+        return (...args: any[]) => wrapQueryWithSectorIsolation(orig(...args), physicalTable, companyId, cleanSlug, isHub, hadPhysicalCol)
+      }
+
+      if (prop === 'then') {
+        return (onfulfilled?: any, onrejected?: any) => {
+          return target.then(async (res: any) => {
+            // Détection de l'absence physique de sector_slug (Postgres 42703 ou PGRST204)
+            const isColMissingErr = res?.error && (
+              res.error.code === '42703' ||
+              res.error.code === 'PGRST204' ||
+              String(res.error.message).includes('sector_slug') ||
+              (String(res.error.message).includes('column') && String(res.error.message).includes('does not exist'))
+            )
+
+            if (isColMissingErr) {
+              TABLES_WITH_PHYSICAL_SECTOR_SLUG.delete(physicalTable)
+              let fbQuery = supabase.from(physicalTable).select('*')
+              if (companyId) fbQuery = fbQuery.eq('company_id', companyId)
+              const fbRes = await fbQuery
+              if (fbRes.error) {
+                return onfulfilled ? onfulfilled(fbRes) : fbRes
+              }
+              const isolated = cleanSlug && !isHub ? filterItemsForSector(fbRes.data || [], cleanSlug) : (fbRes.data || [])
+              const finalData = isSingle ? (isolated[0] || null) : isMaybeSingle ? (isolated[0] || null) : isolated
+              const customRes = { ...fbRes, data: finalData, count: isolated.length, error: null }
+              return onfulfilled ? onfulfilled(customRes) : customRes
+            }
+
+            // Si la table n'a pas de colonne SQL sector_slug mais que la requête a réussi, filtrer en mémoire
+            if (!hadPhysicalCol && cleanSlug && !isHub && res?.data && !res.error) {
+              if (Array.isArray(res.data)) {
+                const isolated = filterItemsForSector(res.data, cleanSlug)
+                const customRes = { ...res, data: isolated, count: isolated.length }
+                return onfulfilled ? onfulfilled(customRes) : customRes
+              } else if (res.data && typeof res.data === 'object') {
+                const ok = isItemInSector(res.data, cleanSlug)
+                const customRes = { ...res, data: ok ? res.data : null }
+                return onfulfilled ? onfulfilled(customRes) : customRes
+              }
+            }
+
+            return onfulfilled ? onfulfilled(res) : res
+          }, onrejected)
+        }
+      }
+
+      const val = Reflect.get(target, prop, receiver)
+      if (typeof val === 'function') {
+        return (...args: any[]) => {
+          const ret = val.apply(target, args)
+          if (ret && typeof ret === 'object' && typeof ret.then === 'function') {
+            return wrapQueryWithSectorIsolation(ret, physicalTable, companyId, cleanSlug, isHub, hadPhysicalCol)
+          }
+          return ret
+        }
+      }
+      return val
+    }
   }
-  return query
+
+  return new Proxy(query, handler)
 }
 
 function attachInsertFallback(query: any, physicalTable: string, payload: any, cleanSlug: string, options?: any) {
   const origThen = query.then.bind(query)
   query.then = function (onfulfilled?: any, onrejected?: any) {
     return origThen(async (res: any) => {
-      if (res?.error && res.error.code === 'PGRST204' && String(res.error.message).includes('sector_slug')) {
+      const isColMissingErr = res?.error && (
+        res.error.code === '42703' ||
+        res.error.code === 'PGRST204' ||
+        String(res.error.message).includes('sector_slug')
+      )
+      if (isColMissingErr) {
+        TABLES_WITH_PHYSICAL_SECTOR_SLUG.delete(physicalTable)
         const stripAndTag = (row: any) => {
           const copy = { ...row }
           delete copy.sector_slug
-          if (copy.sector_meta) {
-            copy.sector_meta = { ...copy.sector_meta, sector_slug: cleanSlug }
+          copy.sector_meta = {
+            ...(copy.sector_meta || {}),
+            sector_slug: cleanSlug,
+            sector: cleanSlug,
           }
-          if (copy.permissions && typeof copy.permissions === 'object') {
-            copy.permissions = { ...copy.permissions, sector_slug: cleanSlug }
+          if (copy.notes) {
+            try {
+              const parsed = typeof copy.notes === 'string' ? JSON.parse(copy.notes) : copy.notes
+              copy.notes = JSON.stringify({ ...parsed, sector_slug: cleanSlug })
+            } catch {}
+          } else if (['customers', 'suppliers', 'expenses'].includes(physicalTable)) {
+            copy.notes = JSON.stringify({ sector_slug: cleanSlug })
           }
           return copy
         }
@@ -123,17 +216,19 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
   const { companyId, sectorSlug, isHub } = scope
 
   const cleanSlug = (sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
+  const hasPhysicalCol = TABLES_WITH_PHYSICAL_SECTOR_SLUG.has(physicalTable)
 
   // Contrôle de sécurité en développement : interdire les requêtes orphelines
   if (!isHub && (!companyId || !cleanSlug)) {
-    console.error(
-      `[ISOLATION CRITIQUE] supabaseTenant('${table}') appelé sans company_id (${companyId}) ou sector_slug (${cleanSlug}) !`
+    console.warn(
+      `[ISOLATION] supabaseTenant('${table}') appelé sans company_id (${companyId}) ou sector_slug (${cleanSlug})`
     )
   }
 
   return {
     /**
-     * SELECT automatique avec injection stricte de .eq('company_id', companyId).eq('sector_slug', sectorSlug)
+     * SELECT automatique avec isolation stricte :
+     * Filtre par company_id et applique l'isolation sectorielle en base ou en mémoire sans crash.
      */
     select(columns: string = '*') {
       let query = supabase.from(physicalTable).select(columns)
@@ -141,23 +236,38 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
       if (companyId) {
         query = query.eq('company_id', companyId)
       }
-      if (cleanSlug && !isHub) {
+      if (hasPhysicalCol && cleanSlug && !isHub) {
         query = query.eq('sector_slug', cleanSlug)
       }
 
-      return attachSelectFallback(query, physicalTable, companyId, cleanSlug, isHub)
+      return wrapQueryWithSectorIsolation(query, physicalTable, companyId || '', cleanSlug, isHub, hasPhysicalCol)
     },
 
     /**
-     * INSERT avec forçage systématique des colonnes company_id et sector_slug (non modifiables)
+     * INSERT avec injection de company_id et sector_slug (en colonne ou métadonnées selon schéma)
      */
     insert(values: any | any[], options?: any) {
       const injectScope = (row: any) => {
-        return {
-          ...row,
-          company_id: companyId,
-          sector_slug: cleanSlug,
+        const copy = { ...row, company_id: companyId }
+        if (cleanSlug) {
+          if (hasPhysicalCol) {
+            copy.sector_slug = cleanSlug
+          }
+          copy.sector_meta = {
+            ...(copy.sector_meta || {}),
+            sector_slug: cleanSlug,
+            sector: cleanSlug,
+          }
+          if (copy.notes) {
+            try {
+              const parsed = typeof copy.notes === 'string' ? JSON.parse(copy.notes) : copy.notes
+              copy.notes = JSON.stringify({ ...parsed, sector_slug: cleanSlug })
+            } catch {}
+          } else if (['customers', 'suppliers', 'expenses'].includes(physicalTable)) {
+            copy.notes = JSON.stringify({ sector_slug: cleanSlug })
+          }
         }
+        return copy
       }
 
       const payload = Array.isArray(values) ? values.map(injectScope) : injectScope(values)
@@ -171,14 +281,16 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
     update(values: any, options?: any) {
       const safeValues = { ...values }
       delete safeValues.company_id
-      delete safeValues.sector_slug
+      if (!hasPhysicalCol) {
+        delete safeValues.sector_slug
+      }
 
       let query = supabase.from(physicalTable).update(safeValues, options)
 
       if (companyId) {
         query = query.eq('company_id', companyId)
       }
-      if (cleanSlug && !isHub) {
+      if (hasPhysicalCol && cleanSlug && !isHub) {
         query = query.eq('sector_slug', cleanSlug)
       }
 
@@ -186,7 +298,7 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
     },
 
     /**
-     * DELETE avec clause WHERE stricte sur company_id et sector_slug
+     * DELETE avec clause WHERE stricte sur company_id
      */
     delete(options?: any) {
       let query = supabase.from(physicalTable).delete(options)
@@ -194,7 +306,7 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
       if (companyId) {
         query = query.eq('company_id', companyId)
       }
-      if (cleanSlug && !isHub) {
+      if (hasPhysicalCol && cleanSlug && !isHub) {
         query = query.eq('sector_slug', cleanSlug)
       }
 
@@ -205,11 +317,11 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
      * UPSERT avec forçage de scope
      */
     upsert(values: any | any[], options?: any) {
-      const injectScope = (row: any) => ({
-        ...row,
-        company_id: companyId,
-        sector_slug: cleanSlug,
-      })
+      const injectScope = (row: any) => {
+        const copy = { ...row, company_id: companyId }
+        if (hasPhysicalCol && cleanSlug) copy.sector_slug = cleanSlug
+        return copy
+      }
 
       const payload = Array.isArray(values) ? values.map(injectScope) : injectScope(values)
       return supabase.from(physicalTable).upsert(payload, options)
@@ -256,11 +368,16 @@ export async function getNextSectorCode(
   // 2. Fallback automatique calculé directement depuis Supabase avec double filtre (company_id, sector_slug)
   try {
     const codeColumn = physicalTable === 'sales_orders' ? 'order_number' : 'code'
-    const { data: rows } = await supabase
+    let query = supabase
       .from(physicalTable)
       .select(codeColumn)
       .eq('company_id', companyId)
-      .eq('sector_slug', cleanSlug)
+
+    if (TABLES_WITH_PHYSICAL_SECTOR_SLUG.has(physicalTable) && cleanSlug) {
+      query = query.eq('sector_slug', cleanSlug)
+    }
+
+    const { data: rows } = await query
 
     let maxNum = 0
     const regex = new RegExp(`^${cleanPrefix}-(\\d+)$`, 'i')

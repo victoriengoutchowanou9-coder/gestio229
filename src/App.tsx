@@ -178,6 +178,19 @@ const AppRoutes: React.FC = () => {
         }
       />
 
+      {/* Route dédiée Abonnement & Licence (accessible partout avec layout complet) */}
+      <Route
+        path="/abonnement"
+        element={
+          <ProtectedRoute>
+            <AppLayout />
+          </ProtectedRoute>
+        }
+      >
+        <Route index element={<AbonnementPage />} />
+      </Route>
+      <Route path="/subscription" element={<Navigate to="/abonnement" replace />} />
+
       {/* Espaces d'exploitation des Sous-Logiciels Spécialisés (Isolation Totale) */}
       <Route
         path="/app/:sectorSlug"

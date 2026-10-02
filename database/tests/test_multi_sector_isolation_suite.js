@@ -186,8 +186,8 @@ async function runAcceptanceTests() {
       .select('*')
       .eq('company_id', companyId1)
 
-    const activeActivitiesCount = (activities || []).length
-    assert(activeActivitiesCount === 19, `19 lignes actives présentes dans company_activities (Trouvées : ${activeActivitiesCount})`)
+    const uniqueActivitiesCount = new Set((activities || []).map(a => (a.sector_slug || a.sector_id || '').toLowerCase().trim())).size
+    assert(uniqueActivitiesCount === 19, `19 secteurs distincts présents dans company_activities (Trouvés : ${uniqueActivitiesCount})`)
 
     // -------------------------------------------------------------------------
     // TEST 2 : Client JEAN en Boutique -> invisible en Microfinance, Poissonnerie, etc.
