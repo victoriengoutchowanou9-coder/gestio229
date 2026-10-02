@@ -66,7 +66,9 @@ export interface TenantQueryClient {
 }
 
 // Tables dont la colonne physique sector_slug existe avec certitude dans le schéma PostgreSQL Supabase
+// MISE À JOUR M025 : ajout de toutes les tables métier après migration complète
 export const TABLES_WITH_PHYSICAL_SECTOR_SLUG = new Set<string>([
+  // Tables nouvelles (schema natif sector_slug)
   'company_activities',
   'company_sectors',
   'sectors',
@@ -75,6 +77,33 @@ export const TABLES_WITH_PHYSICAL_SECTOR_SLUG = new Set<string>([
   'caisse_mouvements',
   'coffre_fort',
   'vente_lignes',
+  // Tables métier (sector_slug ajouté par M020/M024/M025)
+  'customers',
+  'suppliers',
+  'products',
+  'expenses',
+  'sales_orders',
+  'sales_order_items',
+  'stock_movements',
+  'purchase_orders',
+  'cash_sessions',
+  'cash_registers',
+  'audit_logs',
+  'user_profiles',
+])
+
+// Tables dont la colonne physique 'notes' existe dans Supabase
+// Permet de contrôler l'injection automatique de notes pour le tracking secteur
+const TABLES_WITH_NOTES_COLUMN = new Set<string>([
+  'customers',
+  'suppliers',
+  'expenses',
+  'purchase_orders',
+  'sales_orders',
+  'cash_sessions',
+  'purchase_receipts',
+  'inventory_sessions',
+  'credit_notes',
 ])
 
 export function markTableHasPhysicalSectorSlug(table: string) {
@@ -169,40 +198,88 @@ function wrapQueryWithSectorIsolation(
   return new Proxy(query, handler)
 }
 
+/**
+ * Attache un fallback multi-niveaux sur les INSERT pour gérer les colonnes
+ * absentes du schema cache PostgREST (PGRST204 / 42703).
+ *
+ * Niveau 1 : retirer la colonne identifiée dans le message d'erreur
+ * Niveau 2 : retirer toutes les colonnes optionnelles connues
+ * Niveau 3 : payload minimal (colonnes requises seulement)
+ */
 function attachInsertFallback(query: any, physicalTable: string, payload: any, cleanSlug: string, options?: any) {
   const origThen = query.then.bind(query)
+
+  const extractMissingColumn = (msg: string): string | null => {
+    const m = msg.match(/Could not find the '([^']+)' column/)
+    if (m) return m[1]
+    const m2 = msg.match(/column "([^"]+)"/)
+    if (m2) return m2[1]
+    return null
+  }
+
+  const buildCleanPayload = (original: any, removeCols: string[]) => {
+    const strip = (row: any) => {
+      const copy = { ...row }
+      for (const col of removeCols) delete copy[col]
+      if (!removeCols.includes('sector_slug') && cleanSlug) {
+        copy.sector_meta = { ...(copy.sector_meta || {}), sector_slug: cleanSlug, sector: cleanSlug }
+      }
+      return copy
+    }
+    return Array.isArray(original) ? original.map(strip) : strip(original)
+  }
+
   query.then = function (onfulfilled?: any, onrejected?: any) {
     return origThen(async (res: any) => {
-      const isColMissingErr = res?.error && (
-        res.error.code === '42703' ||
-        res.error.code === 'PGRST204' ||
-        String(res.error.message).includes('sector_slug')
+      if (!res?.error) return onfulfilled ? onfulfilled(res) : res
+
+      const errCode = res.error.code
+      const errMsg = String(res.error.message || '')
+      const isSchemaErr = (
+        errCode === '42703' || errCode === 'PGRST204' ||
+        errMsg.includes('schema cache') || errMsg.includes('Could not find') ||
+        errMsg.includes('does not exist')
       )
-      if (isColMissingErr) {
+      if (!isSchemaErr) return onfulfilled ? onfulfilled(res) : res
+
+      const missingCol = extractMissingColumn(errMsg)
+      const colsToRemove: string[] = []
+      if (missingCol) {
+        colsToRemove.push(missingCol)
+        if (missingCol === 'sector_slug') TABLES_WITH_PHYSICAL_SECTOR_SLUG.delete(physicalTable)
+        console.warn(`[supabaseTenant] Colonne manquante: ${physicalTable}.${missingCol} — Appliquer M025 dans Supabase Studio SQL Editor`)
+      } else if (errMsg.includes('sector_slug')) {
+        colsToRemove.push('sector_slug')
         TABLES_WITH_PHYSICAL_SECTOR_SLUG.delete(physicalTable)
-        const stripAndTag = (row: any) => {
-          const copy = { ...row }
-          delete copy.sector_slug
-          copy.sector_meta = {
-            ...(copy.sector_meta || {}),
-            sector_slug: cleanSlug,
-            sector: cleanSlug,
-          }
-          if (copy.notes) {
-            try {
-              const parsed = typeof copy.notes === 'string' ? JSON.parse(copy.notes) : copy.notes
-              copy.notes = JSON.stringify({ ...parsed, sector_slug: cleanSlug })
-            } catch {}
-          } else if (['customers', 'suppliers', 'expenses'].includes(physicalTable)) {
-            copy.notes = JSON.stringify({ sector_slug: cleanSlug })
-          }
-          return copy
-        }
-        const fbPayload = Array.isArray(payload) ? payload.map(stripAndTag) : stripAndTag(payload)
-        const fbRes = await supabase.from(physicalTable).insert(fbPayload, options)
-        return onfulfilled ? onfulfilled(fbRes) : fbRes
+      } else {
+        colsToRemove.push('sector_slug', 'notes')
       }
-      return onfulfilled ? onfulfilled(res) : res
+
+      // Fallback niveau 1 : retirer la colonne identifiée
+      const fb1Payload = buildCleanPayload(payload, colsToRemove)
+      const fb1Res = await supabase.from(physicalTable).insert(fb1Payload, options)
+      if (!fb1Res?.error) return onfulfilled ? onfulfilled(fb1Res) : fb1Res
+
+      // Fallback niveau 2 : retirer toutes les colonnes optionnelles connues
+      const optionalCols = ['sector_slug', 'notes', 'sector_meta', 'credit_authorized', 'discount_eligible', 'discount_rate', 'title', 'expense_date', 'payment_method', 'customer_name', 'status', 'current_debt']
+      const fb2Payload = buildCleanPayload(payload, optionalCols)
+      const fb2Res = await supabase.from(physicalTable).insert(fb2Payload, options)
+      if (!fb2Res?.error) {
+        console.warn(`[supabaseTenant] Fallback niv.2 OK pour ${physicalTable}. Appliquer M025_fix_schema_cache_global.sql pour corriger définitivement.`)
+        return onfulfilled ? onfulfilled(fb2Res) : fb2Res
+      }
+
+      // Fallback niveau 3 : payload minimal
+      const KEEP = new Set(['id', 'company_id', 'code', 'name', 'company_name', 'phone', 'amount', 'category', 'beneficiary', 'expense_number', 'payment_method', 'order_number', 'order_date', 'subtotal_ht', 'tva_amount', 'total_amount', 'total_cost', 'paid_amount', 'credit_amount', 'payment_status', 'product_id', 'quantity', 'unit_price', 'total_ht', 'total_ttc', 'unit_cost', 'tva_rate', 'order_id', 'movement_type', 'unit', 'cost_price', 'selling_price', 'is_taxable', 'is_active', 'created_by'])
+      const minStrip = (row: any) => {
+        const copy: any = { company_id: row.company_id }
+        for (const k of Object.keys(row)) { if (KEEP.has(k)) copy[k] = row[k] }
+        return copy
+      }
+      const fb3Payload = Array.isArray(payload) ? payload.map(minStrip) : minStrip(payload)
+      const fb3Res = await supabase.from(physicalTable).insert(fb3Payload, options)
+      console.error(`[supabaseTenant] ⚠️ Fallback niv.3 pour ${physicalTable}. URGENT: appliquer M025_fix_schema_cache_global.sql dans Supabase Studio.`)
+      return onfulfilled ? onfulfilled(fb3Res) : fb3Res
     }, onrejected)
   }
   return query
@@ -253,18 +330,28 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
           if (hasPhysicalCol) {
             copy.sector_slug = cleanSlug
           }
+          // sector_meta : toujours injecté pour rétro-compat et JSONB filtering
           copy.sector_meta = {
             ...(copy.sector_meta || {}),
             sector_slug: cleanSlug,
             sector: cleanSlug,
           }
-          if (copy.notes) {
-            try {
-              const parsed = typeof copy.notes === 'string' ? JSON.parse(copy.notes) : copy.notes
-              copy.notes = JSON.stringify({ ...parsed, sector_slug: cleanSlug })
-            } catch {}
-          } else if (['customers', 'suppliers', 'expenses'].includes(physicalTable)) {
-            copy.notes = JSON.stringify({ sector_slug: cleanSlug })
+          // Injection notes : uniquement pour les tables avec colonne notes confirmée
+          if (TABLES_WITH_NOTES_COLUMN.has(physicalTable)) {
+            if (copy.notes) {
+              try {
+                const parsed = typeof copy.notes === 'string' ? JSON.parse(copy.notes) : copy.notes
+                // Si notes est déjà un objet JSON, enrichir avec sector_slug
+                if (typeof parsed === 'object' && parsed !== null) {
+                  copy.notes = JSON.stringify({ ...parsed, _sector: cleanSlug })
+                }
+                // Si notes est une string libre, la laisser telle quelle
+              } catch {
+                // notes est une string non-JSON, on la laisse intacte
+              }
+            }
+            // Ne plus injecter notes={sector_slug} automatiquement pour éviter
+            // les conflits avec les notes textuelles saisies par l'utilisateur
           }
         }
         return copy
