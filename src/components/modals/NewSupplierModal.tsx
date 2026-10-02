@@ -13,6 +13,8 @@ import ModalPortal from './ModalPortal'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
+import { useTenant } from '../../hooks/useTenant'
+import { getNextSectorCode } from '../../lib/supabaseTenant'
 import { getActiveSectorSlug, withSectorMeta } from '../../lib/sectorClient'
 
 interface NewSupplierModalProps {
@@ -47,6 +49,7 @@ export const NewSupplierModal: React.FC<NewSupplierModalProps> = ({
 }) => {
   const { company } = useAuthStore()
   const { toast } = useUIStore()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
 
   const defaultCode = `FOURN-${String(nextSupplierIndex).padStart(3, '0')}`
 
@@ -119,9 +122,13 @@ export const NewSupplierModal: React.FC<NewSupplierModalProps> = ({
 
     setIsSubmitting(true)
     try {
+      let finalCode = form.code.trim().toUpperCase()
+      if (!finalCode || finalCode === defaultCode) {
+        finalCode = await getNextSectorCode('suppliers', 'FOURN', companyId || '', sectorSlug)
+      }
+
       const corePayload = {
-        company_id: company.id,
-        code: form.code.trim().toUpperCase() || defaultCode,
+        code: finalCode,
         company_name: form.company_name.trim(),
         contact_person: form.contact_person.trim() || null,
         ifu_number: form.ifu_number.trim() || null,
@@ -135,8 +142,7 @@ export const NewSupplierModal: React.FC<NewSupplierModalProps> = ({
         is_active: form.is_active
       }
 
-      const { data: insData, error } = await supabase
-        .from('suppliers')
+      const { data: insData, error } = await supabaseTenant('suppliers')
         .insert(corePayload)
         .select()
         .single()

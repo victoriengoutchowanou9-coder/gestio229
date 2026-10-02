@@ -229,16 +229,17 @@ const UtilisateursPage: React.FC = () => {
       if (err) throw err
       const rawUserList = data ?? []
 
-      // ── ISOLATION TOTALE PAR ACTIVITÉ (Règle critique) ──
-      // Un utilisateur créé dans l'activité A ne doit JAMAIS apparaître dans l'activité B.
+      // ── ISOLATION TOTALE PAR ACTIVITÉ / SECTEUR (Règle critique) ──
+      // Un utilisateur créé dans un secteur ne doit JAMAIS apparaître dans un autre.
       const userList = rawUserList.filter((u: any) => {
+        const uSector = (u.sector_slug || '').toLowerCase().trim()
         const perm = (typeof u.permissions === 'object' && u.permissions) ? u.permissions : {}
-        const uSector = (perm.sector_slug || perm.sector_id || u.sector_id || '').toLowerCase().replace(/^sec-/, '')
-        const uActId = perm.activity_id || perm.sector_id
-        if (!uSector && !uActId) {
+        const permSector = (perm.sector_slug || perm.sector_id || u.sector_id || '').toLowerCase().replace(/^sec-/, '').trim()
+        const assigned = uSector || permSector
+        if (!assigned) {
           return currentSectorSlug === 'boutique'
         }
-        return uSector === currentSectorSlug || (currentActivityId && (uActId === currentActivityId))
+        return assigned === currentSectorSlug
       })
 
       setUsers(userList)
@@ -569,7 +570,7 @@ const UtilisateursPage: React.FC = () => {
         created_by_admin_id: user?.id ?? null,
       }
 
-      const { error: profileErr } = await supabase.from('user_profiles').insert({
+      const baseUserObj = {
         company_id: company.id,
         auth_user_id: authUserId,
         full_name: form.full_name.trim(),
@@ -581,7 +582,19 @@ const UtilisateursPage: React.FC = () => {
         sector_id: assignedSectorSlug,
         is_active: true,
         permissions: permissionsPayload,
+      }
+
+      let profileErr: any = null
+      const { error: errWithSlug } = await supabase.from('user_profiles').insert({
+        ...baseUserObj,
+        sector_slug: assignedSectorSlug,
       })
+
+      if (errWithSlug) {
+        // Fallback si la colonne physique sector_slug n'existe pas encore
+        const { error: fallbackErr } = await supabase.from('user_profiles').insert(baseUserObj)
+        profileErr = fallbackErr
+      }
 
       if (profileErr) throw new Error('Erreur création profil : ' + profileErr.message)
 

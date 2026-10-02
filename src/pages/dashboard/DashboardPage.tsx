@@ -15,6 +15,7 @@ import {
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
+import { useTenant } from '../../hooks/useTenant'
 import { getActiveSectorSlug, getActiveSectorMeta, filterItemsForSector } from '../../lib/sectorClient'
 
 const fmt = (n: number) =>
@@ -33,9 +34,9 @@ interface TodaySale {
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate()
-  const params = useParams<{ sectorSlug?: string }>()
-  const { company, user, tenantCtx } = useAuthStore()
+  const { user } = useAuthStore()
   const { toast } = useUIStore()
+  const { companyId, sectorSlug, sectorMeta, supabaseTenant } = useTenant()
 
   const [loading, setLoading] = useState(true)
   const [salesToday, setSalesToday] = useState<TodaySale[]>([])
@@ -43,25 +44,21 @@ export const DashboardPage: React.FC = () => {
   const [totalProductsValue, setTotalProductsValue] = useState<number>(0)
   const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
 
-  // Déterminer le sous-logiciel actif avec isolation stricte
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
-  const sectorMeta = getActiveSectorMeta()
+  const currentSectorSlug = sectorSlug
   const sectorDisplayName = sectorMeta?.name || 'Sous-Logiciel'
 
-  // Charger les indicateurs réels du jour pour l'entreprise & le secteur
+  // Charger les indicateurs réels du jour pour l'entreprise & le secteur avec isolation stricte
   const loadDashboardData = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     setLoading(true)
     try {
       // Début et fin de la journée actuelle en heure locale
       const now = new Date()
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
-      // 1. Ventes du jour réelles (chargées depuis Supabase)
-      const { data: salesData, error: salesErr } = await supabase
-        .from('sales_orders')
+      // 1. Ventes du jour réelles (isolées strictement par company_id et sector_slug)
+      const { data: salesData, error: salesErr } = await supabaseTenant('sales_orders')
         .select('*, customer:customers(id, name, ifu_number)')
-        .eq('company_id', company.id)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false })
 
@@ -104,22 +101,18 @@ export const DashboardPage: React.FC = () => {
         }
       })
 
-      // 1. Ventes du jour réelles (filtrées par sous-logiciel)
-      const filteredSales = filterItemsForSector(mappedSales, currentSectorSlug)
-      setSalesToday(filteredSales)
+      setSalesToday(mappedSales)
 
-      // 2. Produits actifs réels (filtrés par sous-logiciel)
-      const { data: prodData, error: prodErr } = await supabase
-        .from('products')
+      // 2. Produits actifs réels (isolés strictement par company_id et sector_slug)
+      const { data: prodData, error: prodErr } = await supabaseTenant('products')
         .select('*')
-        .eq('company_id', company.id)
         .eq('is_active', true)
 
       if (prodErr) throw prodErr
-      const prods = filterItemsForSector(prodData || [], currentSectorSlug)
+      const prods = prodData || []
       setActiveProductsCount(prods.length)
 
-      const stockVal = prods.reduce((sum, p: any) => {
+      const stockVal = prods.reduce((sum: number, p: any) => {
         const qtyMagasin = Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
         const qtyVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
         const cost = Number(p.cost_price || p.purchase_price || 0)
@@ -127,15 +120,12 @@ export const DashboardPage: React.FC = () => {
       }, 0)
       setTotalProductsValue(stockVal)
 
-      // 3. Total créances clients exigibles (filtrées par sous-logiciel)
-      const { data: custData } = await supabase
-        .from('customers')
+      // 3. Total créances clients exigibles (isolées strictement par company_id et sector_slug)
+      const { data: custData } = await supabaseTenant('customers')
         .select('*')
-        .eq('company_id', company.id)
 
       if (custData) {
-        const filteredCusts = filterItemsForSector(custData, currentSectorSlug)
-        const debtSum = filteredCusts.reduce((sum, c: any) => sum + (Number(c.current_debt) || 0), 0)
+        const debtSum = custData.reduce((sum: number, c: any) => sum + (Number(c.current_debt) || 0), 0)
         setTotalCustomersDebt(debtSum)
       }
     } catch (err: any) {
@@ -146,7 +136,7 @@ export const DashboardPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id])
+  }, [companyId, supabaseTenant])
 
   useEffect(() => {
     loadDashboardData()

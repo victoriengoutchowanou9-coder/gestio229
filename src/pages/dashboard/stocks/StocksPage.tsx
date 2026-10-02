@@ -15,6 +15,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { NewProductModal, StockSheetModal, ModalPortal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
@@ -78,8 +79,8 @@ interface DailyStockRow {
 export const StocksPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-  const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
+  const currentSectorSlug = sectorSlug
 
   const [activeTab, setActiveTab] = useState<'double_stock' | 'inventaire' | 'fiche_journaliere'>('double_stock')
 
@@ -130,25 +131,20 @@ export const StocksPage: React.FC = () => {
   const [selectedHistoryForPrint, setSelectedHistoryForPrint] = useState<InventoryHistoryRecord | null>(null)
   const [showHistoryPrintModal, setShowHistoryPrintModal] = useState(false)
 
-  // ─── Chargement réel depuis Supabase (zéro donnée fictive) ──────────────────
+  // ─── Chargement réel depuis Supabase (isolation stricte par sous-logiciel) ──
 
   const loadData = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     setLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('products')
+      const { data, error } = await supabaseTenant('products')
         .select('*, category:product_categories(id, name)')
-        .eq('company_id', company.id)
         .neq('is_active', false)
         .order('name')
 
       if (error) throw error
 
-      // Isolation stricte par sous-logiciel (aucun mélange de données)
-      const sectorFilteredData = filterItemsForSector(data || [], currentSectorSlug)
-
-      const mapped: ProductStock[] = sectorFilteredData.map((p: any) => ({
+      const mapped: ProductStock[] = (data || []).map((p: any) => ({
         id: p.id,
         code: p.code,
         name: p.name,
@@ -173,7 +169,7 @@ export const StocksPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, toast])
+  }, [companyId, supabaseTenant, toast])
 
   useEffect(() => {
     loadData()

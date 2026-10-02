@@ -17,6 +17,7 @@ import autoTable from 'jspdf-autotable'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
@@ -104,8 +105,8 @@ interface SaleRecord {
 export const POSPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-  const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
+  const currentSectorSlug = sectorSlug
 
   // Navigation interne
   const [activeTab, setActiveTab] = useState<'pos' | 'historique'>('pos')
@@ -151,29 +152,23 @@ export const POSPage: React.FC = () => {
   const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([])
   const [historySearch, setHistorySearch] = useState('')
 
-  // ─── Chargement réel des données depuis Supabase ───────────────────────────
+  // ─── Chargement réel des données depuis Supabase (isolation stricte par sous-logiciel) ───
 
   const loadData = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     setLoading(true)
     try {
       const [{ data: prods, error: prodErr }, { data: custs, error: custErr }, { data: sales, error: saleErr }] =
         await Promise.all([
-          supabase
-            .from('products')
+          supabaseTenant('products')
             .select('*, category:product_categories(name)')
-            .eq('company_id', company.id)
             .eq('is_active', true)
             .order('name'),
-          supabase
-            .from('customers')
+          supabaseTenant('customers')
             .select('*')
-            .eq('company_id', company.id)
             .order('name'),
-          supabase
-            .from('sales_orders')
+          supabaseTenant('sales_orders')
             .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
-            .eq('company_id', company.id)
             .order('created_at', { ascending: false })
             .limit(100)
         ])
@@ -181,10 +176,7 @@ export const POSPage: React.FC = () => {
       if (prodErr) throw prodErr
       if (custErr) throw custErr
 
-      // Isolation stricte par sous-logiciel (aucun mélange inter-secteurs)
-      const sectorFilteredProds = filterItemsForSector(prods || [], currentSectorSlug)
-
-      const mappedProds = sectorFilteredProds.map((p: any) => ({
+      const mappedProds = (prods || []).map((p: any) => ({
         ...p,
         selling_price: Number(p.selling_price) || 0,
         cost_price: Number(p.cost_price) || 0,
@@ -717,8 +709,7 @@ export const POSPage: React.FC = () => {
       let savedDbSale: any = null
 
       // Tentative avec colonnes étendues d'abord
-      const { data: dbSale, error: dbSaleErr } = await supabase
-        .from('sales_orders')
+      const { data: dbSale, error: dbSaleErr } = await supabaseTenant('sales_orders')
         .insert(fullSalePayload)
         .select()
         .single()
@@ -727,8 +718,7 @@ export const POSPage: React.FC = () => {
         savedDbSale = dbSale
       } else {
         // Fallback garanti sur le schéma natif Supabase (sans sector_slug ni colonnes manquantes)
-        const { data: fbSale, error: fbErr } = await supabase
-          .from('sales_orders')
+        const { data: fbSale, error: fbErr } = await supabaseTenant('sales_orders')
           .insert(baseSalePayload)
           .select()
           .single()
@@ -785,13 +775,12 @@ export const POSPage: React.FC = () => {
             }
 
             // Mise à jour de la table products
-            await supabase
-              .from('products')
+            await supabaseTenant('products')
               .update({ sector_meta: updatedMeta })
               .eq('id', line.product.id)
 
             // Traçabilité mouvement de stock dans stock_movements
-            await supabase.from('stock_movements').insert({
+            await supabaseTenant('stock_movements').insert({
               company_id: company.id,
               product_id: line.product.id,
               movement_type: 'VENTE_POS',
@@ -818,8 +807,7 @@ export const POSPage: React.FC = () => {
       // 4. Si client avec crédit, mise à jour de la créance dans Supabase
       if (selectedCustomer && creditAmount > 0) {
         const newDebt = (Number(selectedCustomer.current_debt) || 0) + creditAmount
-        await supabase
-          .from('customers')
+        await supabaseTenant('customers')
           .update({ current_debt: newDebt })
           .eq('id', selectedCustomer.id)
 
@@ -842,24 +830,20 @@ export const POSPage: React.FC = () => {
 
       if (paidCash > 0 || paidMomo > 0) {
         try {
-          const { data: registers } = await supabase
-            .from('cash_registers')
+          const { data: registers } = await supabaseTenant('cash_registers')
             .select('*')
-            .eq('company_id', company.id)
             .limit(1)
 
           if (registers && registers.length > 0) {
             const reg = registers[0]
-            await supabase
-              .from('cash_registers')
+            await supabaseTenant('cash_registers')
               .update({
                 current_cash_balance: (Number(reg.current_cash_balance) || 0) + paidCash,
                 current_momo_balance: (Number(reg.current_momo_balance) || 0) + paidMomo
               })
               .eq('id', reg.id)
           } else {
-            await supabase
-              .from('cash_registers')
+            await supabaseTenant('cash_registers')
               .insert({
                 company_id: company.id,
                 name: 'Caisse Principale POS',
@@ -931,8 +915,7 @@ export const POSPage: React.FC = () => {
 
     try {
       // 1. Mettre à jour sales_orders dans Supabase
-      await supabase
-        .from('sales_orders')
+      await supabaseTenant('sales_orders')
         .update({
           payment_status: 'avoir',
           e_mecef_uid: `PAY:avoir|CL:${sale.customer_name.slice(0, 30)}|ST:AVOIR`.slice(0, 100)
@@ -944,8 +927,7 @@ export const POSPage: React.FC = () => {
         const cust = customers.find((c) => c.id === sale.customer_id)
         if (cust) {
           const updatedDebt = Math.max(0, (cust.current_debt || 0) - sale.credit_amount)
-          await supabase
-            .from('customers')
+          await supabaseTenant('customers')
             .update({ current_debt: updatedDebt })
             .eq('id', cust.id)
 
@@ -966,12 +948,11 @@ export const POSPage: React.FC = () => {
           const currentMeta = prod?.sector_meta || {}
           const updatedMeta = { ...currentMeta, stock_vente: restoredStockVente, stock_magasin: currentStockMagasin }
 
-          await supabase
-            .from('products')
+          await supabaseTenant('products')
             .update({ sector_meta: updatedMeta })
             .eq('id', line.product.id)
 
-          await supabase.from('stock_movements').insert({
+          await supabaseTenant('stock_movements').insert({
             company_id: company.id,
             product_id: line.product.id,
             movement_type: 'RETOUR_AVOIR',

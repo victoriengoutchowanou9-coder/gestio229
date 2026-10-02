@@ -31,6 +31,7 @@ const ConfigPage         = lazy(() => import('./pages/dashboard/configuration/Co
 const AuditPage          = lazy(() => import('./pages/dashboard/journal-audit/AuditPage'))
 const AbonnementPage     = lazy(() => import('./pages/dashboard/abonnement/AbonnementPage'))
 const UtilisateursPage   = lazy(() => import('./pages/dashboard/utilisateurs/UtilisateursPage'))
+const IsolationHealthPage = lazy(() => import('./pages/dashboard/isolation/IsolationHealthPage'))
 const FournisseursPage2  = FournisseursPage // alias
 
 // Hub multi-services
@@ -208,6 +209,8 @@ const AppRoutes: React.FC = () => {
         <Route path="audit"          element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
         <Route path="abonnement"     element={<AbonnementPage />} />
         <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
+        <Route path="isolation"       element={<IsolationHealthPage />} />
+        <Route path="sante-isolation" element={<IsolationHealthPage />} />
       </Route>
 
       {/* Point 14 : Routes directes par secteur (Ex: /quincaillerie/tableau-bord, /poissonnerie/stocks...) */}
@@ -241,6 +244,8 @@ const AppRoutes: React.FC = () => {
         <Route path="audit"          element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
         <Route path="abonnement"     element={<AbonnementPage />} />
         <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
+        <Route path="isolation"       element={<IsolationHealthPage />} />
+        <Route path="sante-isolation" element={<IsolationHealthPage />} />
       </Route>
 
       {/* Rétrocompatibilité /dashboard */}

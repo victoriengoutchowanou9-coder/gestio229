@@ -9,6 +9,7 @@ import React from 'react'
 import { Link, useParams, useLocation, Navigate } from 'react-router-dom'
 import { Lock, ArrowLeft, ShieldAlert, Sparkles, Clock, AlertTriangle } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
+import { useUIStore } from '../../store/uiStore'
 import { getActiveSectorSlug, isSectorSubscribed } from '../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
@@ -19,6 +20,7 @@ interface SectorGuardProps {
 
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   const { company } = useAuthStore()
+  const { toast } = useUIStore()
   const params = useParams<{ sectorSlug?: string }>()
   const location = useLocation()
 
@@ -137,6 +139,12 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
 
   const meta = ALL_SECTORS_CATALOG.find((s) => s.slug === targetSectorSlug)
   const sectorName = meta?.name || targetSectorSlug
+
+  // Règle 4 : Si le secteur n'est pas souscrit par l'entreprise -> redirection HUB + toast "Secteur non souscrit"
+  if (isAdmin) {
+    toast.error('Secteur non souscrit', `Le sous-logiciel "${sectorName}" n'a pas été souscrit par votre entreprise.`)
+    return <Navigate to="/hub" replace />
+  }
 
   return (
     <div className="min-h-[75vh] flex items-center justify-center p-4">

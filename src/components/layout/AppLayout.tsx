@@ -8,6 +8,7 @@ import Sidebar from './Sidebar'
 import Header from './Header'
 import { useUIStore } from '../../store/uiStore'
 import ToastContainer from '../ui/ToastContainer'
+import SectorErrorBoundary from '../common/SectorErrorBoundary'
 
 const AppLayout: React.FC = () => {
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
@@ -42,7 +43,9 @@ const AppLayout: React.FC = () => {
         <Header />
         <main className="flex-1 overflow-y-auto">
           <div className="p-4 md:p-6 animate-fade-in">
-            <Outlet />
+            <SectorErrorBoundary>
+              <Outlet />
+            </SectorErrorBoundary>
           </div>
         </main>
       </div>

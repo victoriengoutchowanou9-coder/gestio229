@@ -14,6 +14,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
@@ -102,8 +103,8 @@ interface ReceptionRecord {
 export const FournisseursPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-  const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
+  const currentSectorSlug = sectorSlug
 
   const [activeTab, setActiveTab] = useState<'bc' | 'reception' | 'fournisseurs'>('bc')
 
@@ -129,21 +130,17 @@ export const FournisseursPage: React.FC = () => {
   const [paymentAmount, setPaymentAmount] = useState<number>(0)
   const [paymentMode, setPaymentMode] = useState<'especes' | 'momo' | 'banque'>('banque')
 
-  // Chargement réel depuis Supabase (table suppliers & purchase_orders)
+  // Chargement réel depuis Supabase (table suppliers & purchase_orders) avec isolation stricte
   const loadData = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     setLoading(true)
     try {
       const [{ data: sData, error: sErr }, { data: poData, error: poErr }] = await Promise.all([
-        supabase
-          .from('suppliers')
+        supabaseTenant('suppliers')
           .select('*')
-          .eq('company_id', company.id)
           .order('company_name'),
-        supabase
-          .from('purchase_orders')
+        supabaseTenant('purchase_orders')
           .select('*')
-          .eq('company_id', company.id)
           .order('created_at', { ascending: false })
       ])
 
@@ -486,8 +483,7 @@ export const FournisseursPage: React.FC = () => {
     try {
       const currentDebt = Number(selectedSupplierForPay.current_payable ?? selectedSupplierForPay.current_debt ?? 0)
       const updatedDebt = Math.max(0, currentDebt - paymentAmount)
-      await supabase
-        .from('suppliers')
+      await supabaseTenant('suppliers')
         .update({ current_payable: updatedDebt, updated_at: new Date().toISOString() })
         .eq('id', selectedSupplierForPay.id)
 

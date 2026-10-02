@@ -14,6 +14,8 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
+import { getNextSectorCode } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
 
@@ -51,8 +53,8 @@ export const CATEGORIES = [
 export const DepensesPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-  const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
+  const currentSectorSlug = sectorSlug
 
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [usersList, setUsersList] = useState<{ id: string; name: string }[]>([])
@@ -78,19 +80,17 @@ export const DepensesPage: React.FC = () => {
 
   // Charger les dépenses réelles et les utilisateurs enregistrés dans Supabase
   const loadExpenses = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     setLoading(true)
     try {
       const [{ data, error }, { data: profiles }] = await Promise.all([
-        supabase
-          .from('expenses')
+        supabaseTenant('expenses')
           .select('*')
-          .eq('company_id', company.id)
           .order('created_at', { ascending: false }),
         supabase
           .from('user_profiles')
           .select('id, full_name, username')
-          .eq('company_id', company.id)
+          .eq('company_id', companyId)
       ])
 
       if (error) throw error
@@ -120,7 +120,7 @@ export const DepensesPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, currentSectorSlug])
+  }, [companyId, currentSectorSlug])
 
   useEffect(() => {
     loadExpenses()
@@ -130,12 +130,13 @@ export const DepensesPage: React.FC = () => {
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
     const numAmount = Number(form.amount)
-    if (!company?.id || !form.title.trim() || !numAmount || numAmount <= 0) return
+    if (!companyId || !form.title.trim() || !numAmount || numAmount <= 0) return
     setSaving(true)
     try {
-      const expNum = `DEP-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`
+      const expNum = await getNextSectorCode('expenses', 'DEP', companyId, sectorSlug)
       const corePayload = {
-        company_id: company.id,
+        company_id: companyId,
+        sector_slug: sectorSlug,
         expense_number: expNum,
         category: form.category,
         beneficiary: form.title.trim(),
@@ -145,8 +146,7 @@ export const DepensesPage: React.FC = () => {
         created_by: user?.id || null
       }
 
-      const { data: insData, error: insErr } = await supabase
-        .from('expenses')
+      const { data: insData, error: insErr } = await supabaseTenant('expenses')
         .insert(corePayload)
         .select()
         .single()
@@ -156,17 +156,14 @@ export const DepensesPage: React.FC = () => {
       }
 
       // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse dans Supabase
-      if (form.payment_method === 'especes' && company?.id) {
+      if (form.payment_method === 'especes' && companyId) {
         try {
-          const { data: reg } = await supabase
-            .from('cash_registers')
+          const { data: reg } = await supabaseTenant('cash_registers')
             .select('id, current_cash_balance')
-            .eq('company_id', company.id)
             .limit(1)
             .maybeSingle()
           if (reg) {
-            await supabase
-              .from('cash_registers')
+            await supabaseTenant('cash_registers')
               .update({
                 current_cash_balance: Math.max(0, (Number(reg.current_cash_balance) || 0) - numAmount)
               })

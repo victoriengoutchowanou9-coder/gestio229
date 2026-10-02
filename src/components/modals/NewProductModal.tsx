@@ -19,6 +19,8 @@ import {
 } from '../../utils/batchPricing'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
+import { useTenant } from '../../hooks/useTenant'
+import { getNextSectorCode } from '../../lib/supabaseTenant'
 import { getActiveSectorSlug } from '../../lib/sectorClient'
 
 interface NewProductModalProps {
@@ -42,6 +44,7 @@ export const UV_UNITS = [
 
 export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const { company } = useAuthStore()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
 
   // Formulaire Produit sans valeurs fictives (vides ou 0 réels)
   const [form, setForm] = useState({
@@ -248,10 +251,14 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         margin_uv_ht: marginUvHt,
       }
 
-      // 3. Préparation du payload pour Supabase (Colonnes réelles vérifiées)
+      let autoCode = finalCode
+      if (!autoCode) {
+        autoCode = await getNextSectorCode('products', 'PROD', companyId || '', sectorSlug)
+      }
+
+      // 3. Préparation du payload pour Supabase avec isolation sectorielle forcée
       const insertPayload: any = {
-        company_id: company.id,
-        code: finalCode,
+        code: autoCode,
         name: form.name.trim(),
         unit: form.uv,
         cost_price: form.priceAchatUcdTtc,
@@ -264,7 +271,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         is_active: true,
       }
 
-      let res = await supabase.from('products').insert(insertPayload).select().single()
+      let res = await supabaseTenant('products').insert(insertPayload).select().single()
 
       // 4. Contrôle strict des erreurs (zéro erreur silencieuse)
       if (res.error || !res.data) {

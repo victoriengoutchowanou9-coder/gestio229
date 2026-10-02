@@ -81,36 +81,53 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
  */
 export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   if (!item) return false
-  const active = targetSectorSlug || getActiveSectorSlug()
+  const active = (targetSectorSlug || getActiveSectorSlug()).toLowerCase().trim().replace(/^sec-/, '')
 
-  // 1. Tag explicite par colonne sector_slug
+  // 1. Tag explicite par colonne sector_slug ou sector_id
   if (item.sector_slug && typeof item.sector_slug === 'string') {
-    return item.sector_slug === active
+    return item.sector_slug.toLowerCase().trim().replace(/^sec-/, '') === active
+  }
+  if (item.sector_id && typeof item.sector_id === 'string') {
+    return item.sector_id.toLowerCase().trim().replace(/^sec-/, '') === active
+  }
+
+  // 1b. Permissions (pour user_profiles)
+  if (item.permissions && typeof item.permissions === 'object') {
+    const permSlug = item.permissions.sector_slug || item.permissions.sector_id
+    if (permSlug && typeof permSlug === 'string') {
+      return permSlug.toLowerCase().trim().replace(/^sec-/, '') === active
+    }
   }
 
   // 2. Tag explicite dans sector_meta JSONB
   if (item.sector_meta && typeof item.sector_meta === 'object') {
     if (item.sector_meta.sector_slug) {
-      return item.sector_meta.sector_slug === active
+      return String(item.sector_meta.sector_slug).toLowerCase().trim().replace(/^sec-/, '') === active
     }
     if (item.sector_meta.sector) {
-      return item.sector_meta.sector === active
+      return String(item.sector_meta.sector).toLowerCase().trim().replace(/^sec-/, '') === active
     }
   }
 
-  // 2b. Tag dans notes JSON (commandes, ventes, factures)
+  // 2b. Tag dans notes JSON (commandes, ventes, factures, clients, fournisseurs)
   if (item.notes) {
     try {
       const parsed = typeof item.notes === 'string' ? JSON.parse(item.notes) : item.notes
-      if (parsed?.sector_slug) return parsed.sector_slug === active
-      if (parsed?.sector) return parsed.sector === active
+      if (parsed?.sector_slug) {
+        return String(parsed.sector_slug).toLowerCase().trim().replace(/^sec-/, '') === active
+      }
+      if (parsed?.sector) {
+        return String(parsed.sector).toLowerCase().trim().replace(/^sec-/, '') === active
+      }
     } catch (e) {}
   }
 
   // 2c. Tag dans e_mecef_uid ou métadonnées encodées
   if (typeof item.e_mecef_uid === 'string' && item.e_mecef_uid.includes('SEC:')) {
     const match = item.e_mecef_uid.match(/SEC:([^|]+)/)
-    if (match && match[1]) return match[1] === active
+    if (match && match[1]) {
+      return match[1].toLowerCase().trim().replace(/^sec-/, '') === active
+    }
   }
 
   // 3. Cas de rétrocompatibilité pour les données existantes antérieures à la restructuration :
@@ -127,9 +144,10 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
     return !isFish
   }
 
-  // 4. Si l'élément n'a AUCUN marqueur sectoriel spécifique (ex: clients, fournisseurs ou données d'entreprise) :
-  // Il est rattaché à l'entreprise et doit être visible dans son espace.
-  return true
+  // 4. Règle absolue d'isolation : les données sans marqueur sectoriel explicite
+  // n'apparaissent QUE dans 'boutique' (secteur historique par défaut) et JAMAIS
+  // dans les autres sous-logiciels (Poissonnerie, Pharmacie, Microfinance, etc.)
+  return active === 'boutique'
 }
 
 /**

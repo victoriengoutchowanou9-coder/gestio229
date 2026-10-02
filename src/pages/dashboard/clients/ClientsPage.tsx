@@ -14,6 +14,8 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
+import { getNextSectorCode } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
@@ -86,10 +88,9 @@ const initialFormState: CustomerFormState = {
 }
 
 const ClientsPage: React.FC = () => {
-  const { company } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-  const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const { companyId, sectorSlug, supabaseTenant } = useTenant()
 
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
@@ -132,10 +133,8 @@ const ClientsPage: React.FC = () => {
     setCheckingSales(true)
     setCustomerHasSales(null)
     try {
-      const { data: sales } = await supabase
-        .from('sales_orders')
+      const { data: sales } = await supabaseTenant('sales_orders')
         .select('id')
-        .eq('company_id', company?.id)
         .eq('customer_id', c.id)
         .limit(1)
 
@@ -148,26 +147,22 @@ const ClientsPage: React.FC = () => {
   }
 
   const handleConfirmDeleteCustomer = async (softDeleteOnly: boolean) => {
-    if (!deleteCustomerModal || !company?.id) return
+    if (!deleteCustomerModal || !companyId) return
     setDeletingCustomer(true)
     try {
       if (softDeleteOnly || customerHasSales) {
         // Soft delete : conservation historique légale des factures
-        const { error } = await supabase
-          .from('customers')
+        const { error } = await supabaseTenant('clients')
           .update({ is_active: false })
           .eq('id', deleteCustomerModal.id)
-          .eq('company_id', company.id)
 
         if (error) throw error
         toast.success('Client archivé', `Le client ${deleteCustomerModal.name} a été désactivé (facturation conservée).`)
       } else {
         // Hard delete si aucune vente n'est associée
-        const { error } = await supabase
-          .from('customers')
+        const { error } = await supabaseTenant('clients')
           .delete()
           .eq('id', deleteCustomerModal.id)
-          .eq('company_id', company.id)
 
         if (error) throw error
         toast.success('Client supprimé', `Le client ${deleteCustomerModal.name} a été supprimé.`)
@@ -186,22 +181,18 @@ const ClientsPage: React.FC = () => {
   const [form, setForm] = useState<CustomerFormState>(initialFormState)
 
   const loadCustomers = useCallback(async () => {
-    if (!company?.id) return
+    if (!companyId) return
     setLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('customers')
+      // Isolation stricte multi-secteurs garantie par supabaseTenant
+      const { data, error } = await supabaseTenant('clients')
         .select('*')
-        .eq('company_id', company.id)
         .neq('is_active', false)
         .order('name')
 
       if (error) throw error
 
-      // Isolation stricte par sous-logiciel : filtrer pour le secteur actif
-      const sectorFiltered = filterItemsForSector(data || [], currentSectorSlug)
-
-      const mapped: Customer[] = sectorFiltered.map((c: any) => {
+      const mapped: Customer[] = (data || []).map((c: any) => {
         const creditLimit = Number(c.credit_limit) || 0
         const isCreditAuth = Boolean(c.credit_authorized) || (creditLimit > 0)
         const isDiscount = Boolean(c.discount_eligible)
@@ -223,7 +214,7 @@ const ClientsPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, toast])
+  }, [companyId, supabaseTenant, toast])
 
   useEffect(() => {
     loadCustomers()
@@ -301,17 +292,10 @@ const ClientsPage: React.FC = () => {
 
     setSaving(true)
     try {
-      // Auto-génération du code client CLI-001, CLI-002...
+      // Auto-génération du code client séquentiel PAR (company_id, sector_slug)
       let autoCode = form.code.trim()
       if (!autoCode) {
-        const cliNums = customers
-          .map((c) => {
-            const m = c.code?.match(/CLI-(\d+)/i)
-            return m ? parseInt(m[1], 10) : 0
-          })
-          .filter((n) => !isNaN(n))
-        const nextNum = cliNums.length > 0 ? Math.max(...cliNums) + 1 : customers.length + 1
-        autoCode = `CLI-${String(nextNum).padStart(3, '0')}`
+        autoCode = await getNextSectorCode('clients', 'CLI', companyId, sectorSlug)
       }
 
       const isCreditAuthorized = form.credit_choice === 'oui'
@@ -320,7 +304,6 @@ const ClientsPage: React.FC = () => {
       const discountRate = isDiscountEligible ? Number(form.discount_rate) : 0
 
       const corePayload = {
-        company_id: company.id,
         code: autoCode,
         name: form.name.trim(),
         ifu_number: trimmedIfu || null,
@@ -334,8 +317,8 @@ const ClientsPage: React.FC = () => {
         is_active: true,
       }
 
-      const { data: insertedData, error: insertErr } = await supabase
-        .from('customers')
+      // Insertion via supabaseTenant garantissant l'injection forcée de (company_id, sector_slug)
+      const { data: insertedData, error: insertErr } = await supabaseTenant('clients')
         .insert(corePayload)
         .select()
         .single()
@@ -376,8 +359,7 @@ const ClientsPage: React.FC = () => {
       if (!cust) return
 
       const updatedDebt = (Number(cust.current_debt) || 0) + Number(initialDebtForm.amount)
-      const { error } = await supabase
-        .from('customers')
+      const { error } = await supabaseTenant('clients')
         .update({ current_debt: updatedDebt })
         .eq('id', cust.id)
 
@@ -419,9 +401,8 @@ const ClientsPage: React.FC = () => {
       const newDebt = Math.max(0, Math.round((prevDebt - paymentAmount) * 100) / 100)
       const receiptNumber = `REC-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
 
-      // 1. Mettre à jour la dette client dans Supabase
-      const { error: updErr } = await supabase
-        .from('customers')
+      // 1. Mettre à jour la dette client dans Supabase avec isolation sectorielle
+      const { error: updErr } = await supabaseTenant('clients')
         .update({ current_debt: newDebt })
         .eq('id', selectedCustomer.id)
 
@@ -430,11 +411,10 @@ const ClientsPage: React.FC = () => {
       // 2. Insérer dans la table customer_repayments pour traçabilité comptable et historique
       const normalizedMethod = paymentMode === 'cash' ? 'especes' : paymentMode
       try {
-        await supabase
-          .from('customer_repayments')
+        await supabaseTenant('dettes')
           .insert({
-            company_id: company?.id,
             customer_id: selectedCustomer.id,
+            customer_name: selectedCustomer.name,
             amount: paymentAmount,
             payment_method: normalizedMethod,
             reference: receiptNumber,
@@ -445,15 +425,23 @@ const ClientsPage: React.FC = () => {
         console.warn('Fallback insertion customer_repayments :', repErr)
       }
 
-      // 3. Entrée immédiate dans la caisse opérationnelle (Supabase)
-      if (company?.id) {
+      // 3. Entrée immédiate dans la caisse opérationnelle du secteur
+      if (companyId) {
         try {
-          const { data: reg } = await supabase.from('cash_registers').select('id, current_cash_balance, current_momo_balance').eq('company_id', company.id).limit(1).maybeSingle()
+          const { data: reg } = await supabaseTenant('cash_registers')
+            .select('id, current_cash_balance, current_momo_balance')
+            .limit(1)
+            .maybeSingle()
+
           if (reg) {
             if (paymentMode === 'cash') {
-              await supabase.from('cash_registers').update({ current_cash_balance: (Number(reg.current_cash_balance) || 0) + paymentAmount }).eq('id', reg.id)
+              await supabaseTenant('cash_registers')
+                .update({ current_cash_balance: (Number(reg.current_cash_balance) || 0) + paymentAmount })
+                .eq('id', reg.id)
             } else if (['momo', 'moov', 'wave'].includes(paymentMode)) {
-              await supabase.from('cash_registers').update({ current_momo_balance: (Number(reg.current_momo_balance) || 0) + paymentAmount }).eq('id', reg.id)
+              await supabaseTenant('cash_registers')
+                .update({ current_momo_balance: (Number(reg.current_momo_balance) || 0) + paymentAmount })
+                .eq('id', reg.id)
             }
           }
         } catch (e) {}
