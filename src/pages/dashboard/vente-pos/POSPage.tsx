@@ -704,7 +704,7 @@ export const POSPage: React.FC = () => {
 
       // Payload strictement conforme aux colonnes réelles de sales_orders dans Supabase
       const baseSalePayload: any = {
-        company_id: company.id,
+        company_id: company?.id ?? companyId ?? '',
         customer_id: selectedCustomer?.id || null,
         order_number: orderNum,
         order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
@@ -789,7 +789,7 @@ export const POSPage: React.FC = () => {
           const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
           const unitHt = line.qty > 0 ? Math.round((lineHt / line.qty) * 100) / 100 : line.unitPrice
           return {
-            company_id: company.id,
+            company_id: company?.id ?? companyId ?? '',
             sector_slug: currentSectorSlug,
             vente_id: savedDbSale.id,
             produit_id: line.product.id,
@@ -828,7 +828,7 @@ export const POSPage: React.FC = () => {
 
             // Traçabilité mouvement de stock dans stock_movements
             await supabaseTenant('stock_movements').insert({
-              company_id: company.id,
+              company_id: company?.id ?? companyId ?? '',
               product_id: line.product.id,
               movement_type: 'VENTE_POS',
               reference_type: 'sales_order',
@@ -881,7 +881,7 @@ export const POSPage: React.FC = () => {
           try {
             if (paidCash > 0) {
               await supabase.from('caisse_mouvements').insert({
-                company_id: company.id,
+                company_id: company?.id ?? companyId ?? '',
                 sector_slug: currentSectorSlug,
                 caisse_id: activeCaisse.id,
                 type: 'especes',
@@ -892,7 +892,7 @@ export const POSPage: React.FC = () => {
             }
             if (paidMomo > 0) {
               await supabase.from('caisse_mouvements').insert({
-                company_id: company.id,
+                company_id: company?.id ?? companyId ?? '',
                 sector_slug: currentSectorSlug,
                 caisse_id: activeCaisse.id,
                 type: 'momo',
@@ -922,7 +922,7 @@ export const POSPage: React.FC = () => {
           } else {
             await supabaseTenant('cash_registers')
               .insert({
-                company_id: company.id,
+                company_id: company?.id ?? companyId ?? '',
                 name: 'Caisse Principale POS',
                 current_cash_balance: paidCash,
                 current_momo_balance: paidMomo,
@@ -938,7 +938,7 @@ export const POSPage: React.FC = () => {
       try {
         const { logAuditEvent } = await import('../../../services/auditService')
         await logAuditEvent({
-          companyId: company.id,
+          companyId: company?.id ?? companyId ?? '',
           userId: user?.id,
           userName: user?.full_name || user?.username,
           userRole: user?.role,
@@ -1030,7 +1030,7 @@ export const POSPage: React.FC = () => {
             .eq('id', line.product.id)
 
           await supabaseTenant('stock_movements').insert({
-            company_id: company.id,
+            company_id: company?.id ?? companyId ?? '',
             product_id: line.product.id,
             movement_type: 'RETOUR_AVOIR',
             reference_type: 'sales_order',

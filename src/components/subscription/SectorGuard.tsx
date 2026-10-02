@@ -19,7 +19,7 @@ interface SectorGuardProps {
 }
 
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
-  const { company } = useAuthStore()
+  const { company, status } = useAuthStore()
   const { toast } = useUIStore()
   const params = useParams<{ sectorSlug?: string }>()
   const location = useLocation()
@@ -28,6 +28,16 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   const isAbonnementRoute = location.pathname.includes('/abonnement')
   if (isAbonnementRoute) {
     return <>{children}</>
+  }
+
+  // Guard critique : en attente de l'initialisation du store d'authentification
+  // Evite le crash "company is not defined" pendant la réhydratation Zustand persist
+  if (status === 'idle' || status === 'loading') {
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
   }
 
   // Vérification de la période d'essai (30 jours) et de la validité de l'abonnement
