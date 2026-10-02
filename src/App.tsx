@@ -8,6 +8,7 @@ import { useAuthStore } from './store/authStore'
 import AppLayout from './components/layout/AppLayout'
 import ModuleGuard from './components/subscription/ModuleGuard'
 import SectorGuard from './components/subscription/SectorGuard'
+import SectorErrorBoundary from './components/common/SectorErrorBoundary'
 import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
 
 // ─── Lazy Loading des pages ─────────────────────────────────────────────────
@@ -298,9 +299,11 @@ const App: React.FC = () => {
   return (
     <BrowserRouter>
       <AppInitializer />
-      <Suspense fallback={<FullPageLoader />}>
-        <AppRoutes />
-      </Suspense>
+      <SectorErrorBoundary>
+        <Suspense fallback={<FullPageLoader />}>
+          <AppRoutes />
+        </Suspense>
+      </SectorErrorBoundary>
     </BrowserRouter>
   )
 }

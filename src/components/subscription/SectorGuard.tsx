@@ -19,23 +19,26 @@ interface SectorGuardProps {
 }
 
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
-  const { company, status } = useAuthStore()
-  const { toast } = useUIStore()
+  const location = useLocation()
   const params = useParams<{ sectorSlug?: string }>()
-  // Guard critique : en attente de l'initialisation du store d'authentification
-  // Evite le crash "company is not defined" pendant la réhydratation Zustand persist
-  if (status === 'idle' || status === 'loading') {
+  const { toast } = useUIStore()
+
+  // 1. L'accès à la page d'abonnement est TOUJOURS autorisé (règle absolue CDC pour permettre le renouvellement)
+  const isAbonnementRoute = location.pathname.includes('/abonnement') || location.pathname.includes('/subscription')
+  if (isAbonnementRoute) {
+    return <>{children}</>
+  }
+
+  const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
+  const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
+
+  // 2. Guard critique : en attente de l'initialisation du store d'authentification
+  if (!company && (status === 'idle' || status === 'loading')) {
     return (
       <div className="min-h-[75vh] flex items-center justify-center">
         <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
       </div>
     )
-  }
-
-  // L'accès à la page d'abonnement est TOUJOURS autorisé (règle absolue pour permettre le renouvellement)
-  const isAbonnementRoute = location.pathname.includes('/abonnement') || location.pathname.includes('/subscription')
-  if (isAbonnementRoute) {
-    return <>{children}</>
   }
 
   // Vérification de la période d'essai (30 jours) et de la validité de l'abonnement

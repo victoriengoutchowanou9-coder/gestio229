@@ -55,7 +55,9 @@ const formatDateSafe = (dateVal: any): string => {
 }
 
 export const AbonnementPage: React.FC = () => {
-  const { company, status, refreshTenantContext } = useAuthStore()
+  const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
+  const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
+  const refreshTenantContext = useAuthStore((s) => s.refreshTenantContext)
   const { toast } = useUIStore()
 
   // Calcul des données d'abonnement / essai
@@ -221,7 +223,7 @@ export const AbonnementPage: React.FC = () => {
     return calculateSubscriptionPrice(interactiveActivities)
   }, [interactiveActivities])
 
-  if (status === 'idle' || status === 'loading') {
+  if (!company && (status === 'idle' || status === 'loading')) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
