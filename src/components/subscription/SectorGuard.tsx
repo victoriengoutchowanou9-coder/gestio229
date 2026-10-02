@@ -19,20 +19,21 @@ interface SectorGuardProps {
 }
 
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
+  // ─── 1. RÈGLE DES HOOKS REACT : TOUS LES HOOKS APPELÉS AU TOP SANS EXCEPTION ───
   const location = useLocation()
   const params = useParams<{ sectorSlug?: string }>()
   const { toast } = useUIStore()
+  const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
+  const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
+  const user = useAuthStore((s) => s.user)
 
-  // 1. L'accès à la page d'abonnement est TOUJOURS autorisé (règle absolue CDC pour permettre le renouvellement)
+  // ─── 2. L'accès à la page d'abonnement est TOUJOURS autorisé (règle absolue CDC) ───
   const isAbonnementRoute = location.pathname.includes('/abonnement') || location.pathname.includes('/subscription')
   if (isAbonnementRoute) {
     return <>{children}</>
   }
 
-  const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
-  const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
-
-  // 2. Guard critique : en attente de l'initialisation du store d'authentification
+  // ─── 3. Guard critique : en attente de l'initialisation du store d'authentification ───
   if (!company && (status === 'idle' || status === 'loading')) {
     return (
       <div className="min-h-[75vh] flex items-center justify-center">
@@ -89,7 +90,6 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   }
 
   // Vérification de l'assignation sectorielle pour les utilisateurs internes (Non-admin)
-  const user = useAuthStore((s) => s.user)
   const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
   const targetSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
