@@ -6,7 +6,7 @@ const SUPABASE_KEY = 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr';
 const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 async function inspectMore() {
-  const tables = ['customers', 'suppliers', 'sales_orders', 'expenses', 'audit_logs', 'treasury_accounts'];
+  const tables = ['customers', 'suppliers', 'sales_orders', 'expenses', 'cash_sessions', 'cash_registers'];
   for (const t of tables) {
     const { data, error } = await supabase.from(t).select('*').limit(1);
     if (error) {

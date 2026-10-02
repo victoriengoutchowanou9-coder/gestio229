@@ -15,6 +15,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
+import { debitCoffreFort } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
@@ -128,7 +129,14 @@ export const FournisseursPage: React.FC = () => {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedSupplierForPay, setSelectedSupplierForPay] = useState<Supplier | null>(null)
   const [paymentAmount, setPaymentAmount] = useState<number>(0)
-  const [paymentMode, setPaymentMode] = useState<'especes' | 'momo' | 'banque'>('banque')
+  const [paymentMode, setPaymentMode] = useState<'especes' | 'momo' | 'banque' | 'virement' | 'cheque'>('banque')
+
+  // Déclaration nouvelle dette fournisseur
+  const [showNewDebtModal, setShowNewDebtModal] = useState(false)
+  const [newDebtSupplierId, setNewDebtSupplierId] = useState('')
+  const [newDebtRef, setNewDebtRef] = useState('')
+  const [newDebtAmount, setNewDebtAmount] = useState<number>(0)
+  const [newDebtDueDate, setNewDebtDueDate] = useState('')
 
   // Chargement réel depuis Supabase (table suppliers & purchase_orders) avec isolation stricte
   const loadData = useCallback(async () => {
@@ -477,15 +485,67 @@ export const FournisseursPage: React.FC = () => {
     loadData()
   }
 
-  // Règlement dette fournisseur (colonne réelle current_payable)
+  // Règlement dette fournisseur avec débit strict du coffre-fort
   const handleProcessPayment = async () => {
     if (!selectedSupplierForPay || paymentAmount <= 0) return
+
     try {
+      // 1. Vérification et débit strict du coffre-fort selon le mode choisi
+      const debitRes = await debitCoffreFort(
+        companyId,
+        currentSectorSlug,
+        paymentMode,
+        paymentAmount,
+        `Règlement dette fournisseur : ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}`
+      )
+
+      if (!debitRes.success) {
+        toast.error('Solde insuffisant', debitRes.error || 'Solde disponible insuffisant dans le coffre-fort ou la caisse.')
+        return
+      }
+
+      // 2. Mise à jour de la dette fournisseur dans suppliers
       const currentDebt = Number(selectedSupplierForPay.current_payable ?? selectedSupplierForPay.current_debt ?? 0)
       const updatedDebt = Math.max(0, currentDebt - paymentAmount)
       await supabaseTenant('suppliers')
         .update({ current_payable: updatedDebt, updated_at: new Date().toISOString() })
         .eq('id', selectedSupplierForPay.id)
+
+      // 3. Mise à jour ou insertion dans dettes_fournisseurs et dette_paiements
+      try {
+        const { data: exDette } = await supabase
+          .from('dettes_fournisseurs')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('fournisseur_id', selectedSupplierForPay.id)
+          .gt('reste_a_payer', 0)
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle()
+
+        let detteId = exDette?.id
+        if (exDette) {
+          const newPaid = (Number(exDette.montant_paye) || 0) + paymentAmount
+          const newRemain = Math.max(0, (Number(exDette.reste_a_payer) || 0) - paymentAmount)
+          await supabase.from('dettes_fournisseurs').update({
+            montant_paye: newPaid,
+            reste_a_payer: newRemain,
+            statut: newRemain === 0 ? 'solde' : 'en_cours'
+          }).eq('id', exDette.id)
+        }
+
+        await supabase.from('dette_paiements').insert({
+          company_id: companyId,
+          sector_slug: currentSectorSlug,
+          dette_id: detteId || null,
+          montant: paymentAmount,
+          mode: paymentMode,
+          reference: `PAY-${Date.now()}`,
+          payee_par: user?.full_name || user?.name || 'Comptable'
+        })
+      } catch (dpErr) {
+        console.warn('Avertissement mise à jour dettes_fournisseurs / dette_paiements:', dpErr)
+      }
 
       setSuppliers((prev) =>
         prev.map((s) => (s.id === selectedSupplierForPay.id ? { ...s, current_payable: updatedDebt, current_debt: updatedDebt } : s))
@@ -502,7 +562,7 @@ export const FournisseursPage: React.FC = () => {
           action: 'REGLEMENT_DETTE_FOURNISSEUR',
           entityName: 'Fournisseurs',
           entityId: selectedSupplierForPay.id,
-          description: `Règlement de ${fmt(paymentAmount)} en ${paymentMode} au fournisseur ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}`,
+          description: `Règlement de ${fmt(paymentAmount)} en ${paymentMode} au fournisseur ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}. Coffre-fort débité.`,
           details: {
             supplierId: selectedSupplierForPay.id,
             supplierName: selectedSupplierForPay.company_name || selectedSupplierForPay.name,
@@ -516,10 +576,56 @@ export const FournisseursPage: React.FC = () => {
       setShowPaymentModal(false)
       toast.success(
         'Règlement effectué',
-        `${fmt(paymentAmount)} payés à ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}.`
+        `${fmt(paymentAmount)} payés à ${selectedSupplierForPay.company_name || selectedSupplierForPay.name} (Coffre débité).`
       )
     } catch (err: any) {
       toast.error('Erreur règlement', err.message)
+    }
+  }
+
+  // Déclaration d'une nouvelle dette fournisseur
+  const handleCreateNewDebt = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!newDebtSupplierId || newDebtAmount <= 0) {
+      toast.error('Champs invalides', 'Veuillez sélectionner un fournisseur et saisir un montant supérieur à 0.')
+      return
+    }
+
+    try {
+      const targetSup = suppliers.find(s => s.id === newDebtSupplierId)
+      if (!targetSup) return
+
+      const currentDebt = Number(targetSup.current_payable || targetSup.current_debt || 0)
+      const updatedDebt = currentDebt + newDebtAmount
+
+      await supabaseTenant('suppliers')
+        .update({ current_payable: updatedDebt, updated_at: new Date().toISOString() })
+        .eq('id', targetSup.id)
+
+      try {
+        await supabase.from('dettes_fournisseurs').insert({
+          company_id: companyId,
+          sector_slug: currentSectorSlug,
+          fournisseur_id: targetSup.id,
+          reference_facture: newDebtRef.trim() || `DETTE-${Date.now()}`,
+          montant_ttc_du: newDebtAmount,
+          montant_paye: 0,
+          reste_a_payer: newDebtAmount,
+          date_echeance: newDebtDueDate || null
+        })
+      } catch (dfErr) {
+        console.warn('Avertissement insertion dettes_fournisseurs:', dfErr)
+      }
+
+      setSuppliers(prev => prev.map(s => s.id === targetSup.id ? { ...s, current_payable: updatedDebt, current_debt: updatedDebt } : s))
+      setShowNewDebtModal(false)
+      setNewDebtSupplierId('')
+      setNewDebtRef('')
+      setNewDebtAmount(0)
+      setNewDebtDueDate('')
+      toast.success('Dette enregistrée', `Dette de ${fmt(newDebtAmount)} ajoutée pour ${targetSup.company_name || targetSup.name}.`)
+    } catch (err: any) {
+      toast.error('Erreur enregistrement dette', err.message)
     }
   }
 
@@ -615,7 +721,22 @@ export const FournisseursPage: React.FC = () => {
               Dettes Fournisseurs Dues
             </span>
             <p className="text-xl font-black text-rose-600 font-mono">{fmt(totalSupplierDebt)}</p>
-            <span className="text-[10px] text-slate-400">Total exigible en compte</span>
+            <div className="flex items-center gap-1.5 mt-2">
+              <button
+                type="button"
+                onClick={() => setShowNewDebtModal(true)}
+                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-[11px] rounded-lg border border-rose-200 transition"
+              >
+                + Nouvelle Dette
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('fournisseurs')}
+                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[11px] rounded-lg transition"
+              >
+                Payer
+              </button>
+            </div>
           </div>
           <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600">
             <DollarSign className="w-5 h-5" />
@@ -1267,9 +1388,10 @@ export const FournisseursPage: React.FC = () => {
                 onChange={(e) => setPaymentMode(e.target.value as any)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500"
               >
-                <option value="banque">Virement Bancaire / Chèque</option>
-                <option value="momo">Mobile Money (MTN / Moov / Celtiis)</option>
-                <option value="especes">Espèces (Caisse)</option>
+                <option value="especes">Espèces (Débit Coffre-fort / Caisse)</option>
+                <option value="momo">Mobile Money (Débit Compte Marchand)</option>
+                <option value="virement">Virement Bancaire (Débit Banque)</option>
+                <option value="cheque">Chèque (Débit Banque)</option>
               </select>
             </div>
 
@@ -1291,6 +1413,90 @@ export const FournisseursPage: React.FC = () => {
               </button>
             </div>
           </div>
+        </div>
+      </ModalPortal>
+
+      {/* ── MODAL NOUVELLE DETTE FOURNISSEUR ─────────────────────────────────── */}
+      <ModalPortal isOpen={showNewDebtModal} onClose={() => setShowNewDebtModal(false)} id="modal-new-debt">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+              <Plus className="w-5 h-5 text-rose-600" />
+              Déclarer une Dette Fournisseur
+            </h3>
+            <button onClick={() => setShowNewDebtModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form onSubmit={handleCreateNewDebt} className="space-y-4 text-xs">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Fournisseur Partenaire *</label>
+              <select
+                required
+                value={newDebtSupplierId}
+                onChange={(e) => setNewDebtSupplierId(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500"
+              >
+                <option value="">Sélectionner un fournisseur</option>
+                {suppliers.map(s => (
+                  <option key={s.id} value={s.id}>{s.company_name || s.name} ({s.code})</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Réf. Facture / Bon de Livraison *</label>
+              <input
+                type="text"
+                required
+                placeholder="Ex: BL-2026-089 ou FAC-9902"
+                value={newDebtRef}
+                onChange={(e) => setNewDebtRef(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs font-mono font-bold text-slate-900 focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Montant Total TTC Dû (FCFA) *</label>
+              <input
+                type="number"
+                min={1}
+                required
+                placeholder="0"
+                value={newDebtAmount || ''}
+                onChange={(e) => setNewDebtAmount(parseFloat(e.target.value) || 0)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-bold text-sm text-rose-600 focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Date d'échéance</label>
+              <input
+                type="date"
+                value={newDebtDueDate}
+                onChange={(e) => setNewDebtDueDate(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs text-slate-700 focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowNewDebtModal(false)}
+                className="px-4 py-2 border border-slate-200 text-slate-600 rounded-xl font-semibold hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={!newDebtSupplierId || newDebtAmount <= 0}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
+              >
+                <Check className="w-4 h-4" /> Enregistrer la Dette
+              </button>
+            </div>
+          </form>
         </div>
       </ModalPortal>
 

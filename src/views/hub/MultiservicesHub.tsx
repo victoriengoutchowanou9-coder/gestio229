@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { supabase } from '../../lib/supabase';
+import { fetchResumeActivite } from '../../lib/supabaseTenant';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES & ÉTATS (PARTIE 9 — POLITIQUE DE CONSERVATION DES DONNÉES)
@@ -284,113 +285,41 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     };
   }, [companyId, loadActivitiesFromSupabase]);
 
-  // ── Métriques financières réelles consolidées depuis Supabase ──────────────
+  // ── Métriques financières réelles consolidées depuis v_resume_activite (Règle d'or Hub) ──
   const loadFinancialMetrics = useCallback(async () => {
     if (!companyId) return;
     try {
-      const now = new Date();
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-
-      // ── Requête consolidée sales_orders (avec coût d'achat) et expenses ──
-      const [{ data: salesData }, { data: expData }] = await Promise.all([
-        supabase
-          .from('sales_orders')
-          .select('id, total_amount, total_cost, e_mecef_uid, created_at, payment_status')
-          .eq('company_id', companyId)
-          .gte('created_at', startOfMonth),
-        supabase
-          .from('expenses')
-          .select('amount, notes, created_at')
-          .eq('company_id', companyId)
-          .gte('created_at', startOfMonth),
-      ]);
-
-      // Calcul précis du coût d'achat réel à partir des lignes de commande (sales_order_items)
-      const orderIds = (salesData || []).map((s: any) => s.id);
-      let itemsCostByOrder: Record<string, number> = {};
-      if (orderIds.length > 0) {
-        try {
-          const { data: itemsData } = await supabase
-            .from('sales_order_items')
-            .select('order_id, quantity, unit_cost, unit_price')
-            .in('order_id', orderIds);
-
-          if (itemsData && itemsData.length > 0) {
-            itemsData.forEach((it: any) => {
-              const qty = Number(it.quantity) || 0;
-              let uCost = Number(it.unit_cost) || 0;
-              const uPrice = Number(it.unit_price) || 0;
-              // Règle de cohérence : si le coût unitaire dépasse le prix de vente, appliquer le ratio de marge normal
-              if (uCost > uPrice && uPrice > 0) {
-                uCost = uPrice * 0.7;
-              }
-              const lineCost = qty * uCost;
-              itemsCostByOrder[it.order_id] = (itemsCostByOrder[it.order_id] || 0) + lineCost;
-            });
+      // Le HUB ne calcule rien lui-même ligne par ligne : il lit directement les cartes résumés via v_resume_activite
+      const resumes = (await fetchResumeActivite(companyId)) as any[];
+      const resumeMap: Record<string, { ca_ht: number; marge_brute: number }> = {};
+      if (Array.isArray(resumes)) {
+        resumes.forEach((r) => {
+          if (r && r.sector_slug) {
+            resumeMap[r.sector_slug] = {
+              ca_ht: Number(r.ca_ht) || 0,
+              marge_brute: Number(r.marge_brute) || 0,
+            };
           }
-        } catch (e) {
-          console.warn('[Hub] Note calcul coût items:', e);
-        }
+        });
       }
-
-      const allSales = (salesData || []).map((s: any) => {
-        let sec = (s as any).sector_slug || '';
-        if (!sec && s.e_mecef_uid) {
-          const match = s.e_mecef_uid.match(/SEC:([^|]+)/);
-          if (match && match[1]) sec = match[1];
-        }
-        const exactCost = itemsCostByOrder[s.id] !== undefined
-          ? itemsCostByOrder[s.id]
-          : (Number(s.total_cost) || 0);
-
-        return { ...s, sector_slug: sec, calculated_cost: exactCost };
-      });
-
-      const allExpenses = (expData || []).map((e: any) => {
-        let sec = (e as any).sector_slug || '';
-        if (!sec && e.notes) {
-          try {
-            const parsed = typeof e.notes === 'string' ? JSON.parse(e.notes) : e.notes;
-            if (parsed?.sector_slug) sec = parsed.sector_slug;
-          } catch (x) {}
-        }
-        return { ...e, sector_slug: sec };
-      });
-
-      const todaySales = allSales.filter((s: any) => s.created_at >= startOfDay);
-      const todayExp = allExpenses.filter((e: any) => e.created_at >= startOfDay);
 
       setActivities((prev) =>
         prev.map((act) => {
-          // ── FORMULE OFFICIELLE : Marge nette = Ventes (CA) - Coût d'achat total produits vendus - Dépenses ──
-          const actTodaySales = todaySales.filter((s: any) => s.sector_slug === act.sectorSlug);
-          const actTodayExp = todayExp.filter((e: any) => e.sector_slug === act.sectorSlug);
-          const actDayRev = actTodaySales.reduce((sum: number, s: any) => sum + (Number(s.total_amount) || 0), 0);
-          const actDayCost = actTodaySales.reduce((sum: number, s: any) => sum + (Number(s.calculated_cost) || 0), 0);
-          const actDayExp = actTodayExp.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
-
-          const actMonthSales = allSales.filter((s: any) => s.sector_slug === act.sectorSlug);
-          const actMonthExp = allExpenses.filter((e: any) => e.sector_slug === act.sectorSlug);
-          const actMonthRev = actMonthSales.reduce((sum: number, s: any) => sum + (Number(s.total_amount) || 0), 0);
-          const actMonthCost = actMonthSales.reduce((sum: number, s: any) => sum + (Number(s.calculated_cost) || 0), 0);
-          const aMonthExp = actMonthExp.reduce((sum: number, e: any) => sum + (Number(e.amount) || 0), 0);
-
+          const card = resumeMap[act.sectorSlug] || { ca_ht: 0, marge_brute: 0 };
           return {
             ...act,
-            revenue: actDayRev,
-            expenses: actDayExp,
-            // Marge nette du jour = CA - Coût d'achat - Dépenses du jour
-            netMargin: actDayRev - actDayCost - actDayExp,
-            monthRevenue: actMonthRev,
-            monthExpenses: aMonthExp,
-            // Marge nette du mois = CA du mois - Coût d'achat du mois - Dépenses du mois
-            monthNetMargin: actMonthRev - actMonthCost - aMonthExp,
+            // Carte individuelle de l'activité (0 si aucune vente, ne casse pas la somme)
+            revenue: card.ca_ht,
+            netMargin: card.marge_brute,
+            monthRevenue: card.ca_ht,
+            monthNetMargin: card.marge_brute,
+            expenses: 0,
+            monthExpenses: 0,
           };
         })
       );
     } catch (e) {
-      console.warn('[Hub] Erreur métriques financières:', e);
+      console.warn('[Hub] Erreur métriques financières v_resume_activite:', e);
     }
   }, [companyId]);
 

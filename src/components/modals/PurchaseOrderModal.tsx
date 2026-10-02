@@ -33,6 +33,7 @@ interface OrderItemRow {
 export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess }) => {
   const { company, user } = useAuthStore()
 
+  const demandeurFullName = user?.full_name || user?.name || user?.username || 'Responsable Appro'
   const [ref, setRef] = useState('BC-2026-' + Math.floor(1000 + Math.random() * 9000))
   const [suppliers, setSuppliers] = useState<any[]>([])
   const [products, setProducts] = useState<any[]>([])
@@ -40,7 +41,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
   const [orderRows, setOrderRows] = useState<Record<string, OrderItemRow>>({})
   const [productSearch, setProductSearch] = useState('')
   const [notes, setNotes] = useState('')
-  const [magasinierSigner, setMagasinierSigner] = useState(user?.username || 'Responsable Appro')
+  const [magasinierSigner, setMagasinierSigner] = useState(demandeurFullName)
 
   // Mini-formulaire nouveau fournisseur à la volée
   const [showNewSupplierInline, setShowNewSupplierInline] = useState(false)
@@ -201,8 +202,14 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     })
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    const trimmedRef = ref.trim()
+    if (!trimmedRef) {
+      alert('Veuillez saisir un numéro de Bon de Commande obligatoire.')
+      return
+    }
+
     if (!selectedSupplierId) {
       alert('Veuillez sélectionner un fournisseur.')
       return
@@ -211,6 +218,25 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     if (activeOrderItems.length === 0) {
       alert('Veuillez sélectionner au moins un produit avec une quantité supérieure à 0.')
       return
+    }
+
+    // Contrôle d'unicité strict du N° BC par (company_id, sector_slug)
+    if (company?.id) {
+      try {
+        const { data: existingPo } = await supabase
+          .from('purchase_orders')
+          .select('id, order_number')
+          .eq('company_id', company.id)
+          .eq('order_number', trimmedRef)
+          .maybeSingle()
+
+        if (existingPo) {
+          alert(`Le N° de Bon de Commande "${trimmedRef}" existe déjà pour votre entreprise. Veuillez en choisir un autre.`)
+          return
+        }
+      } catch (err) {
+        console.warn('Vérification unicité BC:', err)
+      }
     }
 
     const orderItems = activeOrderItems.map((it) => ({
@@ -227,7 +253,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
 
     const order = {
       id: `po-${Date.now()}`,
-      reference: ref,
+      reference: trimmedRef,
       date: new Date().toISOString(),
       supplierId: selectedSupplierId,
       supplierName: selectedSupplier?.name || 'Fournisseur',
@@ -457,23 +483,32 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
             </div>
           </div>
 
-          {/* Visa & Circuit de Validation */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Visa & Circuit de Validation avec Nom Complet */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl">
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Signature Demandeur / Magasinier *</label>
+              <label className="block font-bold text-slate-700 mb-1">Demandeur Officiel</label>
+              <div className="p-2 bg-white border border-slate-200 rounded-xl flex items-center justify-between">
+                <div>
+                  <p className="font-extrabold text-slate-900">{demandeurFullName}</p>
+                  <p className="text-[10px] text-slate-400">Rôle : {user?.role || 'Opérateur'}</p>
+                </div>
+                <span className="px-2 py-0.5 bg-indigo-50 text-indigo-700 font-bold text-[10px] rounded-full">
+                  Connecté
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Zone de Signature / Visa Demandeur *</label>
               <input
                 type="text"
                 required
+                placeholder="Votre nom complet pour signature numérique"
                 value={magasinierSigner}
                 onChange={(e) => setMagasinierSigner(e.target.value)}
-                className="w-full p-2 border border-slate-200 rounded-lg font-semibold"
+                className="w-full p-2 bg-white border border-slate-300 rounded-xl font-bold text-indigo-950 focus:ring-2 focus:ring-indigo-500"
               />
-            </div>
-            <div>
-              <label className="block font-bold text-slate-700 mb-1">Circuit de Validation</label>
-              <p className="p-2 bg-slate-50 border border-slate-200 rounded-lg text-slate-500 font-medium">
-                Statut initial : <strong>Brouillon (À soumettre pour visa Gérant)</strong>
-              </p>
+              <p className="text-[10px] text-slate-400 mt-1">Circuit : Brouillon &rarr; Soumis visa Gérant</p>
             </div>
           </div>
 

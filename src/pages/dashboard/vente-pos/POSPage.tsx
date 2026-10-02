@@ -5,7 +5,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, Link } from 'react-router-dom'
 import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
@@ -18,6 +18,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
+import { getActiveCaisse } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
@@ -148,6 +149,10 @@ export const POSPage: React.FC = () => {
   const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4'>('factureA4')
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
 
+  // Caisse active (statut='ouverte' isolée par secteur)
+  const [activeCaisse, setActiveCaisse] = useState<any>(null)
+  const [checkingCaisse, setCheckingCaisse] = useState(true)
+
   // Historique des ventes réelles
   const [salesHistory, setSalesHistory] = useState<SaleRecord[]>([])
   const [historySearch, setHistorySearch] = useState('')
@@ -157,7 +162,17 @@ export const POSPage: React.FC = () => {
   const loadData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
+    setCheckingCaisse(true)
     try {
+      // 0. Vérification stricte de la caisse ouverte pour ce secteur
+      try {
+        const caisse = await getActiveCaisse(companyId, currentSectorSlug)
+        setActiveCaisse(caisse)
+      } catch (err) {
+        console.warn('Erreur vérification caisse:', err)
+        setActiveCaisse(null)
+      }
+
       const [{ data: prods, error: prodErr }, { data: custs, error: custErr }, { data: sales, error: saleErr }] =
         await Promise.all([
           supabaseTenant('products')
@@ -317,8 +332,9 @@ export const POSPage: React.FC = () => {
       setSalesHistory([])
     } finally {
       setLoading(false)
+      setCheckingCaisse(false)
     }
-  }, [company?.id, toast])
+  }, [companyId, currentSectorSlug, toast, supabaseTenant])
 
   useEffect(() => {
     loadData()
@@ -567,15 +583,18 @@ export const POSPage: React.FC = () => {
   const cashChange = Math.max(0, cashGiven - totalNetTTC)
   const isCashInsufficient = isCash && cashGiven < totalNetTTC
 
-  // Règle de validation stricte : Déverrouillage uniquement si équilibre parfait
+  // Règle de validation stricte : Déverrouillage uniquement si équilibre parfait ET caisse ouverte
   const isPaymentValid = isMultiMode
     ? isMultiBalanced
     : (!isCashInsufficient && totalNetTTC > 0)
 
-  const canValidateSale = cart.length > 0 && isPaymentValid && !paying
+  const canValidateSale = cart.length > 0 && isPaymentValid && !paying && !checkingCaisse && !!activeCaisse
 
-  // Libellé dynamique du bouton de validation selon l'équilibre
+  // Libellé dynamique du bouton de validation selon l'équilibre et l'état de caisse
   const validationButtonText = useMemo(() => {
+    if (!checkingCaisse && !activeCaisse) {
+      return "Veuillez ouvrir la caisse"
+    }
     if (cart.length === 0) return 'Panier vide'
     if (paying) return 'Validation en cours...'
 
@@ -593,11 +612,17 @@ export const POSPage: React.FC = () => {
       }
       return `Valider la Vente (${fmt(totalNetTTC)})`
     }
-  }, [cart.length, paying, isMultiMode, multiDiff, totalNetTTC, isCashInsufficient, cashGiven])
+  }, [checkingCaisse, activeCaisse, cart.length, paying, isMultiMode, multiDiff, totalNetTTC, isCashInsufficient, cashGiven])
 
   // ─── Validation de la Vente ────────────────────────────────────────────────
 
   const handleValidateSale = async () => {
+    // 0. Contrôle caisse ouverte obligatoire pour ce secteur
+    if (!activeCaisse) {
+      toast.error('Caisse fermée', 'Veuillez ouvrir la caisse avant d\'encaisser une vente.')
+      return
+    }
+
     // 1. Contrôle strict des montants
     if (isMultiMode) {
       if (Math.abs(multiDiff) > 0.01) {
@@ -756,6 +781,28 @@ export const POSPage: React.FC = () => {
         console.warn('Avertissement insertion sales_order_items:', linesErr.message)
       }
 
+      // 2b. Insertion obligatoire dans vente_lignes (Silo 19 secteurs - Coût d'achat HT unitaire figé)
+      try {
+        const vlRows = cart.map((line) => {
+          const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
+          const lineTotal = line.qty * line.unitPrice
+          const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
+          const unitHt = line.qty > 0 ? Math.round((lineHt / line.qty) * 100) / 100 : line.unitPrice
+          return {
+            company_id: company.id,
+            sector_slug: currentSectorSlug,
+            vente_id: savedDbSale.id,
+            produit_id: line.product.id,
+            quantite: line.qty,
+            prix_vente_ht_unitaire: unitHt,
+            cout_achat_ht_unitaire: Number(line.product.cost_price) || 0
+          }
+        })
+        await supabase.from('vente_lignes').insert(vlRows)
+      } catch (vlErr) {
+        console.warn('Avertissement insertion vente_lignes:', vlErr)
+      }
+
       // 3. Déstockage strict dans le Stock Vente (en UV) sans altérer le Stock Magasin (en UCD)
       for (const line of cart) {
         if (line.product?.id) {
@@ -829,6 +876,36 @@ export const POSPage: React.FC = () => {
         : (['momo_mtn', 'momo_moov'].includes(singleMethod) ? totalNetTTC : 0)
 
       if (paidCash > 0 || paidMomo > 0) {
+        // Enregistrement dans caisse_mouvements pour la caisse active isolée
+        if (activeCaisse?.id) {
+          try {
+            if (paidCash > 0) {
+              await supabase.from('caisse_mouvements').insert({
+                company_id: company.id,
+                sector_slug: currentSectorSlug,
+                caisse_id: activeCaisse.id,
+                type: 'especes',
+                sens: 'entree',
+                montant: paidCash,
+                motif: `Vente POS ${orderNum} - Encaissement espèces`
+              })
+            }
+            if (paidMomo > 0) {
+              await supabase.from('caisse_mouvements').insert({
+                company_id: company.id,
+                sector_slug: currentSectorSlug,
+                caisse_id: activeCaisse.id,
+                type: 'momo',
+                sens: 'entree',
+                montant: paidMomo,
+                motif: `Vente POS ${orderNum} - Encaissement MoMo`
+              })
+            }
+          } catch (cmErr) {
+            console.warn('Avertissement caisse_mouvements:', cmErr)
+          }
+        }
+
         try {
           const { data: registers } = await supabaseTenant('cash_registers')
             .select('*')
@@ -1186,6 +1263,27 @@ export const POSPage: React.FC = () => {
           </button>
         </div>
       </div>
+
+      {/* Alerte caisse fermée */}
+      {!checkingCaisse && !activeCaisse && (
+        <div className="bg-amber-50 border border-amber-300 text-amber-900 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-200 text-amber-800 flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="font-bold text-sm">Caisse non ouverte pour ce secteur ({currentSectorSlug})</p>
+              <p className="text-amber-700 text-xs">Veuillez ouvrir la caisse avant de pouvoir valider des encaissements ou ventes.</p>
+            </div>
+          </div>
+          <Link
+            to={`/app/${currentSectorSlug}/caisse`}
+            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition text-center text-xs whitespace-nowrap shadow-sm"
+          >
+            Ouvrir la Caisse &rarr;
+          </Link>
+        </div>
+      )}
 
       {activeTab === 'pos' ? (
         /* ── VUE 1 : POINT DE VENTE (CATALOGUE & PANIER INTÉGRÉ GLISSANT À DROITE) ── */

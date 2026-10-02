@@ -16,6 +16,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
 import { useTenant } from '../../hooks/useTenant'
+import { fetchResumeActivite } from '../../lib/supabaseTenant'
 import { getActiveSectorSlug, getActiveSectorMeta, filterItemsForSector } from '../../lib/sectorClient'
 
 const fmt = (n: number) =>
@@ -34,7 +35,7 @@ interface TodaySale {
 
 export const DashboardPage: React.FC = () => {
   const navigate = useNavigate()
-  const { user } = useAuthStore()
+  const { company, user } = useAuthStore()
   const { toast } = useUIStore()
   const { companyId, sectorSlug, sectorMeta, supabaseTenant } = useTenant()
 
@@ -43,6 +44,7 @@ export const DashboardPage: React.FC = () => {
   const [activeProductsCount, setActiveProductsCount] = useState<number>(0)
   const [totalProductsValue, setTotalProductsValue] = useState<number>(0)
   const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
+  const [resumeActivite, setResumeActivite] = useState<{ ca_ht: number, marge_brute: number }>({ ca_ht: 0, marge_brute: 0 })
 
   const currentSectorSlug = sectorSlug
   const sectorDisplayName = sectorMeta?.name || 'Sous-Logiciel'
@@ -128,6 +130,19 @@ export const DashboardPage: React.FC = () => {
         const debtSum = custData.reduce((sum: number, c: any) => sum + (Number(c.current_debt) || 0), 0)
         setTotalCustomersDebt(debtSum)
       }
+
+      // 4. Résumé officiel d'activité (CA HT et Marge Brute calculés depuis v_resume_activite)
+      try {
+        const resume = await fetchResumeActivite(companyId, currentSectorSlug) as any
+        if (resume && typeof resume.ca_ht === 'number') {
+          setResumeActivite({
+            ca_ht: Number(resume.ca_ht) || 0,
+            marge_brute: Number(resume.marge_brute) || 0
+          })
+        }
+      } catch (rErr) {
+        console.warn('Avertissement chargement v_resume_activite:', rErr)
+      }
     } catch (err: any) {
       console.error('Erreur chargement Dashboard :', err)
       setSalesToday([])
@@ -136,7 +151,7 @@ export const DashboardPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [companyId, supabaseTenant])
+  }, [companyId, currentSectorSlug, supabaseTenant])
 
   useEffect(() => {
     loadDashboardData()
@@ -242,8 +257,8 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── 4 Indicateurs Principaux Exigés par la Spécification ─────────────── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* ── Indicateurs Principaux avec Marge Brute Silo (v_resume_activite) ─────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* 1. CA du Jour */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-emerald-200 transition">
           <div className="flex items-center justify-between mb-3">
@@ -254,7 +269,7 @@ export const DashboardPage: React.FC = () => {
               <TrendingUp className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-2xl font-black text-slate-900 font-mono">
+          <p className="text-xl font-black text-slate-900 font-mono">
             {fmt(caDuJour)}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
@@ -263,7 +278,28 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 2. Espèces du Jour */}
+        {/* 2. Marge Brute Silo (Source unique v_resume_activite) */}
+        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-teal-200 transition">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+              Marge Brute Silo
+            </span>
+            <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
+              <DollarSign className="w-5 h-5" />
+            </div>
+          </div>
+          <p className="text-xl font-black text-teal-700 font-mono">
+            {fmt(resumeActivite.marge_brute)}
+          </p>
+          <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
+            <span>CA HT Silo :</span>
+            <span className="text-slate-700 font-mono font-bold">
+              {fmt(resumeActivite.ca_ht)}
+            </span>
+          </div>
+        </div>
+
+        {/* 3. Espèces du Jour */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-emerald-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -273,39 +309,39 @@ export const DashboardPage: React.FC = () => {
               <Wallet className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-2xl font-black text-emerald-700 font-mono">
+          <p className="text-xl font-black text-emerald-700 font-mono">
             {fmt(especesDuJour)}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
-            <span>Mobile Money encaissé :</span>
+            <span>MoMo encaissé :</span>
             <span className="text-purple-700 font-mono font-bold">
               {fmt(momoDuJour)}
             </span>
           </div>
         </div>
 
-        {/* 3. Créances du Jour & Dettes Clients */}
+        {/* 4. Créances Clients */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-rose-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Créances du Jour
+              Créances Clients
             </span>
             <div className="w-9 h-9 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
               <CreditCard className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-2xl font-black text-rose-600 font-mono">
-            {fmt(creancesDuJour)}
+          <p className="text-xl font-black text-rose-600 font-mono">
+            {fmt(totalCustomersDebt)}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
-            <span>Total exigible clients :</span>
+            <span>Du jour :</span>
             <span className="text-rose-700 font-bold font-mono">
-              {fmt(totalCustomersDebt)}
+              {fmt(creancesDuJour)}
             </span>
           </div>
         </div>
 
-        {/* 4. Produits Actifs */}
+        {/* 5. Produits Actifs */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-indigo-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -315,7 +351,7 @@ export const DashboardPage: React.FC = () => {
               <Package className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-2xl font-black text-slate-900 font-mono">
+          <p className="text-xl font-black text-slate-900 font-mono">
             {activeProductsCount}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
@@ -328,7 +364,7 @@ export const DashboardPage: React.FC = () => {
       {/* ── Raccourcis Métiers Opérationnels ──────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Link
-          to="/dashboard/vente-pos"
+          to={`/app/${currentSectorSlug}/vente-pos`}
           className="p-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl shadow-sm transition flex flex-col justify-between group"
         >
           <div className="flex items-center justify-between">
@@ -342,7 +378,7 @@ export const DashboardPage: React.FC = () => {
         </Link>
 
         <Link
-          to="/dashboard/stocks"
+          to={`/app/${currentSectorSlug}/stocks`}
           className="p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl shadow-sm transition flex flex-col justify-between group"
         >
           <div className="flex items-center justify-between">
@@ -356,7 +392,7 @@ export const DashboardPage: React.FC = () => {
         </Link>
 
         <Link
-          to="/dashboard/caisse"
+          to={`/app/${currentSectorSlug}/caisse`}
           className="p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl shadow-sm transition flex flex-col justify-between group"
         >
           <div className="flex items-center justify-between">
@@ -365,12 +401,12 @@ export const DashboardPage: React.FC = () => {
           </div>
           <div className="mt-3">
             <p className="text-xs font-bold text-slate-800">Caisse du Secteur</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Sessions & Z de caisse</p>
+            <p className="text-[10px] text-slate-400 mt-0.5">Sessions & Clôtures</p>
           </div>
         </Link>
 
         <Link
-          to="/dashboard/clients"
+          to={`/app/${currentSectorSlug}/clients`}
           className="p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl shadow-sm transition flex flex-col justify-between group"
         >
           <div className="flex items-center justify-between">
@@ -394,7 +430,7 @@ export const DashboardPage: React.FC = () => {
             </h3>
           </div>
           <Link
-            to="/dashboard/vente-pos"
+            to={`/app/${currentSectorSlug}/vente-pos`}
             className="text-xs font-bold text-emerald-600 hover:text-emerald-700 flex items-center gap-1"
           >
             <span>Ouvrir la caisse POS</span>
@@ -415,7 +451,7 @@ export const DashboardPage: React.FC = () => {
             </p>
             <div className="pt-2">
               <Link
-                to="/dashboard/vente-pos"
+                to={`/app/${currentSectorSlug}/vente-pos`}
                 className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition"
               >
                 <ShoppingCart className="w-4 h-4" />
