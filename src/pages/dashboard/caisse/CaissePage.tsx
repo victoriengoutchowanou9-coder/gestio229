@@ -17,6 +17,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
 import { getActiveCaisse } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../components/modals'
@@ -55,8 +56,10 @@ interface CashClosure {
 export const CaissePage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
+  const { companyId, sectorSlug: tenantSectorSlug, supabaseTenant } = useTenant()
   const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const currentSectorSlug = tenantSectorSlug || params.sectorSlug || getActiveSectorSlug()
+  const currentCompanyId = companyId || company?.id || ''
 
   // État de la caisse : Ouverte ou Fermée
   const [caisseStatus, setCaisseStatus] = useState<'OUVERTE' | 'FERMEE'>('FERMEE')
@@ -113,7 +116,7 @@ export const CaissePage: React.FC = () => {
 
   // Charger les ventes réelles et remboursements du jour depuis Supabase
   const loadCaisseData = useCallback(async () => {
-    if (!company?.id) return
+    if (!currentCompanyId) return
     setLoading(true)
     try {
       const now = new Date()
@@ -124,7 +127,7 @@ export const CaissePage: React.FC = () => {
         const { data: registers } = await supabase
           .from('cash_registers')
           .select('id, name, current_cash_balance, current_momo_balance')
-          .eq('company_id', company.id)
+          .eq('company_id', currentCompanyId)
           .limit(1)
 
         if (registers && registers.length > 0) {
@@ -132,7 +135,7 @@ export const CaissePage: React.FC = () => {
         }
 
         // Vérifier si une session/caisse est ouverte pour ce secteur (persistance nocturne)
-        const activeCaisse = await getActiveCaisse(company.id, currentSectorSlug)
+        const activeCaisse = await getActiveCaisse(currentCompanyId, currentSectorSlug)
         if (activeCaisse) {
           setActiveSessionId(activeCaisse.id)
           setCaisseStatus('OUVERTE')
@@ -151,7 +154,7 @@ export const CaissePage: React.FC = () => {
           const { data: dbClotures } = await supabase
             .from('caisse_clotures')
             .select('*')
-            .eq('company_id', company.id)
+            .eq('company_id', currentCompanyId)
             .eq('sector_slug', currentSectorSlug)
             .order('date_cloture', { ascending: false })
             .limit(30)
@@ -176,7 +179,7 @@ export const CaissePage: React.FC = () => {
             const { data: closedSessions } = await supabase
               .from('cash_sessions')
               .select('*')
-              .eq('company_id', company.id)
+              .eq('company_id', currentCompanyId)
               .eq('status', 'cloturee')
               .order('closed_at', { ascending: false })
               .limit(30)
@@ -209,7 +212,7 @@ export const CaissePage: React.FC = () => {
       const { data: sales, error } = await supabase
         .from('sales_orders')
         .select('*, customer:customers(id, name, ifu_number)')
-        .eq('company_id', company.id)
+        .eq('company_id', currentCompanyId)
         .gte('created_at', startOfDay)
         .order('created_at', { ascending: false })
 
@@ -261,7 +264,7 @@ export const CaissePage: React.FC = () => {
         const { data: repayments } = await supabase
           .from('customer_repayments')
           .select('*, customer:customers(name)')
-          .eq('company_id', company.id)
+          .eq('company_id', currentCompanyId)
           .gte('created_at', startOfDay)
           .order('created_at', { ascending: false })
         if (repayments) repList = repayments
@@ -274,7 +277,7 @@ export const CaissePage: React.FC = () => {
           const { data: auditReps } = await supabase
             .from('audit_logs')
             .select('*')
-            .eq('company_id', company.id)
+            .eq('company_id', currentCompanyId)
             .eq('action', 'REMBOURSEMENT_CREANCE')
             .gte('created_at', startOfDay)
             .order('created_at', { ascending: false })
@@ -338,7 +341,7 @@ export const CaissePage: React.FC = () => {
         const { data: dbTransfers } = await supabase
           .from('treasury_transfers')
           .select('*')
-          .eq('company_id', company.id)
+          .eq('company_id', currentCompanyId)
           .gte('created_at', startOfDay)
           .order('created_at', { ascending: false })
         if (dbTransfers && dbTransfers.length > 0) {
@@ -359,7 +362,7 @@ export const CaissePage: React.FC = () => {
           const { data: auditTransfers } = await supabase
             .from('audit_logs')
             .select('*')
-            .eq('company_id', company.id)
+            .eq('company_id', currentCompanyId)
             .eq('action', 'DEMANDE_TRANSFERT_TRESORERIE')
             .gte('created_at', startOfDay)
             .order('created_at', { ascending: false })
@@ -405,7 +408,7 @@ export const CaissePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id])
+  }, [currentCompanyId, currentSectorSlug, user?.full_name])
 
   useEffect(() => {
     loadCaisseData()
@@ -509,19 +512,19 @@ export const CaissePage: React.FC = () => {
 
     try {
       let regId = cashRegisterId
-      if (!regId && company?.id) {
-        const { data: reg } = await supabase.from('cash_registers').select('id').eq('company_id', company.id).limit(1).maybeSingle()
+      if (!regId && currentCompanyId) {
+        const { data: reg } = await supabase.from('cash_registers').select('id').eq('company_id', currentCompanyId).limit(1).maybeSingle()
         if (reg?.id) {
           regId = reg.id
           setCashRegisterId(reg.id)
         }
       }
 
-      if (company?.id) {
+      if (currentCompanyId) {
         try {
           // Table caisses (standard 19 secteurs)
           const { data: newCaisse } = await supabase.from('caisses').insert({
-            company_id: company.id,
+            company_id: currentCompanyId,
             sector_slug: currentSectorSlug,
             date_ouverture: nowIso,
             statut: 'ouverte',
@@ -536,7 +539,7 @@ export const CaissePage: React.FC = () => {
 
           // Rétro-compatibilité cash_sessions
           const { data: newSession } = await supabase.from('cash_sessions').insert({
-            company_id: company.id,
+            company_id: currentCompanyId,
             cash_register_id: regId || null,
             opened_at: nowIso,
             opening_cash: initC,
@@ -632,7 +635,7 @@ export const CaissePage: React.FC = () => {
 
             // 2. Insertion dans caisse_clotures (standard 19 secteurs)
             await supabase.from('caisse_clotures').insert({
-              company_id: company.id,
+              company_id: currentCompanyId,
               sector_slug: currentSectorSlug,
               caisse_id: activeSessionId,
               total_especes_jour: totalEspecesJour,
@@ -664,7 +667,7 @@ export const CaissePage: React.FC = () => {
             const { data: exCoffre } = await supabase
               .from('coffre_fort')
               .select('*')
-              .eq('company_id', company.id)
+              .eq('company_id', currentCompanyId)
               .eq('sector_slug', currentSectorSlug)
               .maybeSingle()
 
@@ -675,7 +678,7 @@ export const CaissePage: React.FC = () => {
               }).eq('id', exCoffre.id)
             } else {
               await supabase.from('coffre_fort').insert({
-                company_id: company.id,
+                company_id: currentCompanyId,
                 sector_slug: currentSectorSlug,
                 solde_especes: nouveauFondEspeces,
                 solde_momo_marchand: nouveauFondMomo,
@@ -689,10 +692,10 @@ export const CaissePage: React.FC = () => {
           // 4. Rapport en arrière-plan envoyé par email (table report_emails)
           try {
             await supabase.from('report_emails').insert({
-              company_id: company.id,
+              company_id: currentCompanyId,
               sector_slug: currentSectorSlug,
               report_type: 'cloture_caisse',
-              recipient: recipientEmails.join(', ') || company.email || 'direction@gestio229.bj',
+              recipient: recipientEmails.join(', ') || company?.email || 'direction@gestio229.bj',
               payload: {
                 caisse_id: activeSessionId,
                 closed_at: closedAt,
@@ -777,10 +780,10 @@ export const CaissePage: React.FC = () => {
     const updated = [newReq, ...pendingRequests]
     setPendingRequests(updated)
 
-    if (company?.id) {
+    if (currentCompanyId) {
       try {
         await supabase.from('treasury_transfers').insert({
-          company_id: company.id,
+          company_id: currentCompanyId,
           sector_slug: currentSectorSlug,
           requested_by: user?.full_name || 'Caissier',
           type: req.type,
@@ -791,7 +794,7 @@ export const CaissePage: React.FC = () => {
       } catch (e) {
         try {
           await supabase.from('audit_logs').insert({
-            company_id: company.id,
+            company_id: currentCompanyId,
             user_id: user?.id,
             user_name: user?.full_name,
             action: 'DEMANDE_TRANSFERT_TRESORERIE',

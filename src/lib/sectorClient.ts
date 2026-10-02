@@ -55,10 +55,10 @@ export function getActiveSectorMeta() {
 export function isSectorSubscribed(sectorSlug: string, company?: Company | null): boolean {
   if (!company) return false
   
-  const normSlug = String(sectorSlug).replace(/^sec-/, '').toLowerCase()
+  const normSlug = String(sectorSlug).replace(/^sec-/, '').toLowerCase().trim()
 
   // Liste des secteurs souscrits dans company_sectors ou selected_sectors
-  const rawList: string[] = []
+  const rawList: any[] = []
   if (Array.isArray((company as any).selected_sectors)) {
     rawList.push(...(company as any).selected_sectors)
   }
@@ -68,10 +68,25 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
   if ((company as any).active_sector) {
     rawList.push((company as any).active_sector)
   }
+  if (Array.isArray((company as any).company_sectors)) {
+    rawList.push(...(company as any).company_sectors)
+  }
 
   if (rawList.length === 0) return true
 
-  const normalizedList = rawList.map((s) => String(s).replace(/^sec-/, '').toLowerCase())
+  const normalizedList = rawList
+    .map((s) => {
+      if (typeof s === 'string') {
+        return s.replace(/^sec-/, '').toLowerCase().trim()
+      }
+      if (s && typeof s === 'object') {
+        const slug = s.slug || s.sector_slug || s.sector?.slug || s.code || ''
+        return String(slug).replace(/^sec-/, '').toLowerCase().trim()
+      }
+      return ''
+    })
+    .filter(Boolean)
+
   return normalizedList.includes(normSlug)
 }
 

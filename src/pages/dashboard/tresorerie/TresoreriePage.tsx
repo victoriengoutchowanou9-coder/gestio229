@@ -16,6 +16,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { TreasuryDisbursementModal, ModalPortal } from '../../../components/modals'
 import { logAuditEvent } from '../../../services/auditService'
@@ -47,8 +48,10 @@ interface PendingTransfer {
 export const TresoreriePage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
+  const { companyId: tenantCompanyId, sectorSlug: tenantSectorSlug } = useTenant()
   const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const currentSectorSlug = tenantSectorSlug || params.sectorSlug || getActiveSectorSlug()
+  const currentCompanyId = tenantCompanyId || company?.id || ''
 
   const [accounts, setAccounts] = useState<TreasuryAccount[]>([])
   const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([])
@@ -70,14 +73,14 @@ export const TresoreriePage: React.FC = () => {
 
   // Charger les comptes trésorerie réels
   const loadTreasuryData = useCallback(async () => {
-    if (!company?.id) return
+    if (!currentCompanyId) return
     setLoading(true)
     try {
       // 1. Charger depuis Supabase si table existante
       const { data: dbAccounts, error } = await supabase
         .from('treasury_accounts')
         .select('*')
-        .eq('company_id', company.id)
+        .eq('company_id', currentCompanyId)
 
       if (!error && dbAccounts && dbAccounts.length > 0) {
         const sectorAccs = filterItemsForSector(dbAccounts, currentSectorSlug)
@@ -91,7 +94,7 @@ export const TresoreriePage: React.FC = () => {
         const { data: dbTransfers } = await supabase
           .from('treasury_transfers')
           .select('*')
-          .eq('company_id', company.id)
+          .eq('company_id', currentCompanyId)
           .order('created_at', { ascending: false })
         if (dbTransfers && dbTransfers.length > 0) {
           setPendingTransfers(dbTransfers)
@@ -99,7 +102,7 @@ export const TresoreriePage: React.FC = () => {
           const { data: auditTransfers } = await supabase
             .from('audit_logs')
             .select('*')
-            .eq('company_id', company.id)
+            .eq('company_id', currentCompanyId)
             .eq('action', 'DEMANDE_TRANSFERT_TRESORERIE')
             .order('created_at', { ascending: false })
           if (auditTransfers && auditTransfers.length > 0) {
@@ -129,7 +132,7 @@ export const TresoreriePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [company?.id, currentSectorSlug])
+  }, [currentCompanyId, currentSectorSlug])
 
   useEffect(() => {
     loadTreasuryData()
@@ -143,7 +146,7 @@ export const TresoreriePage: React.FC = () => {
   // Ajouter un nouveau compte réel
   const handleCreateAccount = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newAccForm.name.trim() || !company?.id) return
+    if (!newAccForm.name.trim() || !currentCompanyId) return
 
     const fullAccNum = newAccForm.institution.trim()
       ? `${newAccForm.institution.trim()} - ${newAccForm.account_number.trim() || 'Principal'}`
@@ -156,7 +159,7 @@ export const TresoreriePage: React.FC = () => {
       const { data: dbAcc, error } = await supabase
         .from('treasury_accounts')
         .insert({
-          company_id: company.id,
+          company_id: currentCompanyId,
           name: newAccForm.name.trim(),
           type: newAccForm.type,
           account_number: fullAccNum,
@@ -188,7 +191,7 @@ export const TresoreriePage: React.FC = () => {
     saveAccounts(updated)
 
     await logAuditEvent({
-      companyId: company.id,
+      companyId: currentCompanyId,
       userId: user?.id,
       userName: user?.full_name,
       userRole: user?.role,

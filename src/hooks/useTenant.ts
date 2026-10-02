@@ -24,6 +24,7 @@ export interface TenantContext {
   isAdmin: boolean
   assignedSectorSlug: string | null
   supabaseTenant: (table: string) => TenantQueryClient
+  loading: boolean
 }
 
 /**
@@ -32,8 +33,9 @@ export interface TenantContext {
 export function useTenant(): TenantContext {
   const location = useLocation()
   const params = useParams<{ sectorSlug?: string }>()
-  const { company, user } = useAuthStore()
+  const { company, user, status } = useAuthStore()
 
+  const loading = status === 'idle' || status === 'loading'
   const companyId = company?.id ?? null
 
   // 1. Détecter si on est sur la vue HUB
@@ -114,6 +116,7 @@ export function useTenant(): TenantContext {
     isAdmin,
     assignedSectorSlug,
     supabaseTenant: tenantDbFactory,
+    loading,
   }
 }
 
