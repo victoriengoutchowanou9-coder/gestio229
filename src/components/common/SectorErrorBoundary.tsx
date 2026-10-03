@@ -23,11 +23,12 @@ interface State {
 /** Détecte si une erreur est causée par un chunk JS introuvable (post-déploiement) */
 function detectChunkError(err: Error | null): boolean {
   if (!err) return false
-  const msg = err.message + (err.name ?? '')
+  const msg = (err.message || '') + (err.name || '') + (err.stack || '')
   return (
     msg.includes('dynamically imported module') ||
     msg.includes('Failed to fetch') ||
     msg.includes('Loading chunk') ||
+    msg.includes('Loading CSS chunk') ||
     msg.includes('ChunkLoadError') ||
     msg.includes('Importing a module script failed') ||
     msg.includes('error loading dynamically imported module')

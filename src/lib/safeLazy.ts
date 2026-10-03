@@ -21,11 +21,12 @@ const RELOAD_KEY = 'gestio229_chunk_reload'
  * (chunk introuvable après déploiement).
  */
 function isChunkError(err: unknown): boolean {
-  const msg = err instanceof Error ? err.message : String(err)
+  const msg = err instanceof Error ? (err.message + (err.stack || '')) : String(err)
   return (
     msg.includes('dynamically imported module') ||
     msg.includes('Failed to fetch') ||
     msg.includes('Loading chunk') ||
+    msg.includes('Loading CSS chunk') ||
     msg.includes('ChunkLoadError') ||
     msg.includes('Importing a module script failed') ||
     msg.includes('error loading dynamically imported module')

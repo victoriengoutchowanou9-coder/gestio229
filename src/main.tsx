@@ -58,8 +58,10 @@ if (typeof window !== 'undefined') {
       msg.includes('dynamically imported module') ||
       msg.includes('Failed to fetch') ||
       msg.includes('Loading chunk') ||
+      msg.includes('Loading CSS chunk') ||
       msg.includes('ChunkLoadError') ||
-      msg.includes('Importing a module script failed')
+      msg.includes('Importing a module script failed') ||
+      msg.includes('error loading dynamically imported module')
     )
     if (isChunkError) {
       event.preventDefault()
