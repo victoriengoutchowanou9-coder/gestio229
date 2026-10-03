@@ -786,6 +786,7 @@ export const POSPage: React.FC = () => {
       const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferred ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
 
       // Payload strictement conforme aux colonnes réelles de sales_orders dans Supabase
+      // NOTE: gross_margin est une colonne GENERATED dans Supabase → on ne l'insert PAS
       const baseSalePayload: any = {
         company_id: company?.id ?? companyId ?? '',
         customer_id: selectedCustomer?.id || null,
@@ -797,7 +798,6 @@ export const POSPage: React.FC = () => {
         aib_amount: cartFiscalSummary.aib,
         total_amount: totalNetTTC,
         total_cost: totalCostHTRounded,
-        gross_margin: grossMarginHT,
         paid_amount: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
         payment_status: creditAmount >= totalNetTTC ? 'credit' : primaryMethod,
@@ -806,9 +806,9 @@ export const POSPage: React.FC = () => {
       }
 
       // Payload étendu si des colonnes optionnelles ont été ajoutées (ex: M014/M018)
+      // NOTE: gross_margin est GENERATED → pas inclus dans l'insert
       const fullSalePayload: any = {
         ...baseSalePayload,
-        gross_margin: grossMarginHT,
         sector_slug: currentSectorSlug,
         payment_method: primaryMethod,
         customer_name: custName,
