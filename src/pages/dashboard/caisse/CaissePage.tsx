@@ -260,7 +260,30 @@ export const CaissePage: React.FC = () => {
       setSalesToday(parsedSales)
 
       // 2. Remboursements de créances du jour
+      // Source principale : debt_payments (nouvelle table M028)
       let repList: any[] = []
+      try {
+        const { data: debtPays } = await supabase
+          .from('debt_payments')
+          .select('id, amount, payment_method, payment_date, created_at, client_id, reference')
+          .eq('company_id', currentCompanyId)
+          .eq('sector_code', currentSectorSlug)
+          .gte('created_at', startOfDay)
+          .order('created_at', { ascending: false })
+        if (debtPays && debtPays.length > 0) {
+          repList = debtPays.map((d: any) => ({
+            id: d.id,
+            created_at: d.created_at,
+            customer_name: 'Client',
+            amount: Number(d.amount) || 0,
+            payment_method: d.payment_method, // 'Espèces' | 'MTN MoMo' | 'Moov Money'
+            reference: d.reference || `DP-${d.id.slice(0, 6)}`
+          }))
+        }
+      } catch (dpErr) {
+        console.warn('debt_payments fetch error :', dpErr)
+      }
+      // Source de secours : ancienne table customer_repayments
       try {
         const { data: repayments } = await supabase
           .from('customer_repayments')
@@ -268,11 +291,13 @@ export const CaissePage: React.FC = () => {
           .eq('company_id', currentCompanyId)
           .gte('created_at', startOfDay)
           .order('created_at', { ascending: false })
-        if (repayments) repList = repayments
+        if (repayments && repayments.length > 0) {
+          repList = [...repList, ...repayments]
+        }
       } catch (err) {
         console.warn('Fallback customer_repayments :', err)
       }
-      // Si la table customer_repayments est indisponible, interroger audit_logs Supabase
+      // Dernier recours : audit_logs
       if (repList.length === 0) {
         try {
           const { data: auditReps } = await supabase
@@ -322,7 +347,7 @@ export const CaissePage: React.FC = () => {
       })
 
       const repaymentMovements: CashMovement[] = repList.map((r: any) => {
-        const isCash = r.payment_method === 'cash' || r.payment_method === 'especes'
+        const isCash = ['cash', 'especes', 'espèces'].includes((r.payment_method || '').toLowerCase())
         return {
           id: `rep-${r.id}`,
           created_at: r.created_at,
@@ -458,14 +483,20 @@ export const CaissePage: React.FC = () => {
   // 3. Remboursements créances en espèces
   const remboursementsEspeces = useMemo(() => {
     return repaymentsToday
-      .filter((r) => r.payment_method === 'cash' || r.payment_method === 'especes')
+      .filter((r) => {
+        const m = (r.payment_method || '').toLowerCase()
+        return m === 'cash' || m === 'espèces' || m === 'especes'
+      })
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [repaymentsToday])
 
   // 4. Remboursements créances en MoMo
   const remboursementsMomo = useMemo(() => {
     return repaymentsToday
-      .filter((r) => r.payment_method && (r.payment_method.includes('momo') || r.payment_method.includes('wave')))
+      .filter((r) => {
+        const m = (r.payment_method || '').toLowerCase()
+        return m.includes('momo') || m.includes('wave') || m.includes('moov')
+      })
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [repaymentsToday])
 
