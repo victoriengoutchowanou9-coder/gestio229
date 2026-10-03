@@ -17,5 +17,11 @@ export default defineConfig({
   server: {
     port: 3000,
     host: true
+  },
+  define: {
+    // Identifiant unique de chaque build — change à chaque déploiement Vercel
+    // Utilisé pour détecter un nouveau déploiement et forcer un rechargement propre
+    __APP_VERSION__: JSON.stringify(`${Date.now()}`),
   }
 })
+

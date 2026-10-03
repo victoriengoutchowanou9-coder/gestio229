@@ -2,7 +2,7 @@
 // GESTIO 229 SaaS — App.tsx : Router Principal React Router v6
 // =============================================================================
 
-import React, { useEffect, Suspense, lazy } from 'react'
+import React, { useEffect, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import AppLayout from './components/layout/AppLayout'
@@ -10,33 +10,35 @@ import ModuleGuard from './components/subscription/ModuleGuard'
 import SectorGuard from './components/subscription/SectorGuard'
 import SectorErrorBoundary from './components/common/SectorErrorBoundary'
 import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
+import { safeLazy } from './lib/safeLazy'
 
-// ─── Lazy Loading des pages ─────────────────────────────────────────────────
+// ─── Lazy Loading des pages (safeLazy = auto-reload si chunk introuvable) ────
 
 // Auth
-const LoginPage     = lazy(() => import('./pages/auth/LoginPage'))
-const RegisterPage  = lazy(() => import('./pages/auth/RegisterPage'))
+const LoginPage     = safeLazy(() => import('./pages/auth/LoginPage'))
+const RegisterPage  = safeLazy(() => import('./pages/auth/RegisterPage'))
 
 // Dashboard
-const DashboardPage   = lazy(() => import('./pages/dashboard/DashboardPage'))
-const POSPage         = lazy(() => import('./pages/dashboard/vente-pos/POSPage'))
-const StocksPage         = lazy(() => import('./pages/dashboard/stocks/StocksPage'))
-const CaissePage         = lazy(() => import('./pages/dashboard/caisse/CaissePage'))
-const TresoreriePage     = lazy(() => import('./pages/dashboard/tresorerie/TresoreriePage'))
-const ClientsPage        = lazy(() => import('./pages/dashboard/clients/ClientsPage'))
-const FournisseursPage   = lazy(() => import('./pages/dashboard/fournisseurs/FournisseursPage'))
-const DepensesPage       = lazy(() => import('./pages/dashboard/depenses/DepensesPage'))
-const ReportingPage      = lazy(() => import('./pages/dashboard/reporting/ReportingPage'))
-const SyscohadaPage      = lazy(() => import('./pages/dashboard/syscohada/SyscohadaPage'))
-const ConfigPage         = lazy(() => import('./pages/dashboard/configuration/ConfigPage'))
-const AuditPage          = lazy(() => import('./pages/dashboard/journal-audit/AuditPage'))
-const AbonnementPage     = lazy(() => import('./pages/dashboard/abonnement/AbonnementPage'))
-const UtilisateursPage   = lazy(() => import('./pages/dashboard/utilisateurs/UtilisateursPage'))
-const IsolationHealthPage = lazy(() => import('./pages/dashboard/isolation/IsolationHealthPage'))
+const DashboardPage   = safeLazy(() => import('./pages/dashboard/DashboardPage'))
+const POSPage         = safeLazy(() => import('./pages/dashboard/vente-pos/POSPage'))
+const StocksPage         = safeLazy(() => import('./pages/dashboard/stocks/StocksPage'))
+const CaissePage         = safeLazy(() => import('./pages/dashboard/caisse/CaissePage'))
+const TresoreriePage     = safeLazy(() => import('./pages/dashboard/tresorerie/TresoreriePage'))
+const ClientsPage        = safeLazy(() => import('./pages/dashboard/clients/ClientsPage'))
+const FournisseursPage   = safeLazy(() => import('./pages/dashboard/fournisseurs/FournisseursPage'))
+const DepensesPage       = safeLazy(() => import('./pages/dashboard/depenses/DepensesPage'))
+const ReportingPage      = safeLazy(() => import('./pages/dashboard/reporting/ReportingPage'))
+const SyscohadaPage      = safeLazy(() => import('./pages/dashboard/syscohada/SyscohadaPage'))
+const ConfigPage         = safeLazy(() => import('./pages/dashboard/configuration/ConfigPage'))
+const AuditPage          = safeLazy(() => import('./pages/dashboard/journal-audit/AuditPage'))
+const AbonnementPage     = safeLazy(() => import('./pages/dashboard/abonnement/AbonnementPage'))
+const UtilisateursPage   = safeLazy(() => import('./pages/dashboard/utilisateurs/UtilisateursPage'))
+const IsolationHealthPage = safeLazy(() => import('./pages/dashboard/isolation/IsolationHealthPage'))
 const FournisseursPage2  = FournisseursPage // alias
 
 // Hub multi-services
-const HubPage = lazy(() => import('./pages/HubPage'))
+const HubPage = safeLazy(() => import('./pages/HubPage'))
+
 
 // ─── Loader / Spinner ───────────────────────────────────────────────────────
 

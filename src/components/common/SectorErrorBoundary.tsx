@@ -2,10 +2,11 @@
 // GESTIO 229 SaaS — SectorErrorBoundary (Protection Anti-Page Blanche)
 // =============================================================================
 // Isole les erreurs au sein d'un sous-logiciel sans jamais planter l'ERP global.
+// Gère en particulier les erreurs de chunks JS après un nouveau déploiement.
 // =============================================================================
 
 import React, { Component, ErrorInfo, ReactNode } from 'react'
-import { AlertOctagon, RotateCcw, Home, ArrowLeft } from 'lucide-react'
+import { AlertOctagon, RotateCcw, Home } from 'lucide-react'
 
 interface Props {
   children: ReactNode
@@ -16,6 +17,21 @@ interface State {
   hasError: boolean
   error: Error | null
   errorInfo: ErrorInfo | null
+  isChunkError: boolean
+}
+
+/** Détecte si une erreur est causée par un chunk JS introuvable (post-déploiement) */
+function detectChunkError(err: Error | null): boolean {
+  if (!err) return false
+  const msg = err.message + (err.name ?? '')
+  return (
+    msg.includes('dynamically imported module') ||
+    msg.includes('Failed to fetch') ||
+    msg.includes('Loading chunk') ||
+    msg.includes('ChunkLoadError') ||
+    msg.includes('Importing a module script failed') ||
+    msg.includes('error loading dynamically imported module')
+  )
 }
 
 export class SectorErrorBoundary extends Component<Props, State> {
@@ -23,20 +39,41 @@ export class SectorErrorBoundary extends Component<Props, State> {
     hasError: false,
     error: null,
     errorInfo: null,
+    isChunkError: false,
   }
 
   public static getDerivedStateFromError(error: Error): State {
-    return { hasError: true, error, errorInfo: null }
+    return {
+      hasError: true,
+      error,
+      errorInfo: null,
+      isChunkError: detectChunkError(error),
+    }
   }
 
   public componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('[SectorErrorBoundary] Erreur interceptée dans le sous-logiciel :', error, errorInfo)
     this.setState({ errorInfo })
+
+    // ── Auto-reload si chunk error (post-déploiement) ─────────────────────
+    // On recharge automatiquement UNE seule fois (garde anti-boucle).
+    if (detectChunkError(error)) {
+      const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
+      if (!alreadyReloaded) {
+        console.warn('[SectorErrorBoundary] Chunk introuvable — rechargement automatique dans 800ms…')
+        sessionStorage.setItem('gestio229_chunk_reload', '1')
+        // Petit délai pour ne pas recharger avant que React ait fini le rendu
+        setTimeout(() => {
+          window.location.href = window.location.pathname + '?t=' + Date.now()
+        }, 800)
+      }
+    }
   }
 
+  /** Hard reload avec cache-bust — bypass navigateur et SW */
   private handleReload = () => {
-    this.setState({ hasError: false, error: null, errorInfo: null })
-    window.location.reload()
+    sessionStorage.removeItem('gestio229_chunk_reload')
+    window.location.href = window.location.pathname + '?t=' + Date.now()
   }
 
   private handleGoHub = () => {
@@ -48,6 +85,25 @@ export class SectorErrorBoundary extends Component<Props, State> {
       const sectorName = this.props.sectorSlug
         ? this.props.sectorSlug.charAt(0).toUpperCase() + this.props.sectorSlug.slice(1)
         : 'Sous-Logiciel'
+
+      // Si c'est une chunk error, on affiche un message d'attente pendant le reload auto
+      if (this.state.isChunkError) {
+        return (
+          <div className="min-h-[70vh] flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-900">
+            <div className="max-w-lg w-full bg-white dark:bg-slate-800 rounded-3xl shadow-xl border border-amber-200 dark:border-amber-900/60 p-8 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-4 shadow-sm">
+                <RotateCcw className="w-8 h-8 animate-spin" />
+              </div>
+              <h2 className="text-xl font-black text-slate-800 dark:text-slate-100 mb-2">
+                Nouveau déploiement détecté
+              </h2>
+              <p className="text-slate-500 dark:text-slate-400 text-sm">
+                Mise à jour en cours... Rechargement automatique de l'application.
+              </p>
+            </div>
+          </div>
+        )
+      }
 
       return (
         <div className="min-h-[70vh] flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-900">
@@ -101,3 +157,4 @@ export class SectorErrorBoundary extends Component<Props, State> {
 }
 
 export default SectorErrorBoundary
+
