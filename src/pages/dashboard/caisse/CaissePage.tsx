@@ -8,7 +8,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
@@ -56,6 +56,7 @@ interface CashClosure {
 export const CaissePage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
+  const navigate = useNavigate()
   const { companyId, sectorSlug: tenantSectorSlug, supabaseTenant } = useTenant()
   const params = useParams<{ sectorSlug?: string }>()
   const currentSectorSlug = tenantSectorSlug || params.sectorSlug || getActiveSectorSlug()
@@ -505,15 +506,37 @@ export const CaissePage: React.FC = () => {
   const handleOpenCaisse = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsOperatingCaisse(true)
-    const opBy = user?.full_name || 'Caissier'
+    const opBy = user?.full_name || user?.username || 'Caissier'
     const nowIso = new Date().toISOString()
     const initC = Number(openInputCash) || 0
     const initM = Number(openInputMomo) || 0
+    const cleanSlug = (currentSectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
+    const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)
+      ? user.id
+      : null
+
+    console.log('[CASH-OPEN]', {
+      company_id: currentCompanyId,
+      sector_slug: cleanSlug,
+      user_id: validUserId,
+      user_name: opBy,
+      fond_especes: initC,
+      fond_momo: initM,
+      date_ouverture: nowIso,
+      statut: 'ouverte'
+    })
+
+    let createdSessionId: string | null = null
 
     try {
       let regId = cashRegisterId
       if (!regId && currentCompanyId) {
-        const { data: reg } = await supabase.from('cash_registers').select('id').eq('company_id', currentCompanyId).limit(1).maybeSingle()
+        const { data: reg } = await supabase
+          .from('cash_registers')
+          .select('id')
+          .eq('company_id', currentCompanyId)
+          .limit(1)
+          .maybeSingle()
         if (reg?.id) {
           regId = reg.id
           setCashRegisterId(reg.id)
@@ -521,45 +544,75 @@ export const CaissePage: React.FC = () => {
       }
 
       if (currentCompanyId) {
+        // 1. Table caisses (standard 19 secteurs M025)
         try {
-          // Table caisses (standard 19 secteurs)
-          const { data: newCaisse } = await supabase.from('caisses').insert({
-            company_id: currentCompanyId,
-            sector_slug: currentSectorSlug,
-            date_ouverture: nowIso,
-            statut: 'ouverte',
-            fond_ouverture_especes: initC,
-            fond_ouverture_momo: initM,
-            ouvert_par: opBy
-          }).select().single()
+          const { data: newCaisse, error: caisseErr } = await supabase
+            .from('caisses')
+            .insert({
+              company_id: currentCompanyId,
+              sector_slug: cleanSlug,
+              date_ouverture: nowIso,
+              statut: 'ouverte',
+              fond_ouverture_especes: initC,
+              fond_ouverture_momo: initM,
+              ouvert_par: validUserId
+            })
+            .select()
+            .single()
 
-          if (newCaisse?.id) {
+          if (caisseErr) {
+            console.error('[CASH-OPEN] Erreur insertion caisses:', caisseErr)
+          } else if (newCaisse?.id) {
+            createdSessionId = newCaisse.id
             setActiveSessionId(newCaisse.id)
+            console.log('[CASH-OPEN] Caisse enregistrée avec succès dans caisses, ID:', newCaisse.id)
           }
+        } catch (cErr) {
+          console.error('[CASH-OPEN] Exception insertion caisses:', cErr)
+        }
 
-          // Rétro-compatibilité cash_sessions
-          const { data: newSession } = await supabase.from('cash_sessions').insert({
-            company_id: currentCompanyId,
-            cash_register_id: regId || null,
-            opened_at: nowIso,
-            opening_cash: initC,
-            opening_momo: initM,
-            status: 'ouverte'
-          }).select().single()
+        // 2. Rétro-compatibilité synchronisée cash_sessions
+        try {
+          const { data: newSession, error: sessErr } = await supabase
+            .from('cash_sessions')
+            .insert({
+              company_id: currentCompanyId,
+              cash_register_id: regId || null,
+              cashier_id: validUserId,
+              opened_at: nowIso,
+              opening_cash: initC,
+              opening_momo: initM,
+              status: 'ouverte',
+              closing_notes: `[SECTOR:${cleanSlug}] Fond initial: ${initC} FCFA par ${opBy}`
+            })
+            .select()
+            .single()
 
-          if (!newCaisse?.id && newSession?.id) {
-            setActiveSessionId(newSession.id)
+          if (sessErr) {
+            console.warn('[CASH-OPEN] Avertissement cash_sessions:', sessErr)
+          } else if (newSession?.id) {
+            if (!createdSessionId) {
+              createdSessionId = newSession.id
+              setActiveSessionId(newSession.id)
+            }
+            console.log('[CASH-OPEN] Caisse enregistrée dans cash_sessions, ID:', newSession.id)
           }
+        } catch (sErr) {
+          console.warn('[CASH-OPEN] Exception insertion cash_sessions:', sErr)
+        }
 
-          if (regId) {
-            await supabase.from('cash_registers').update({
-              current_cash_balance: initC,
-              current_momo_balance: initM,
-              is_active: true
-            }).eq('id', regId)
-          }
-        } catch (err) {
-          console.warn('Erreur ouverture caisse Supabase:', err)
+        // 3. Mise à jour de la caisse physique (cash_registers)
+        if (regId) {
+          try {
+            await supabase
+              .from('cash_registers')
+              .update({
+                current_cash_balance: initC,
+                current_momo_balance: initM,
+                is_active: true
+              })
+              .eq('id', regId)
+          } catch (_) {}
         }
       }
 
@@ -576,6 +629,14 @@ export const CaissePage: React.FC = () => {
         module: 'CAISSE',
         sector: currentSectorSlug.toUpperCase(),
         description: `Ouverture de la caisse ${currentSectorSlug} par ${opBy}. Fond tiroir : ${fmt(initC)}, MoMo : ${fmt(initM)}`
+      })
+
+      // Recharger les données locales de la page caisse
+      await loadData()
+
+      // Rediriger immédiatement vers le module Vente avec le nouvel ID de session
+      navigate(`/app/${cleanSlug}/vente?session_id=${createdSessionId || ''}`, {
+        state: { sessionId: createdSessionId, refreshCaisse: true }
       })
     } finally {
       setIsOperatingCaisse(false)
@@ -628,9 +689,17 @@ export const CaissePage: React.FC = () => {
       if (company?.id) {
         try {
           if (activeSessionId) {
+            const validCloseUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)
+              ? user.id
+              : null
+
             // 1. Mise à jour de la table caisses
             await supabase.from('caisses').update({
-              statut: 'fermee'
+              statut: 'fermee',
+              date_fermeture: closedAt,
+              solde_especes_final: Number(closingPhysicalCash) || 0,
+              solde_momo_final: fondActuelMomo,
+              ferme_par: validCloseUserId
             }).eq('id', activeSessionId)
 
             // 2. Insertion dans caisse_clotures (standard 19 secteurs)

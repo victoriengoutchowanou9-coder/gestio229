@@ -609,10 +609,36 @@ export async function fetchResumeActivite(
  * Si non clôturée le soir, elle RESTE ouverte le lendemain.
  * ─────────────────────────────────────────────────────────────────────────────
  */
-export async function getActiveCaisse(
+export interface ActiveCaisseSession {
+  id: string
+  session_number: string
+  statut: 'ouverte' | 'open'
+  date_ouverture: string
+  heure_ouverture: string
+  fond_ouverture_especes: number
+  fond_ouverture_momo: number
+  total_ouverture: number
+  ouvert_par: string
+  ouvert_par_id: string | null
+  sector_slug: string
+  company_id: string
+}
+
+function isValidUuid(val?: string | null): boolean {
+  if (!val) return false
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(val)
+}
+
+/**
+ * Récupère la session de caisse active (statut='ouverte' ET closed_at/date_fermeture IS NULL)
+ * pour le couple exact (company_id, sector_slug).
+ * Supporte la table caisses officielle et le fallback cash_sessions.
+ */
+export async function getCurrentCashSession(
   companyId: string,
-  sectorSlug: string
-): Promise<{ id: string; statut: 'ouverte' | 'fermee'; date_ouverture: string; fond_ouverture_especes: number; fond_ouverture_momo: number } | null> {
+  sectorSlug: string,
+  userId?: string
+): Promise<ActiveCaisseSession | null> {
   const cleanSlug = (sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
   if (!companyId || !cleanSlug) return null
 
@@ -620,56 +646,125 @@ export async function getActiveCaisse(
   try {
     const { data: openCaisses, error } = await supabase
       .from('caisses')
-      .select('*')
+      .select('*, opener:user_profiles!ouvert_par(id, full_name, username)')
       .eq('company_id', companyId)
       .eq('sector_slug', cleanSlug)
-      .eq('statut', 'ouverte')
+      .in('statut', ['ouverte', 'open'])
+      .is('date_fermeture', null)
       .order('date_ouverture', { ascending: false })
       .limit(1)
 
     if (!error && openCaisses && openCaisses.length > 0) {
       const c = openCaisses[0]
-      return {
+      const openDate = new Date(c.date_ouverture || c.created_at)
+      const heureStr = !isNaN(openDate.getTime())
+        ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+        : '--:--'
+
+      const sessionInfo: ActiveCaisseSession = {
         id: c.id,
+        session_number: `CS-${cleanSlug.slice(0, 4).toUpperCase()}-${c.id.slice(0, 6).toUpperCase()}`,
         statut: 'ouverte',
         date_ouverture: c.date_ouverture || c.created_at,
+        heure_ouverture: heureStr,
         fond_ouverture_especes: Number(c.fond_ouverture_especes) || 0,
-        fond_ouverture_momo: Number(c.fond_ouverture_momo) || 0
+        fond_ouverture_momo: Number(c.fond_ouverture_momo) || 0,
+        total_ouverture: (Number(c.fond_ouverture_especes) || 0) + (Number(c.fond_ouverture_momo) || 0),
+        ouvert_par: c.opener?.full_name || c.opener?.username || 'Caissier',
+        ouvert_par_id: c.ouvert_par || null,
+        sector_slug: cleanSlug,
+        company_id: companyId
       }
-    }
-  } catch (_) {}
 
-  // 2. Fallback sur cash_sessions si caisses n'existe pas encore
+      console.log('[CASH-CHECK]', {
+        source: 'caisses',
+        company_id: companyId,
+        sector_slug: cleanSlug,
+        user_id: userId,
+        found: true,
+        session_id: c.id,
+        ouvert_par: sessionInfo.ouvert_par,
+        date_ouverture: sessionInfo.date_ouverture,
+        fond_ouverture_especes: sessionInfo.fond_ouverture_especes
+      })
+
+      return sessionInfo
+    }
+  } catch (err) {
+    console.warn('[CASH-CHECK] Erreur lecture caisses:', err)
+  }
+
+  // 2. Fallback sur cash_sessions si caisses n'existe pas encore ou vide
   try {
     const { data: openSessions, error: sessErr } = await supabase
       .from('cash_sessions')
-      .select('*')
+      .select('*, cashier:user_profiles!cashier_id(id, full_name, username)')
       .eq('company_id', companyId)
-      .eq('status', 'ouverte')
+      .in('status', ['ouverte', 'open'])
+      .is('closed_at', null)
       .order('opened_at', { ascending: false })
-      .limit(10)
+      .limit(20)
 
     if (!sessErr && openSessions && openSessions.length > 0) {
-      // Filtrer par sector_slug
       const sessionInSector = openSessions.find((s: any) => {
         if (s.sector_slug) return s.sector_slug.toLowerCase().trim().replace(/^sec-/, '') === cleanSlug
+        if (s.closing_notes && typeof s.closing_notes === 'string') {
+          if (s.closing_notes.includes(`[SECTOR:${cleanSlug}]`)) return true
+        }
         return cleanSlug === 'boutique'
       })
 
       if (sessionInSector) {
-        return {
+        const openDate = new Date(sessionInSector.opened_at)
+        const heureStr = !isNaN(openDate.getTime())
+          ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+          : '--:--'
+
+        const sessionInfo: ActiveCaisseSession = {
           id: sessionInSector.id,
+          session_number: `CS-${cleanSlug.slice(0, 4).toUpperCase()}-${sessionInSector.id.slice(0, 6).toUpperCase()}`,
           statut: 'ouverte',
           date_ouverture: sessionInSector.opened_at,
+          heure_ouverture: heureStr,
           fond_ouverture_especes: Number(sessionInSector.opening_cash) || 0,
-          fond_ouverture_momo: Number(sessionInSector.opening_momo) || 0
+          fond_ouverture_momo: Number(sessionInSector.opening_momo) || 0,
+          total_ouverture: (Number(sessionInSector.opening_cash) || 0) + (Number(sessionInSector.opening_momo) || 0),
+          ouvert_par: sessionInSector.cashier?.full_name || sessionInSector.cashier?.username || 'Caissier',
+          ouvert_par_id: sessionInSector.cashier_id || null,
+          sector_slug: cleanSlug,
+          company_id: companyId
         }
+
+        console.log('[CASH-CHECK]', {
+          source: 'cash_sessions',
+          company_id: companyId,
+          sector_slug: cleanSlug,
+          user_id: userId,
+          found: true,
+          session_id: sessionInSector.id,
+          ouvert_par: sessionInfo.ouvert_par,
+          date_ouverture: sessionInfo.date_ouverture
+        })
+
+        return sessionInfo
       }
     }
-  } catch (_) {}
+  } catch (sessErr) {
+    console.warn('[CASH-CHECK] Erreur lecture cash_sessions:', sessErr)
+  }
+
+  console.log('[CASH-CHECK]', {
+    company_id: companyId,
+    sector_slug: cleanSlug,
+    user_id: userId,
+    found: false,
+    message: 'Caisse non ouverte pour ce secteur'
+  })
 
   return null
 }
+
+export const getActiveCaisse = getCurrentCashSession
 
 /**
  * ─────────────────────────────────────────────────────────────────────────────

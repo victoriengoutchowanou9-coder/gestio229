@@ -5,7 +5,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useLocation } from 'react-router-dom'
 import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
@@ -18,7 +18,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
-import { getActiveCaisse } from '../../../lib/supabaseTenant'
+import { getActiveCaisse, getCurrentCashSession, ActiveCaisseSession } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
@@ -108,6 +108,7 @@ export const POSPage: React.FC = () => {
   const { toast } = useUIStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
   const currentSectorSlug = sectorSlug
+  const location = useLocation()
 
   // Navigation interne
   const [activeTab, setActiveTab] = useState<'pos' | 'historique'>('pos')
@@ -150,7 +151,7 @@ export const POSPage: React.FC = () => {
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
 
   // Caisse active (statut='ouverte' isolée par secteur)
-  const [activeCaisse, setActiveCaisse] = useState<any>(null)
+  const [activeCaisse, setActiveCaisse] = useState<ActiveCaisseSession | null>(null)
   const [checkingCaisse, setCheckingCaisse] = useState(true)
 
   // Historique des ventes réelles
@@ -166,10 +167,10 @@ export const POSPage: React.FC = () => {
     try {
       // 0. Vérification stricte de la caisse ouverte pour ce secteur
       try {
-        const caisse = await getActiveCaisse(companyId, currentSectorSlug)
+        const caisse = await getCurrentCashSession(companyId, currentSectorSlug, user?.id)
         setActiveCaisse(caisse)
       } catch (err) {
-        console.warn('Erreur vérification caisse:', err)
+        console.warn('[CASH-CHECK] Erreur vérification caisse:', err)
         setActiveCaisse(null)
       }
 
@@ -1264,24 +1265,69 @@ export const POSPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Alerte caisse fermée */}
-      {!checkingCaisse && !activeCaisse && (
+
+      {/* ── Bannière statut caisse ──────────────────────────────────────── */}
+      {checkingCaisse ? (
+        <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs text-slate-500 flex items-center gap-2 animate-pulse">
+          <RefreshCw className="w-3 h-3 animate-spin" /> Vérification de la caisse en cours…
+        </div>
+      ) : activeCaisse ? (
+        /* ── Caisse OUVERTE : affichage des infos de session ── */
+        <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center flex-shrink-0">
+              <Check className="w-3.5 h-3.5" />
+            </div>
+            <div>
+              <p className="font-bold text-emerald-900 text-sm">Caisse Ouverte</p>
+              <p className="text-emerald-700">
+                N° {activeCaisse.session_number} &bull; Ouverte à {activeCaisse.heure_ouverture} par <strong>{activeCaisse.ouvert_par}</strong>
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="text-right">
+              <p className="text-emerald-600 font-mono font-bold">{fmt(activeCaisse.fond_ouverture_especes)} Espèces</p>
+              {activeCaisse.fond_ouverture_momo > 0 && (
+                <p className="text-emerald-600 font-mono">{fmt(activeCaisse.fond_ouverture_momo)} MoMo</p>
+              )}
+            </div>
+            <button
+              onClick={loadData}
+              title="Actualiser le statut caisse"
+              className="p-1.5 rounded-lg hover:bg-emerald-100 text-emerald-600 transition"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      ) : (
+        /* ── Caisse FERMÉE : alerte avec bouton d'action ── */
         <div className="bg-amber-50 border border-amber-300 text-amber-900 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 rounded-xl bg-amber-200 text-amber-800 flex items-center justify-center flex-shrink-0">
               <AlertTriangle className="w-4 h-4" />
             </div>
             <div>
-              <p className="font-bold text-sm">Caisse non ouverte pour ce secteur ({currentSectorSlug})</p>
-              <p className="text-amber-700 text-xs">Veuillez ouvrir la caisse avant de pouvoir valider des encaissements ou ventes.</p>
+              <p className="font-bold text-sm">Caisse non ouverte — secteur : {currentSectorSlug}</p>
+              <p className="text-amber-700 text-xs">Veuillez ouvrir la caisse avant de valider une vente.</p>
             </div>
           </div>
-          <Link
-            to={`/app/${currentSectorSlug}/caisse`}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition text-center text-xs whitespace-nowrap shadow-sm"
-          >
-            Ouvrir la Caisse &rarr;
-          </Link>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={loadData}
+              title="Vérifier à nouveau"
+              className="p-2 rounded-xl border border-amber-300 hover:bg-amber-100 text-amber-700 transition"
+            >
+              <RefreshCw className="w-4 h-4" />
+            </button>
+            <Link
+              to={`/app/${currentSectorSlug}/caisse`}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition text-center text-xs whitespace-nowrap shadow-sm"
+            >
+              Ouvrir la Caisse →
+            </Link>
+          </div>
         </div>
       )}
 
