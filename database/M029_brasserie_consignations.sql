@@ -48,26 +48,38 @@ CREATE INDEX IF NOT EXISTS idx_brasserie_pe_product
     WHERE sector_slug = 'brasserie';
 
 -- 3. Consignation client (solde d'emballages par client et par type)
+-- La table existait dans le schéma initial sans sector_slug -> On assure la structure avec ADD COLUMN IF NOT EXISTS
 CREATE TABLE IF NOT EXISTS public.brasserie_consignations (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id UUID NOT NULL,
-    sector_slug TEXT NOT NULL DEFAULT 'brasserie',
-    client_id UUID NOT NULL,          -- référence customers.id
-    emballage_id UUID NOT NULL REFERENCES public.brasserie_emballages(id) ON DELETE CASCADE,
-    total_sorti INTEGER DEFAULT 0,    -- cumul total emballages sortis chez ce client
-    total_retourne INTEGER DEFAULT 0, -- cumul total emballages retournés par ce client
-    solde_du INTEGER DEFAULT 0,       -- = total_sorti - total_retourne
-    derniere_sortie TIMESTAMPTZ,
-    dernier_retour TIMESTAMPTZ,
-    created_at TIMESTAMPTZ DEFAULT now(),
-    updated_at TIMESTAMPTZ DEFAULT now(),
-    CONSTRAINT brasserie_consig_sector CHECK (sector_slug = 'brasserie'),
-    CONSTRAINT brasserie_consig_positive CHECK (solde_du >= 0)
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid()
 );
+
+ALTER TABLE public.brasserie_consignations
+    ADD COLUMN IF NOT EXISTS company_id UUID,
+    ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'brasserie',
+    ADD COLUMN IF NOT EXISTS client_id UUID,
+    ADD COLUMN IF NOT EXISTS emballage_id UUID,
+    ADD COLUMN IF NOT EXISTS total_sorti INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS total_retourne INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS solde_du INTEGER DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS derniere_sortie TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS dernier_retour TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT now(),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
+
+-- Rétrocompatibilité si customer_id existait déjà dans l'ancienne table
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' AND table_name = 'brasserie_consignations' AND column_name = 'customer_id'
+    ) THEN
+        UPDATE public.brasserie_consignations SET client_id = customer_id WHERE client_id IS NULL AND customer_id IS NOT NULL;
+    END IF;
+END $$;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_brasserie_consig_client_emb
     ON public.brasserie_consignations (company_id, client_id, emballage_id)
-    WHERE sector_slug = 'brasserie';
+    WHERE sector_slug = 'brasserie' AND emballage_id IS NOT NULL AND client_id IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_brasserie_consig_client
     ON public.brasserie_consignations (company_id, sector_slug, client_id);
