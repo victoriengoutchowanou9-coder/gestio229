@@ -90,6 +90,13 @@ export const TABLES_WITH_PHYSICAL_SECTOR_SLUG = new Set<string>([
   'cash_registers',
   'audit_logs',
   'user_profiles',
+  // Tables M029 Brasserie Consignations
+  'brasserie_emballages',
+  'brasserie_produit_emballage',
+  'brasserie_consignations',
+  'brasserie_mouvements_emballages',
+  'brasserie_inventaires_emballages',
+  'brasserie_inventaire_lignes',
 ])
 
 // Tables dont la colonne physique 'notes' existe dans Supabase

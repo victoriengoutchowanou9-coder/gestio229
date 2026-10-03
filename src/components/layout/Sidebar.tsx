@@ -24,6 +24,7 @@ const ICON_MAP: Record<string, React.FC<any>> = {
   LayoutDashboard, ShoppingCart, Package, Landmark, Users, Truck, Receipt,
   BarChart3, ClipboardList, Shield, CreditCard, Settings,
   BookOpen, Wallet, Building2, Store,
+  Package2: Package,
 }
 
 const DynamicIcon: React.FC<{ name: string; className?: string }> = ({ name, className }) => {

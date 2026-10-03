@@ -134,8 +134,36 @@ const ClientsPage: React.FC = () => {
 
   // Données client_debts et debt_payments (Module Créances & Remboursements)
   const [debtsByClient, setDebtsByClient] = useState<Record<string, ClientDebt[]>>({})
-  const [paymentsByClient, setPaymentsByClient] = useState<Record<string, DebtPayment[]>>({})
   const [activeDetailsCustomer, setActiveDetailsCustomer] = useState<Customer | null>(null)
+
+  // Emballages & Consignations client (Brasserie uniquement)
+  const [customerConsignations, setCustomerConsignations] = useState<{ code: string; designation: string; total_sorti: number; total_retourne: number; solde_du: number }[]>([])
+
+  useEffect(() => {
+    if (activeDetailsCustomer && currentSectorSlug === 'brasserie' && companyId) {
+      supabase
+        .from('brasserie_consignations')
+        .select('total_sorti, total_retourne, solde_du, emballage:brasserie_emballages(code, designation)')
+        .eq('company_id', companyId)
+        .eq('sector_slug', 'brasserie')
+        .eq('client_id', activeDetailsCustomer.id)
+        .then(({ data }) => {
+          if (data) {
+            setCustomerConsignations(data.map((c: any) => ({
+              code: c.emballage?.code || 'EMB',
+              designation: c.emballage?.designation || 'Emballage',
+              total_sorti: c.total_sorti || 0,
+              total_retourne: c.total_retourne || 0,
+              solde_du: c.solde_du || 0,
+            })))
+          } else {
+            setCustomerConsignations([])
+          }
+        })
+    } else {
+      setCustomerConsignations([])
+    }
+  }, [activeDetailsCustomer, currentSectorSlug, companyId])
 
   // Modal Dette Initiale
   const [showInitialDebtModal, setShowInitialDebtModal] = useState(false)
@@ -1747,6 +1775,42 @@ const ClientsPage: React.FC = () => {
                       <Printer className="w-3.5 h-3.5 text-slate-500" /> Imprimer situation globale
                     </button>
                   </div>
+
+                  {/* SITUATION DES EMBALLAGES CONSIGNÉS (BRASSERIE UNIQUEMENT) */}
+                  {currentSectorSlug === 'brasserie' && customerConsignations.length > 0 && (
+                    <div className="bg-amber-50/80 border border-amber-200 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="font-bold text-xs uppercase tracking-wider text-amber-900 flex items-center gap-1.5">
+                          <span>📦</span> Situation des Emballages Consignés (Casiers)
+                        </h4>
+                        <span className="text-xs text-amber-800 font-black">
+                          Total dû : {customerConsignations.reduce((s, c) => s + c.solde_du, 0)} casiers
+                        </span>
+                      </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs">
+                          <thead>
+                            <tr className="border-b border-amber-200 text-amber-800 font-bold uppercase text-[10px]">
+                              <th className="text-left py-1.5">Emballage</th>
+                              <th className="text-right py-1.5">Total Sorti</th>
+                              <th className="text-right py-1.5">Total Retourné</th>
+                              <th className="text-right py-1.5">Solde Dû</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-amber-100">
+                            {customerConsignations.map((c, idx) => (
+                              <tr key={idx}>
+                                <td className="py-1.5 font-bold text-slate-800">[{c.code}] {c.designation}</td>
+                                <td className="py-1.5 text-right font-mono text-red-600 font-bold">{c.total_sorti}</td>
+                                <td className="py-1.5 text-right font-mono text-emerald-600 font-bold">{c.total_retourne}</td>
+                                <td className="py-1.5 text-right font-mono font-black text-amber-900">{c.solde_du}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Historique des Remboursements issu de debt_payments — JAMAIS VIDÉ */}
                   <div>

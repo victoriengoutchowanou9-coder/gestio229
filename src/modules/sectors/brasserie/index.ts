@@ -17,7 +17,8 @@ export const SECTOR_MANIFEST = {
     'Clients',
     'Fournisseurs',
     'Depenses',
-    'Reporting'
+    'Reporting',
+    'Consignation'
   ]
 }
 
@@ -30,5 +31,6 @@ export { default as Clients } from './Clients'
 export { default as Fournisseurs } from './Fournisseurs'
 export { default as Depenses } from './Depenses'
 export { default as Reporting } from './Reporting'
+export { default as Consignation } from '../../../pages/dashboard/brasserie/ConsignationPage'
 
 export default SECTOR_MANIFEST

@@ -39,6 +39,9 @@ const FournisseursPage2  = FournisseursPage // alias
 // Hub multi-services
 const HubPage = safeLazy(() => import('./pages/HubPage'))
 
+// Brasserie - Consignation & Emballages
+const ConsignationPage = safeLazy(() => import('./pages/dashboard/brasserie/ConsignationPage'))
+
 
 // ─── Loader / Spinner ───────────────────────────────────────────────────────
 
@@ -227,6 +230,7 @@ const AppRoutes: React.FC = () => {
         <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
         <Route path="isolation"       element={<IsolationHealthPage />} />
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
+        <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
       </Route>
 
       {/* Point 14 : Routes directes par secteur (Ex: /quincaillerie/tableau-bord, /poissonnerie/stocks...) */}
@@ -262,6 +266,7 @@ const AppRoutes: React.FC = () => {
         <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
         <Route path="isolation"       element={<IsolationHealthPage />} />
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
+        <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
       </Route>
 
       {/* Rétrocompatibilité /dashboard */}

@@ -472,7 +472,7 @@ export const SectorLoader = {
     }
   },
 
-  // ─── Résolution Nav Globale (sans secteur — modules communs) ─────────────
+  // ─── Résolution Nav Globale (avec prise en compte des modules spécifiques par secteur) ─────────────
 
   getDefaultNav(sectorSlug?: string): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const commonModuleIds = [
@@ -481,9 +481,21 @@ export const SectorLoader = {
       'configuration', 'utilisateurs', 'audit', 'abonnement',
     ]
 
+    // Modules spécifiques par secteur si sectorSlug est renseigné
+    const specificModuleIds: string[] = []
+    if (sectorSlug) {
+      const cleanSlug = sectorSlug.toLowerCase().trim().replace(/^sec-/, '')
+      Object.values(MODULE_REGISTRY).forEach((m) => {
+        if (!m.isCommon && m.sectorSlugs?.includes(cleanSlug) && !specificModuleIds.includes(m.id)) {
+          specificModuleIds.push(m.id)
+        }
+      })
+    }
+
+    const allModuleIds = [...commonModuleIds, ...specificModuleIds]
     const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
 
-    const flat: NavItem[] = commonModuleIds
+    const flat: NavItem[] = allModuleIds
       .map((id) => {
         const mod = MODULE_REGISTRY[id]
         if (!mod) return null
@@ -533,8 +545,8 @@ export const SectorLoader = {
     }
 
     // Permissions spécifiques par rôle pour les modules clés
-    if (moduleId === 'ventes' || moduleId === 'caisse') {
-      return ['caissier', 'vendeur', 'commercial', 'gerant'].includes(user.role)
+    if (moduleId === 'ventes' || moduleId === 'caisse' || moduleId === 'consignation') {
+      return ['caissier', 'vendeur', 'commercial', 'magasinier', 'gestionnaire', 'gerant'].includes(user.role)
     }
     if (moduleId === 'stock') {
       return ['magasinier', 'gestionnaire', 'gerant'].includes(user.role)

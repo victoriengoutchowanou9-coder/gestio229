@@ -103,6 +103,7 @@ interface SaleRecord {
   is_deferred: boolean
   status: 'COMPLET' | 'A_LIVRER' | 'AVOIR'
   lines: CartItem[]
+  emballages_consignes?: { code: string; designation: string; sortie: number; retour: number; net_du: number }[]
 }
 
 export const POSPage: React.FC = () => {
@@ -121,6 +122,10 @@ export const POSPage: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+
+  // Emballages & Consignations (Brasserie & Dépôt de Boissons)
+  const [brasserieEmballagesList, setBrasserieEmballagesList] = useState<{ id: string; code: string; designation: string; stock_depot?: number }[]>([])
+  const [brasserieRetours, setBrasserieRetours] = useState<Record<string, number>>({})
 
   // Client sélectionné (défaut = vide = Client Comptoir)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
@@ -253,6 +258,28 @@ export const POSPage: React.FC = () => {
       })
       setCustomers(mappedCusts)
 
+      // Charger les types d'emballages si secteur Brasserie
+      if (currentSectorSlug === 'brasserie') {
+        const cId = company?.id ?? companyId ?? ''
+        try {
+          const { data: embData } = await supabase
+            .from('brasserie_emballages')
+            .select('id, code, designation, stock_depot')
+            .eq('company_id', cId)
+            .eq('sector_slug', 'brasserie')
+            .eq('is_active', true)
+          if (embData && embData.length > 0) {
+            setBrasserieEmballagesList(embData)
+          } else {
+            setBrasserieEmballagesList([
+              { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles', stock_depot: 0 },
+              { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles', stock_depot: 0 },
+              { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles', stock_depot: 0 },
+            ])
+          }
+        } catch (_) {}
+      }
+
       // Transformer les ventes réelles chargées depuis Supabase avec leurs lignes réelles
       // Isolation stricte : ne charger que les ventes du sous-logiciel actif
       if (sales && !saleErr) {
@@ -353,6 +380,7 @@ export const POSPage: React.FC = () => {
             is_deferred: isDeferredSale,
             status: isAvoir ? 'AVOIR' : isDeferredSale ? 'A_LIVRER' : 'COMPLET',
             lines,
+            emballages_consignes: Array.isArray(parsedNotes.emballages_consignes) ? parsedNotes.emballages_consignes : undefined,
           }
         })
         setSalesHistory(mappedSales)
@@ -632,6 +660,49 @@ export const POSPage: React.FC = () => {
     setMultiMode2Amount(safeVal)
   }
 
+  // Calcul automatique des emballages sortis pour le secteur Brasserie
+  const brasserieSorties = useMemo(() => {
+    if (currentSectorSlug !== 'brasserie') return []
+    const map: Record<string, { id?: string; code: string; designation: string; sortie: number }> = {}
+
+    cart.forEach((item) => {
+      const p = item.product
+      let embCode = ''
+      let embName = ''
+      let embId = p.sector_meta?.emballage_id || ''
+
+      const matchedEmb = brasserieEmballagesList.find(e => e.id === embId || e.code === p.sector_meta?.emballage_code)
+      if (matchedEmb) {
+        embCode = matchedEmb.code
+        embName = matchedEmb.designation
+        embId = matchedEmb.id
+      } else {
+        const nameUpper = (p.name || '').toUpperCase()
+        if (nameUpper.includes('12T') || nameUpper.includes('12 BOUT') || nameUpper.includes('12B')) {
+          embCode = 'C12T'
+          embName = 'Casier 12 Bouteilles'
+        } else if (nameUpper.includes('20T') || nameUpper.includes('20 BOUT') || nameUpper.includes('20B')) {
+          embCode = 'C20T'
+          embName = 'Casier 20 Bouteilles'
+        } else if (nameUpper.includes('24T') || nameUpper.includes('24 BOUT') || nameUpper.includes('24B')) {
+          embCode = 'C24T'
+          embName = 'Casier 24 Bouteilles'
+        }
+      }
+
+      if (embCode) {
+        const coefEmb = Number(p.sector_meta?.qte_emballage) || 1
+        const count = Math.round(item.qty * coefEmb)
+        if (!map[embCode]) {
+          map[embCode] = { id: embId, code: embCode, designation: embName || `Casier ${embCode}`, sortie: 0 }
+        }
+        map[embCode].sortie += count
+      }
+    })
+
+    return Object.values(map)
+  }, [cart, currentSectorSlug, brasserieEmballagesList])
+
   // Calculs en temps réel multi-modes
   const multiSum = Math.round((multiMode1Amount + multiMode2Amount) * 100) / 100
   const multiDiff = Math.round((totalNetTTC - multiSum) * 100) / 100
@@ -777,7 +848,14 @@ export const POSPage: React.FC = () => {
           qty: c.qty,
           unitPrice: c.unitPrice,
           discount: c.discount
-        }))
+        })),
+        emballages_consignes: currentSectorSlug === 'brasserie' ? brasserieSorties.map(e => ({
+          code: e.code,
+          designation: e.designation,
+          sortie: e.sortie,
+          retour: Number(brasserieRetours[e.code]) || 0,
+          net_du: e.sortie - (Number(brasserieRetours[e.code]) || 0)
+        })) : undefined
       }
 
       // 1. Insertion garantie en base de données Supabase dans sales_orders
@@ -1021,6 +1099,113 @@ export const POSPage: React.FC = () => {
         }
       }
 
+      // 4-BIS. Brasserie & Dépôt de Boissons : Gestion des Emballages et Consignations
+      if (currentSectorSlug === 'brasserie' && brasserieSorties.length > 0) {
+        try {
+          const compId = company?.id ?? companyId ?? ''
+          for (const emb of brasserieSorties) {
+            const retour = Number(brasserieRetours[emb.code]) || 0
+
+            let realEmbId = emb.id
+            if (!realEmbId) {
+              const matched = brasserieEmballagesList.find(e => e.code === emb.code)
+              realEmbId = matched?.id
+            }
+
+            if (realEmbId) {
+              // A. Mouvement SORTIE_VENTE
+              if (emb.sortie > 0) {
+                await supabase.from('brasserie_mouvements_emballages').insert({
+                  company_id: compId,
+                  sector_slug: 'brasserie',
+                  emballage_id: realEmbId,
+                  client_id: selectedCustomer?.id || null,
+                  type_mouvement: 'SORTIE_VENTE',
+                  quantite: emb.sortie,
+                  reference: orderNum,
+                  vente_id: savedDbSale.id,
+                  created_by_name: user?.full_name || 'Vendeur',
+                })
+              }
+
+              // B. Mouvement RETOUR_IMMEDIAT
+              if (retour > 0) {
+                await supabase.from('brasserie_mouvements_emballages').insert({
+                  company_id: compId,
+                  sector_slug: 'brasserie',
+                  emballage_id: realEmbId,
+                  client_id: selectedCustomer?.id || null,
+                  type_mouvement: 'RETOUR_IMMEDIAT',
+                  quantite: retour,
+                  reference: orderNum,
+                  vente_id: savedDbSale.id,
+                  created_by_name: user?.full_name || 'Vendeur',
+                })
+              }
+
+              // C. Mise à jour stock dépôt : - sortie + retour
+              const { data: embRow } = await supabase
+                .from('brasserie_emballages')
+                .select('stock_depot')
+                .eq('id', realEmbId)
+                .maybeSingle()
+              if (embRow) {
+                const currentStockDepot = Number(embRow.stock_depot) || 0
+                const updatedStockDepot = Math.max(0, currentStockDepot - emb.sortie + retour)
+                await supabase
+                  .from('brasserie_emballages')
+                  .update({ stock_depot: updatedStockDepot, updated_at: new Date().toISOString() })
+                  .eq('id', realEmbId)
+              }
+
+              // D. Mise à jour de la consignation client
+              if (selectedCustomer?.id) {
+                const { data: exCons } = await supabase
+                  .from('brasserie_consignations')
+                  .select('*')
+                  .eq('company_id', compId)
+                  .eq('sector_slug', 'brasserie')
+                  .eq('client_id', selectedCustomer.id)
+                  .eq('emballage_id', realEmbId)
+                  .maybeSingle()
+
+                if (exCons) {
+                  const newSorti = (Number(exCons.total_sorti) || 0) + emb.sortie
+                  const newRetour = (Number(exCons.total_retourne) || 0) + retour
+                  await supabase
+                    .from('brasserie_consignations')
+                    .update({
+                      total_sorti: newSorti,
+                      total_retourne: newRetour,
+                      solde_du: Math.max(0, newSorti - newRetour),
+                      derniere_sortie: new Date().toISOString(),
+                      dernier_retour: retour > 0 ? new Date().toISOString() : exCons.dernier_retour,
+                      updated_at: new Date().toISOString(),
+                    })
+                    .eq('id', exCons.id)
+                } else {
+                  await supabase
+                    .from('brasserie_consignations')
+                    .insert({
+                      company_id: compId,
+                      sector_slug: 'brasserie',
+                      client_id: selectedCustomer.id,
+                      emballage_id: realEmbId,
+                      total_sorti: emb.sortie,
+                      total_retourne: retour,
+                      solde_du: Math.max(0, emb.sortie - retour),
+                      derniere_sortie: new Date().toISOString(),
+                      dernier_retour: retour > 0 ? new Date().toISOString() : null,
+                    })
+                }
+              }
+            }
+          }
+        } catch (embErr) {
+          console.warn('[POSPage] Erreur enregistrement consignation brasserie :', embErr)
+        }
+      }
+
       // 5. Synchronisation Caisse en temps réel & persistance Supabase
       const paidCash = isMultiMode
         ? ((multiMode1Canal === 'especes' ? multiMode1Amount : 0) + (multiMode2Canal === 'especes' ? multiMode2Amount : 0))
@@ -1126,12 +1311,20 @@ export const POSPage: React.FC = () => {
         is_deferred: isDeferred,
         status: isDeferred ? 'A_LIVRER' : 'COMPLET',
         lines: [...cart],
+        emballages_consignes: currentSectorSlug === 'brasserie' ? brasserieSorties.map(e => ({
+          code: e.code,
+          designation: e.designation,
+          sortie: e.sortie,
+          retour: Number(brasserieRetours[e.code]) || 0,
+          net_du: e.sortie - (Number(brasserieRetours[e.code]) || 0)
+        })) : undefined
       }
 
       setSalesHistory([newSale, ...salesHistory.filter(s => s.id !== newSale.id)])
       setCurrentSale(newSale)
       setShowInvoiceModal(true)
       clearCart()
+      setBrasserieRetours({})
       toast.success('Vente enregistrée avec succès !', `Réf : ${orderNum}`)
     } catch (err: any) {
       toast.error('Erreur validation vente', err.message)
@@ -1209,6 +1402,72 @@ export const POSPage: React.FC = () => {
           setProducts((prev) =>
             prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: restoredStockVente, sector_meta: updatedMeta } : p))
           )
+        }
+      }
+
+      // 4. Si secteur Brasserie, réintégrer les emballages consignés et ajuster la situation client
+      if (currentSectorSlug === 'brasserie' && sale.emballages_consignes && sale.emballages_consignes.length > 0) {
+        try {
+          const compId = company?.id ?? companyId ?? ''
+          for (const emb of sale.emballages_consignes) {
+            const { data: embRow } = await supabase
+              .from('brasserie_emballages')
+              .select('id, stock_depot')
+              .eq('company_id', compId)
+              .eq('sector_slug', 'brasserie')
+              .eq('code', emb.code)
+              .maybeSingle()
+
+            if (embRow) {
+              const netSorti = emb.sortie - (emb.retour || 0)
+              if (netSorti > 0) {
+                await supabase.from('brasserie_mouvements_emballages').insert({
+                  company_id: compId,
+                  sector_slug: 'brasserie',
+                  emballage_id: embRow.id,
+                  client_id: sale.customer_id || null,
+                  type_mouvement: 'AVOIR_RETOUR',
+                  quantite: netSorti,
+                  reference: `AVOIR-${sale.order_number}`,
+                  vente_id: sale.id,
+                  notes: `Restitution emballages sur Facture d'Avoir ${sale.order_number}`,
+                  created_by_name: user?.full_name || 'Utilisateur',
+                })
+
+                const newStockDepot = (Number(embRow.stock_depot) || 0) + netSorti
+                await supabase
+                  .from('brasserie_emballages')
+                  .update({ stock_depot: newStockDepot, updated_at: new Date().toISOString() })
+                  .eq('id', embRow.id)
+
+                if (sale.customer_id) {
+                  const { data: exCons } = await supabase
+                    .from('brasserie_consignations')
+                    .select('*')
+                    .eq('company_id', compId)
+                    .eq('sector_slug', 'brasserie')
+                    .eq('client_id', sale.customer_id)
+                    .eq('emballage_id', embRow.id)
+                    .maybeSingle()
+
+                  if (exCons) {
+                    const newTotalSorti = Math.max(0, (Number(exCons.total_sorti) || 0) - netSorti)
+                    const newSoldeDu = Math.max(0, newTotalSorti - (Number(exCons.total_retourne) || 0))
+                    await supabase
+                      .from('brasserie_consignations')
+                      .update({
+                        total_sorti: newTotalSorti,
+                        solde_du: newSoldeDu,
+                        updated_at: new Date().toISOString(),
+                      })
+                      .eq('id', exCons.id)
+                  }
+                }
+              }
+            }
+          }
+        } catch (embAvoirErr) {
+          console.warn('[POSPage] Erreur réintégration emballages avoir brasserie :', embAvoirErr)
         }
       }
 
@@ -2016,6 +2275,55 @@ export const POSPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* SECTION EMBALLAGES BRASSERIE DANS LE PANIER */}
+              {currentSectorSlug === 'brasserie' && brasserieSorties.length > 0 && (
+                <div className="mx-3 my-2 p-2.5 bg-amber-50/90 rounded-2xl border border-amber-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-black text-amber-900 flex items-center gap-1.5">
+                      <span className="text-sm">📦</span> Emballages & Casiers Consignés
+                    </span>
+                    <span className="text-[10px] text-amber-700 font-bold">Sortie vs Retour</span>
+                  </div>
+                  <div className="space-y-1.5 text-xs">
+                    {brasserieSorties.map((emb) => {
+                      const retour = Number(brasserieRetours[emb.code]) || 0
+                      const netDu = emb.sortie - retour
+                      return (
+                        <div key={emb.code} className="flex items-center justify-between gap-2 bg-white p-2 rounded-xl border border-amber-100 shadow-2xs">
+                          <div className="min-w-0 flex-1">
+                            <p className="font-bold text-[11px] text-slate-800 truncate">[{emb.code}] {emb.designation}</p>
+                            <p className="text-[10px] text-slate-500">
+                              Sortie : <span className="font-black text-red-600">{emb.sortie}</span>
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-[10px] font-bold text-slate-600">Retour :</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max={emb.sortie}
+                              value={brasserieRetours[emb.code] ?? ''}
+                              placeholder="0"
+                              onChange={(e) => {
+                                const val = Math.max(0, parseInt(e.target.value) || 0)
+                                setBrasserieRetours(prev => ({ ...prev, [emb.code]: val }))
+                              }}
+                              className="w-12 text-center p-1 font-black text-xs border border-amber-300 rounded-lg font-mono bg-amber-50/50 focus:ring-1 focus:ring-amber-500"
+                            />
+                          </div>
+                          <div className="text-right pl-1 shrink-0">
+                            <span className="text-[10px] text-slate-400 block leading-tight">Net dû</span>
+                            <span className={clsx("font-black text-xs font-mono", netDu > 0 ? "text-amber-800" : "text-emerald-700")}>
+                              {netDu}
+                            </span>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Pied du Panier : Bouton Valider la Vente en 1 clic */}
               <div className="p-3 bg-slate-50 border-t border-slate-200 shrink-0">
                 <button
@@ -2490,6 +2798,41 @@ export const POSPage: React.FC = () => {
                 </div>
               </div>
 
+              {/* SECTION EMBALLAGES CONSIGNÉS (BRASSERIE UNIQUEMENT) */}
+              {currentSectorSlug === 'brasserie' && currentSale?.emballages_consignes && currentSale.emballages_consignes.length > 0 && (
+                <div className="pt-3 border-t border-slate-200">
+                  <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200">
+                    <p className="font-black text-[11px] uppercase tracking-wider text-amber-900 mb-2">
+                      📦 SITUATION DES EMBALLAGES CONSIGNÉS
+                    </p>
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="border-b border-amber-200 text-[10px] text-amber-800 font-bold uppercase">
+                          <th className="text-left py-1">Emballage</th>
+                          <th className="text-center py-1">Sortie</th>
+                          <th className="text-center py-1">Retour Immédiat</th>
+                          <th className="text-right py-1">Net Dû</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-amber-100">
+                        {currentSale.emballages_consignes.map((emb: any) => (
+                          <tr key={emb.code}>
+                            <td className="py-1 font-semibold text-slate-800">{emb.designation || emb.code}</td>
+                            <td className="py-1 text-center font-bold text-red-600">{emb.sortie}</td>
+                            <td className="py-1 text-center font-bold text-emerald-600">{emb.retour || 0}</td>
+                            <td className="py-1 text-right font-black text-amber-900">{emb.net_du}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="mt-2 pt-2 border-t border-amber-200 text-xs font-black text-amber-900 flex justify-between">
+                      <span>TOTAL DÛ EMBALLAGES :</span>
+                      <span>{currentSale.emballages_consignes.map((e: any) => `${e.net_du} ${e.code}`).join(' | ')}</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Mentions Légales Standard (Pas de fausses mentions e-MECeF) */}
               <div className="pt-4 border-t border-slate-200 text-center text-[10px] text-slate-400 space-y-0.5">
                 <p>Facture commerciale émise par GESTIO 229 ERP — République du Bénin</p>
@@ -2537,6 +2880,19 @@ export const POSPage: React.FC = () => {
                   ))}
                 </tbody>
               </table>
+
+              {/* SECTION EMBALLAGES TICKET 80 (BRASSERIE UNIQUEMENT) */}
+              {currentSectorSlug === 'brasserie' && currentSale?.emballages_consignes && currentSale.emballages_consignes.length > 0 && (
+                <div className="border-t border-dashed border-slate-300 py-1.5 space-y-1 text-[11px]">
+                  <p className="font-bold uppercase text-slate-700">📦 Emballages Consignés :</p>
+                  {currentSale.emballages_consignes.map((emb: any) => (
+                    <div key={emb.code} className="flex justify-between text-[10px]">
+                      <span>{emb.code} (S:{emb.sortie} | R:{emb.retour || 0})</span>
+                      <span className="font-black text-amber-900">Dû : {emb.net_du}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
 
               <div className="border-t border-dashed border-slate-300 pt-2 space-y-1 text-right">
                 <p className="font-black text-sm">TOTAL TTC : {fmt(currentSale?.total_amount || 0)}</p>

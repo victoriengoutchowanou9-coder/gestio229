@@ -5,7 +5,7 @@
 // Ajout CDC : Vente par lot (optionnel) et sous-modale de tarification par fractions
 // =============================================================================
 
-import React, { useState, useMemo } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   PackagePlus, X, Check, Calculator, ShieldCheck, Info,
   Settings, Layers, HelpCircle
@@ -89,6 +89,35 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [lastSavedProduct, setLastSavedProduct] = useState<{ code: string; name: string } | null>(null)
+
+  // Emballages & Consignations (Brasserie & Dépôt de Boissons uniquement)
+  const [brasserieEmballages, setBrasserieEmballages] = useState<{ id: string; code: string; designation: string }[]>([])
+  const [selectedEmballageId, setSelectedEmballageId] = useState<string>('')
+  const [qteEmballageParUnite, setQteEmballageParUnite] = useState<number>(1)
+
+  useEffect(() => {
+    if (isOpen && sectorSlug === 'brasserie' && (company?.id || companyId)) {
+      const cId = company?.id || companyId || ''
+      supabase
+        .from('brasserie_emballages')
+        .select('id, code, designation')
+        .eq('company_id', cId)
+        .eq('sector_slug', 'brasserie')
+        .eq('is_active', true)
+        .order('code')
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            setBrasserieEmballages(data)
+          } else {
+            setBrasserieEmballages([
+              { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles (12T)' },
+              { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles (20T)' },
+              { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles (24T)' },
+            ])
+          }
+        })
+    }
+  }, [isOpen, sectorSlug, company?.id, companyId])
 
   // Décomposition fiscale automatique
   const taxAchat = useMemo(() => {
@@ -249,6 +278,8 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         price_vente_ht: taxVenteUv.htPrice,
         margin_ucd_ht: marginUcdHt,
         margin_uv_ht: marginUvHt,
+        emballage_id: sectorSlug === 'brasserie' ? (selectedEmballageId || null) : null,
+        qte_emballage: sectorSlug === 'brasserie' && selectedEmballageId ? (Number(qteEmballageParUnite) || 1) : null,
       }
 
       let autoCode = finalCode
@@ -279,6 +310,23 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         alert(`❌ Erreur lors de l'enregistrement dans la base de données :\n\n${res.error?.message || 'Erreur inconnue'}\n\nLe produit n'a pas été enregistré.`)
         setIsSaving(false)
         return
+      }
+
+      // 4b. Association emballage pour Brasserie & Dépôt de Boissons
+      if (res.data?.id && sectorSlug === 'brasserie' && selectedEmballageId) {
+        try {
+          const cId = company?.id || companyId || ''
+          await supabase.from('brasserie_produit_emballage').insert({
+            company_id: cId,
+            sector_slug: 'brasserie',
+            product_id: res.data.id,
+            emballage_id: selectedEmballageId,
+            qte_emballage_par_unite: Number(qteEmballageParUnite) || 1,
+            is_active: true
+          })
+        } catch (peErr) {
+          console.warn('[NewProductModal] Échec brasserie_produit_emballage:', peErr)
+        }
       }
 
       const savedProduct = {
@@ -535,6 +583,50 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                 </div>
               </div>
             </div>
+
+            {/* SECTION 2-BIS: EMBALLAGES CONSIGNÉS (BRASSERIE UNIQUEMENT) */}
+            {sectorSlug === 'brasserie' && (
+              <div className="bg-amber-50/70 dark:bg-amber-950/30 p-3.5 rounded-2xl border border-amber-200 dark:border-amber-800 space-y-3">
+                <h4 className="font-bold text-amber-900 dark:text-amber-200 flex items-center space-x-1.5">
+                  <PackagePlus className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                  <span>Emballage Consigné Associé (Brasserie & Dépôt de Boissons)</span>
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Type d'emballage consignable
+                    </label>
+                    <select
+                      value={selectedEmballageId}
+                      onChange={(e) => setSelectedEmballageId(e.target.value)}
+                      className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold text-slate-800 dark:text-slate-100 text-sm"
+                    >
+                      <option value="">— Aucun (Produit sans consigne) —</option>
+                      {brasserieEmballages.map((emb) => (
+                        <option key={emb.id} value={emb.id}>
+                          [{emb.code}] {emb.designation}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Nombre d'emballages par unité ({form.uv || 'UV'}) vendue
+                    </label>
+                    <input
+                      type="number"
+                      min="0.01"
+                      step="any"
+                      value={qteEmballageParUnite}
+                      onChange={(e) => setQteEmballageParUnite(Number(e.target.value) || 1)}
+                      disabled={!selectedEmballageId}
+                      className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold font-mono text-slate-800 dark:text-slate-100 text-sm disabled:opacity-40"
+                    />
+                    <p className="text-[10px] text-slate-500 mt-1">Ex: 1 casier 12T par caisse/carton vendu</p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* SECTION 3: FISCALITÉ PRODUIT (TVA & AIB BÉNIN) */}
             <div className="bg-amber-50/70 dark:bg-amber-950/30 p-3.5 rounded-2xl border border-amber-200 dark:border-amber-800 space-y-3">
