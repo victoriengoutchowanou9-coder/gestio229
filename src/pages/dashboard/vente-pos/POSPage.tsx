@@ -959,16 +959,66 @@ export const POSPage: React.FC = () => {
         }
       }
 
-      // 4. Si client avec crédit, mise à jour de la créance dans Supabase
+      // 4. Si client avec crédit, mise à jour de la créance dans Supabase (client_debts + clients)
       if (selectedCustomer && creditAmount > 0) {
         const newDebt = (Number(selectedCustomer.current_debt) || 0) + creditAmount
-        await supabaseTenant('customers')
-          .update({ current_debt: newDebt })
-          .eq('id', selectedCustomer.id)
+        try {
+          await supabaseTenant('customers')
+            .update({ current_debt: newDebt })
+            .eq('id', selectedCustomer.id)
+        } catch (_) {}
 
         setCustomers((prev) =>
           prev.map((c) => (c.id === selectedCustomer.id ? { ...c, current_debt: newDebt } : c))
         )
+
+        // E. Logique Créances :
+        // - Nouvel achat à crédit si solde restant -> ajoute au total_dette de la créance en_cours
+        // - Nouvel achat à crédit si ancienne soldée (ou aucune) -> crée une NOUVELLE ligne client_debts
+        try {
+          const compId = company?.id ?? companyId ?? ''
+          const secSlug = currentSectorSlug || 'boutique'
+
+          const { data: existingDebts } = await supabase
+            .from('client_debts')
+            .select('*')
+            .eq('company_id', compId)
+            .eq('client_id', selectedCustomer.id)
+            .eq('status', 'en_cours')
+            .order('created_at', { ascending: false })
+            .limit(1)
+
+          if (existingDebts && existingDebts.length > 0) {
+            const activeDebt = existingDebts[0]
+            const updatedTotalDette = (Number(activeDebt.total_dette) || 0) + creditAmount
+            const updatedSoldeDu = updatedTotalDette - (Number(activeDebt.total_rembourse) || 0)
+
+            await supabase
+              .from('client_debts')
+              .update({
+                total_dette: updatedTotalDette,
+                solde_du: updatedSoldeDu,
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', activeDebt.id)
+          } else {
+            await supabase
+              .from('client_debts')
+              .insert({
+                company_id: compId,
+                sector_code: secSlug,
+                client_id: selectedCustomer.id,
+                total_dette: creditAmount,
+                total_rembourse: 0,
+                solde_du: creditAmount,
+                status: 'en_cours',
+                created_at: new Date().toISOString(),
+                updated_at: new Date().toISOString()
+              })
+          }
+        } catch (debtErr) {
+          console.warn('[POSPage] Sauvegarde client_debts non bloquante :', debtErr)
+        }
       }
 
       // 5. Synchronisation Caisse en temps réel & persistance Supabase

@@ -48,14 +48,28 @@ html, body {
 
 /* Print styles */
 @media print {
+  @page {
+    size: auto;
+    margin: 8mm;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
   body * { visibility: hidden; }
   #printable-area, #printable-area * { visibility: visible; }
   #printable-area {
     position: absolute;
-    left: 0; top: 0;
-    width: 100%;
+    left: 0;
+    top: 0;
+    width: 100% !important;
+    max-width: 100% !important;
     background: white !important;
     color: black !important;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
   }
   .no-print { display: none !important; }
 }

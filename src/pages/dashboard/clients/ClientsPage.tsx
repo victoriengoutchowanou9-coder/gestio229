@@ -15,13 +15,43 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
-import { getNextSectorCode } from '../../../lib/supabaseTenant'
+import { getNextSectorCode, getCurrentCashSession } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
+
+export interface ClientDebt {
+  id: string
+  company_id: string
+  sector_code: string
+  client_id: string
+  total_dette: number
+  total_rembourse: number
+  solde_du: number
+  status: 'en_cours' | 'soldée' | string
+  created_at: string
+  updated_at: string
+}
+
+export interface DebtPayment {
+  id: string
+  company_id: string
+  sector_code: string
+  debt_id: string
+  client_id: string
+  amount: number
+  payment_method: string
+  payment_date: string
+  cash_session_id?: string
+  reste_apres: number
+  reference?: string
+  notes?: string
+  created_by?: string
+  created_at: string
+}
 
 interface Customer {
   id: string
@@ -92,12 +122,20 @@ const ClientsPage: React.FC = () => {
   const { toast } = useUIStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
 
+  const currentSectorSlug = sectorSlug || getActiveSectorSlug()
+  const currentCompanyId = companyId || company?.id || ''
+
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [filterDebtorsOnly, setFilterDebtorsOnly] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
+
+  // Données client_debts et debt_payments (Module Créances & Remboursements)
+  const [debtsByClient, setDebtsByClient] = useState<Record<string, ClientDebt[]>>({})
+  const [paymentsByClient, setPaymentsByClient] = useState<Record<string, DebtPayment[]>>({})
+  const [activeDetailsCustomer, setActiveDetailsCustomer] = useState<Customer | null>(null)
 
   // Modal Dette Initiale
   const [showInitialDebtModal, setShowInitialDebtModal] = useState(false)
@@ -112,15 +150,19 @@ const ClientsPage: React.FC = () => {
   const [showPaymentModal, setShowPaymentModal] = useState(false)
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [paymentAmount, setPaymentAmount] = useState<number>(0)
-  const [paymentMode, setPaymentMode] = useState<string>('cash')
+  const [paymentMode, setPaymentMode] = useState<string>('Espèces')
+  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().slice(0, 16))
+  const [paymentReference, setPaymentReference] = useState<string>('')
   const [paymentNotes, setPaymentNotes] = useState<string>('')
   const [isProcessingPayment, setIsProcessingPayment] = useState(false)
 
-  // Reçu de remboursement
-  const [settlementReceipt, setSettlementReceipt] = useState<SettlementReceipt | null>(null)
-
-  // Relevé de compte client
-  const [statementCustomer, setStatementCustomer] = useState<Customer | null>(null)
+  // Reçu de remboursement actif & situation globale
+  const [activePaymentReceipt, setActivePaymentReceipt] = useState<{
+    payment: DebtPayment
+    customer: Customer
+    debt?: ClientDebt | null
+  } | null>(null)
+  const [activeGlobalStatement, setActiveGlobalStatement] = useState<Customer | null>(null)
 
   // Modal Suppression Client (Contrôle d'intégrité & Soft/Hard delete)
   const [deleteCustomerModal, setDeleteCustomerModal] = useState<Customer | null>(null)
@@ -180,8 +222,59 @@ const ClientsPage: React.FC = () => {
 
   const [form, setForm] = useState<CustomerFormState>(initialFormState)
 
+  // Chargement des dettes et paiements réels depuis Supabase
+  const loadDebtsAndPayments = useCallback(async () => {
+    if (!currentCompanyId) return
+    const activeSector = currentSectorSlug || 'boutique'
+    try {
+      const [debtsRes, paymentsRes] = await Promise.all([
+        supabase
+          .from('client_debts')
+          .select('*')
+          .eq('company_id', currentCompanyId)
+          .eq('sector_code', activeSector)
+          .order('created_at', { ascending: false }),
+        supabase
+          .from('debt_payments')
+          .select('*')
+          .eq('company_id', currentCompanyId)
+          .eq('sector_code', activeSector)
+          .order('payment_date', { ascending: false })
+      ])
+
+      if (debtsRes.data) {
+        const groupedDebts: Record<string, ClientDebt[]> = {}
+        for (const d of debtsRes.data) {
+          if (!groupedDebts[d.client_id]) groupedDebts[d.client_id] = []
+          groupedDebts[d.client_id].push({
+            ...d,
+            total_dette: Number(d.total_dette) || 0,
+            total_rembourse: Number(d.total_rembourse) || 0,
+            solde_du: Number(d.solde_du) || 0,
+          })
+        }
+        setDebtsByClient(groupedDebts)
+      }
+
+      if (paymentsRes.data) {
+        const groupedPayments: Record<string, DebtPayment[]> = {}
+        for (const p of paymentsRes.data) {
+          if (!groupedPayments[p.client_id]) groupedPayments[p.client_id] = []
+          groupedPayments[p.client_id].push({
+            ...p,
+            amount: Number(p.amount) || 0,
+            reste_apres: Number(p.reste_apres) || 0,
+          })
+        }
+        setPaymentsByClient(groupedPayments)
+      }
+    } catch (e) {
+      console.warn('Erreur chargement client_debts/debt_payments :', e)
+    }
+  }, [currentCompanyId, currentSectorSlug])
+
   const loadCustomers = useCallback(async () => {
-    if (!companyId) return
+    if (!currentCompanyId) return
     setLoading(true)
     try {
       // Isolation stricte multi-secteurs garantie par supabaseTenant
@@ -208,17 +301,39 @@ const ClientsPage: React.FC = () => {
       })
 
       setCustomers(mapped)
+      await loadDebtsAndPayments()
     } catch (err: any) {
       toast.error('Erreur chargement clients', err.message)
       setCustomers([])
     } finally {
       setLoading(false)
     }
-  }, [companyId, supabaseTenant, toast])
+  }, [currentCompanyId, supabaseTenant, loadDebtsAndPayments, toast])
 
   useEffect(() => {
     loadCustomers()
   }, [loadCustomers])
+
+  // Calcul précis des créances d'un client (client_debts + debt_payments + legacy)
+  const getCustomerDetteInfo = useCallback((cust: Customer) => {
+    const debts = debtsByClient[cust.id] || []
+    const payments = paymentsByClient[cust.id] || []
+
+    if (debts.length > 0) {
+      const totalDette = debts.reduce((sum, d) => sum + (Number(d.total_dette) || 0), 0)
+      const totalRembourse = debts.reduce((sum, d) => sum + (Number(d.total_rembourse) || 0), 0)
+      const soldeDu = debts.reduce((sum, d) => sum + (Number(d.solde_du) || 0), 0)
+      return { totalDette, totalRembourse, soldeDu, debts, payments }
+    }
+
+    // Fallback données legacy si aucune ligne client_debts n'a encore été insérée
+    const legacyDebt = Number(cust.current_debt) || 0
+    const paymentsSum = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+    const totalDette = legacyDebt + paymentsSum
+    const totalRembourse = paymentsSum
+    const soldeDu = legacyDebt
+    return { totalDette, totalRembourse, soldeDu, debts, payments }
+  }, [debtsByClient, paymentsByClient])
 
   const filtered = customers.filter((c) => {
     const matchSearch =
@@ -227,13 +342,13 @@ const ClientsPage: React.FC = () => {
       c.phone.includes(search) ||
       c.code.toLowerCase().includes(search.toLowerCase())
     if (filterDebtorsOnly) {
-      return matchSearch && (c.current_debt || 0) > 0
+      return matchSearch && getCustomerDetteInfo(c).soldeDu > 0
     }
     return matchSearch
   })
 
-  const totalDebt = customers.reduce((sum, c) => sum + (c.current_debt || 0), 0)
-  const debtorsCount = customers.filter((c) => (c.current_debt || 0) > 0).length
+  const totalDebt = customers.reduce((sum, c) => sum + getCustomerDetteInfo(c).soldeDu, 0)
+  const debtorsCount = customers.filter((c) => getCustomerDetteInfo(c).soldeDu > 0).length
 
   // Création Client avec validation stricte
   const handleSave = async (e: React.FormEvent) => {
@@ -348,7 +463,7 @@ const ClientsPage: React.FC = () => {
     }
   }
 
-  // Ajouter dette initiale
+  // Ajouter dette initiale (synchronisé avec client_debts & clients)
   const handleAddInitialDebt = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!initialDebtForm.customerId || initialDebtForm.amount <= 0) return
@@ -358,17 +473,48 @@ const ClientsPage: React.FC = () => {
       const cust = customers.find((c) => c.id === initialDebtForm.customerId)
       if (!cust) return
 
-      const updatedDebt = (Number(cust.current_debt) || 0) + Number(initialDebtForm.amount)
-      const { error } = await supabaseTenant('clients')
+      const addAmount = Number(initialDebtForm.amount)
+      const currentActiveDebt = (debtsByClient[cust.id] || []).find((d) => d.status === 'en_cours')
+
+      let newSoldeDu = addAmount
+      if (currentActiveDebt) {
+        // Ajouter à la créance en_cours existante
+        const newTotalDette = (Number(currentActiveDebt.total_dette) || 0) + addAmount
+        newSoldeDu = newTotalDette - (Number(currentActiveDebt.total_rembourse) || 0)
+
+        await supabase
+          .from('client_debts')
+          .update({
+            total_dette: newTotalDette,
+            solde_du: newSoldeDu,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', currentActiveDebt.id)
+      } else {
+        // Créer une nouvelle ligne client_debts en_cours
+        await supabase.from('client_debts').insert({
+          company_id: currentCompanyId,
+          sector_code: currentSectorSlug || 'boutique',
+          client_id: cust.id,
+          total_dette: addAmount,
+          total_rembourse: 0,
+          solde_du: addAmount,
+          status: 'en_cours',
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        })
+      }
+
+      // Rétrocompatibilité : mettre à jour current_debt sur clients
+      const updatedDebt = (Number(cust.current_debt) || 0) + addAmount
+      await supabaseTenant('clients')
         .update({ current_debt: updatedDebt })
         .eq('id', cust.id)
 
-      if (error) throw error
-
-      toast.success('Dette initiale ajoutée', `${cust.name} : +${fmt(initialDebtForm.amount)}`)
+      toast.success('Dette initiale ajoutée', `${cust.name} : +${fmt(addAmount)}`)
       setShowInitialDebtModal(false)
       setInitialDebtForm({ customerId: '', amount: 0, motif: 'Report arriéré antérieur' })
-      loadCustomers()
+      await loadCustomers()
     } catch (err: any) {
       toast.error('Erreur ajout dette', err.message)
     } finally {
@@ -379,101 +525,217 @@ const ClientsPage: React.FC = () => {
   // Ouvrir modal de remboursement
   const openPaymentModal = (cust: Customer) => {
     setSelectedCustomer(cust)
-    setPaymentAmount(cust.current_debt || 0)
-    setPaymentMode('cash')
+    const { soldeDu } = getCustomerDetteInfo(cust)
+    setPaymentAmount(soldeDu || cust.current_debt || 0)
+    setPaymentMode('Espèces')
+    setPaymentDate(new Date().toISOString().slice(0, 16))
+    setPaymentReference('')
     setPaymentNotes('')
     setShowPaymentModal(true)
   }
 
-  // Valider le remboursement
+  // Valider le remboursement (Transaction complète : caisse, client_debts, debt_payments, cash_sessions)
   const handleProcessPayment = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedCustomer || paymentAmount <= 0) return
 
-    const prevDebt = Number(selectedCustomer.current_debt) || 0
-    if (paymentAmount > prevDebt) {
-      toast.error('Montant invalide', 'Le montant du remboursement ne peut pas dépasser la dette actuelle.')
+    const { soldeDu, totalDette, totalRembourse, debts } = getCustomerDetteInfo(selectedCustomer)
+    if (paymentAmount > soldeDu) {
+      toast.error('Montant invalide', 'Le montant du remboursement ne peut pas dépasser le solde dû.')
       return
     }
 
     setIsProcessingPayment(true)
     try {
-      const newDebt = Math.max(0, Math.round((prevDebt - paymentAmount) * 100) / 100)
-      const receiptNumber = `REC-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
+      // 1. Vérification session caisse ouverte pour company_id + sector_code courant
+      const activeSession = await getCurrentCashSession(currentCompanyId, currentSectorSlug)
+      if (!activeSession) {
+        toast.error('Caisse non ouverte', 'Ouvrez la caisse du jour pour enregistrer un remboursement.')
+        setIsProcessingPayment(false)
+        return
+      }
 
-      // 1. Mettre à jour la dette client dans Supabase avec isolation sectorielle
-      const { error: updErr } = await supabaseTenant('clients')
-        .update({ current_debt: newDebt })
-        .eq('id', selectedCustomer.id)
-
-      if (updErr) throw updErr
-
-      // 2. Insérer dans la table customer_repayments pour traçabilité comptable et historique
-      const normalizedMethod = paymentMode === 'cash' ? 'especes' : paymentMode
-      try {
-        await supabaseTenant('dettes')
+      // 2. Trouver ou créer la dette en_cours dans client_debts
+      let activeDebt = debts.find((d) => d.status === 'en_cours')
+      if (!activeDebt) {
+        const { data: newDebtRow, error: debtCreateErr } = await supabase
+          .from('client_debts')
           .insert({
-            customer_id: selectedCustomer.id,
-            customer_name: selectedCustomer.name,
+            company_id: currentCompanyId,
+            sector_code: currentSectorSlug || 'boutique',
+            client_id: selectedCustomer.id,
+            total_dette: soldeDu,
+            total_rembourse: 0,
+            solde_du: soldeDu,
+            status: 'en_cours',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .select()
+          .single()
+
+        if (!debtCreateErr && newDebtRow) {
+          activeDebt = newDebtRow
+        }
+      }
+
+      const debtId = activeDebt?.id || null
+      const debtTotalDette = activeDebt ? Number(activeDebt.total_dette) : totalDette
+      const debtPrevRembourse = activeDebt ? Number(activeDebt.total_rembourse) : totalRembourse
+      const newTotalRembourse = debtPrevRembourse + paymentAmount
+      const resteApres = Math.max(0, debtTotalDette - newTotalRembourse)
+      const newStatus = resteApres <= 0 ? 'soldée' : 'en_cours'
+      const receiptNumber = paymentReference.trim() || `REC-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
+      const payDateIso = paymentDate ? new Date(paymentDate).toISOString() : new Date().toISOString()
+
+      // 3. INSERT dans debt_payments
+      const normalizedMethod = paymentMode === 'cash' ? 'Espèces' : paymentMode === 'momo' ? 'MTN MoMo' : paymentMode === 'moov' ? 'Moov Money' : paymentMode
+
+      let insertedPaymentRecord: DebtPayment | null = null
+      try {
+        const { data: payData, error: payErr } = await supabase
+          .from('debt_payments')
+          .insert({
+            company_id: currentCompanyId,
+            sector_code: currentSectorSlug || 'boutique',
+            debt_id: debtId,
+            client_id: selectedCustomer.id,
             amount: paymentAmount,
             payment_method: normalizedMethod,
+            payment_date: payDateIso,
+            cash_session_id: activeSession.id,
+            reste_apres: resteApres,
             reference: receiptNumber,
-            notes: paymentNotes || `Remboursement créance client ${selectedCustomer.name}`,
-            created_at: new Date().toISOString()
+            notes: paymentNotes || `Règlement créance client ${selectedCustomer.name}`,
+            created_by: user?.id || null,
+            created_at: new Date().toISOString(),
           })
-      } catch (repErr) {
-        console.warn('Fallback insertion customer_repayments :', repErr)
+          .select()
+          .single()
+
+        if (!payErr && payData) {
+          insertedPaymentRecord = payData
+        }
+      } catch (e) {
+        console.warn('Erreur insertion debt_payments :', e)
       }
 
-      // 3. Entrée immédiate dans la caisse opérationnelle du secteur
-      if (companyId) {
+      // 4. UPDATE client_debts
+      if (debtId) {
         try {
-          const { data: reg } = await supabaseTenant('cash_registers')
-            .select('id, current_cash_balance, current_momo_balance')
-            .limit(1)
-            .maybeSingle()
-
-          if (reg) {
-            if (paymentMode === 'cash') {
-              await supabaseTenant('cash_registers')
-                .update({ current_cash_balance: (Number(reg.current_cash_balance) || 0) + paymentAmount })
-                .eq('id', reg.id)
-            } else if (['momo', 'moov', 'wave'].includes(paymentMode)) {
-              await supabaseTenant('cash_registers')
-                .update({ current_momo_balance: (Number(reg.current_momo_balance) || 0) + paymentAmount })
-                .eq('id', reg.id)
-            }
-          }
-        } catch (e) {}
+          await supabase
+            .from('client_debts')
+            .update({
+              total_rembourse: newTotalRembourse,
+              solde_du: resteApres,
+              status: newStatus,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', debtId)
+        } catch (e) {
+          console.warn('Erreur mise à jour client_debts :', e)
+        }
       }
 
-      // 4. Traçabilité Journal d'Audit
+      // 5. UPDATE cash_sessions (cash_especes, cash_momo, total_remboursements)
+      try {
+        const isCash = normalizedMethod === 'Espèces'
+        const { data: sessRow } = await supabase
+          .from('cash_sessions')
+          .select('id, cash_especes, cash_momo, total_remboursements')
+          .eq('id', activeSession.id)
+          .maybeSingle()
+
+        if (sessRow) {
+          await supabase
+            .from('cash_sessions')
+            .update({
+              cash_especes: isCash ? (Number(sessRow.cash_especes) || 0) + paymentAmount : Number(sessRow.cash_especes) || 0,
+              cash_momo: !isCash ? (Number(sessRow.cash_momo) || 0) + paymentAmount : Number(sessRow.cash_momo) || 0,
+              total_remboursements: (Number(sessRow.total_remboursements) || 0) + paymentAmount,
+            })
+            .eq('id', activeSession.id)
+        }
+      } catch (sessUpdErr) {
+        console.warn('Erreur maj cash_sessions :', sessUpdErr)
+      }
+
+      // 6. Rétrocompatibilité clients (mise à jour current_debt)
+      try {
+        await supabaseTenant('clients')
+          .update({ current_debt: resteApres })
+          .eq('id', selectedCustomer.id)
+      } catch (_) {}
+
+      // 7. Mise à jour de cash_registers et caisse_mouvements
+      try {
+        const { data: reg } = await supabaseTenant('cash_registers')
+          .select('id, current_cash_balance, current_momo_balance')
+          .limit(1)
+          .maybeSingle()
+
+        if (reg) {
+          if (normalizedMethod === 'Espèces') {
+            await supabaseTenant('cash_registers')
+              .update({ current_cash_balance: (Number(reg.current_cash_balance) || 0) + paymentAmount })
+              .eq('id', reg.id)
+          } else {
+            await supabaseTenant('cash_registers')
+              .update({ current_momo_balance: (Number(reg.current_momo_balance) || 0) + paymentAmount })
+              .eq('id', reg.id)
+          }
+        }
+
+        await supabaseTenant('caisse_mouvements').insert({
+          company_id: currentCompanyId,
+          session_id: activeSession.id,
+          user_id: user?.id,
+          user_name: user?.full_name || 'Caissier',
+          type: 'REMBOURSEMENT',
+          payment_channel: normalizedMethod === 'Espèces' ? 'Espèces' : 'MoMo',
+          amount: paymentAmount,
+          motif: `Remboursement dette client ${selectedCustomer.name} (${receiptNumber})`,
+          reference: receiptNumber,
+          status: 'VALIDE',
+          created_at: new Date().toISOString(),
+        })
+      } catch (_) {}
+
+      // 8. Traçabilité Journal d'Audit
       await logAuditEvent({
         action: 'RECOUVREMENT_CREANCE',
         module: 'CLIENTS',
         sector: 'COMMERCIAL',
-        description: `Règlement de créance pour ${selectedCustomer.name} (${selectedCustomer.code}) : ${fmt(paymentAmount)} réglé en ${paymentMode}. Solde antérieur : ${fmt(prevDebt)}, Nouveau solde : ${fmt(newDebt)}. Reçu N° ${receiptNumber}`
+        description: `Règlement créance client ${selectedCustomer.name} (${selectedCustomer.code}) : ${fmt(paymentAmount)} en ${normalizedMethod}. Solde antérieur : ${fmt(soldeDu)}, Reste après opération : ${fmt(resteApres)}. Reçu N° ${receiptNumber}`,
       })
 
-      // 5. Préparer le reçu de versement imprimable
-      const receiptData: SettlementReceipt = {
-        receiptNumber,
-        date: new Date().toISOString(),
-        customerName: selectedCustomer.name,
-        customerCode: selectedCustomer.code,
-        customerPhone: selectedCustomer.phone,
-        customerIfu: selectedCustomer.ifu_number,
-        amountPaid: paymentAmount,
-        previousDebt: prevDebt,
-        remainingDebt: newDebt,
-        paymentMethod: paymentMode === 'cash' ? 'Espèces' : paymentMode === 'momo' ? 'MTN MoMo' : paymentMode === 'moov' ? 'Moov Money' : paymentMode === 'wave' ? 'Wave' : 'Banque/Chèque',
-        notes: paymentNotes || 'Règlement de créance'
+      // 9. Préparer la quittance officielle A5
+      const finalPaymentRecord: DebtPayment = insertedPaymentRecord || {
+        id: `pay-${Date.now()}`,
+        company_id: currentCompanyId,
+        sector_code: currentSectorSlug,
+        debt_id: debtId || '',
+        client_id: selectedCustomer.id,
+        amount: paymentAmount,
+        payment_method: normalizedMethod,
+        payment_date: payDateIso,
+        cash_session_id: activeSession.id,
+        reste_apres: resteApres,
+        reference: receiptNumber,
+        notes: paymentNotes || 'Règlement créance client',
+        created_by: user?.id,
+        created_at: new Date().toISOString(),
       }
 
-      setSettlementReceipt(receiptData)
+      setActivePaymentReceipt({
+        payment: finalPaymentRecord,
+        customer: selectedCustomer,
+        debt: activeDebt ? { ...activeDebt, total_rembourse: newTotalRembourse, solde_du: resteApres } : null,
+      })
+
       setShowPaymentModal(false)
-      toast.success('Règlement enregistré avec succès', `${fmt(paymentAmount)} reçus et ajoutés à la caisse.`)
-      loadCustomers()
+      toast.success('Règlement enregistré avec succès', `${fmt(paymentAmount)} reçus en ${normalizedMethod}. Caisse mise à jour.`)
+      await loadCustomers()
     } catch (err: any) {
       toast.error('Erreur lors du versement', err.message)
     } finally {
@@ -603,17 +865,15 @@ const ClientsPage: React.FC = () => {
               <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-700 uppercase">
                 <tr>
                   <th className="px-5 py-3.5">Client</th>
-                  <th className="px-5 py-3.5 text-right">Total Facturé</th>
-                  <th className="px-5 py-3.5 text-right">Total Remboursé</th>
-                  <th className="px-5 py-3.5 text-right">Solde Dû</th>
-                  <th className="px-5 py-3.5 text-center">Actions</th>
+                  <th className="px-5 py-3.5 text-right">TOTAL DETTE</th>
+                  <th className="px-5 py-3.5 text-right">TOTAL REMBOURSÉ</th>
+                  <th className="px-5 py-3.5 text-right">SOLDE DÛ</th>
+                  <th className="px-5 py-3.5 text-center">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-sans">
                 {filtered.map((item) => {
-                  const currentDebt = Number(item.current_debt) || 0
-                  const totalFacture = (Number(item.total_invoiced) || currentDebt)
-                  const totalRembourse = Math.max(0, totalFacture - currentDebt)
+                  const { totalDette, totalRembourse, soldeDu } = getCustomerDetteInfo(item)
 
                   return (
                     <tr key={item.id} className="hover:bg-slate-50/80 transition">
@@ -656,15 +916,15 @@ const ClientsPage: React.FC = () => {
                         </div>
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono font-medium text-slate-800 text-sm">
-                        {fmt(totalFacture)}
+                        {fmt(totalDette)}
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono font-medium text-emerald-700 text-sm">
                         {fmt(totalRembourse)}
                       </td>
                       <td className="px-5 py-3.5 text-right font-mono font-bold text-sm">
-                        {currentDebt > 0 ? (
+                        {soldeDu > 0 ? (
                           <span className="text-rose-600 bg-rose-50 px-2.5 py-1 rounded-lg border border-rose-200">
-                            {fmt(currentDebt)}
+                            {fmt(soldeDu)}
                           </span>
                         ) : (
                           <span className="text-emerald-600 font-semibold">0 FCFA</span>
@@ -673,17 +933,17 @@ const ClientsPage: React.FC = () => {
                       <td className="px-5 py-3.5 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
-                            onClick={() => setStatementCustomer(item)}
-                            title="Historique des factures et règlements"
+                            onClick={() => setActiveDetailsCustomer(item)}
+                            title="Fiche client & historique des remboursements"
                             className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition flex items-center gap-1 shadow-sm"
                           >
                             <FileText className="w-3.5 h-3.5 text-slate-500" /> Détails
                           </button>
-                          {currentDebt > 0 && (
+                          {soldeDu > 0 && (
                             <>
                               <button
                                 onClick={() => openPaymentModal(item)}
-                                title="Enregistrer un paiement qui diminue la dette et entre dans la caisse"
+                                title="Enregistrer un remboursement qui diminue la dette et entre dans la caisse"
                                 className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition"
                               >
                                 <DollarSign className="w-3.5 h-3.5" /> Remboursement
@@ -1135,7 +1395,7 @@ const ClientsPage: React.FC = () => {
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div>
                 <h3 className="text-lg font-bold text-slate-800">Encaisser un Remboursement</h3>
-                <p className="text-xs text-slate-500">Règlement d'arriéré client</p>
+                <p className="text-xs text-slate-500">Règlement d'arriéré client avec impact caisse</p>
               </div>
               <button onClick={() => setShowPaymentModal(false)} className="text-slate-400 hover:text-slate-600">
                 <X className="w-5 h-5" />
@@ -1143,66 +1403,97 @@ const ClientsPage: React.FC = () => {
             </div>
 
             <form onSubmit={handleProcessPayment} className="space-y-4">
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-100 text-sm">
-                <p className="font-bold text-slate-800">{selectedCustomer.name}</p>
-                <p className="text-xs text-slate-500 font-mono">Code: {selectedCustomer.code} | Tél: {selectedCustomer.phone}</p>
-                <div className="mt-2 pt-2 border-t border-slate-200 flex justify-between items-center">
-                  <span className="text-xs text-slate-600 font-semibold">Créance totale due :</span>
-                  <span className="text-sm font-black text-red-600">{fmt(selectedCustomer.current_debt)}</span>
-                </div>
-              </div>
+              {(() => {
+                const { soldeDu, totalDette, totalRembourse } = getCustomerDetteInfo(selectedCustomer)
+                return (
+                  <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 text-xs space-y-2">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <p className="font-bold text-sm text-slate-800">{selectedCustomer.name}</p>
+                        <p className="text-slate-500 font-mono">Code: {selectedCustomer.code} • Tél: {selectedCustomer.phone}</p>
+                      </div>
+                      <span className="font-mono text-[10px] bg-white px-2 py-0.5 rounded border border-slate-200">
+                        {currentSectorSlug.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200">
+                      <div>
+                        <span className="text-slate-500">Dette cumulée :</span>
+                        <p className="font-mono font-bold text-slate-700">{fmt(totalDette)}</p>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-slate-500">Solde restant dû :</span>
+                        <p className="font-mono font-black text-rose-600 text-sm">{fmt(soldeDu)}</p>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })()}
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Montant à Encaisser (FCFA) *</label>
+                <div className="flex justify-between items-center mb-1">
+                  <label className="text-xs font-semibold text-slate-700">Montant à Encaisser (FCFA) *</label>
+                  <span className="text-[11px] text-slate-400">
+                    Max : {fmt(getCustomerDetteInfo(selectedCustomer).soldeDu)}
+                  </span>
+                </div>
                 <input
                   type="number"
                   required
                   min={1}
-                  max={selectedCustomer.current_debt}
-                  value={paymentAmount}
+                  max={getCustomerDetteInfo(selectedCustomer).soldeDu}
+                  value={paymentAmount || ''}
                   onChange={(e) => setPaymentAmount(Math.max(0, Number(e.target.value)))}
-                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-lg font-bold text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
+                  className="w-full px-3 py-2.5 border border-slate-300 rounded-xl text-lg font-black text-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono"
                 />
-                <div className="flex justify-between items-center mt-1 text-xs text-slate-400">
-                  <span>Solde restant après paiement :</span>
-                  <span className="font-bold text-slate-700">{fmt(Math.max(0, selectedCustomer.current_debt - paymentAmount))}</span>
+                <div className="flex justify-between items-center mt-1 text-xs text-slate-500">
+                  <span>Reste après cette opération :</span>
+                  <span className="font-bold text-slate-800 font-mono">
+                    {fmt(Math.max(0, getCustomerDetteInfo(selectedCustomer).soldeDu - paymentAmount))}
+                  </span>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Mode d'Encaissement *</label>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  {[
-                    { id: 'cash', label: 'Espèces (Caisse)' },
-                    { id: 'momo', label: 'MTN MoMo' },
-                    { id: 'moov', label: 'Moov Money' },
-                    { id: 'wave', label: 'Wave' },
-                    { id: 'bank', label: 'Banque / Chèque' },
-                  ].map((m) => (
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Date du Paiement *</label>
+                <input
+                  type="datetime-local"
+                  required
+                  value={paymentDate}
+                  onChange={(e) => setPaymentDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">Mode de Paiement *</label>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  {['Espèces', 'MTN MoMo', 'Moov Money'].map((mode) => (
                     <button
-                      key={m.id}
+                      key={mode}
                       type="button"
-                      onClick={() => setPaymentMode(m.id)}
-                      className={`p-2 rounded-lg border font-medium transition text-left ${
-                        paymentMode === m.id
-                          ? 'bg-emerald-50 border-emerald-500 text-emerald-800 font-bold'
-                          : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
-                      }`}
+                      onClick={() => setPaymentMode(mode)}
+                      className={clsx(
+                        'py-2 px-1 text-center rounded-xl border font-bold text-xs transition',
+                        paymentMode === mode
+                          ? 'bg-emerald-600 text-white border-emerald-600 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                      )}
                     >
-                      {m.label}
+                      {mode}
                     </button>
                   ))}
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Référence / Quittance / Note</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Référence / Note / Quittance</label>
                 <input
                   type="text"
                   value={paymentNotes}
                   onChange={(e) => setPaymentNotes(e.target.value)}
-                  placeholder="Ex: Versement partiel, Chèque N°..."
-                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm"
+                  placeholder="Ex: Versement acompte, Chèque N°..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs"
                 />
               </div>
 
@@ -1210,16 +1501,24 @@ const ClientsPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowPaymentModal(false)}
-                  className="px-4 py-2 border border-slate-200 rounded-xl text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  className="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-50"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   disabled={isProcessingPayment || paymentAmount <= 0}
-                  className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-sm font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                  className="px-5 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 disabled:opacity-50 shadow-sm flex items-center gap-1.5"
                 >
-                  {isProcessingPayment ? 'Validation...' : 'Valider l\'Encaissement'}
+                  {isProcessingPayment ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Validation...
+                    </>
+                  ) : (
+                    <>
+                      <DollarSign className="w-3.5 h-3.5" /> Valider l'Encaissement
+                    </>
+                  )}
                 </button>
               </div>
             </form>
@@ -1227,128 +1526,433 @@ const ClientsPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 4: Reçu de Remboursement Imprimable */}
-      {settlementReceipt && (
+      {/* MODAL 4: Quittance A5 Propre (Non vide, imprimable avec #printable-area) */}
+      {activePaymentReceipt && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
-              <div className="flex items-center gap-2 text-emerald-600">
-                <CheckCircle2 className="w-5 h-5" />
-                <h3 className="font-bold text-slate-800">Reçu de Règlement Officiel</h3>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl max-h-[92vh] overflow-y-auto">
+            {/* Barre d'action modale (cachée à l'impression) */}
+            <div className="no-print p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-bold text-slate-800 text-sm">Quittance Officielle de Règlement</h3>
               </div>
-              <button onClick={() => setSettlementReceipt(null)} className="text-slate-400 hover:text-slate-600">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 font-sans text-xs space-y-3">
-              <div className="text-center pb-2 border-b border-slate-300">
-                <p className="font-black text-sm text-slate-800 uppercase">{company?.name || 'ENTREPRISE'}</p>
-                <p className="text-slate-500">IFU: {(company as any)?.ifu_number || 'Non renseigné'} | Tél: {(company as any)?.phone || 'Non renseigné'}</p>
-                <p className="text-slate-400 font-mono">{settlementReceipt.receiptNumber}</p>
-                <p className="text-[10px] text-slate-400">{new Date(settlementReceipt.date).toLocaleString('fr-BJ')}</p>
-              </div>
-
-              <div className="bg-white p-3 rounded-lg border border-slate-200">
-                <span className="text-[10px] uppercase font-bold text-slate-400">Client Débiteur</span>
-                <p className="font-bold text-slate-800 text-sm">{settlementReceipt.customerName}</p>
-                <p className="text-slate-500">Code: {settlementReceipt.customerCode} | Tél: {settlementReceipt.customerPhone}</p>
-              </div>
-
-              <div className="space-y-1.5 bg-white p-3 rounded-lg border border-slate-200 font-mono">
-                <div className="flex justify-between font-sans">
-                  <span className="text-slate-500">Créance Initiale :</span>
-                  <span className="font-medium text-slate-700">{fmt(settlementReceipt.previousDebt)}</span>
-                </div>
-                <div className="flex justify-between font-bold text-emerald-700 text-sm border-y border-dashed py-1">
-                  <span>Montant Encaissé :</span>
-                  <span>{fmt(settlementReceipt.amountPaid)}</span>
-                </div>
-                <div className="flex justify-between font-bold text-red-600">
-                  <span>Reste à Payer :</span>
-                  <span>{fmt(settlementReceipt.remainingDebt)}</span>
-                </div>
-              </div>
-
-              <div className="pt-2 flex justify-between text-[11px] text-slate-500">
-                <div className="text-center">
-                  <p>Signature Client</p>
-                  <div className="h-8 border-b border-dotted border-slate-400 w-24 mx-auto mt-1" />
-                </div>
-                <div className="text-center">
-                  <p>Cachet Caisse</p>
-                  <div className="h-8 border-b border-dotted border-slate-400 w-24 mx-auto mt-1" />
-                </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                >
+                  <Printer className="w-4 h-4" /> Imprimer le reçu A5
+                </button>
+                <button
+                  onClick={() => setActivePaymentReceipt(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => window.print()}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
-              >
-                <Printer className="w-4 h-4" /> Imprimer
-              </button>
-              <button
-                onClick={() => setSettlementReceipt(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
-              >
-                Fermer
-              </button>
+            {/* Zone Imprimable format A5 - Identifiant #printable-area */}
+            <div id="printable-area" className="p-8 bg-white text-slate-800 font-sans text-xs space-y-4">
+              {/* En-tête Entreprise */}
+              <div className="border-b-2 border-slate-900 pb-3 text-center">
+                <p className="font-black text-base text-slate-900 uppercase tracking-wide">
+                  {company?.name || 'ENTREPRISE COMMERCIALE'}
+                </p>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  IFU: {(company as any)?.ifu_number || 'Non renseigné'} • Tél: {(company as any)?.phone || 'Non renseigné'} • Ville: {(company as any)?.city || 'Cotonou'}
+                </p>
+                <div className="mt-2 inline-block px-3 py-1 bg-slate-900 text-white font-bold text-xs uppercase tracking-wider rounded">
+                  QUITTANCE DE RÈGLEMENT DE CRÉANCE
+                </div>
+              </div>
+
+              {/* Réf reçu & Date */}
+              <div className="flex justify-between items-center bg-slate-50 p-2.5 rounded border border-slate-200 font-mono text-[11px]">
+                <div>
+                  <span className="text-slate-500 font-sans">N° Quittance : </span>
+                  <strong className="text-slate-900">
+                    {activePaymentReceipt.payment.reference || `REC-${activePaymentReceipt.payment.id.slice(0, 8).toUpperCase()}`}
+                  </strong>
+                </div>
+                <div>
+                  <span className="text-slate-500 font-sans">Date : </span>
+                  <strong className="text-slate-900">
+                    {new Date(activePaymentReceipt.payment.payment_date).toLocaleDateString('fr-BJ', {
+                      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
+                    })}
+                  </strong>
+                </div>
+              </div>
+
+              {/* Informations Client */}
+              <div className="p-3 bg-slate-50 rounded border border-slate-200">
+                <span className="text-[10px] uppercase font-bold text-slate-500">CLIENT BÉNÉFICIAIRE</span>
+                <p className="font-bold text-sm text-slate-900">{activePaymentReceipt.customer.name}</p>
+                <div className="text-[11px] text-slate-600 flex flex-wrap gap-x-4 mt-0.5">
+                  <span>Code : <strong>{activePaymentReceipt.customer.code}</strong></span>
+                  <span>Tél : <strong>{activePaymentReceipt.customer.phone}</strong></span>
+                  {activePaymentReceipt.customer.ifu_number && <span>IFU : <strong>{activePaymentReceipt.customer.ifu_number}</strong></span>}
+                </div>
+              </div>
+
+              {/* Détails financiers lus depuis debt_payments + client_debts */}
+              <div className="space-y-2 border border-slate-200 rounded p-3 bg-white font-mono">
+                <div className="flex justify-between font-sans text-xs">
+                  <span className="text-slate-600">Total Dette Initiale :</span>
+                  <span className="font-bold text-slate-900">
+                    {fmt(Number(activePaymentReceipt.debt?.total_dette) || (activePaymentReceipt.payment.amount + activePaymentReceipt.payment.reste_apres))}
+                  </span>
+                </div>
+
+                <div className="flex justify-between font-sans text-xs">
+                  <span className="text-slate-600">Total déjà remboursé (cumulé) :</span>
+                  <span className="font-bold text-emerald-700">
+                    {fmt(Number(activePaymentReceipt.debt?.total_rembourse) || activePaymentReceipt.payment.amount)}
+                  </span>
+                </div>
+
+                <div className="flex justify-between items-center py-2 px-3 bg-emerald-50 border border-emerald-200 rounded font-sans">
+                  <span className="font-bold text-emerald-900 text-sm">Montant remboursé ce jour :</span>
+                  <span className="font-black text-emerald-700 text-base font-mono">
+                    {fmt(activePaymentReceipt.payment.amount)}
+                  </span>
+                </div>
+
+                <div className="flex justify-between font-sans text-xs pt-1">
+                  <span className="text-slate-600">Mode de paiement :</span>
+                  <span className="font-bold text-slate-900">
+                    {activePaymentReceipt.payment.payment_method}
+                  </span>
+                </div>
+
+                <div className="flex justify-between font-sans text-xs pt-2 border-t border-dashed border-slate-300">
+                  <span className="font-bold text-slate-800">Solde Dû restant :</span>
+                  <span className={clsx(
+                    'font-black text-sm font-mono',
+                    activePaymentReceipt.payment.reste_apres > 0 ? 'text-rose-600' : 'text-emerald-600'
+                  )}>
+                    {fmt(activePaymentReceipt.payment.reste_apres)}
+                  </span>
+                </div>
+              </div>
+
+              {/* Note ou référence */}
+              {activePaymentReceipt.payment.notes && (
+                <p className="text-[11px] text-slate-500 italic bg-slate-50 p-2 rounded">
+                  Motif / Référence : {activePaymentReceipt.payment.notes}
+                </p>
+              )}
+
+              {/* Signatures */}
+              <div className="pt-6 grid grid-cols-2 gap-8 text-[11px] text-slate-700">
+                <div className="text-center">
+                  <p className="font-bold uppercase">Signature Client</p>
+                  <div className="h-14 border-b border-slate-400 w-36 mx-auto mt-2" />
+                </div>
+                <div className="text-center">
+                  <p className="font-bold uppercase">Cachet & Signature Caisse</p>
+                  <div className="h-14 border-b border-slate-400 w-36 mx-auto mt-2" />
+                </div>
+              </div>
+
+              <div className="pt-2 text-center text-[10px] text-slate-400 border-t border-slate-200">
+                Quittance officielle certifiant le règlement libératoire à due concurrence • GESTIO 229 SaaS
+              </div>
             </div>
           </div>
         </div>
       )}
 
-      {/* MODAL 5: Relevé de Compte Client (Détails) */}
-      {statementCustomer && (
+      {/* MODAL 5: Fiche Détails Client (B.2 : Nom, téléphone, Total Dette, Total Remboursé, Solde Dû, Historique JAMAIS vidé) */}
+      {activeDetailsCustomer && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl p-6 max-h-[92vh] overflow-y-auto">
+            {/* Header Fiche Client */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
               <div>
-                <h3 className="font-bold text-slate-800 text-base">Relevé de Compte Client</h3>
-                <p className="text-xs text-slate-500">Détails de la créance et conditions commerciales</p>
+                <div className="flex items-center gap-2">
+                  <h3 className="font-bold text-slate-900 text-lg">{activeDetailsCustomer.name}</h3>
+                  <span className="font-mono text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                    {activeDetailsCustomer.code}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 flex items-center gap-3 mt-1">
+                  <span>Tél : {activeDetailsCustomer.phone}</span>
+                  {activeDetailsCustomer.ifu_number && <span>IFU : {activeDetailsCustomer.ifu_number}</span>}
+                  {activeDetailsCustomer.city && <span>Ville : {activeDetailsCustomer.city}</span>}
+                </p>
               </div>
-              <button onClick={() => setStatementCustomer(null)} className="text-slate-400 hover:text-slate-600">
+              <button onClick={() => setActiveDetailsCustomer(null)} className="text-slate-400 hover:text-slate-600 p-1">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-4 text-xs font-sans">
-              <div className="flex justify-between items-start">
-                <div>
-                  <p className="font-bold text-sm text-slate-800">{statementCustomer.name}</p>
-                  <p className="text-slate-500 font-mono">Code: {statementCustomer.code} | IFU: {statementCustomer.ifu_number || 'Non renseigné'}</p>
-                  <p className="text-slate-500">Tél: {statementCustomer.phone} | Ville: {statementCustomer.city || 'Cotonou'}</p>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 uppercase font-semibold">Solde Débiteur Exigible</span>
-                  <p className="text-xl font-black text-rose-600 font-mono">{fmt(statementCustomer.current_debt)}</p>
-                  <p className="text-[11px] text-slate-500">Plafond autorisé: {fmt(statementCustomer.credit_limit || 0)}</p>
-                </div>
-              </div>
+            {(() => {
+              const custInfo = getCustomerDetteInfo(activeDetailsCustomer)
+              return (
+                <div className="space-y-5">
+                  {/* KPI Cards : Total Dette | Total Remboursé | Solde Dû */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+                      <span className="text-[11px] font-bold uppercase text-slate-500">TOTAL DETTE</span>
+                      <p className="text-lg font-black text-slate-800 mt-1 font-mono">{fmt(custInfo.totalDette)}</p>
+                    </div>
+                    <div className="bg-emerald-50/70 border border-emerald-200 rounded-xl p-3.5">
+                      <span className="text-[11px] font-bold uppercase text-emerald-700">TOTAL REMBOURSÉ</span>
+                      <p className="text-lg font-black text-emerald-700 mt-1 font-mono">{fmt(custInfo.totalRembourse)}</p>
+                    </div>
+                    <div
+                      className={clsx(
+                        'rounded-xl p-3.5 border',
+                        custInfo.soldeDu > 0 ? 'bg-rose-50 border-rose-200 text-rose-700' : 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                      )}
+                    >
+                      <span className="text-[11px] font-bold uppercase">SOLDE DÛ</span>
+                      <p className="text-lg font-black mt-1 font-mono">{fmt(custInfo.soldeDu)}</p>
+                    </div>
+                  </div>
 
-              <div className="bg-white p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-2 text-slate-600">
-                <div>Crédit autorisé aux achats : <strong className={statementCustomer.credit_authorized ? 'text-emerald-700' : 'text-rose-700'}>{statementCustomer.credit_authorized ? 'Oui' : 'Non'}</strong></div>
-                <div>Délai de paiement accordé : <strong>{statementCustomer.payment_terms_days} jours</strong></div>
-                <div>Remise accordée : <strong className={statementCustomer.discount_eligible ? 'text-amber-700' : 'text-slate-700'}>{statementCustomer.discount_eligible && (statementCustomer.discount_rate || 0) > 0 ? `${statementCustomer.discount_rate}%` : 'Aucune (0%)'}</strong></div>
-                <div>Statut Facturation : <strong className="text-emerald-700">Actif</strong></div>
+                  {/* Boutons d'Action : Ajouter dette initiale, Nouveau remboursement, Imprimer situation globale */}
+                  <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-slate-50 rounded-xl border border-slate-200">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          setInitialDebtForm({
+                            customerId: activeDetailsCustomer.id,
+                            amount: 0,
+                            motif: 'Report arriéré antérieur',
+                          })
+                          setShowInitialDebtModal(true)
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+                      >
+                        <History className="w-3.5 h-3.5" /> Ajouter dette initiale
+                      </button>
+
+                      {custInfo.soldeDu > 0 && (
+                        <button
+                          onClick={() => openPaymentModal(activeDetailsCustomer)}
+                          className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+                        >
+                          <DollarSign className="w-3.5 h-3.5" /> Nouveau remboursement
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => setActiveGlobalStatement(activeDetailsCustomer)}
+                      className="flex items-center gap-1.5 px-3.5 py-2 bg-white border border-slate-200 hover:bg-slate-100 text-slate-700 rounded-xl text-xs font-bold transition shadow-sm"
+                    >
+                      <Printer className="w-3.5 h-3.5 text-slate-500" /> Imprimer situation globale
+                    </button>
+                  </div>
+
+                  {/* Historique des Remboursements issu de debt_payments — JAMAIS VIDÉ */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2.5">
+                      <h4 className="font-bold text-slate-800 text-xs flex items-center gap-2 uppercase tracking-wide">
+                        <History className="w-4 h-4 text-emerald-600" />
+                        Historique des remboursements ({custInfo.payments.length})
+                      </h4>
+                      <span className="text-[11px] text-slate-400">Archivage permanent</span>
+                    </div>
+
+                    {custInfo.payments.length === 0 ? (
+                      <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-400 text-xs">
+                        Aucun remboursement enregistré pour ce client.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                        <table className="w-full text-left text-xs">
+                          <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600 uppercase">
+                            <tr>
+                              <th className="px-4 py-2.5">Date</th>
+                              <th className="px-4 py-2.5 text-right">Montant remboursé</th>
+                              <th className="px-4 py-2.5">Mode</th>
+                              <th className="px-4 py-2.5 text-right">Reste après opération</th>
+                              <th className="px-4 py-2.5 text-center">Reçu</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {custInfo.payments.map((p) => {
+                              const pDate = new Date(p.payment_date)
+                              const dateStr = !isNaN(pDate.getTime())
+                                ? pDate.toLocaleDateString('fr-BJ', {
+                                    day: '2-digit',
+                                    month: '2-digit',
+                                    year: 'numeric',
+                                    hour: '2-digit',
+                                    minute: '2-digit',
+                                  })
+                                : p.payment_date
+
+                              return (
+                                <tr key={p.id} className="hover:bg-slate-50/80 transition">
+                                  <td className="px-4 py-2.5 font-medium text-slate-700">{dateStr}</td>
+                                  <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-700">
+                                    {fmt(p.amount)}
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <span className="px-2 py-0.5 rounded-md font-semibold text-[11px] bg-slate-100 text-slate-700">
+                                      {p.payment_method}
+                                    </span>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-800">
+                                    {fmt(p.reste_apres)}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-center">
+                                    <button
+                                      onClick={() => {
+                                        const linkedDebt = custInfo.debts.find((d) => d.id === p.debt_id) || custInfo.debts[0]
+                                        setActivePaymentReceipt({
+                                          payment: p,
+                                          customer: activeDetailsCustomer,
+                                          debt: linkedDebt,
+                                        })
+                                      }}
+                                      className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center gap-1 mx-auto transition"
+                                    >
+                                      <Printer className="w-3 h-3" /> Imprimer
+                                    </button>
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6: Situation Globale Imprimable (Relevé Compte A5) */}
+      {activeGlobalStatement && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
+            {/* Header Actions */}
+            <div className="no-print p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-2xl">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-emerald-600" />
+                <h3 className="font-bold text-slate-800 text-sm">Situation Globale du Compte Client</h3>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                >
+                  <Printer className="w-4 h-4" /> Imprimer la situation
+                </button>
+                <button
+                  onClick={() => setActiveGlobalStatement(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1"
+                >
+                  <X className="w-5 h-5" />
+                </button>
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-end gap-2">
-              <button
-                onClick={() => window.print()}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5"
-              >
-                <Printer className="w-4 h-4" /> Imprimer le Relevé
-              </button>
-              <button
-                onClick={() => setStatementCustomer(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
-              >
-                Fermer
-              </button>
+            {/* Printable Content - #printable-area */}
+            <div id="printable-area" className="p-8 bg-white text-slate-800 font-sans text-xs space-y-4">
+              <div className="border-b-2 border-slate-900 pb-3 text-center">
+                <p className="font-black text-base text-slate-900 uppercase">{company?.name || 'ENTREPRISE COMMERCIALE'}</p>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  IFU: {(company as any)?.ifu_number || 'Non renseigné'} • Tél: {(company as any)?.phone || 'Non renseigné'}
+                </p>
+                <div className="mt-2 inline-block px-3 py-1 bg-slate-900 text-white font-bold text-xs uppercase tracking-wider rounded">
+                  RELEVÉ DE SITUATION DU COMPTE CRÉANCE
+                </div>
+              </div>
+
+              {/* Client Info */}
+              <div className="flex justify-between items-start bg-slate-50 p-3 rounded border border-slate-200">
+                <div>
+                  <p className="font-bold text-sm text-slate-900">{activeGlobalStatement.name}</p>
+                  <p className="text-slate-600 font-mono text-[11px]">
+                    Code : {activeGlobalStatement.code} • Tél : {activeGlobalStatement.phone}
+                  </p>
+                  {activeGlobalStatement.ifu_number && (
+                    <p className="text-slate-600 text-[11px]">IFU : {activeGlobalStatement.ifu_number}</p>
+                  )}
+                </div>
+                <div className="text-right text-[11px] font-mono text-slate-500">
+                  <p>Édité le : {new Date().toLocaleDateString('fr-BJ')}</p>
+                  <p>Secteur : {currentSectorSlug.toUpperCase()}</p>
+                </div>
+              </div>
+
+              {/* Totaux */}
+              {(() => {
+                const info = getCustomerDetteInfo(activeGlobalStatement)
+                return (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-3 gap-2 text-center">
+                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded">
+                        <span className="text-[10px] font-bold uppercase text-slate-500">Total Dette</span>
+                        <p className="font-mono font-bold text-sm text-slate-800">{fmt(info.totalDette)}</p>
+                      </div>
+                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded">
+                        <span className="text-[10px] font-bold uppercase text-emerald-800">Total Remboursé</span>
+                        <p className="font-mono font-bold text-sm text-emerald-700">{fmt(info.totalRembourse)}</p>
+                      </div>
+                      <div className="p-2.5 bg-rose-50 border border-rose-200 rounded">
+                        <span className="text-[10px] font-bold uppercase text-rose-800">Solde Dû</span>
+                        <p className="font-mono font-black text-sm text-rose-600">{fmt(info.soldeDu)}</p>
+                      </div>
+                    </div>
+
+                    {/* Table des règlements */}
+                    <div>
+                      <p className="font-bold uppercase text-[10px] text-slate-500 mb-1.5">Historique des Règlements</p>
+                      {info.payments.length === 0 ? (
+                        <p className="text-slate-400 italic text-[11px]">Aucun remboursement enregistré.</p>
+                      ) : (
+                        <table className="w-full text-left text-[11px] border border-slate-200">
+                          <thead className="bg-slate-100 font-bold text-slate-700 uppercase">
+                            <tr>
+                              <th className="p-2 border-b">Date</th>
+                              <th className="p-2 border-b">Réf</th>
+                              <th className="p-2 border-b text-right">Montant</th>
+                              <th className="p-2 border-b">Mode</th>
+                              <th className="p-2 border-b text-right">Reste</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 font-mono">
+                            {info.payments.map((p) => (
+                              <tr key={p.id}>
+                                <td className="p-2 font-sans font-medium text-slate-700">
+                                  {new Date(p.payment_date).toLocaleDateString('fr-BJ')}
+                                </td>
+                                <td className="p-2 text-slate-500">{p.reference || '-'}</td>
+                                <td className="p-2 text-right font-bold text-emerald-700">{fmt(p.amount)}</td>
+                                <td className="p-2 font-sans text-slate-700">{p.payment_method}</td>
+                                <td className="p-2 text-right font-bold text-slate-900">{fmt(p.reste_apres)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      )}
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Signatures */}
+              <div className="pt-6 grid grid-cols-2 gap-8 text-[11px] text-slate-700">
+                <div className="text-center">
+                  <p className="font-bold uppercase">Signature Client</p>
+                  <div className="h-14 border-b border-slate-400 w-36 mx-auto mt-2" />
+                </div>
+                <div className="text-center">
+                  <p className="font-bold uppercase">Cachet Entreprise</p>
+                  <div className="h-14 border-b border-slate-400 w-36 mx-auto mt-2" />
+                </div>
+              </div>
             </div>
           </div>
         </div>
