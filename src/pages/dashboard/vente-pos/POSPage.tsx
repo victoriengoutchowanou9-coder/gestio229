@@ -47,6 +47,8 @@ interface Product {
   current_stock?: number
   stock_vente?: number
   stock_magasin?: number
+  is_taxable?: boolean
+  tva_rate?: number
   is_vat_subject?: boolean
   vat_rate?: number
   is_aib_subject?: boolean
@@ -142,6 +144,10 @@ export const POSPage: React.FC = () => {
   const [multiMode2Canal, setMultiMode2Canal] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'credit'>('momo_mtn')
   const [multiMode2Amount, setMultiMode2Amount] = useState<number>(0)
 
+  // Option AIB manuelle sur le panier si non présente sur les articles
+  const [applyAibCart, setApplyAibCart] = useState<boolean>(false)
+  const [cartAibRate, setCartAibRate] = useState<number>(1)
+
   const [cashReceivedInput, setCashReceivedInput] = useState('')
   const [paying, setPaying] = useState(false)
 
@@ -192,17 +198,42 @@ export const POSPage: React.FC = () => {
       if (prodErr) throw prodErr
       if (custErr) throw custErr
 
-      const mappedProds = (prods || []).map((p: any) => ({
-        ...p,
-        selling_price: Number(p.selling_price) || 0,
-        cost_price: Number(p.cost_price) || 0,
-        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
-        stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
-        coef: Number(p.coef || p.sector_meta?.coef || 1),
-        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
-        uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
-        batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
-      }))
+      const mappedProds = (prods || []).map((p: any) => {
+        const isVat = Boolean(
+          p.is_taxable ??
+          p.is_vat_subject ??
+          p.sector_meta?.is_taxable ??
+          p.sector_meta?.is_vat_subject ??
+          (Number(p.tva_rate) > 0) ??
+          (Number(p.vat_rate) > 0) ??
+          false
+        )
+        const vatRate = isVat ? Number(p.tva_rate ?? p.vat_rate ?? 18) : 0
+        const isAib = Boolean(
+          p.is_aib_subject ??
+          p.sector_meta?.is_aib_subject ??
+          false
+        )
+        const aibRate = isAib ? Number(p.aib_rate ?? p.sector_meta?.aib_rate ?? 1) : 0
+
+        return {
+          ...p,
+          selling_price: Number(p.selling_price) || 0,
+          cost_price: Number(p.cost_price) || 0,
+          stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
+          stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
+          coef: Number(p.coef || p.sector_meta?.coef || 1),
+          ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
+          uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
+          batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
+          is_taxable: isVat,
+          is_vat_subject: isVat,
+          tva_rate: vatRate,
+          vat_rate: vatRate,
+          is_aib_subject: isAib,
+          aib_rate: aibRate,
+        }
+      })
       setProducts(mappedProds)
 
       // Charger les clients avec métadonnées de crédit et remise
@@ -490,28 +521,51 @@ export const POSPage: React.FC = () => {
     return cart.reduce((sum, i) => sum + i.qty * i.discount, 0)
   }, [cart])
 
-  const totalNetTTC = Math.max(0, subtotalTTC - totalDiscount)
-
   // Décomposition fiscale ligne par ligne rigoureuse
   const cartFiscalSummary = useMemo(() => {
     let ht = 0
     let tva = 0
     let aib = 0
     let totalExonere = 0
+    let hasProductWithAib = false
+    let detectedAibRate = 0
 
     cart.forEach((item) => {
       const lineTtc = item.qty * item.unitPrice - item.qty * item.discount
-      const isVat = Boolean(item.product.is_vat_subject ?? (item.product.vat_rate && item.product.vat_rate > 0) ?? false)
-      const vatRate = isVat ? (item.product.vat_rate || 18) : 0
-      const isAib = Boolean(item.product.is_aib_subject ?? item.product.sector_meta?.is_aib_subject ?? false)
-      const aibRate = isAib ? (item.product.aib_rate || 1) : 0
+      const isVat = Boolean(
+        item.product.is_vat_subject ??
+        item.product.is_taxable ??
+        item.product.sector_meta?.is_taxable ??
+        (Number(item.product.tva_rate) > 0) ??
+        (Number(item.product.vat_rate) > 0) ??
+        false
+      )
+      const vatRate = isVat ? Number(item.product.vat_rate ?? item.product.tva_rate ?? 18) : 0
+
+      // AIB : si coché sur le produit OU coché manuellement sur le panier
+      const isProdAib = Boolean(
+        item.product.is_aib_subject ??
+        item.product.sector_meta?.is_aib_subject ??
+        false
+      )
+      if (isProdAib) {
+        hasProductWithAib = true
+      }
+      const isAib = isProdAib || applyAibCart
+      const itemAibRate = isProdAib
+        ? Number(item.product.aib_rate ?? item.product.sector_meta?.aib_rate ?? cartAibRate)
+        : cartAibRate
+
+      if (isAib && itemAibRate > detectedAibRate) {
+        detectedAibRate = itemAibRate
+      }
 
       const tax = calculateTaxFromTTC(
         lineTtc,
         isVat,
         vatRate,
         isAib,
-        aibRate
+        itemAibRate
       )
       ht += tax.htPrice
       tva += tax.vatAmount
@@ -525,9 +579,14 @@ export const POSPage: React.FC = () => {
       ht: Math.round(ht * 100) / 100,
       tva: Math.round(tva * 100) / 100,
       aib: Math.round(aib * 100) / 100,
+      hasProductWithAib,
+      aibRate: detectedAibRate || cartAibRate || 1,
       totalExonere: Math.round(totalExonere * 100) / 100,
     }
-  }, [cart])
+  }, [cart, applyAibCart, cartAibRate])
+
+  // Total Net TTC à payer : Sous-total TTC - Remises + AIB (si AIB calculé sur HT)
+  const totalNetTTC = Math.max(0, Math.round((subtotalTTC - totalDiscount + cartFiscalSummary.aib) * 100) / 100)
 
   // ─── Gestion des Modes de Paiement (Panier & Checkout Intégré) ──────────────
 
@@ -743,6 +802,7 @@ export const POSPage: React.FC = () => {
       if (!dbSaleErr && dbSale) {
         savedDbSale = dbSale
       } else {
+        console.warn('Fallback insertion sales_orders:', dbSaleErr)
         // Fallback garanti sur le schéma natif Supabase (sans sector_slug ni colonnes manquantes)
         const { data: fbSale, error: fbErr } = await supabaseTenant('sales_orders')
           .insert(baseSalePayload)
@@ -750,8 +810,9 @@ export const POSPage: React.FC = () => {
           .single()
 
         if (fbErr || !fbSale) {
-          console.error('Erreur critique insertion sales_orders:', fbErr)
-          throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${fbErr?.message || 'Erreur inconnue'}`)
+          console.error('Erreur critique insertion sales_orders:', fbErr, dbSaleErr)
+          const errDetail = fbErr?.message || (fbErr as any)?.details || dbSaleErr?.message || 'Erreur inconnue'
+          throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${errDetail}`)
         }
         savedDbSale = fbSale
       }
@@ -762,9 +823,15 @@ export const POSPage: React.FC = () => {
 
       // 2. Insertion des lignes réelles dans sales_order_items (source de vérité Supabase)
       const lineItems = cart.map((line) => {
-        const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
+        const isTaxed = Boolean(
+          line.product.is_vat_subject ??
+          line.product.is_taxable ??
+          (Number(line.product.tva_rate) > 0) ??
+          false
+        )
+        const itemVatRate = isTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
         const lineTotal = line.qty * line.unitPrice
-        const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
+        const lineHt = isTaxed ? Math.round((lineTotal / (1 + itemVatRate / 100)) * 100) / 100 : lineTotal
         return {
           order_id: savedDbSale.id,
           product_id: line.product.id,
@@ -772,7 +839,7 @@ export const POSPage: React.FC = () => {
           quantity: line.qty,
           unit_price: line.unitPrice,
           unit_cost: line.product.cost_price || 0,
-          tva_rate: isTaxed ? (line.product.vat_rate || 18) : 0,
+          tva_rate: itemVatRate,
           total_ht: lineHt,
           total_ttc: lineTotal
         }
@@ -1611,8 +1678,8 @@ export const POSPage: React.FC = () => {
                   )}
                 </div>
 
-                {/* 3. Récapitulatif Sous-total, TVA, Total TTC */}
-                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1">
+                {/* 3. Récapitulatif Sous-total, TVA, Total TTC & AIB */}
+                <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
                   <div className="flex justify-between text-slate-600 text-[11px]">
                     <span>Sous-total HT :</span>
                     <span className="font-mono font-bold">{fmt(cartFiscalSummary.ht)}</span>
@@ -1621,12 +1688,56 @@ export const POSPage: React.FC = () => {
                     <span>TVA (18%) :</span>
                     <span className="font-mono font-bold">{fmt(cartFiscalSummary.tva)}</span>
                   </div>
+
+                  {/* Ligne AIB calculée */}
                   {cartFiscalSummary.aib > 0 && (
-                    <div className="flex justify-between text-slate-600 text-[11px]">
-                      <span>AIB (Calculé sur HT) :</span>
+                    <div className="flex justify-between text-amber-800 bg-amber-50/80 px-2 py-1 rounded-lg border border-amber-200 text-[11px]">
+                      <span className="font-bold flex items-center gap-1">
+                        AIB ({cartFiscalSummary.aibRate}% sur HT) :
+                      </span>
                       <span className="font-mono font-bold">{fmt(cartFiscalSummary.aib)}</span>
                     </div>
                   )}
+
+                  {/* Case à cocher pour activer/désactiver l'AIB sur le panier si non défini sur les articles */}
+                  {!cartFiscalSummary.hasProductWithAib && (
+                    <div className="pt-1 flex items-center justify-between text-[11px] text-slate-600 border-t border-dashed border-slate-200">
+                      <label className="flex items-center gap-1.5 cursor-pointer font-medium hover:text-amber-800">
+                        <input
+                          type="checkbox"
+                          checked={applyAibCart}
+                          onChange={(e) => setApplyAibCart(e.target.checked)}
+                          className="w-3.5 h-3.5 accent-amber-600 rounded cursor-pointer"
+                        />
+                        <span>Appliquer AIB sur cette vente</span>
+                      </label>
+                      {applyAibCart && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setCartAibRate(1)}
+                            className={clsx(
+                              'px-1.5 py-0.5 rounded text-[10px] font-bold transition',
+                              cartAibRate === 1 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                            )}
+                          >
+                            1%
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setCartAibRate(5)}
+                            className={clsx(
+                              'px-1.5 py-0.5 rounded text-[10px] font-bold transition',
+                              cartAibRate === 5 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                            )}
+                          >
+                            5%
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <div className="flex justify-between items-center text-sm font-black text-slate-900 pt-1.5 border-t border-slate-200">
                     <span className="text-slate-800 uppercase tracking-tight text-xs">TOTAL TTC :</span>
                     <span className="font-mono text-emerald-700 text-base font-black">{fmt(totalNetTTC)}</span>
@@ -2335,7 +2446,12 @@ export const POSPage: React.FC = () => {
 
               <div className="border-t border-dashed border-slate-300 pt-2 space-y-1 text-right">
                 <p className="font-black text-sm">TOTAL TTC : {fmt(currentSale?.total_amount || 0)}</p>
-                <p className="text-[10px] text-slate-500">Dont TVA : {fmt(currentSale?.total_tva || 0)}</p>
+                <p className="text-[10px] text-slate-500">
+                  Dont HT : {fmt(currentSale?.total_ht || 0)} | Dont TVA (18%) : {fmt(currentSale?.total_tva || 0)}
+                </p>
+                {(currentSale?.total_aib || 0) > 0 && (
+                  <p className="text-[10px] text-amber-800 font-bold">Dont AIB : {fmt(currentSale?.total_aib || 0)}</p>
+                )}
                 <p className="text-xs text-emerald-700 font-bold">Payé : {fmt(currentSale?.amount_paid || 0)}</p>
                 {(currentSale?.credit_amount || 0) > 0 && (
                   <p className="text-xs text-rose-600 font-bold">Reste Dû : {fmt(currentSale?.credit_amount || 0)}</p>

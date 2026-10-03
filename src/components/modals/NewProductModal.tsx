@@ -288,6 +288,12 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         ucd: form.ucd,
         uv: form.uv,
         coef: form.coef,
+        is_taxable: form.isVatSubject,
+        tva_rate: form.isVatSubject ? form.vatRate : 0,
+        is_vat_subject: form.isVatSubject,
+        vat_rate: form.isVatSubject ? form.vatRate : 0,
+        is_aib_subject: form.isAibSubject,
+        aib_rate: form.isAibSubject ? form.aibRate : 0,
       }
 
       setIsSaving(false)

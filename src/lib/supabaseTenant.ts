@@ -106,6 +106,14 @@ const TABLES_WITH_NOTES_COLUMN = new Set<string>([
   'credit_notes',
 ])
 
+// Tables dont la colonne physique 'sector_meta' existe dans Supabase (JSONB)
+// Seules ces tables acceptent sector_meta sans erreur 42703/PGRST204
+const TABLES_WITH_SECTOR_META = new Set<string>([
+  'products',
+  'customers',
+  'suppliers',
+])
+
 export function markTableHasPhysicalSectorSlug(table: string) {
   TABLES_WITH_PHYSICAL_SECTOR_SLUG.add(resolveTableName(table))
 }
@@ -221,7 +229,12 @@ function attachInsertFallback(query: any, physicalTable: string, payload: any, c
     const strip = (row: any) => {
       const copy = { ...row }
       for (const col of removeCols) delete copy[col]
-      if (!removeCols.includes('sector_slug') && cleanSlug) {
+      if (
+        !removeCols.includes('sector_slug') &&
+        !removeCols.includes('sector_meta') &&
+        cleanSlug &&
+        TABLES_WITH_SECTOR_META.has(physicalTable)
+      ) {
         copy.sector_meta = { ...(copy.sector_meta || {}), sector_slug: cleanSlug, sector: cleanSlug }
       }
       return copy
@@ -330,11 +343,13 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
           if (hasPhysicalCol) {
             copy.sector_slug = cleanSlug
           }
-          // sector_meta : toujours injecté pour rétro-compat et JSONB filtering
-          copy.sector_meta = {
-            ...(copy.sector_meta || {}),
-            sector_slug: cleanSlug,
-            sector: cleanSlug,
+          // sector_meta : UNIQUEMENT pour les tables avec colonne sector_meta réelle (JSONB)
+          if (TABLES_WITH_SECTOR_META.has(physicalTable)) {
+            copy.sector_meta = {
+              ...(copy.sector_meta || {}),
+              sector_slug: cleanSlug,
+              sector: cleanSlug,
+            }
           }
           // Injection notes : uniquement pour les tables avec colonne notes confirmée
           if (TABLES_WITH_NOTES_COLUMN.has(physicalTable)) {
