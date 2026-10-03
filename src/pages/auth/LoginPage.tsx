@@ -64,19 +64,30 @@ const LoginPage: React.FC = () => {
   }, [])
 
   useEffect(() => {
-    // 1. Vérification si déjà en mode application installée (standalone / PWA)
-    const checkInstalled = () => {
-      const isStandaloneMedia = window.matchMedia('(display-mode: standalone)').matches
-      const isNavigatorStandalone = (window.navigator as any).standalone === true
-      const isAndroidApp = document.referrer.startsWith('android-app://')
-      const isStoredInstalled = localStorage.getItem('gestio_pwa_installed') === 'true'
+    // ── Détection robuste d'installation PWA ────────────────────────────────
+    // Règle : le bouton "Installer" doit TOUJOURS se réactiver si l'app
+    // n'est plus installée (désinstallée). On NE se fie JAMAIS uniquement
+    // au localStorage — on vérifie l'état réel du navigateur à chaque fois.
 
-      if (isStandaloneMedia || isNavigatorStandalone || isAndroidApp || isStoredInstalled) {
-        setIsAppInstalled(true)
+    const isReallyInstalled = (): boolean => {
+      // Vérification de l'environnement d'affichage (standalone = app installée active)
+      const standaloneMedia = window.matchMedia('(display-mode: standalone)').matches
+      const standaloneNav = (window.navigator as any).standalone === true
+      const androidApp = document.referrer.startsWith('android-app://')
+      return standaloneMedia || standaloneNav || androidApp
+    }
+
+    const updateInstallState = () => {
+      const installed = isReallyInstalled()
+      setIsAppInstalled(installed)
+      // Synchroniser le localStorage avec la réalité (si désinstallé, on nettoie)
+      if (!installed) {
+        try { localStorage.removeItem('gestio_pwa_installed') } catch (_) {}
       }
     }
 
-    checkInstalled()
+    // Vérification initiale
+    updateInstallState()
 
     // 2. Vérifier si un prompt a déjà été capturé avant le montage React
     if ((window as any).__gestio_deferred_prompt) {
@@ -88,12 +99,16 @@ const LoginPage: React.FC = () => {
       e.preventDefault()
       ;(window as any).__gestio_deferred_prompt = e
       setDeferredPrompt(e)
+      // Si on reçoit beforeinstallprompt, l'app n'est PAS installée → réactiver le bouton
+      setIsAppInstalled(false)
+      try { localStorage.removeItem('gestio_pwa_installed') } catch (_) {}
     }
 
     // 4. Écouter l'événement personnalisé dispatched par index.html
     const handleCustomPrompt = (e: any) => {
       if (e.detail) {
         setDeferredPrompt(e.detail)
+        setIsAppInstalled(false)
       }
     }
 
@@ -112,11 +127,34 @@ const LoginPage: React.FC = () => {
     window.addEventListener('appinstalled', handleAppInstalled)
     window.addEventListener('gestio-pwa-installed', handleAppInstalled)
 
+    // 6. Écouter les changements de display-mode (détecte désinstallation en direct)
     const mediaQuery = window.matchMedia('(display-mode: standalone)')
     const handleMediaChange = (e: MediaQueryListEvent) => {
-      if (e.matches) setIsAppInstalled(true)
+      if (e.matches) {
+        setIsAppInstalled(true)
+      } else {
+        // L'app vient de sortir du mode standalone → désinstallée ou changement de fenêtre
+        setIsAppInstalled(false)
+        setDeferredPrompt(null)
+        try { localStorage.removeItem('gestio_pwa_installed') } catch (_) {}
+      }
     }
     mediaQuery.addEventListener?.('change', handleMediaChange)
+
+    // 7. Polling toutes les 3 secondes pour détecter les désinstallations (surtout mobile)
+    const pollInterval = setInterval(() => {
+      const nowInstalled = isReallyInstalled()
+      setIsAppInstalled((prev) => {
+        if (prev !== nowInstalled) {
+          if (!nowInstalled) {
+            // Désinstallé : remettre le deferredPrompt si disponible pour réactiver le bouton
+            try { localStorage.removeItem('gestio_pwa_installed') } catch (_) {}
+          }
+          return nowInstalled
+        }
+        return prev
+      })
+    }, 3000)
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall)
@@ -124,6 +162,7 @@ const LoginPage: React.FC = () => {
       window.removeEventListener('appinstalled', handleAppInstalled)
       window.removeEventListener('gestio-pwa-installed', handleAppInstalled)
       mediaQuery.removeEventListener?.('change', handleMediaChange)
+      clearInterval(pollInterval)
     }
   }, [])
 

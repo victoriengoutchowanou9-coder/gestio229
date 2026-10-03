@@ -54,53 +54,28 @@ export const useAuthStore = create<AuthState>()(
       errorMessage: null,
 
       // ─── Initialisation au démarrage de l'app ─────────────────────────────
+      // RÈGLE : L'initialisation NE doit PAS connecter automatiquement l'utilisateur.
+      // Même si Supabase a une session active ou que zustand a persisté un user,
+      // on affiche TOUJOURS l'écran de connexion et on attend le clic "Se connecter".
+      // La connexion ne se fait QUE via login() explicitement appelé par l'utilisateur.
 
       initialize: async () => {
         set({ status: 'loading' })
         try {
-          // 1. Vérifier la session Supabase Auth (compte email / admin)
-          const { data: { session } } = await supabase.auth.getSession()
+          // 1. Déconnecter immédiatement toute session Supabase Auth active.
+          //    Cela empêche la reconnexion automatique via le token JWT mémorisé.
+          await supabase.auth.signOut().catch(() => {})
+        } catch (_) {}
 
-          if (session?.user) {
-            const ctx = await SectorLoader.loadTenantContext(session.user.id, session.user.email)
-            if (ctx && ctx.company) {
-              set({
-                status: 'authenticated',
-                user: ctx.user,
-                company: ctx.company,
-                tenantCtx: ctx,
-                errorMessage: null,
-              })
-              return
-            }
-          }
-
-          // 2. Vérifier si un utilisateur interne était connecté en session persistée
-          const currentUser = get().user
-          if (currentUser?.id) {
-            const ctx = await SectorLoader.loadTenantContext(
-              currentUser.auth_user_id || currentUser.id,
-              currentUser.email,
-              currentUser
-            )
-            if (ctx && ctx.company) {
-              set({
-                status: 'authenticated',
-                user: ctx.user,
-                company: ctx.company,
-                tenantCtx: ctx,
-                errorMessage: null,
-              })
-              return
-            }
-          }
-
-          // Aucune session valide
-          set({ status: 'unauthenticated', user: null, company: null, tenantCtx: null })
-        } catch (err: any) {
-          console.error('[AuthStore] Erreur initialisation :', err)
-          set({ status: 'unauthenticated', user: null, company: null, tenantCtx: null })
-        }
+        // 2. Toujours atterrir sur l'écran de connexion (status unauthenticated).
+        //    L'autofill navigateur reste actif côté form, mais NE provoque PAS de connexion.
+        set({
+          status: 'unauthenticated',
+          user: null,
+          company: null,
+          tenantCtx: null,
+          errorMessage: null,
+        })
       },
 
       // ─── Connexion Unifiée : Administrateur & Utilisateurs Internes ────────
