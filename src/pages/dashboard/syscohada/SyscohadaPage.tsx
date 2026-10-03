@@ -70,6 +70,7 @@ const DEFAULT_PLAN_SYSCOHADA = [
   { code: '431000', label: 'Sécurité Sociale (CNSS Bénin)', classId: 4 },
   { code: '445200', label: 'État, TVA récupérable sur achats', classId: 4 },
   { code: '445710', label: 'État, TVA facturée sur ventes (18%)', classId: 4 },
+  { code: '449200', label: 'État, AIB collecté sur ventes (1% / 5%)', classId: 4 },
   // Classe 5 : Trésorerie
   { code: '521100', label: 'Banques locales en FCFA', classId: 5 },
   { code: '571100', label: 'Caisse centrale espèces', classId: 5 },
@@ -489,18 +490,23 @@ const SyscohadaPage: React.FC = () => {
 
       const generated: JournalEntry[] = []
 
-      // 1. Écritures de Ventes (Journal VTE)
+      // 1. Écritures de Ventes (Journal VTE) avec ventilation stricte SYSCOHADA (HT, TVA 445710, AIB 449200)
       ;(sales || []).forEach((sale) => {
         const dateStr = sale.order_date || sale.created_at || new Date().toISOString()
         const total = Number(sale.total_amount) || 0
         if (total <= 0) return
 
-        const isCredit = sale.payment_method === 'credit'
-        const isMoMo = sale.payment_method === 'momo' || sale.payment_method === 'wave'
+        const isCredit = sale.payment_method === 'credit' || sale.payment_status === 'credit'
+        const isMoMo = sale.payment_method === 'momo' || sale.payment_method === 'wave' || (sale.e_mecef_uid && sale.e_mecef_uid.includes('PAY:momo'))
         const debitAcc = isCredit ? '411100' : isMoMo ? '572100' : '571100'
         const debitLabel = isCredit ? 'Clients ordinaires' : isMoMo ? 'Comptes Mobile Money' : 'Caisse centrale'
 
-        // Débit Trésorerie ou Tiers
+        const tva = Math.round((Number(sale.tva_amount) || 0) * 100) / 100
+        const aib = Math.round((Number(sale.aib_amount) || 0) * 100) / 100
+        // Montant HT équilibrant la partie double : Débit (total) = Crédit (HT + TVA + AIB)
+        const creditHT = Math.round((total - tva - aib) * 100) / 100
+
+        // 1. Débit Trésorerie ou Tiers (Total TTC + AIB perçu / dû)
         generated.push({
           id: `${sale.id}-d`,
           entry_date: dateStr,
@@ -513,18 +519,48 @@ const SyscohadaPage: React.FC = () => {
           libelle: `Vente ${sale.order_number || ''} - ${sale.customer_name || 'Client Comptoir'}`
         })
 
-        // Crédit Vente de Marchandises
+        // 2. Crédit Ventes de Marchandises HT (Compte 701100)
         generated.push({
-          id: `${sale.id}-c`,
+          id: `${sale.id}-c-ht`,
           entry_date: dateStr,
           piece_ref: sale.order_number || 'VTE',
           journal_code: 'VTE',
           account_number: '701100',
           account_label: 'Ventes de marchandises',
           debit: 0,
-          credit: total,
-          libelle: `Produits des ventes ${sale.order_number || ''}`
+          credit: creditHT,
+          libelle: `Produits des ventes HT ${sale.order_number || ''}`
         })
+
+        // 3. Crédit État, TVA facturée sur ventes (Compte 445710)
+        if (tva > 0) {
+          generated.push({
+            id: `${sale.id}-c-tva`,
+            entry_date: dateStr,
+            piece_ref: sale.order_number || 'VTE',
+            journal_code: 'VTE',
+            account_number: '445710',
+            account_label: 'État, TVA facturée sur ventes (18%)',
+            debit: 0,
+            credit: tva,
+            libelle: `TVA 18% collectée s/vente ${sale.order_number || ''}`
+          })
+        }
+
+        // 4. Crédit État, AIB collecté sur ventes (Compte 449200)
+        if (aib > 0) {
+          generated.push({
+            id: `${sale.id}-c-aib`,
+            entry_date: dateStr,
+            piece_ref: sale.order_number || 'VTE',
+            journal_code: 'VTE',
+            account_number: '449200',
+            account_label: 'État, AIB collecté sur ventes',
+            debit: 0,
+            credit: aib,
+            libelle: `AIB collecté s/vente ${sale.order_number || ''}`
+          })
+        }
       })
 
       // 2. Écritures de Dépenses (Journal CAI / ACH)
@@ -640,6 +676,19 @@ const SyscohadaPage: React.FC = () => {
   const totalCredit = entries.reduce((s, e) => s + e.credit, 0)
   const isDoubleEntryBalanced = Math.abs(totalDebit - totalCredit) < 1
 
+  // Cumuls fiscaux SYSCOHADA (TVA 445710, AIB 449200, Ventes HT 701100)
+  const totalTvaCollectee = useMemo(() => {
+    return entries.filter((e) => e.account_number === '445710').reduce((s, e) => s + e.credit, 0)
+  }, [entries])
+
+  const totalAibCollecte = useMemo(() => {
+    return entries.filter((e) => e.account_number === '449200').reduce((s, e) => s + e.credit, 0)
+  }, [entries])
+
+  const totalCaHt = useMemo(() => {
+    return entries.filter((e) => e.account_number.startsWith('701')).reduce((s, e) => s + e.credit, 0)
+  }, [entries])
+
   // Calcul du Grand Livre
   const grandLivreData = useMemo(() => {
     const map: Record<string, { label: string; debit: number; credit: number; entries: JournalEntry[] }> = {}
@@ -695,6 +744,7 @@ const SyscohadaPage: React.FC = () => {
     let creancesClients = 0
     let tresorerieActif = 0
     let dettesFournisseurs = 0
+    let dettesFiscales = 0
 
     trialBalance.forEach((b) => {
       if (b.account.startsWith('701')) caVentes += b.mvtCredit
@@ -704,6 +754,7 @@ const SyscohadaPage: React.FC = () => {
       if (b.account.startsWith('411')) creancesClients += b.soldeDebit
       if (b.account.startsWith('571') || b.account.startsWith('521') || b.account.startsWith('572')) tresorerieActif += b.soldeDebit
       if (b.account.startsWith('401')) dettesFournisseurs += b.soldeCredit
+      if (b.account.startsWith('445') || b.account.startsWith('449')) dettesFiscales += b.soldeCredit
     })
 
     const margeCommerciale = caVentes - achatsMarchandises
@@ -721,8 +772,9 @@ const SyscohadaPage: React.FC = () => {
       creancesClients,
       tresorerieActif,
       dettesFournisseurs,
+      dettesFiscales,
       totalActif: creancesClients + tresorerieActif,
-      totalPassif: dettesFournisseurs + Math.max(0, resultatNet)
+      totalPassif: dettesFournisseurs + dettesFiscales + Math.max(0, resultatNet)
     }
   }, [trialBalance])
 
@@ -900,28 +952,66 @@ const SyscohadaPage: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <span className="text-xs font-semibold uppercase text-slate-400">Total Mouvements Débit</span>
-            <p className="text-2xl font-black text-slate-800 mt-1">{fmt(totalDebit)}</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3.5">
+          {/* 1. CA VENTES HT */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <span className="text-[11px] font-bold uppercase text-slate-400 block mb-1">Chiffre d'Affaires HT</span>
+            <p className="text-xl font-black text-slate-900 font-mono">{fmt(totalCaHt)}</p>
+            <span className="text-[10px] text-emerald-600 font-semibold mt-1 inline-block bg-emerald-50 px-1.5 py-0.5 rounded">
+              Compte 701100 (Ventes HT)
+            </span>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <span className="text-xs font-semibold uppercase text-slate-400">Total Mouvements Crédit</span>
-            <p className="text-2xl font-black text-slate-800 mt-1">{fmt(totalCredit)}</p>
+
+          {/* 2. TVA COLLECTÉE */}
+          <div className="bg-white rounded-2xl border border-amber-200/80 bg-gradient-to-br from-amber-50/40 to-white p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-bold uppercase text-amber-700">TVA Collectée (18%)</span>
+              <span className="text-[10px] font-black bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">445710</span>
+            </div>
+            <p className="text-xl font-black text-amber-700 font-mono">{fmt(totalTvaCollectee)}</p>
+            <span className="text-[10px] text-amber-600 mt-1 inline-block">
+              TVA facturée s/ventes
+            </span>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
-            <span className="text-xs font-semibold uppercase text-slate-400">Contrôle de Partie Double</span>
-            <div className="flex items-center gap-2 mt-1">
+
+          {/* 3. AIB COLLECTÉ */}
+          <div className="bg-white rounded-2xl border border-indigo-200/80 bg-gradient-to-br from-indigo-50/40 to-white p-4 shadow-sm">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[11px] font-bold uppercase text-indigo-700">AIB Collecté</span>
+              <span className="text-[10px] font-black bg-indigo-100 text-indigo-800 px-1.5 py-0.5 rounded">449200</span>
+            </div>
+            <p className="text-xl font-black text-indigo-700 font-mono">{fmt(totalAibCollecte)}</p>
+            <span className="text-[10px] text-indigo-600 mt-1 inline-block">
+              AIB retenu s/ventes
+            </span>
+          </div>
+
+          {/* 4. TOTAL FLUX DÉBIT / CRÉDIT */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+            <span className="text-[11px] font-bold uppercase text-slate-400 block mb-1">Total Mouvements</span>
+            <p className="text-xl font-black text-slate-800 font-mono">{fmt(totalDebit)}</p>
+            <span className="text-[10px] text-slate-400 mt-1 inline-block">
+              Débit: {fmt(totalDebit)}
+            </span>
+          </div>
+
+          {/* 5. ÉQUILIBRE PARTIE DOUBLE */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
+            <span className="text-[11px] font-bold uppercase text-slate-400 block mb-1">Partie Double OHADA</span>
+            <div className="mt-1">
               {isDoubleEntryBalanced ? (
-                <span className="flex items-center gap-1.5 text-emerald-600 font-black text-sm bg-emerald-50 px-2.5 py-1 rounded-lg">
-                  <CheckCircle className="w-4 h-4" /> Parfaitement Équilibré (Écart 0 F)
+                <span className="flex items-center gap-1.5 text-emerald-600 font-black text-xs bg-emerald-50 px-2 py-1 rounded-xl border border-emerald-200/50">
+                  <CheckCircle className="w-3.5 h-3.5 shrink-0" /> Équilibré (Écart 0 F)
                 </span>
               ) : (
-                <span className="flex items-center gap-1.5 text-red-600 font-black text-sm bg-red-50 px-2.5 py-1 rounded-lg">
-                  <AlertCircle className="w-4 h-4" /> Écart de {fmt(Math.abs(totalDebit - totalCredit))}
+                <span className="flex items-center gap-1.5 text-rose-600 font-black text-xs bg-rose-50 px-2 py-1 rounded-xl border border-rose-200/50">
+                  <AlertCircle className="w-3.5 h-3.5 shrink-0" /> Écart: {fmt(Math.abs(totalDebit - totalCredit))}
                 </span>
               )}
             </div>
+            <span className="text-[10px] text-slate-400 mt-1 inline-block">
+              Acte Uniforme SYSCOHADA
+            </span>
           </div>
         </div>
       )}

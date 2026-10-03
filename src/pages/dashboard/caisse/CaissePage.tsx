@@ -485,21 +485,39 @@ export const CaissePage: React.FC = () => {
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
-  // Fond actuel — Espèces (initial + ventes espèces + remboursements espèces - retraits)
-  const fondActuelEspeces = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces
+  // 1. Flux réels de la session en cours
+  // Espèces du jour : Ventes espèces + Remboursements créances espèces - Retraits espèces validés
+  const especesDuJour = Math.max(0, ventesEspeces + remboursementsEspeces - totalRetraitsEspeces)
 
-  // Fond actuel — MoMo (initial + ventes MoMo + remboursements MoMo - retraits)
-  const fondActuelMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo
+  // MoMo du jour : Ventes MoMo + Remboursements créances MoMo - Retraits MoMo validés
+  const momoDuJour = Math.max(0, ventesMomo + remboursementsMomo - totalRetraitsMomo)
 
-  // 6. Fond initial global
+  // Fond théorique calculé en cours de session (pour contrôle et comptage lors de la clôture)
+  const fondTheoriqueEsp = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces
+  const fondTheoriqueMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo
+
+  // 2. Fond actuel espèces & MoMo :
+  // RÈGLE : C'est APRÈS clôture de caisse que les espèces du jour et momo du jour vont
+  // respectivement dans fond actuel espèces et fond actuel momo (reflétant le tiroir réel clôturé).
+  const lastClosure = closuresHistory.length > 0 ? closuresHistory[0] : null
+  const fondActuelEspeces = lastClosure
+    ? (Number(lastClosure.fond_especes_physique) || 0)
+    : (caisseStatus === 'FERMEE' ? 0 : initialCash)
+  const fondActuelMomo = lastClosure
+    ? (Number(lastClosure.fond_momo) || 0)
+    : (caisseStatus === 'FERMEE' ? 0 : initialMomo)
+
+  // 3. Fond initial global
   const fondInitialTotal = initialCash + initialMomo
 
-  // 7. Fond théorique actuel global
-  const fondTheoriqueActuel = fondActuelEspeces + fondActuelMomo
+  // 4. Fond théorique actuel global
+  const fondTheoriqueActuel = fondTheoriqueEsp + fondTheoriqueMomo
 
-  // CA total des ventes du jour (tous modes confondus)
+  // CA total des ventes du jour (tous modes confondus, hors avoirs)
   const caDuJour = useMemo(() => {
-    return salesToday.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+    return salesToday
+      .filter((s) => s.payment_status !== 'avoir' && s.status !== 'AVOIR')
+      .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
   }, [salesToday])
 
   // ─── Action : Ouvrir la Caisse ─────────────────────────────────────────────
@@ -649,7 +667,7 @@ export const CaissePage: React.FC = () => {
     const totalMomoJour = ventesMomo + remboursementsMomo
     const nouveauFondEspeces = initialCash + totalEspecesJour
     const nouveauFondMomo = initialMomo + totalMomoJour
-    const ecart = Number(closingPhysicalCash) - fondActuelEspeces
+    const ecart = Number(closingPhysicalCash) - fondTheoriqueEsp
 
     if (ecart !== 0 && !closingNotes.trim()) {
       toast.error('Justification obligatoire', 'Un écart de caisse est constaté. Veuillez saisir un motif dans les observations.')
@@ -673,11 +691,11 @@ export const CaissePage: React.FC = () => {
         closed_at: closedAt,
         closed_by: closedBy,
         caisse_name: `Caisse ${currentSectorSlug.toUpperCase()}`,
-        fond_especes_theorique: fondActuelEspeces,
+        fond_especes_theorique: fondTheoriqueEsp,
         fond_especes_physique: Number(closingPhysicalCash),
         ecart_especes: ecart,
-        fond_momo: fondActuelMomo,
-        total_fermeture: Number(closingPhysicalCash) + fondActuelMomo,
+        fond_momo: momoDuJour,
+        total_fermeture: Number(closingPhysicalCash) + momoDuJour,
         notes: closingNotes || 'Clôture de session normale',
         status: 'CLOTURE_VALIDEE',
         emailed_to: recipientEmails
@@ -698,7 +716,7 @@ export const CaissePage: React.FC = () => {
               statut: 'fermee',
               date_fermeture: closedAt,
               solde_especes_final: Number(closingPhysicalCash) || 0,
-              solde_momo_final: fondActuelMomo,
+              solde_momo_final: momoDuJour,
               ferme_par: validCloseUserId
             }).eq('id', activeSessionId)
 
@@ -709,8 +727,8 @@ export const CaissePage: React.FC = () => {
               caisse_id: activeSessionId,
               total_especes_jour: totalEspecesJour,
               total_momo_jour: totalMomoJour,
-              fond_actuel_especes_apres: nouveauFondEspeces,
-              fond_actuel_momo_apres: nouveauFondMomo,
+              fond_actuel_especes_apres: Number(closingPhysicalCash),
+              fond_actuel_momo_apres: momoDuJour,
               cloture_par: closedBy,
               date_cloture: closedAt
             })
@@ -723,7 +741,7 @@ export const CaissePage: React.FC = () => {
               total_credit_collected: remboursementsEspeces + remboursementsMomo,
               total_transferred_to_treasury: totalRetraitsEspeces + totalRetraitsMomo,
               closing_cash_counted: Number(closingPhysicalCash),
-              closing_momo_counted: fondActuelMomo,
+              closing_momo_counted: momoDuJour,
               cash_discrepancy: ecart,
               status: 'cloturee',
               closing_notes: closingNotes || 'Clôture de session normale',
@@ -742,8 +760,8 @@ export const CaissePage: React.FC = () => {
 
             if (exCoffre) {
               await supabase.from('coffre_fort').update({
-                solde_especes: (Number(exCoffre.solde_especes) || 0) + totalEspecesJour,
-                solde_momo_marchand: (Number(exCoffre.solde_momo_marchand) || 0) + totalMomoJour,
+                solde_especes: Number(closingPhysicalCash),
+                solde_momo_marchand: momoDuJour,
               }).eq('id', exCoffre.id)
             } else {
               await supabase.from('coffre_fort').insert({
@@ -997,7 +1015,7 @@ export const CaissePage: React.FC = () => {
           ) : (
             <button
               onClick={() => {
-                setClosingPhysicalCash(fondActuelEspeces)
+                setClosingPhysicalCash(fondTheoriqueEsp)
                 setShowCloseModal(true)
               }}
               className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md shadow-rose-200 transition flex items-center gap-1.5"
@@ -1023,70 +1041,19 @@ export const CaissePage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── 7 Compteurs Journaliers Séparés (Exigence stricte de gestion) ── */}
+      {/* ── Compteurs d'Activités Journalières & Situation de Trésorerie ── */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-4">
-        <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
           <div>
             <h2 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-emerald-600" />
               Compteurs d'Activités Journalières
             </h2>
-            <p className="text-xs text-slate-400">Ventilation stricte des flux encaissés et situation de trésorerie tiroir</p>
+            <p className="text-xs text-slate-400">Ventilation des encaissements du jour et situation réelle des tiroirs après clôtures</p>
           </div>
           <span className="text-xs font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl">
             Total Entrées : {fmt(totalEntreesDuJour)}
           </span>
-        </div>
-
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-2.5">
-          {/* 1. Ventes en espèces */}
-          <div className="p-3 bg-emerald-50/60 border border-emerald-200 rounded-2xl">
-            <span className="text-[10px] font-bold text-emerald-800 uppercase block">1. Ventes Espèces</span>
-            <p className="text-base font-black text-emerald-900 font-mono mt-1">{fmt(ventesEspeces)}</p>
-            <span className="text-[10px] text-emerald-600 font-medium">Tiroir direct</span>
-          </div>
-
-          {/* 2. Ventes en MoMo */}
-          <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-2xl">
-            <span className="text-[10px] font-bold text-amber-800 uppercase block">2. Ventes MoMo</span>
-            <p className="text-base font-black text-amber-900 font-mono mt-1">{fmt(ventesMomo)}</p>
-            <span className="text-[10px] text-amber-600 font-medium">MTN / Moov / Wave</span>
-          </div>
-
-          {/* 3. Remboursements espèces */}
-          <div className="p-3 bg-teal-50/60 border border-teal-200 rounded-2xl">
-            <span className="text-[10px] font-bold text-teal-800 uppercase block">3. Recouvr. Espèces</span>
-            <p className="text-base font-black text-teal-900 font-mono mt-1">{fmt(remboursementsEspeces)}</p>
-            <span className="text-[10px] text-teal-600 font-medium">Créances clients</span>
-          </div>
-
-          {/* 4. Remboursements MoMo */}
-          <div className="p-3 bg-sky-50/60 border border-sky-200 rounded-2xl">
-            <span className="text-[10px] font-bold text-sky-800 uppercase block">4. Recouvr. MoMo</span>
-            <p className="text-base font-black text-sky-900 font-mono mt-1">{fmt(remboursementsMomo)}</p>
-            <span className="text-[10px] text-sky-600 font-medium">Créances MoMo</span>
-          </div>
-
-          {/* 5. Total entrées du jour */}
-          <div className="p-3 bg-indigo-50/60 border border-indigo-200 rounded-2xl">
-            <span className="text-[10px] font-bold text-indigo-800 uppercase block">5. Total Entrées</span>
-            <p className="text-base font-black text-indigo-900 font-mono mt-1">{fmt(totalEntreesDuJour)}</p>
-            <span className="text-[10px] text-indigo-600 font-medium">Flux bruts reçus</span>
-          </div>
-
-          {/* 6. Fond de caisse initial */}
-          <div className="p-3 bg-slate-100 border border-slate-200 rounded-2xl">
-            <span className="text-[10px] font-bold text-slate-700 uppercase block">6. Fond Initial</span>
-            <p className="text-base font-black text-slate-900 font-mono mt-1">{fmt(fondInitialTotal)}</p>
-            <span className="text-[10px] text-slate-500 font-medium">Esp : {fmt(initialCash)}</span>
-          </div>
-
-          {/* 7. Fond théorique actuel */}
-          <div className="p-3 bg-slate-900 text-white rounded-2xl border border-slate-800 shadow-sm">
-            <span className="text-[10px] font-bold text-slate-300 uppercase block">7. Fond Théorique</span>
-            <p className="text-base font-black text-emerald-400 font-mono mt-1">{fmt(fondTheoriqueActuel)}</p>
-            <span className="text-[10px] text-slate-400 font-medium">Esp : {fmt(fondActuelEspeces)}</span>
-          </div>
         </div>
       </div>
 

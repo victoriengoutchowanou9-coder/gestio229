@@ -576,34 +576,88 @@ export async function fetchResumeActivite(
     }
   } catch (_) {}
 
-  // 3. Fallback direct et exact depuis sales_orders (avec coût figé)
+  // 3. Fallback direct et exact depuis sales_orders (avec coût figé et assainissement)
   try {
     const { data: salesList } = await supabase
       .from('sales_orders')
-      .select('id, total_amount, subtotal_ht, total_cost, sector_slug, notes, e_mecef_uid')
+      .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, notes, e_mecef_uid')
       .eq('company_id', companyId)
 
     const sales = salesList || []
 
+    const computeSectorMetrics = (sectorSales: any[]) => {
+      let ca_ht = 0
+      let total_cost = 0
+      let marge_brute = 0
+
+      for (const item of sectorSales) {
+        const item_ca_ht = Number(item.subtotal_ht) > 0
+          ? Number(item.subtotal_ht)
+          : Math.round(((Number(item.total_amount) || 0) / 1.18) * 100) / 100
+
+        ca_ht += item_ca_ht
+
+        // Si gross_margin explicite et valide
+        if (typeof item.gross_margin === 'number' && item.gross_margin > 0 && item.gross_margin <= item_ca_ht) {
+          marge_brute += item.gross_margin
+          total_cost += (item_ca_ht - item.gross_margin)
+          continue
+        }
+
+        let item_cost = Number(item.total_cost) || 0
+
+        // Vérifier si le coût est aberrant (ex: coût de tonne 95k au lieu de sac 4k, item_cost >= item_ca_ht)
+        if (item_cost >= item_ca_ht || item_cost <= 0) {
+          let recoveredCost = 0
+          let hasParsed = false
+          try {
+            const pNotes = typeof item.notes === 'string' ? JSON.parse(item.notes) : item.notes
+            if (pNotes && Array.isArray(pNotes.lines) && pNotes.lines.length > 0) {
+              recoveredCost = pNotes.lines.reduce((acc: number, l: any) => {
+                const coef = Math.max(1, Number(l.product?.coef || 1))
+                const isTax = Boolean(l.product?.is_vat_subject ?? false)
+                const vRate = isTax ? Number(l.product?.vat_rate || 18) : 0
+                const rawCost = Number(l.product?.cost_price) || 0
+                const uvCostTTC = rawCost / coef
+                const uvCostHT = isTax ? (uvCostTTC / (1 + vRate / 100)) : uvCostTTC
+                return acc + (Number(l.qty || 1) * uvCostHT)
+              }, 0)
+              hasParsed = true
+            }
+          } catch (_) {}
+
+          if (hasParsed && recoveredCost > 0 && recoveredCost < item_ca_ht) {
+            item_cost = recoveredCost
+          } else {
+            // Clamping sécurisé pour les données historiques
+            item_cost = Math.round(item_ca_ht * 0.80 * 100) / 100
+          }
+        }
+
+        total_cost += item_cost
+        marge_brute += Math.max(0, item_ca_ht - item_cost)
+      }
+
+      return {
+        ca_ht: Math.round(ca_ht * 100) / 100,
+        marge_brute: Math.round(marge_brute * 100) / 100
+      }
+    }
+
     if (normSlug) {
       const sectorSales = filterItemsForSector(sales, normSlug)
-      const ca_ht = sectorSales.reduce((s: number, item: any) => s + (Number(item.subtotal_ht || item.total_amount) || 0), 0)
-      const total_cost = sectorSales.reduce((s: number, item: any) => s + (Number(item.total_cost) || 0), 0)
-      const marge_brute = Math.max(0, ca_ht - total_cost)
-      return { ca_ht, marge_brute }
+      return computeSectorMetrics(sectorSales)
     }
 
     return ALL_SECTORS_CATALOG.map((s) => {
       const secSlug = s.slug
       const sectorSales = filterItemsForSector(sales, secSlug)
-      const ca_ht = sectorSales.reduce((sum: number, item: any) => sum + (Number(item.subtotal_ht || item.total_amount) || 0), 0)
-      const total_cost = sectorSales.reduce((sum: number, item: any) => sum + (Number(item.total_cost) || 0), 0)
-      const marge_brute = Math.max(0, ca_ht - total_cost)
+      const metrics = computeSectorMetrics(sectorSales)
       return {
         company_id: companyId,
         sector_slug: secSlug,
-        ca_ht,
-        marge_brute
+        ca_ht: metrics.ca_ht,
+        marge_brute: metrics.marge_brute
       }
     })
   } catch {

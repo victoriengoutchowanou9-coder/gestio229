@@ -729,7 +729,29 @@ export const POSPage: React.FC = () => {
         ? (paymentsList.find(p => p.amount > 0)?.method || 'especes')
         : singleMethod
 
-      const totalCost = cart.reduce((sum, item) => sum + item.qty * (item.product.cost_price || 0), 0)
+      // Calcul strict du Coût d'achat HT au niveau de l'Unité de Vente (UV)
+      // cost_price est le prix d'achat du conditionnement UCD (ex: Tonne ou Carton). Il doit être divisé par coef pour obtenir le coût UV (sac/pièce).
+      // Si assujetti à TVA, le coût d'achat est ramené en Hors Taxe (HT).
+      const totalCostHT = cart.reduce((sum, item) => {
+        const coef = Math.max(1, Number(item.product.coef || item.product.sector_meta?.coef || 1))
+        const isTaxed = Boolean(
+          item.product.is_vat_subject ??
+          item.product.is_taxable ??
+          item.product.sector_meta?.is_taxable ??
+          (Number(item.product.tva_rate) > 0) ??
+          (Number(item.product.vat_rate) > 0) ??
+          false
+        )
+        const vatRate = isTaxed ? Number(item.product.vat_rate ?? item.product.tva_rate ?? 18) : 0
+        const rawPackageCost = Number(item.product.cost_price) || 0
+        const uvCostTTC = rawPackageCost / coef
+        const uvCostHT = isTaxed ? (uvCostTTC / (1 + vatRate / 100)) : uvCostTTC
+        return sum + (item.qty * uvCostHT)
+      }, 0)
+
+      const totalCostHTRounded = Math.round(totalCostHT * 100) / 100
+      // Marge d'exploitation stricte : CA HT - Coût d'Achat HT (hors TVA et hors AIB)
+      const grossMarginHT = Math.round((cartFiscalSummary.ht - totalCostHTRounded) * 100) / 100
 
       const notesPayload = {
         sector_slug: currentSectorSlug,
@@ -749,7 +771,8 @@ export const POSPage: React.FC = () => {
             is_vat_subject: c.product.is_vat_subject,
             vat_rate: c.product.vat_rate,
             is_aib_subject: c.product.is_aib_subject,
-            aib_rate: c.product.aib_rate
+            aib_rate: c.product.aib_rate,
+            coef: c.product.coef
           },
           qty: c.qty,
           unitPrice: c.unitPrice,
@@ -773,7 +796,8 @@ export const POSPage: React.FC = () => {
         tva_amount: cartFiscalSummary.tva,
         aib_amount: cartFiscalSummary.aib,
         total_amount: totalNetTTC,
-        total_cost: totalCost,
+        total_cost: totalCostHTRounded,
+        gross_margin: grossMarginHT,
         paid_amount: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
         payment_status: creditAmount >= totalNetTTC ? 'credit' : primaryMethod,
@@ -784,6 +808,7 @@ export const POSPage: React.FC = () => {
       // Payload étendu si des colonnes optionnelles ont été ajoutées (ex: M014/M018)
       const fullSalePayload: any = {
         ...baseSalePayload,
+        gross_margin: grossMarginHT,
         sector_slug: currentSectorSlug,
         payment_method: primaryMethod,
         customer_name: custName,
@@ -823,6 +848,7 @@ export const POSPage: React.FC = () => {
 
       // 2. Insertion des lignes réelles dans sales_order_items (source de vérité Supabase)
       const lineItems = cart.map((line) => {
+        const coef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
         const isTaxed = Boolean(
           line.product.is_vat_subject ??
           line.product.is_taxable ??
@@ -832,13 +858,17 @@ export const POSPage: React.FC = () => {
         const itemVatRate = isTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
         const lineTotal = line.qty * line.unitPrice
         const lineHt = isTaxed ? Math.round((lineTotal / (1 + itemVatRate / 100)) * 100) / 100 : lineTotal
+        const uvCostTTC = (Number(line.product.cost_price) || 0) / coef
+        const uvCostHT = isTaxed ? Math.round((uvCostTTC / (1 + itemVatRate / 100)) * 100) / 100 : Math.round(uvCostTTC * 100) / 100
+        const lineCostHT = Math.round(line.qty * uvCostHT * 100) / 100
         return {
           order_id: savedDbSale.id,
           product_id: line.product.id,
           product_name: line.product.name,
           quantity: line.qty,
           unit_price: line.unitPrice,
-          unit_cost: line.product.cost_price || 0,
+          unit_cost: uvCostHT,
+          total_cost: lineCostHT,
           tva_rate: itemVatRate,
           total_ht: lineHt,
           total_ttc: lineTotal
@@ -852,10 +882,13 @@ export const POSPage: React.FC = () => {
       // 2b. Insertion obligatoire dans vente_lignes (Silo 19 secteurs - Coût d'achat HT unitaire figé)
       try {
         const vlRows = cart.map((line) => {
+          const coef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
           const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
           const lineTotal = line.qty * line.unitPrice
           const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
           const unitHt = line.qty > 0 ? Math.round((lineHt / line.qty) * 100) / 100 : line.unitPrice
+          const uvCostTTC = (Number(line.product.cost_price) || 0) / coef
+          const uvCostHT = isTaxed ? Math.round((uvCostTTC / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : Math.round(uvCostTTC * 100) / 100
           return {
             company_id: company?.id ?? companyId ?? '',
             sector_slug: currentSectorSlug,
@@ -863,7 +896,7 @@ export const POSPage: React.FC = () => {
             produit_id: line.product.id,
             quantite: line.qty,
             prix_vente_ht_unitaire: unitHt,
-            cout_achat_ht_unitaire: Number(line.product.cost_price) || 0
+            cout_achat_ht_unitaire: uvCostHT
           }
         })
         await supabase.from('vente_lignes').insert(vlRows)
@@ -895,6 +928,13 @@ export const POSPage: React.FC = () => {
               .eq('id', line.product.id)
 
             // Traçabilité mouvement de stock dans stock_movements
+            const lineCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
+            const lineIsTaxed = Boolean(line.product.is_vat_subject ?? line.product.is_taxable ?? false)
+            const lineVatRate = lineIsTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
+            const lineUvCostTTC = (Number(line.product.cost_price) || 0) / lineCoef
+            const lineUvCostHT = lineIsTaxed ? Math.round((lineUvCostTTC / (1 + lineVatRate / 100)) * 100) / 100 : Math.round(lineUvCostTTC * 100) / 100
+            const movementTotalCostHT = Math.round(line.qty * lineUvCostHT * 100) / 100
+
             await supabaseTenant('stock_movements').insert({
               company_id: company?.id ?? companyId ?? '',
               product_id: line.product.id,
@@ -905,8 +945,8 @@ export const POSPage: React.FC = () => {
               quantity: -line.qty,
               previous_stock: currentStockVente,
               new_stock: newStockVente,
-              unit_cost: line.product.cost_price || 0,
-              total_cost: (line.product.cost_price || 0) * line.qty,
+              unit_cost: lineUvCostHT,
+              total_cost: movementTotalCostHT,
               notes: `Vente POS ${orderNum} - Déstockage Stock Vente : ${line.qty} ${line.product.uv || line.product.unit || 'UV'}`
             })
 
@@ -1097,6 +1137,10 @@ export const POSPage: React.FC = () => {
             .update({ sector_meta: updatedMeta })
             .eq('id', line.product.id)
 
+          const avoirCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
+          const avoirUvCost = Math.round(((line.product.cost_price || 0) / avoirCoef) * 100) / 100
+          const avoirTotalCost = Math.round(avoirUvCost * line.qty * 100) / 100
+
           await supabaseTenant('stock_movements').insert({
             company_id: company?.id ?? companyId ?? '',
             product_id: line.product.id,
@@ -1107,8 +1151,8 @@ export const POSPage: React.FC = () => {
             quantity: line.qty,
             previous_stock: currentStockVente,
             new_stock: restoredStockVente,
-            unit_cost: line.product.cost_price || 0,
-            total_cost: (line.product.cost_price || 0) * line.qty,
+            unit_cost: avoirUvCost,
+            total_cost: avoirTotalCost,
             notes: `Retour Stock Vente sur Avoir ${sale.order_number}`
           })
 
