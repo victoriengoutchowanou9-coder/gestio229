@@ -9,6 +9,7 @@ import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { MODULE_CONFIGS, FieldDef, fmtMoney, generateRef } from './moduleConfigs'
+import { TableMissingVerifier } from './TableMissingVerifier'
 
 const TONE_CARD: Record<string, string> = {
   emerald: 'text-emerald-700', rose: 'text-rose-600', amber: 'text-amber-600', indigo: 'text-indigo-700', slate: 'text-slate-900',
@@ -246,13 +247,13 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
       </div>
 
       {tableMissing && (
-        <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 flex items-start gap-3 text-sm text-amber-900">
-          <Database className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
-          <div>
-            <p className="font-bold">Table « {config.table} » introuvable dans Supabase</p>
-            <p className="text-xs mt-1">Exécutez le script <code className="font-mono">database/M030_sector_specific_tables.sql</code> dans le SQL Editor Supabase, puis cliquez sur Actualiser.</p>
-          </div>
-        </div>
+        <TableMissingVerifier
+          tableName={config.table}
+          moduleTitle={config.title}
+          sectorSlug={sectorSlug || 'global'}
+          onRetry={load}
+          isRetrying={loading}
+        />
       )}
 
       {/* Cartes indicateurs */}
