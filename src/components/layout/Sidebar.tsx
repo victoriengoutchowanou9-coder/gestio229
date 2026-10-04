@@ -5,10 +5,16 @@
 import React, { useState } from 'react'
 import { NavLink, useNavigate, useParams } from 'react-router-dom'
 import {
-  ShoppingCart, Package, Landmark, Users, Truck, Receipt,
+  ShoppingCart, Package, Package2, Landmark, Users, Truck, Receipt,
   BarChart3, ClipboardList, Shield, CreditCard, Settings,
   BookOpen, ChevronLeft, ChevronRight, LogOut, Store,
-  Wallet, Building2, KeyRound, LayoutDashboard
+  Wallet, Building2, KeyRound, LayoutDashboard,
+  // Sector-specific icons
+  GraduationCap, Car, Wrench, BedDouble, PiggyBank, Scale, Tag, Fuel,
+  Home, UserCog, Droplets, Snowflake, Layers, Calculator, Calendar,
+  Sparkles, RefreshCw, UserCheck, FileText, AlertTriangle, Fish,
+  Scissors, Banknote, Sprout, Wine, Utensils, Printer, GitFork,
+  FileCheck, FileSignature, AlertOctagon, Grid2X2, Hammer
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
@@ -21,10 +27,16 @@ import clsx from 'clsx'
 // ─── Map icônes ─────────────────────────────────────────────────────────────
 
 const ICON_MAP: Record<string, React.FC<any>> = {
-  LayoutDashboard, ShoppingCart, Package, Landmark, Users, Truck, Receipt,
+  LayoutDashboard, ShoppingCart, Package, Package2, Landmark, Users, Truck, Receipt,
   BarChart3, ClipboardList, Shield, CreditCard, Settings,
   BookOpen, Wallet, Building2, Store,
-  Package2: Package,
+  // Sector-specific icons
+  GraduationCap, Car, Wrench, BedDouble, PiggyBank, Scale, Tag, Fuel,
+  Home, UserCog, Droplets, Snowflake, Layers, Calculator, Calendar,
+  Sparkles, RefreshCw, UserCheck, FileText, AlertTriangle, Fish,
+  Scissors, Banknote, Sprout, Wine, Utensils, Printer, GitFork,
+  FileCheck, FileSignature, AlertOctagon, Hammer,
+  Grid: Grid2X2,
 }
 
 const DynamicIcon: React.FC<{ name: string; className?: string }> = ({ name, className }) => {

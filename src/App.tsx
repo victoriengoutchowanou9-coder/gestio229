@@ -42,6 +42,59 @@ const HubPage = safeLazy(() => import('./pages/HubPage'))
 // Brasserie - Consignation & Emballages
 const ConsignationPage = safeLazy(() => import('./pages/dashboard/brasserie/ConsignationPage'))
 
+// Modules spécifiques par secteur : une page générique pilotée par configuration
+const SectorModulePage = safeLazy(() => import('./pages/dashboard/sector-modules/SectorModulePage'))
+const mod = (moduleId: string): React.FC => () => <SectorModulePage moduleId={moduleId} />
+
+const GrillesPage            = mod('grilles_tarifaires')
+// École
+const ElevesPage             = mod('eleves')
+const FraisScolairesPage     = mod('frais_scolaires')
+const NotesResultatsPage     = mod('notes_resultats')
+const AbsencesPage           = mod('absences')
+// Supermarché
+const RayonsPage             = mod('rayons_gondoles')
+const PromosDLCPage          = mod('promos_dlc_courtes')
+// Pharmacie
+const OrdonnancesPage        = mod('ordonnances')
+const LotsPeremptionPage     = mod('lots_peremption')
+// Station-Service
+const PompesPage             = mod('pompes_cuves')
+const PostesPage             = mod('postes_pompiste')
+const LubrifiantsPage        = mod('lubrifiants')
+// Hôtel
+const ChambresHotelPage      = mod('chambres_reservations')
+const HousekeepingPage       = mod('housekeeping')
+// Garage
+const VehiculesPage          = mod('vehicules_reparations')
+const ReparationsPage        = mod('ordres_reparation')
+// Microfinance / Tontine
+const MembresPage            = mod('membres_epargne')
+const CreditsPage            = mod('credits')
+const AgentsPage             = mod('agents_collecteurs')
+const CyclesPage             = mod('tontine_cycles')
+// Imprimerie
+const DevisProductionPage    = mod('devis_production')
+const SousTraitancePage      = mod('sous_traitance')
+// Gestion Locative / Immobilier
+const BiensPage              = mod('biens_locations')
+const ContratsPage           = mod('contrats_loyers')
+const QuittancesPage         = mod('quittances')
+// Poissonnerie
+const ChambresFroidesPage    = mod('chambres_froides')
+const PeseePage              = mod('pesee_cartons')
+const AvariesPage            = mod('avaries_peremption')
+// Quincaillerie
+const MateriauxPage          = mod('materiaux_btp')
+const ConversionsPage        = mod('conversions_unites')
+const ChantiersPage          = mod('suivi_chantiers')
+// Événementiel
+const PlanningEvenementsPage = mod('reservations_dates')
+const MaterielPage           = mod('location_materiel')
+const TraiteurPage           = mod('traiteur_prestations')
+
+
+
 
 // ─── Loader / Spinner ───────────────────────────────────────────────────────
 
@@ -231,9 +284,55 @@ const AppRoutes: React.FC = () => {
         <Route path="isolation"       element={<IsolationHealthPage />} />
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
         <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
+        <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><GrillesPage /></ModuleGuard>} />
+        {/* ── Modules École ── */}
+        <Route path="eleves"   element={<ModuleGuard moduleId="eleves"><ElevesPage /></ModuleGuard>} />
+        <Route path="frais"    element={<ModuleGuard moduleId="frais_scolaires"><FraisScolairesPage /></ModuleGuard>} />
+        <Route path="notes"    element={<ModuleGuard moduleId="notes_resultats"><NotesResultatsPage /></ModuleGuard>} />
+        <Route path="absences" element={<ModuleGuard moduleId="absences"><AbsencesPage /></ModuleGuard>} />
+        {/* ── Modules Supermarché ── */}
+        <Route path="rayons"     element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
+        <Route path="promos-dlc" element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
+        {/* ── Modules Pharmacie ── */}
+        <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
+        <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
+        {/* ── Modules Station-Service ── */}
+        <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
+        <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
+        {/* ── Modules Hôtel ── */}
+        <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
+        <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
+        {/* ── Modules Garage ── */}
+        <Route path="vehicules"   element={<ModuleGuard moduleId="vehicules_reparations"><VehiculesPage /></ModuleGuard>} />
+        <Route path="reparations" element={<ModuleGuard moduleId="ordres_reparation"><ReparationsPage /></ModuleGuard>} />
+        {/* ── Modules Microfinance / Tontine ── */}
+        <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresPage /></ModuleGuard>} />
+        <Route path="credits" element={<ModuleGuard moduleId="credits"><CreditsPage /></ModuleGuard>} />
+        <Route path="agents"  element={<ModuleGuard moduleId="agents_collecteurs"><AgentsPage /></ModuleGuard>} />
+        <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><CyclesPage /></ModuleGuard>} />
+        {/* ── Modules Impression ── */}
+        <Route path="devis"          element={<ModuleGuard moduleId="devis_production"><DevisProductionPage /></ModuleGuard>} />
+        <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><SousTraitancePage /></ModuleGuard>} />
+        {/* ── Modules Gestion Locative ── */}
+        <Route path="biens"      element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
+        <Route path="contrats"   element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
+        <Route path="quittances" element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
+        {/* ── Modules Poissonnerie ── */}
+        <Route path="chambres-froides" element={<ModuleGuard moduleId="chambres_froides"><ChambresFroidesPage /></ModuleGuard>} />
+        <Route path="pesee"            element={<ModuleGuard moduleId="pesee_cartons"><PeseePage /></ModuleGuard>} />
+        <Route path="avaries"          element={<ModuleGuard moduleId="avaries_peremption"><AvariesPage /></ModuleGuard>} />
+        {/* ── Modules Quincaillerie ── */}
+        <Route path="materiaux"   element={<ModuleGuard moduleId="materiaux_btp"><MateriauxPage /></ModuleGuard>} />
+        <Route path="conversions" element={<ModuleGuard moduleId="conversions_unites"><ConversionsPage /></ModuleGuard>} />
+        <Route path="chantiers"   element={<ModuleGuard moduleId="suivi_chantiers"><ChantiersPage /></ModuleGuard>} />
+        {/* ── Modules Événementiel ── */}
+        <Route path="planning-evenements" element={<ModuleGuard moduleId="reservations_dates"><PlanningEvenementsPage /></ModuleGuard>} />
+        <Route path="materiel"            element={<ModuleGuard moduleId="location_materiel"><MaterielPage /></ModuleGuard>} />
+        <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
       </Route>
 
-      {/* Point 14 : Routes directes par secteur (Ex: /quincaillerie/tableau-bord, /poissonnerie/stocks...) */}
+
       <Route
         path="/:sectorSlug"
         element={
@@ -267,6 +366,52 @@ const AppRoutes: React.FC = () => {
         <Route path="isolation"       element={<IsolationHealthPage />} />
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
         <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
+        <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><GrillesPage /></ModuleGuard>} />
+        {/* ── Modules École ── */}
+        <Route path="eleves"   element={<ModuleGuard moduleId="eleves"><ElevesPage /></ModuleGuard>} />
+        <Route path="frais"    element={<ModuleGuard moduleId="frais_scolaires"><FraisScolairesPage /></ModuleGuard>} />
+        <Route path="notes"    element={<ModuleGuard moduleId="notes_resultats"><NotesResultatsPage /></ModuleGuard>} />
+        <Route path="absences" element={<ModuleGuard moduleId="absences"><AbsencesPage /></ModuleGuard>} />
+        {/* ── Modules Supermarché ── */}
+        <Route path="rayons"     element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
+        <Route path="promos-dlc" element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
+        {/* ── Modules Pharmacie ── */}
+        <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
+        <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
+        {/* ── Modules Station-Service ── */}
+        <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
+        <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
+        {/* ── Modules Hôtel ── */}
+        <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
+        <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
+        {/* ── Modules Garage ── */}
+        <Route path="vehicules"   element={<ModuleGuard moduleId="vehicules_reparations"><VehiculesPage /></ModuleGuard>} />
+        <Route path="reparations" element={<ModuleGuard moduleId="ordres_reparation"><ReparationsPage /></ModuleGuard>} />
+        {/* ── Modules Microfinance / Tontine ── */}
+        <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresPage /></ModuleGuard>} />
+        <Route path="credits" element={<ModuleGuard moduleId="credits"><CreditsPage /></ModuleGuard>} />
+        <Route path="agents"  element={<ModuleGuard moduleId="agents_collecteurs"><AgentsPage /></ModuleGuard>} />
+        <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><CyclesPage /></ModuleGuard>} />
+        {/* ── Modules Impression ── */}
+        <Route path="devis"          element={<ModuleGuard moduleId="devis_production"><DevisProductionPage /></ModuleGuard>} />
+        <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><SousTraitancePage /></ModuleGuard>} />
+        {/* ── Modules Gestion Locative ── */}
+        <Route path="biens"      element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
+        <Route path="contrats"   element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
+        <Route path="quittances" element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
+        {/* ── Modules Poissonnerie ── */}
+        <Route path="chambres-froides" element={<ModuleGuard moduleId="chambres_froides"><ChambresFroidesPage /></ModuleGuard>} />
+        <Route path="pesee"            element={<ModuleGuard moduleId="pesee_cartons"><PeseePage /></ModuleGuard>} />
+        <Route path="avaries"          element={<ModuleGuard moduleId="avaries_peremption"><AvariesPage /></ModuleGuard>} />
+        {/* ── Modules Quincaillerie ── */}
+        <Route path="materiaux"   element={<ModuleGuard moduleId="materiaux_btp"><MateriauxPage /></ModuleGuard>} />
+        <Route path="conversions" element={<ModuleGuard moduleId="conversions_unites"><ConversionsPage /></ModuleGuard>} />
+        <Route path="chantiers"   element={<ModuleGuard moduleId="suivi_chantiers"><ChantiersPage /></ModuleGuard>} />
+        {/* ── Modules Événementiel ── */}
+        <Route path="planning-evenements" element={<ModuleGuard moduleId="reservations_dates"><PlanningEvenementsPage /></ModuleGuard>} />
+        <Route path="materiel"            element={<ModuleGuard moduleId="location_materiel"><MaterielPage /></ModuleGuard>} />
+        <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
       </Route>
 
       {/* Rétrocompatibilité /dashboard */}

@@ -306,7 +306,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     icon: 'Home',
     path: 'biens',
     isCommon: false,
-    sectorSlugs: ['location'],
+    sectorSlugs: ['location', 'immobilier'],
     group: 'gestion',
   },
 
@@ -316,7 +316,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     icon: 'FileSignature',
     path: 'contrats',
     isCommon: false,
-    sectorSlugs: ['location'],
+    sectorSlugs: ['location', 'immobilier'],
     group: 'commercial',
   },
 
@@ -326,7 +326,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     icon: 'FileCheck',
     path: 'quittances',
     isCommon: false,
-    sectorSlugs: ['location'],
+    sectorSlugs: ['location', 'immobilier'],
     group: 'finance',
   },
 
@@ -418,7 +418,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     icon: 'RefreshCw',
     path: 'cycles',
     isCommon: false,
-    sectorSlugs: ['tontine'],
+    sectorSlugs: ['tontine', 'microfinance'],
     group: 'gestion',
   },
 
@@ -432,7 +432,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     icon: 'Printer',
     path: 'devis',
     isCommon: false,
-    sectorSlugs: ['impression'],
+    sectorSlugs: ['impression', 'imprimerie'],
     group: 'commercial',
   },
 
@@ -442,7 +442,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     icon: 'GitFork',
     path: 'sous-traitance',
     isCommon: false,
-    sectorSlugs: ['impression'],
+    sectorSlugs: ['impression', 'imprimerie'],
     group: 'gestion',
   },
 
