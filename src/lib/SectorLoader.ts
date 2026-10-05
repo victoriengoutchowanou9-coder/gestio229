@@ -478,7 +478,37 @@ export const SectorLoader = {
     const cleanSlug = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
     const isStation = cleanSlug === 'station-service' || cleanSlug === 'station' || cleanSlug === 'hydrocarbures'
     const isRestaurant = cleanSlug === 'restaurant' || cleanSlug === 'bar-restaurant-maquis' || cleanSlug === 'bar' || cleanSlug === 'maquis' || cleanSlug === 'fastfood'
+    const isMicrofinance = cleanSlug === 'microfinance' || cleanSlug === 'microfinance-tontine' || cleanSlug === 'tontine'
     const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
+
+    // ── Menu spécifique Microfinance, Épargne & Tontine (Sans POS ni Stocks) ───
+    if (isMicrofinance) {
+      const microfinanceNav: NavItem[] = [
+        // Aperçu
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        // Métier Microfinance & Épargne
+        { id: 'membres', label: 'Membres & Épargne', icon: 'Users', href: `${prefix}/membres`, group: 'commercial' },
+        { id: 'tontine', label: 'Tontines & Cycles', icon: 'PiggyBank', href: `${prefix}/tontine`, group: 'commercial' },
+        { id: 'credits', label: 'Crédits & Échéanciers', icon: 'CreditCard', href: `${prefix}/credits`, group: 'commercial' },
+        { id: 'agents', label: 'Agents Collecteurs', icon: 'Bike', href: `${prefix}/agents`, group: 'commercial' },
+        // Finance & Trésorerie
+        { id: 'caisse', label: 'Caisse & Clôtures', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'fournisseurs', label: "Achats & Exploitation", icon: 'Building2', href: `${prefix}/fournisseurs`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+        // Risques, Réglementaire & Sécurité
+        { id: 'conformite', label: 'Risques & Conformité', icon: 'ShieldAlert', href: `${prefix}/conformite`, group: 'gestion' },
+        { id: 'rapports', label: 'Rapports & Réglementaire', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'gestion' },
+        // Administration
+        { id: 'configuration', label: 'Configuration IMF', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(microfinanceNav)
+      return { grouped, flat: microfinanceNav }
+    }
 
     // ── Menu spécifique Bar, Restaurant, Maquis & Fast-Food ───────────────────
     if (isRestaurant) {

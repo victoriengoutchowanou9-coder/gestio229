@@ -80,12 +80,14 @@ const ChambresHotelPage      = mod('chambres_reservations')
 const HousekeepingPage       = mod('housekeeping')
 // Garage
 const VehiculesPage          = mod('vehicules_reparations')
-const ReparationsPage        = mod('ordres_reparation')
-// Microfinance / Tontine
-const MembresPage            = mod('membres_epargne')
-const CreditsPage            = mod('credits')
-const AgentsPage             = mod('agents_collecteurs')
-const CyclesPage             = mod('tontine_cycles')
+// Microfinance / Tontine (ERP Dédié & Conforme UEMOA)
+const MicrofinanceDashboardPage = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceDashboardPage'))
+const MembresEpargnePage        = safeLazy(() => import('./pages/dashboard/microfinance/MembresEpargnePage'))
+const CreditsEcheanciersPage    = safeLazy(() => import('./pages/dashboard/microfinance/CreditsEcheanciersPage'))
+const TontinesCyclesPage        = safeLazy(() => import('./pages/dashboard/microfinance/TontinesCyclesPage'))
+const AgentsCollecteursPage     = safeLazy(() => import('./pages/dashboard/microfinance/AgentsCollecteursPage'))
+const RisquesConformitePage     = safeLazy(() => import('./pages/dashboard/microfinance/RisquesConformitePage'))
+const MicrofinanceAchatsPage    = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceAchatsPage'))
 // Imprimerie
 const DevisProductionPage    = mod('devis_production')
 const SousTraitancePage      = mod('sous_traitance')
@@ -172,7 +174,7 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>
 }
 
-// ─── Dashboard conditionnel spécialisé Station-Service & Restaurant ─────────────
+// ─── Dashboard conditionnel spécialisé Station-Service, Restaurant & Microfinance ───
 const SectorAwareDashboard: React.FC = () => {
   const { sectorSlug } = useTenant()
   const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
@@ -182,7 +184,20 @@ const SectorAwareDashboard: React.FC = () => {
   if (clean === 'restaurant' || clean === 'bar-restaurant-maquis' || clean === 'bar' || clean === 'maquis' || clean === 'fastfood') {
     return <RestaurantDashboardPage />
   }
+  if (clean === 'microfinance' || clean === 'microfinance-tontine' || clean === 'tontine') {
+    return <MicrofinanceDashboardPage />
+  }
   return <DashboardPage />
+}
+
+// ─── Fournisseurs & Achats conditionnel (Spécialisé Charges Exploitation IMF) ─────
+const SectorAwareFournisseurs: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'microfinance' || clean === 'microfinance-tontine' || clean === 'tontine') {
+    return <MicrofinanceAchatsPage />
+  }
+  return <FournisseursPage />
 }
 
 // ─── Initialisation globale ─────────────────────────────────────────────────
@@ -296,8 +311,8 @@ const AppRoutes: React.FC = () => {
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
-        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
-        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
+        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
         <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
@@ -345,11 +360,14 @@ const AppRoutes: React.FC = () => {
         {/* ── Modules Garage ── */}
         <Route path="vehicules"   element={<ModuleGuard moduleId="vehicules_reparations"><VehiculesPage /></ModuleGuard>} />
         <Route path="reparations" element={<ModuleGuard moduleId="ordres_reparation"><ReparationsPage /></ModuleGuard>} />
-        {/* ── Modules Microfinance / Tontine ── */}
-        <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresPage /></ModuleGuard>} />
-        <Route path="credits" element={<ModuleGuard moduleId="credits"><CreditsPage /></ModuleGuard>} />
-        <Route path="agents"  element={<ModuleGuard moduleId="agents_collecteurs"><AgentsPage /></ModuleGuard>} />
-        <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><CyclesPage /></ModuleGuard>} />
+        {/* ── Modules Microfinance / Tontine (ERP Dédié & Conforme UEMOA) ── */}
+        <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
+        <Route path="epargne" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
+        <Route path="credits" element={<ModuleGuard moduleId="credits"><CreditsEcheanciersPage /></ModuleGuard>} />
+        <Route path="agents"  element={<ModuleGuard moduleId="agents_collecteurs"><AgentsCollecteursPage /></ModuleGuard>} />
+        <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
+        <Route path="tontine" element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
+        <Route path="conformite" element={<RisquesConformitePage />} />
         {/* ── Modules Impression ── */}
         <Route path="devis"          element={<ModuleGuard moduleId="devis_production"><DevisProductionPage /></ModuleGuard>} />
         <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><SousTraitancePage /></ModuleGuard>} />
@@ -391,8 +409,8 @@ const AppRoutes: React.FC = () => {
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
-        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
-        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><FournisseursPage /></ModuleGuard>} />
+        <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
+        <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
         <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
         <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
@@ -440,11 +458,14 @@ const AppRoutes: React.FC = () => {
         {/* ── Modules Garage ── */}
         <Route path="vehicules"   element={<ModuleGuard moduleId="vehicules_reparations"><VehiculesPage /></ModuleGuard>} />
         <Route path="reparations" element={<ModuleGuard moduleId="ordres_reparation"><ReparationsPage /></ModuleGuard>} />
-        {/* ── Modules Microfinance / Tontine ── */}
-        <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresPage /></ModuleGuard>} />
-        <Route path="credits" element={<ModuleGuard moduleId="credits"><CreditsPage /></ModuleGuard>} />
-        <Route path="agents"  element={<ModuleGuard moduleId="agents_collecteurs"><AgentsPage /></ModuleGuard>} />
-        <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><CyclesPage /></ModuleGuard>} />
+        {/* ── Modules Microfinance / Tontine (ERP Dédié & Conforme UEMOA) ── */}
+        <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
+        <Route path="epargne" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
+        <Route path="credits" element={<ModuleGuard moduleId="credits"><CreditsEcheanciersPage /></ModuleGuard>} />
+        <Route path="agents"  element={<ModuleGuard moduleId="agents_collecteurs"><AgentsCollecteursPage /></ModuleGuard>} />
+        <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
+        <Route path="tontine" element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
+        <Route path="conformite" element={<RisquesConformitePage />} />
         {/* ── Modules Impression ── */}
         <Route path="devis"          element={<ModuleGuard moduleId="devis_production"><DevisProductionPage /></ModuleGuard>} />
         <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><SousTraitancePage /></ModuleGuard>} />
