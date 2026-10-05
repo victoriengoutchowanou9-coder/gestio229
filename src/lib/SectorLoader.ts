@@ -475,6 +475,44 @@ export const SectorLoader = {
   // ─── Résolution Nav Globale (avec prise en compte des modules spécifiques par secteur) ─────────────
 
   getDefaultNav(sectorSlug?: string): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
+    const cleanSlug = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+    const isStation = cleanSlug === 'station-service' || cleanSlug === 'station' || cleanSlug === 'hydrocarbures'
+    const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
+
+    // ── Menu spécifique Station-Service & Hydrocarbures ──────────────────────
+    if (isStation) {
+      const stationNav: NavItem[] = [
+        // Aperçu
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        // Exploitation
+        { id: 'ventes', label: 'Vente & Distribution', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
+        { id: 'pompes_cuves', label: 'Pompes & Cuves', icon: 'Fuel', href: `${prefix}/pompes`, group: 'commercial' },
+        { id: 'postes_pompiste', label: 'Postes Pompistes', icon: 'UserCog', href: `${prefix}/postes`, group: 'commercial' },
+        { id: 'lubrifiants', label: 'Lubrifiants & Produits', icon: 'Droplets', href: `${prefix}/lubrifiants`, group: 'commercial' },
+        { id: 'flottes_vehicules', label: 'Clients & Flottes', icon: 'Car', href: `${prefix}/flottes`, group: 'commercial' },
+        // Stock & Contrôles
+        { id: 'stock', label: 'Stocks Carburants', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Citernes', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+        { id: 'anomalies_controles', label: 'Anomalies & Pertes', icon: 'ShieldAlert', href: `${prefix}/anomalies`, group: 'gestion' },
+        { id: 'rapports', label: 'Rapports de Clôture', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'gestion' },
+        // Finance
+        { id: 'caisse', label: 'Caisse & Clôtures', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'clients', label: 'Créances Clients', icon: 'Users', href: `${prefix}/clients`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Station', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+        // Administration
+        { id: 'configuration', label: 'Configuration', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(stationNav)
+      return { grouped, flat: stationNav }
+    }
+
+    // ── Logique par défaut pour tous les autres secteurs (Strictement Inchangée) ──
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',
       'fournisseurs', 'depenses', 'rapports', 'syscohada',
@@ -484,7 +522,6 @@ export const SectorLoader = {
     // Modules spécifiques par secteur si sectorSlug est renseigné
     const specificModuleIds: string[] = []
     if (sectorSlug) {
-      const cleanSlug = sectorSlug.toLowerCase().trim().replace(/^sec-/, '')
       Object.values(MODULE_REGISTRY).forEach((m) => {
         if (!m.isCommon && m.sectorSlugs?.includes(cleanSlug) && !specificModuleIds.includes(m.id)) {
           specificModuleIds.push(m.id)
@@ -493,7 +530,6 @@ export const SectorLoader = {
     }
 
     const allModuleIds = [...commonModuleIds, ...specificModuleIds]
-    const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
 
     const flat: NavItem[] = allModuleIds
       .map((id) => {

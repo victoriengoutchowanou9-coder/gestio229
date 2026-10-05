@@ -29,6 +29,7 @@ import {
   getBatchTiersList
 } from '../../../utils/batchPricing'
 import clsx from 'clsx'
+import { StationFuelDispenser } from '../station/StationFuelDispenser'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -111,6 +112,7 @@ export const POSPage: React.FC = () => {
   const { toast } = useUIStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
   const currentSectorSlug = sectorSlug
+  const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
   const location = useLocation()
 
   // Navigation interne
@@ -483,6 +485,19 @@ export const POSPage: React.FC = () => {
     setSelectedProductForDetail(null)
     setDetailQty(1)
     setIsCartVisible(true) // Glissement immédiat et visibilité du panier à droite lors de l'ajout
+  }
+
+  const handleDirectAddToCart = (item: { product: any; qty: number; unitPrice: number; discount: number }) => {
+    setCart((prev) => [
+      ...prev,
+      {
+        product: item.product,
+        qty: item.qty,
+        unitPrice: item.unitPrice,
+        discount: item.discount || 0
+      }
+    ])
+    setIsCartVisible(true)
   }
 
   const updateCartItemQty = (productId: string, newQty: number) => {
@@ -1752,8 +1767,13 @@ export const POSPage: React.FC = () => {
       )}
 
       {activeTab === 'pos' ? (
-        /* ── VUE 1 : POINT DE VENTE (CATALOGUE & PANIER INTÉGRÉ GLISSANT À DROITE) ── */
-        <div className="flex flex-col lg:flex-row gap-4 items-start relative">
+        <div className="space-y-4">
+          {isStation && (
+            <StationFuelDispenser onAddToCart={handleDirectAddToCart} />
+          )}
+
+          {/* ── VUE 1 : POINT DE VENTE (CATALOGUE & PANIER INTÉGRÉ GLISSANT À DROITE) ── */}
+          <div className="flex flex-col lg:flex-row gap-4 items-start relative">
           {/* CATALOGUE GAUCHE */}
           <div className="flex-1 w-full min-w-0 bg-white rounded-2xl border border-slate-200 shadow-sm p-4 overflow-hidden h-[calc(100vh-13rem)] flex flex-col">
             <div className="flex items-center gap-2 mb-3">
@@ -2347,6 +2367,7 @@ export const POSPage: React.FC = () => {
               </div>
             </div>
           )}
+        </div>
         </div>
       ) : (
         /* ── VUE 2 : HISTORIQUE DES VENTES & AVOIRS ──────────────────────────── */

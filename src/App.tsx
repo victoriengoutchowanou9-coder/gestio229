@@ -58,9 +58,12 @@ const PromosDLCPage          = mod('promos_dlc_courtes')
 // Pharmacie
 const OrdonnancesPage        = mod('ordonnances')
 const LotsPeremptionPage     = mod('lots_peremption')
-// Station-Service
-const PompesPage             = mod('pompes_cuves')
-const PostesPage             = mod('postes_pompiste')
+// Station-Service & Hydrocarbures (ERP dédié)
+const PompesPage             = safeLazy(() => import('./pages/dashboard/station/PompesCuvesPage'))
+const PostesPage             = safeLazy(() => import('./pages/dashboard/station/PostesPompistesPage'))
+const FlottesPage            = safeLazy(() => import('./pages/dashboard/station/FlottesClientsPage'))
+const AnomaliesPage          = safeLazy(() => import('./pages/dashboard/station/AnomaliesControlesPage'))
+const StationDashboardPage   = safeLazy(() => import('./pages/dashboard/station/StationDashboardPage'))
 const LubrifiantsPage        = mod('lubrifiants')
 // Hôtel
 const ChambresHotelPage      = mod('chambres_reservations')
@@ -157,6 +160,16 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     return <Navigate to={tenantCtx.routingDecision.redirectTo} replace />
   }
   return <>{children}</>
+}
+
+// ─── Dashboard conditionnel spécialisé Station-Service ─────────────────────
+const SectorAwareDashboard: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'station-service' || clean === 'station' || clean === 'hydrocarbures') {
+    return <StationDashboardPage />
+  }
+  return <DashboardPage />
 }
 
 // ─── Initialisation globale ─────────────────────────────────────────────────
@@ -262,8 +275,8 @@ const AppRoutes: React.FC = () => {
         }
       >
         <Route index element={<Navigate to="tableau-bord" replace />} />
-        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
-        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
+        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
@@ -296,9 +309,14 @@ const AppRoutes: React.FC = () => {
         {/* ── Modules Pharmacie ── */}
         <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
         <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
-        {/* ── Modules Station-Service ── */}
-        <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
-        <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
+        {/* ── Modules Station-Service & Hydrocarbures ── */}
+        <Route path="pompes"      element={<PompesPage />} />
+        <Route path="cuves"       element={<PompesPage />} />
+        <Route path="jaugeages"   element={<PompesPage />} />
+        <Route path="receptions"  element={<PompesPage />} />
+        <Route path="postes"      element={<PostesPage />} />
+        <Route path="flottes"     element={<FlottesPage />} />
+        <Route path="anomalies"   element={<AnomaliesPage />} />
         <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
@@ -344,8 +362,8 @@ const AppRoutes: React.FC = () => {
         }
       >
         <Route index element={<Navigate to="tableau-bord" replace />} />
-        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
-        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
+        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
+        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
@@ -378,9 +396,14 @@ const AppRoutes: React.FC = () => {
         {/* ── Modules Pharmacie ── */}
         <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
         <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
-        {/* ── Modules Station-Service ── */}
-        <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
-        <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
+        {/* ── Modules Station-Service & Hydrocarbures ── */}
+        <Route path="pompes"      element={<PompesPage />} />
+        <Route path="cuves"       element={<PompesPage />} />
+        <Route path="jaugeages"   element={<PompesPage />} />
+        <Route path="receptions"  element={<PompesPage />} />
+        <Route path="postes"      element={<PostesPage />} />
+        <Route path="flottes"     element={<FlottesPage />} />
+        <Route path="anomalies"   element={<AnomaliesPage />} />
         <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
