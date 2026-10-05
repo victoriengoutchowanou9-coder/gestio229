@@ -2,11 +2,50 @@
 -- GESTIO 229 SaaS — M033 : ERP Spécialisé Microfinance, Épargne & Tontine
 -- =============================================================================
 -- Migration exclusive pour le secteur : "microfinance"
--- (Microfinance, IMF, Tontines, Épargne & Crédit, Collecteurs de terrain)
 -- Conforme aux directives UEMOA et à la loi n°2025-14 du 2 juillet 2025 (Bénin)
 -- Isolation stricte : company_id + sector_slug = 'microfinance'
--- IDEMPOTENT & NON DESTRUCTIF
+-- IDEMPOTENT, NON DESTRUCTIF & SÉCURISÉ CONTRE LES TABLES PRÉ-EXISTANTES
 -- =============================================================================
+
+-- ══════════════════════════════════════════════════════════════════════════════
+-- 0. GARANTIR EN TOUTE PRIORITÉ LA PRÉSENCE DE company_id ET sector_slug
+--    SUR TOUTES LES TABLES (Évite l'erreur 42703 si les tables existaient déjà)
+-- ══════════════════════════════════════════════════════════════════════════════
+
+DO $$
+BEGIN
+  -- Tables potentiellement préexistantes
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'microfinance_membres') THEN
+    ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'microfinance_comptes') THEN
+    ALTER TABLE public.microfinance_comptes ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.microfinance_comptes ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'microfinance_credits') THEN
+    ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tontine_cycles') THEN
+    ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'tontine_cotisations') THEN
+    ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+  END IF;
+
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'microfinance_agents') THEN
+    ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+  END IF;
+END $$;
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 1. RÉPERTOIRE DES MEMBRES & FICHIER ADHÉRENTS (avec KYC / LBC-FT)
@@ -48,19 +87,41 @@ CREATE TABLE IF NOT EXISTS public.microfinance_membres (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Colonnes additionnelles rétro-compatibles
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS civilite TEXT DEFAULT 'M.';
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS sexe TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS date_naissance DATE;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS lieu_naissance TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS ville TEXT DEFAULT 'Cotonou';
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS profession TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS secteur_activite TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS piece_identite_type TEXT DEFAULT 'CIP';
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS piece_identite_numero TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS piece_expire_le DATE;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS ifu TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS personne_contact_nom TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS personne_contact_tel TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS beneficiaire_nom TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS beneficiaire_tel TEXT;
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS kyc_statut TEXT DEFAULT 'COMPLET';
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS kyc_niveau_risque TEXT DEFAULT 'FAIBLE';
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS kyc_notes TEXT;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS agent_collecteur_id UUID;
+ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS agent_collecteur_nom TEXT;
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS solde_epargne_total NUMERIC(15,2) DEFAULT 0;
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS encours_credit_total NUMERIC(15,2) DEFAULT 0;
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.microfinance_membres ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_membres ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_membres;
 CREATE POLICY "company_isolation" ON public.microfinance_membres FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 2. COMPTES D'ÉPARGNE (Libre, Obligatoire, Tontine, Bloquée, Projet)
@@ -84,15 +145,18 @@ CREATE TABLE IF NOT EXISTS public.microfinance_comptes_epargne (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_comptes_epargne ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_comptes_epargne ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_comptes_epargne ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.microfinance_comptes_epargne ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_comptes_epargne ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_comptes_epargne;
 CREATE POLICY "company_isolation" ON public.microfinance_comptes_epargne FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 3. OPÉRATIONS D'ÉPARGNE (Dépôts, Retraits, Reçus traçables)
@@ -119,14 +183,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_epargne_operations (
     date_operation TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_epargne_operations ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_epargne_operations ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_epargne_operations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_epargne_operations ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_epargne_operations;
 CREATE POLICY "company_isolation" ON public.microfinance_epargne_operations FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 4. DOSSIERS DE CRÉDIT & PORTEFEUILLE PRÊTS (Workflow complet)
@@ -165,15 +232,44 @@ CREATE TABLE IF NOT EXISTS public.microfinance_credits (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Rétrocompatibilité : Ajout des colonnes au cas où la table existait dans un ancien schéma
 ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS reference TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS membre_id UUID;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS membre_nom TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS membre_tel TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS activite_financee TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS objet_credit TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS montant_demande NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS montant_accorde NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS duree_mois INT DEFAULT 12;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS periodicite TEXT DEFAULT 'MENSUELLE';
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS taux_interet NUMERIC(5,2) DEFAULT 12;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS montant_interet NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS frais_dossier NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS montant_total_du NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS montant_rembourse NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS solde_restant NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS garanties TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS caution_nom TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS caution_tel TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS date_demande DATE DEFAULT CURRENT_DATE;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS date_approbation DATE;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS date_decaissement DATE;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS date_echeance_finale DATE;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS agent_credit_nom TEXT;
+ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS valide_par TEXT;
 ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.microfinance_credits ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_credits ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_credits;
 CREATE POLICY "company_isolation" ON public.microfinance_credits FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 5. ÉCHÉANCIERS DÉTAILLÉS & REMBOURSEMENTS PARTIELS / COMPLETS
@@ -200,14 +296,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_credit_echeances (
     statut TEXT NOT NULL DEFAULT 'A_VENIR' CHECK (statut IN ('A_VENIR', 'ECHUE', 'PARTIELLEMENT_PAYEE', 'PAYEE', 'EN_RETARD', 'IMPAYEE')),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_credit_echeances ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_credit_echeances ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_credit_echeances ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_credit_echeances ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_credit_echeances;
 CREATE POLICY "company_isolation" ON public.microfinance_credit_echeances FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 CREATE TABLE IF NOT EXISTS public.microfinance_credit_remboursements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -229,14 +328,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_credit_remboursements (
     date_remboursement TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_credit_remboursements ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_credit_remboursements ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_credit_remboursements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_credit_remboursements ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_credit_remboursements;
 CREATE POLICY "company_isolation" ON public.microfinance_credit_remboursements FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 6. TONTINE & COLLECTES (Groupes, Cycles, Cotisations, Décaissements)
@@ -258,14 +360,17 @@ CREATE TABLE IF NOT EXISTS public.tontine_groupes (
     notes TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.tontine_groupes ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.tontine_groupes ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.tontine_groupes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.tontine_groupes ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.tontine_groupes;
 CREATE POLICY "company_isolation" ON public.tontine_groupes FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 CREATE TABLE IF NOT EXISTS public.tontine_cycles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -284,14 +389,27 @@ CREATE TABLE IF NOT EXISTS public.tontine_cycles (
     statut TEXT NOT NULL DEFAULT 'EN_COURS' CHECK (statut IN ('EN_COURS', 'CLOTURE', 'PLANIFIE')),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Rétrocompatibilité : Ajout des colonnes au cas où tontine_cycles existait déjà
 ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS groupe_id UUID;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS groupe_nom TEXT;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS numero_cycle INT DEFAULT 1;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS date_fin DATE;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS montant_mise NUMERIC(15,2) DEFAULT 1000;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS cagnotte_par_tour NUMERIC(15,2) DEFAULT 0;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS tour_actuel INT DEFAULT 1;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS nb_tours_total INT DEFAULT 12;
+ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS montant_collecte_cumul NUMERIC(15,2) DEFAULT 0;
 ALTER TABLE public.tontine_cycles ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.tontine_cycles ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.tontine_cycles;
 CREATE POLICY "company_isolation" ON public.tontine_cycles FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 CREATE TABLE IF NOT EXISTS public.tontine_cotisations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -309,14 +427,24 @@ CREATE TABLE IF NOT EXISTS public.tontine_cotisations (
     agent_collecteur_nom TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Rétrocompatibilité : Ajout des colonnes si tontine_cotisations existait déjà
 ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS reference TEXT;
+ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS groupe_id UUID;
+ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS membre_id UUID;
+ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS membre_nom TEXT;
+ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS tour_numero INT DEFAULT 1;
+ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS agent_collecteur_nom TEXT;
 ALTER TABLE public.tontine_cotisations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.tontine_cotisations ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.tontine_cotisations;
 CREATE POLICY "company_isolation" ON public.tontine_cotisations FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 CREATE TABLE IF NOT EXISTS public.tontine_decaissements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -335,14 +463,17 @@ CREATE TABLE IF NOT EXISTS public.tontine_decaissements (
     valide_par TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.tontine_decaissements ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.tontine_decaissements ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.tontine_decaissements ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.tontine_decaissements ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.tontine_decaissements;
 CREATE POLICY "company_isolation" ON public.tontine_decaissements FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 7. AGENTS COLLECTEURS TERRAIN, TOURNÉES & CONTRÔLE DES ESPÈCES
@@ -366,18 +497,23 @@ CREATE TABLE IF NOT EXISTS public.microfinance_agents (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS matricule TEXT;
+ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS email TEXT;
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS plafond_especes NUMERIC(15,2) DEFAULT 1000000;
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS solde_especes_detenu NUMERIC(15,2) DEFAULT 0;
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS total_collecte_jour NUMERIC(15,2) DEFAULT 0;
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.microfinance_agents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_agents ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_agents;
 CREATE POLICY "company_isolation" ON public.microfinance_agents FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 CREATE TABLE IF NOT EXISTS public.microfinance_collectes_terrain (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -399,14 +535,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_collectes_terrain (
     observation TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_collectes_terrain ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_collectes_terrain ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_collectes_terrain ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_collectes_terrain ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_collectes_terrain;
 CREATE POLICY "company_isolation" ON public.microfinance_collectes_terrain FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 CREATE TABLE IF NOT EXISTS public.microfinance_reversements_agents (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -425,14 +564,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_reversements_agents (
     observation TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_reversements_agents ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_reversements_agents ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_reversements_agents ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_reversements_agents ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_reversements_agents;
 CREATE POLICY "company_isolation" ON public.microfinance_reversements_agents FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 8. RISQUES, LBC/FT/FP & CONFORMITÉ RÉGLEMENTAIRE (Loi 2025-14 Bénin)
@@ -455,14 +597,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_conformite_alertes (
     date_alerte TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_conformite_alertes ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_conformite_alertes ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_conformite_alertes ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_conformite_alertes ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_conformite_alertes;
 CREATE POLICY "company_isolation" ON public.microfinance_conformite_alertes FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 9. DÉPENSES & ACHATS D'EXPLOITATION DE L'IMF
@@ -486,14 +631,17 @@ CREATE TABLE IF NOT EXISTS public.microfinance_achats_exploitation (
     valide_par TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.microfinance_achats_exploitation ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.microfinance_achats_exploitation ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
 ALTER TABLE public.microfinance_achats_exploitation ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
+
 ALTER TABLE public.microfinance_achats_exploitation ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.microfinance_achats_exploitation;
 CREATE POLICY "company_isolation" ON public.microfinance_achats_exploitation FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 10. INDEX DE RECHERCHE ET PERFORMANCE
