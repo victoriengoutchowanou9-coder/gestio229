@@ -134,6 +134,27 @@ const ClientsPage: React.FC = () => {
 
   // Données client_debts et debt_payments (Module Créances & Remboursements)
   const [debtsByClient, setDebtsByClient] = useState<Record<string, ClientDebt[]>>({})
+  const [payments, setPayments] = useState<DebtPayment[]>([])
+  const [paymentsByClientState, setPaymentsByClientState] = useState<Record<string, DebtPayment[]>>({})
+  const setPaymentsByClient = useCallback((val: Record<string, DebtPayment[]>) => {
+    setPaymentsByClientState(val || {})
+  }, [])
+
+  const paymentsByClient = useMemo(() => {
+    const base: Record<string, DebtPayment[]> = { ...(paymentsByClientState || {}) }
+    if (!payments || !Array.isArray(payments)) return base
+    return payments.reduce((acc: Record<string, DebtPayment[]>, p: any) => {
+      const key = p.client_id || p.clientId || 'inconnu'
+      if (!acc[key]) acc[key] = []
+      acc[key].push({
+        ...p,
+        amount: Number(p.amount) || 0,
+        reste_apres: Number(p.reste_apres) || 0,
+      })
+      return acc
+    }, base)
+  }, [payments, paymentsByClientState])
+
   const [activeDetailsCustomer, setActiveDetailsCustomer] = useState<Customer | null>(null)
 
   // Emballages & Consignations client (Brasserie uniquement)
@@ -285,6 +306,7 @@ const ClientsPage: React.FC = () => {
       }
 
       if (paymentsRes.data) {
+        setPayments(paymentsRes.data || [])
         const groupedPayments: Record<string, DebtPayment[]> = {}
         for (const p of paymentsRes.data) {
           if (!groupedPayments[p.client_id]) groupedPayments[p.client_id] = []
@@ -295,9 +317,14 @@ const ClientsPage: React.FC = () => {
           })
         }
         setPaymentsByClient(groupedPayments)
+      } else {
+        setPayments([])
+        setPaymentsByClient({})
       }
     } catch (e) {
       console.warn('Erreur chargement client_debts/debt_payments :', e)
+      setPayments([])
+      setPaymentsByClient({})
     }
   }, [currentCompanyId, currentSectorSlug])
 
@@ -344,8 +371,10 @@ const ClientsPage: React.FC = () => {
 
   // Calcul précis des créances d'un client (client_debts + debt_payments + legacy)
   const getCustomerDetteInfo = useCallback((cust: Customer) => {
-    const debts = debtsByClient[cust.id] || []
-    const payments = paymentsByClient[cust.id] || []
+    const safeDebts = debtsByClient || {}
+    const safePayments = paymentsByClient || {}
+    const debts = safeDebts[cust.id] || []
+    const payments = safePayments[cust.id] || []
 
     if (debts.length > 0) {
       const totalDette = debts.reduce((sum, d) => sum + (Number(d.total_dette) || 0), 0)
@@ -502,7 +531,7 @@ const ClientsPage: React.FC = () => {
       if (!cust) return
 
       const addAmount = Number(initialDebtForm.amount)
-      const currentActiveDebt = (debtsByClient[cust.id] || []).find((d) => d.status === 'en_cours')
+      const currentActiveDebt = ((debtsByClient || {})[cust.id] || []).find((d) => d.status === 'en_cours')
 
       let newSoldeDu = addAmount
       if (currentActiveDebt) {

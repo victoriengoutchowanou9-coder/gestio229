@@ -306,11 +306,11 @@ export const StationDashboardPage: React.FC = () => {
           <h3 className="font-black text-slate-900 text-sm uppercase tracking-wider mb-4">
             Ventes de Carburant par Produit (Aujourd'hui)
           </h3>
-          {Object.keys(carburantsMap).length === 0 ? (
+          {Object.keys(carburantsMap || {}).length === 0 ? (
             <p className="text-xs text-slate-400 py-6 text-center">Aucun shift clôturé pour la date du jour.</p>
           ) : (
             <div className="space-y-3">
-              {Object.entries(carburantsMap).map(([prod, val]) => (
+              {Object.entries(carburantsMap || {}).map(([prod, val]) => (
                 <div key={prod} className="p-3 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
                   <div>
                     <p className="font-black text-slate-900 text-xs">{prod}</p>

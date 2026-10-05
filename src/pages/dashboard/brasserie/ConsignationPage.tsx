@@ -994,7 +994,7 @@ const BrasserieConsignationPage: React.FC = () => {
             </select>
             <select value={filterType} onChange={e => setFilterType(e.target.value)} className="px-3 py-1.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-amber-200 outline-none">
               <option value="all">Tous types</option>
-              {Object.entries(MOUVEMENT_LABELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              {Object.entries(MOUVEMENT_LABELS || {}).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
             </select>
             <button onClick={loadMouvements} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500 text-white text-sm font-semibold hover:bg-amber-600">
               <Search className="w-3.5 h-3.5" /> Filtrer
