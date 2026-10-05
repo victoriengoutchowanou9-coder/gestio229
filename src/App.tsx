@@ -11,6 +11,7 @@ import SectorGuard from './components/subscription/SectorGuard'
 import SectorErrorBoundary from './components/common/SectorErrorBoundary'
 import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
 import { safeLazy } from './lib/safeLazy'
+import { useTenant } from './hooks/useTenant'
 
 // ─── Lazy Loading des pages (safeLazy = auto-reload si chunk introuvable) ────
 
