@@ -575,6 +575,16 @@ CREATE POLICY "company_isolation" ON public.microfinance_reversements_agents FOR
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
 
+-- Compatibilité rétroactive au cas où une table 'microfinance_reversements' existait déjà
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'microfinance_reversements') THEN
+    ALTER TABLE public.microfinance_reversements ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
+    ALTER TABLE public.microfinance_reversements ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'microfinance';
+    ALTER TABLE public.microfinance_reversements ENABLE ROW LEVEL SECURITY;
+  END IF;
+END $$;
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 8. RISQUES, LBC/FT/FP & CONFORMITÉ RÉGLEMENTAIRE (Loi 2025-14 Bénin)
