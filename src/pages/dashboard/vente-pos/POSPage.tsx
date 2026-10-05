@@ -30,6 +30,7 @@ import {
 } from '../../../utils/batchPricing'
 import clsx from 'clsx'
 import { StationFuelDispenser } from '../station/StationFuelDispenser'
+import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -113,6 +114,10 @@ export const POSPage: React.FC = () => {
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
   const currentSectorSlug = sectorSlug
   const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
+  const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
+  const [restaurantTable, setRestaurantTable] = useState('')
+  const [restaurantCouverts, setRestaurantCouverts] = useState(1)
+  const [restaurantServeur, setRestaurantServeur] = useState('')
   const location = useLocation()
 
   // Navigation interne
@@ -1770,6 +1775,16 @@ export const POSPage: React.FC = () => {
         <div className="space-y-4">
           {isStation && (
             <StationFuelDispenser onAddToCart={handleDirectAddToCart} />
+          )}
+          {isRestaurant && (
+            <RestaurantOrderWidget
+              selectedTable={restaurantTable}
+              setSelectedTable={setRestaurantTable}
+              couverts={restaurantCouverts}
+              setCouverts={setRestaurantCouverts}
+              serveur={restaurantServeur}
+              setServeur={setRestaurantServeur}
+            />
           )}
 
           {/* ── VUE 1 : POINT DE VENTE (CATALOGUE & PANIER INTÉGRÉ GLISSANT À DROITE) ── */}

@@ -14,7 +14,8 @@ import {
   Home, UserCog, Droplets, Snowflake, Layers, Calculator, Calendar,
   Sparkles, RefreshCw, UserCheck, FileText, AlertTriangle, Fish,
   Scissors, Banknote, Sprout, Wine, Utensils, Printer, GitFork,
-  FileCheck, FileSignature, AlertOctagon, Grid2X2, Hammer, Gauge, ShieldAlert
+  FileCheck, FileSignature, AlertOctagon, Grid2X2, Hammer, Gauge, ShieldAlert,
+  ChefHat, UtensilsCrossed, Trash2
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
@@ -36,6 +37,7 @@ const ICON_MAP: Record<string, React.FC<any>> = {
   Sparkles, RefreshCw, UserCheck, FileText, AlertTriangle, Fish,
   Scissors, Banknote, Sprout, Wine, Utensils, Printer, GitFork,
   FileCheck, FileSignature, AlertOctagon, Hammer, Gauge, ShieldAlert,
+  ChefHat, UtensilsCrossed, Trash2,
   Grid: Grid2X2,
 }
 

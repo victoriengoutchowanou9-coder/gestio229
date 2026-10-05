@@ -477,7 +477,43 @@ export const SectorLoader = {
   getDefaultNav(sectorSlug?: string): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const cleanSlug = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
     const isStation = cleanSlug === 'station-service' || cleanSlug === 'station' || cleanSlug === 'hydrocarbures'
+    const isRestaurant = cleanSlug === 'restaurant' || cleanSlug === 'bar-restaurant-maquis' || cleanSlug === 'bar' || cleanSlug === 'maquis' || cleanSlug === 'fastfood'
     const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
+
+    // ── Menu spécifique Bar, Restaurant, Maquis & Fast-Food ───────────────────
+    if (isRestaurant) {
+      const restaurantNav: NavItem[] = [
+        // Aperçu
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        // Exploitation
+        { id: 'tables_plan', label: 'Service & Tables', icon: 'UtensilsCrossed', href: `${prefix}/tables`, group: 'commercial' },
+        { id: 'ventes', label: 'Commandes & POS', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
+        { id: 'cuisine_bar', label: 'Cuisine & Bar (KDS)', icon: 'ChefHat', href: `${prefix}/cuisine-bar`, group: 'commercial' },
+        { id: 'reservations', label: 'Réservations', icon: 'Calendar', href: `${prefix}/reservations`, group: 'commercial' },
+        { id: 'recettes', label: 'Fiches & Recettes', icon: 'BookOpen', href: `${prefix}/recettes`, group: 'commercial' },
+        { id: 'evenements', label: 'Événements & Soirées', icon: 'Sparkles', href: `${prefix}/evenements`, group: 'commercial' },
+        // Stock & Approvisionnements
+        { id: 'stock', label: 'Stock Boissons & Matières', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+        { id: 'pertes_gaspillage', label: 'Pertes, Casses & Offerts', icon: 'Trash2', href: `${prefix}/pertes`, group: 'gestion' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Achats', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+        { id: 'rapports', label: 'Rapports & Rentabilité', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'gestion' },
+        // Finance
+        { id: 'caisse', label: 'Caisse & Clôtures Service', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'clients', label: 'Clients & Ardoises', icon: 'Users', href: `${prefix}/clients`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Établissement', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+        // Administration
+        { id: 'serveurs', label: 'Serveurs & Personnel', icon: 'UserCheck', href: `${prefix}/serveurs`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Restaurant', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(restaurantNav)
+      return { grouped, flat: restaurantNav }
+    }
 
     // ── Menu spécifique Station-Service & Hydrocarbures ──────────────────────
     if (isStation) {

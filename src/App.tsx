@@ -66,6 +66,15 @@ const FlottesPage            = safeLazy(() => import('./pages/dashboard/station/
 const AnomaliesPage          = safeLazy(() => import('./pages/dashboard/station/AnomaliesControlesPage'))
 const StationDashboardPage   = safeLazy(() => import('./pages/dashboard/station/StationDashboardPage'))
 const LubrifiantsPage        = mod('lubrifiants')
+// Bar, Restaurant, Maquis & Fast-Food (ERP dédié)
+const RestaurantDashboardPage = safeLazy(() => import('./pages/dashboard/restaurant/RestaurantDashboardPage'))
+const TablesPlanPage          = safeLazy(() => import('./pages/dashboard/restaurant/TablesPlanPage'))
+const CuisineBarKDSPage       = safeLazy(() => import('./pages/dashboard/restaurant/CuisineBarKDSPage'))
+const RecettesFichesPage      = safeLazy(() => import('./pages/dashboard/restaurant/RecettesFichesPage'))
+const ReservationsPage        = safeLazy(() => import('./pages/dashboard/restaurant/ReservationsPage'))
+const PertesGaspillagePage    = safeLazy(() => import('./pages/dashboard/restaurant/PertesGaspillagePage'))
+const ServeursPersonnelPage   = safeLazy(() => import('./pages/dashboard/restaurant/ServeursPersonnelPage'))
+const EvenementsPage          = safeLazy(() => import('./pages/dashboard/restaurant/EvenementsPage'))
 // Hôtel
 const ChambresHotelPage      = mod('chambres_reservations')
 const HousekeepingPage       = mod('housekeeping')
@@ -163,12 +172,15 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   return <>{children}</>
 }
 
-// ─── Dashboard conditionnel spécialisé Station-Service ─────────────────────
+// ─── Dashboard conditionnel spécialisé Station-Service & Restaurant ─────────────
 const SectorAwareDashboard: React.FC = () => {
   const { sectorSlug } = useTenant()
   const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
   if (clean === 'station-service' || clean === 'station' || clean === 'hydrocarbures') {
     return <StationDashboardPage />
+  }
+  if (clean === 'restaurant' || clean === 'bar-restaurant-maquis' || clean === 'bar' || clean === 'maquis' || clean === 'fastfood') {
+    return <RestaurantDashboardPage />
   }
   return <DashboardPage />
 }
@@ -319,6 +331,14 @@ const AppRoutes: React.FC = () => {
         <Route path="flottes"     element={<FlottesPage />} />
         <Route path="anomalies"   element={<AnomaliesPage />} />
         <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
+        {/* ── Modules Bar, Restaurant, Maquis & Fast-Food ── */}
+        <Route path="tables"       element={<TablesPlanPage />} />
+        <Route path="cuisine-bar"  element={<CuisineBarKDSPage />} />
+        <Route path="recettes"     element={<RecettesFichesPage />} />
+        <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="pertes"       element={<PertesGaspillagePage />} />
+        <Route path="serveurs"     element={<ServeursPersonnelPage />} />
+        <Route path="evenements"   element={<EvenementsPage />} />
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
@@ -406,6 +426,14 @@ const AppRoutes: React.FC = () => {
         <Route path="flottes"     element={<FlottesPage />} />
         <Route path="anomalies"   element={<AnomaliesPage />} />
         <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
+        {/* ── Modules Bar, Restaurant, Maquis & Fast-Food ── */}
+        <Route path="tables"       element={<TablesPlanPage />} />
+        <Route path="cuisine-bar"  element={<CuisineBarKDSPage />} />
+        <Route path="recettes"     element={<RecettesFichesPage />} />
+        <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="pertes"       element={<PertesGaspillagePage />} />
+        <Route path="serveurs"     element={<ServeursPersonnelPage />} />
+        <Route path="evenements"   element={<EvenementsPage />} />
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
