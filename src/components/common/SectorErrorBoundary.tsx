@@ -126,8 +126,14 @@ export class SectorErrorBoundary extends Component<Props, State> {
             </p>
 
             {this.state.error?.message && (
-              <div className="p-3 mb-6 bg-slate-100 dark:bg-slate-900/80 rounded-xl border border-slate-200 dark:border-slate-700 text-left font-mono text-xs text-red-600 dark:text-red-400 overflow-x-auto max-h-28">
-                {this.state.error.message}
+              <div className="p-3 mb-4 bg-slate-100 dark:bg-slate-900/80 rounded-xl border border-slate-200 dark:border-slate-700 text-left font-mono text-xs text-red-600 dark:text-red-400 overflow-x-auto max-h-40">
+                <div className="font-bold text-slate-800 dark:text-slate-200 mb-1">Détail technique :</div>
+                <div>{this.state.error.message}</div>
+                {this.state.errorInfo?.componentStack && (
+                  <div className="mt-2 text-[10px] text-slate-500 dark:text-slate-400 whitespace-pre font-mono">
+                    Composant affecté :{this.state.errorInfo.componentStack.split('\n').slice(0, 4).join('\n')}
+                  </div>
+                )}
               </div>
             )}
 

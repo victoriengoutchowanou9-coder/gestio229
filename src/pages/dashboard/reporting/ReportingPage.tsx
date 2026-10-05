@@ -10,7 +10,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams } from 'react-router-dom'
 import {
-  BarChart3, TrendingUp, DollarSign, ArrowUpRight, ArrowDownRight,
+  BarChart3, TrendingUp, TrendingDown, DollarSign, ArrowUpRight, ArrowDownRight,
   RefreshCw, Calendar, Printer, Filter, Users, Package,
   CreditCard, Smartphone, CheckCircle2, ShoppingBag, PieChart,
   ArrowRight, FileText, Layers

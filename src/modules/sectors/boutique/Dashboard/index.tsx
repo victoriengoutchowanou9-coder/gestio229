@@ -11,7 +11,8 @@
 // Phase 1 : Partage du code commun (DashboardPage)
 // Phase 2 (future) : Personnalisation spécifique à la boutique (modules métier dédiés)
 
-export { DashboardPage as BoutiqueDashboard } from '../../../pages/dashboard/DashboardPage'
+import { DashboardPage as BoutiqueDashboard } from '../../../pages/dashboard/DashboardPage'
+export { BoutiqueDashboard }
 
 // Métadonnées du secteur boutique pour référence dans ce module
 export const BOUTIQUE_SECTOR_CONFIG = {

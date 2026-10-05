@@ -9,7 +9,8 @@
 // - Gestion des avaries et péremptions
 // =============================================================================
 
-export { DashboardPage as PoissonnerieDashboard } from '../../../pages/dashboard/DashboardPage'
+import { DashboardPage as PoissonnerieDashboard } from '../../../pages/dashboard/DashboardPage'
+export { PoissonnerieDashboard }
 
 export const POISSONNERIE_SECTOR_CONFIG = {
   slug: 'poissonnerie',

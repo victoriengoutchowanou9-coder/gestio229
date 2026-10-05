@@ -10,7 +10,8 @@
 // - Tableau de bord financier spécialisé
 // =============================================================================
 
-export { DashboardPage as MicrofinanceDashboard } from '../../../pages/dashboard/DashboardPage'
+import { DashboardPage as MicrofinanceDashboard } from '../../../pages/dashboard/DashboardPage'
+export { MicrofinanceDashboard }
 
 export const MICROFINANCE_SECTOR_CONFIG = {
   slug: 'microfinance',

@@ -12,7 +12,7 @@ import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
-  BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock
+  BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock, RefreshCw
 } from 'lucide-react'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'

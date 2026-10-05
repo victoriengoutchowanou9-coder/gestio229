@@ -681,7 +681,7 @@ export const CaissePage: React.FC = () => {
       })
 
       // Recharger les données locales de la page caisse
-      await loadData()
+      await loadCaisseData()
 
       // Rediriger immédiatement vers le module Vente avec le nouvel ID de session
       navigate(`/app/${cleanSlug}/vente?session_id=${createdSessionId || ''}`, {

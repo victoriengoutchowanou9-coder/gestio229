@@ -80,6 +80,7 @@ const ChambresHotelPage      = mod('chambres_reservations')
 const HousekeepingPage       = mod('housekeeping')
 // Garage
 const VehiculesPage          = mod('vehicules_reparations')
+const ReparationsPage        = mod('ordres_reparation')
 // Microfinance / Tontine (ERP Dédié & Conforme UEMOA)
 const MicrofinanceDashboardPage = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceDashboardPage'))
 const MembresEpargnePage        = safeLazy(() => import('./pages/dashboard/microfinance/MembresEpargnePage'))
