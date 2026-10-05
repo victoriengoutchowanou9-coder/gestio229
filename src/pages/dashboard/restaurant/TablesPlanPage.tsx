@@ -38,15 +38,6 @@ export const TablesPlanPage: React.FC = () => {
   // Modale détails table rapide
   const [activeTableDetail, setActiveTableDetail] = useState<any | null>(null)
 
-  const defaultTables = [
-    { id: 't1', numero_table: 'T 01', nom: 'Table Entrée', zone: 'Salle principale', capacite: 4, statut: 'LIBRE', montant_actuel: 0 },
-    { id: 't2', numero_table: 'T 02', nom: 'Table Centre', zone: 'Salle principale', capacite: 4, statut: 'OCCUPEE', montant_actuel: 34500, serveur_assigne: 'Koffi' },
-    { id: 't3', numero_table: 'T 03', nom: 'Table Fenêtre', zone: 'Salle principale', capacite: 6, statut: 'OCCUPEE', montant_actuel: 52000, serveur_assigne: 'Awa' },
-    { id: 't4', numero_table: 'VIP 01', nom: 'Salon Prestige', zone: 'VIP', capacite: 8, statut: 'RESERVEE', montant_actuel: 0 },
-    { id: 't5', numero_table: 'TER 01', nom: 'Terrasse Jardin', zone: 'Terrasse', capacite: 4, statut: 'LIBRE', montant_actuel: 0 },
-    { id: 't6', numero_table: 'BAR 01', nom: 'Comptoir Bar', zone: 'Bar', capacite: 2, statut: 'OCCUPEE', montant_actuel: 14000, serveur_assigne: 'Moussa' },
-  ]
-
   const loadTables = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -56,16 +47,18 @@ export const TablesPlanPage: React.FC = () => {
         .order('numero_table')
 
       if (error) throw error
-      if (data && data.length > 0) {
+      if (data) {
         setTables(data)
         const uniqueZones = Array.from(new Set(data.map((t: any) => t.zone).filter(Boolean)))
-        setZones(['Toutes', ...uniqueZones])
+        if (uniqueZones.length > 0) {
+          setZones(['Toutes', ...uniqueZones])
+        }
       } else {
-        setTables(defaultTables)
+        setTables([])
       }
     } catch (err: any) {
-      console.warn('[TablesPlanPage] Tables fallback utilisées:', err.message)
-      setTables(defaultTables)
+      console.error('[TablesPlanPage] Erreur chargement tables:', err.message)
+      setTables([])
     } finally {
       setLoading(false)
     }
@@ -239,68 +232,86 @@ export const TablesPlanPage: React.FC = () => {
       </div>
 
       {/* Grille Visuelle des Tables */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-        {filteredTables.map((t) => {
-          const badge = getStatusBadge(t.statut)
-          const montant = Number(t.montant_actuel) || 0
+      {filteredTables.length === 0 ? (
+        <div className="bg-white rounded-3xl border border-dashed border-slate-300 p-12 text-center">
+          <Utensils className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+          <h3 className="text-base font-bold text-slate-700">Aucune table enregistrée</h3>
+          <p className="text-xs text-slate-400 mt-1 mb-4">Créez votre première table pour organiser votre salle.</p>
+          <button
+            onClick={() => {
+              setEditingTable(null)
+              setTableForm({ numero_table: '', nom: '', zone: 'Salle principale', capacite: 4, statut: 'LIBRE' })
+              setShowTableModal(true)
+            }}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Ajouter une table
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+          {filteredTables.map((t) => {
+            const badge = getStatusBadge(t.statut)
+            const montant = Number(t.montant_actuel) || 0
 
-          return (
-            <div
-              key={t.id}
-              onClick={() => setActiveTableDetail(t)}
-              className={clsx(
-                'group relative bg-white rounded-3xl border p-5 shadow-sm hover:shadow-md transition-all cursor-pointer select-none flex flex-col justify-between min-h-[170px]',
-                t.statut === 'OCCUPEE' ? 'border-rose-300 ring-2 ring-rose-500/10' : 'border-slate-200 hover:border-slate-400'
-              )}
-            >
-              <div>
-                {/* En-tête carte */}
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center font-black text-xs text-slate-800 font-mono">
-                      {t.numero_table}
-                    </span>
-                    <div>
-                      <h3 className="font-black text-sm text-slate-900 leading-tight">{t.nom || t.numero_table}</h3>
-                      <p className="text-[10px] text-slate-400 font-semibold">{t.zone}</p>
-                    </div>
-                  </div>
-                  <span className={clsx('px-2.5 py-1 rounded-full text-[10px] font-black tracking-wider uppercase', badge.bg, badge.text)}>
-                    {badge.label}
-                  </span>
-                </div>
-
-                {/* Détails : capacité et serveur */}
-                <div className="flex items-center gap-3 text-xs text-slate-500 mt-3">
-                  <span className="flex items-center gap-1">
-                    <Users className="w-3.5 h-3.5 text-slate-400" />
-                    {t.capacite} places
-                  </span>
-                  {t.serveur_assigne && (
-                    <span className="flex items-center gap-1 font-semibold text-slate-700">
-                      <UserCheck className="w-3.5 h-3.5 text-rose-500" />
-                      {t.serveur_assigne}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Addition en cours */}
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+            return (
+              <div
+                key={t.id}
+                onClick={() => setActiveTableDetail(t)}
+                className={clsx(
+                  'group relative bg-white rounded-3xl border p-5 shadow-sm hover:shadow-md transition-all cursor-pointer select-none flex flex-col justify-between min-h-[170px]',
+                  t.statut === 'OCCUPEE' ? 'border-rose-300 ring-2 ring-rose-500/10' : 'border-slate-200 hover:border-slate-400'
+                )}
+              >
                 <div>
-                  <span className="text-[10px] text-slate-400 font-bold uppercase">Note actuelle</span>
-                  <p className={clsx('font-mono font-black text-sm', montant > 0 ? 'text-rose-600' : 'text-slate-400')}>
-                    {montant > 0 ? fmt(montant) : '0 FCFA'}
-                  </p>
+                  {/* En-tête carte */}
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center font-black text-xs text-slate-800 font-mono">
+                        {t.numero_table}
+                      </span>
+                      <div>
+                        <h3 className="font-black text-sm text-slate-900 leading-tight">{t.nom || t.numero_table}</h3>
+                        <p className="text-[10px] text-slate-400 font-semibold">{t.zone}</p>
+                      </div>
+                    </div>
+                    <span className={clsx('px-2.5 py-1 rounded-full text-[10px] font-black tracking-wider uppercase', badge.bg, badge.text)}>
+                      {badge.label}
+                    </span>
+                  </div>
+
+                  {/* Détails : capacité et serveur */}
+                  <div className="flex items-center gap-3 text-xs text-slate-500 mt-3">
+                    <span className="flex items-center gap-1">
+                      <Users className="w-3.5 h-3.5 text-slate-400" />
+                      {t.capacite} places
+                    </span>
+                    {t.serveur_assigne && (
+                      <span className="flex items-center gap-1 font-semibold text-slate-700">
+                        <UserCheck className="w-3.5 h-3.5 text-rose-500" />
+                        {t.serveur_assigne}
+                      </span>
+                    )}
+                  </div>
                 </div>
-                <div className="p-2 bg-slate-50 group-hover:bg-rose-50 text-slate-400 group-hover:text-rose-600 rounded-xl transition">
-                  <ChevronRight className="w-4 h-4" />
+
+                {/* Addition en cours */}
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold uppercase">Note actuelle</span>
+                    <p className={clsx('font-mono font-black text-sm', montant > 0 ? 'text-rose-600' : 'text-slate-400')}>
+                      {montant > 0 ? fmt(montant) : '0 FCFA'}
+                    </p>
+                  </div>
+                  <div className="p-2 bg-slate-50 group-hover:bg-rose-50 text-slate-400 group-hover:text-rose-600 rounded-xl transition">
+                    <ChevronRight className="w-4 h-4" />
+                  </div>
                 </div>
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* Modal Détails & Actions Table */}
       {activeTableDetail && (

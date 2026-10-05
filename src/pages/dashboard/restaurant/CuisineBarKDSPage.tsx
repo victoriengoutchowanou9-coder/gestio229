@@ -15,69 +15,6 @@ export const CuisineBarKDSPage: React.FC = () => {
   const [lignes, setLignes] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
-  const defaultLignes = [
-    {
-      id: 'l1',
-      commande_numero: 'CMD-0042',
-      table_numero: 'T 02',
-      serveur_nom: 'Koffi',
-      destination: 'CUISINE',
-      designation: 'Poulet Braisé + Alloco',
-      quantite: 2,
-      notes_cuisson: 'Bien pimenté, oignons grillés',
-      statut_preparation: 'EN_PREPARATION',
-      heure_commande: new Date(Date.now() - 12 * 60000).toISOString(),
-    },
-    {
-      id: 'l2',
-      commande_numero: 'CMD-0042',
-      table_numero: 'T 02',
-      serveur_nom: 'Koffi',
-      destination: 'BAR',
-      designation: 'Bière Castel 65cl',
-      quantite: 3,
-      notes_cuisson: 'Très glacées',
-      statut_preparation: 'NOUVEAU',
-      heure_commande: new Date(Date.now() - 11 * 60000).toISOString(),
-    },
-    {
-      id: 'l3',
-      commande_numero: 'CMD-0043',
-      table_numero: 'VIP 01',
-      serveur_nom: 'Awa',
-      destination: 'CUISINE',
-      designation: 'Capitaine Braisé sauce Maquis',
-      quantite: 1,
-      notes_cuisson: 'Sans piment, sauce à part',
-      statut_preparation: 'NOUVEAU',
-      heure_commande: new Date(Date.now() - 5 * 60000).toISOString(),
-    },
-    {
-      id: 'l4',
-      commande_numero: 'CMD-0043',
-      table_numero: 'VIP 01',
-      serveur_nom: 'Awa',
-      destination: 'BAR',
-      designation: 'Cocktail Mojito Passion',
-      quantite: 2,
-      notes_cuisson: 'Menthe fraîche',
-      statut_preparation: 'PRET',
-      heure_commande: new Date(Date.now() - 18 * 60000).toISOString(),
-    },
-    {
-      id: 'l5',
-      commande_numero: 'CMD-0044',
-      table_numero: 'TER 01',
-      serveur_nom: 'Moussa',
-      destination: 'CUISINE',
-      designation: 'Brochettes de Filet de Bœuf (x5)',
-      quantite: 2,
-      notes_cuisson: 'Cuisson à point',
-      statut_preparation: 'EN_PREPARATION',
-      heure_commande: new Date(Date.now() - 25 * 60000).toISOString(),
-    }
-  ]
-
   const loadKDSData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -89,14 +26,10 @@ export const CuisineBarKDSPage: React.FC = () => {
         .order('heure_commande', { ascending: true })
 
       if (error) throw error
-      if (data && data.length > 0) {
-        setLignes(data)
-      } else {
-        setLignes(defaultLignes)
-      }
+      setLignes(data || [])
     } catch (err: any) {
-      console.warn('[KDS] Utilisation fallback KDS:', err.message)
-      setLignes(defaultLignes)
+      console.error('[KDS] Erreur chargement KDS:', err.message)
+      setLignes([])
     } finally {
       setLoading(false)
     }

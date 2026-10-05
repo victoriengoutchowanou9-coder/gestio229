@@ -32,41 +32,6 @@ export const EvenementsPage: React.FC = () => {
     notes: ''
   })
 
-  const defaultEvenements = [
-    {
-      id: 'evt-1',
-      reference: 'EVT-2026-001',
-      titre: 'Soirée Karaoké & Grillades Live',
-      type_evenement: 'Karaoké',
-      date_evenement: new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10),
-      heure_debut: '20:00',
-      heure_fin: '02:00',
-      nb_participants: 85,
-      budget_prevu: 150000,
-      recettes_realisees: 640000,
-      depenses_realisees: 180000,
-      benefice_net: 460000,
-      statut: 'TERMINE',
-      notes: 'Affluence record, rupture stock bière Castel'
-    },
-    {
-      id: 'evt-2',
-      reference: 'EVT-2026-002',
-      titre: 'Anniversaire VIP Privatisé Me Dossou',
-      type_evenement: 'Anniversaire',
-      date_evenement: new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10),
-      heure_debut: '21:00',
-      heure_fin: '04:00',
-      nb_participants: 40,
-      budget_prevu: 300000,
-      recettes_realisees: 850000,
-      depenses_realisees: 220000,
-      benefice_net: 630000,
-      statut: 'PROGRAMME',
-      notes: 'Buffet chaud + service champagne en terrasse VIP'
-    }
-  ]
-
   const loadEvenements = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -76,14 +41,10 @@ export const EvenementsPage: React.FC = () => {
         .order('date_evenement', { ascending: false })
 
       if (error) throw error
-      if (data && data.length > 0) {
-        setEvenements(data)
-      } else {
-        setEvenements(defaultEvenements)
-      }
+      setEvenements(data || [])
     } catch (err: any) {
-      console.warn('[Evenements] Fallback utilisé:', err.message)
-      setEvenements(defaultEvenements)
+      console.error('[Evenements] Erreur chargement:', err.message)
+      setEvenements([])
     } finally {
       setLoading(false)
     }
@@ -179,51 +140,65 @@ export const EvenementsPage: React.FC = () => {
       </div>
 
       {/* Liste des Événements */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {evenements.map((e) => {
-          const benef = Number(e.benefice_net) || (Number(e.recettes_realisees) - Number(e.depenses_realisees))
+      {evenements.length === 0 ? (
+        <div className="bg-white rounded-3xl border border-dashed border-slate-300 p-12 text-center">
+          <Sparkles className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+          <h3 className="text-base font-bold text-slate-700">Aucun événement programmé</h3>
+          <p className="text-xs text-slate-400 mt-1 mb-4">Créez votre première soirée ou prestation pour suivre sa rentabilité.</p>
+          <button
+            onClick={() => setShowModal(true)}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Programmer un événement
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {evenements.map((e) => {
+            const benef = Number(e.benefice_net) || (Number(e.recettes_realisees) - Number(e.depenses_realisees))
 
-          return (
-            <div key={e.id} className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-4 flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 uppercase">
-                    {e.type_evenement}
-                  </span>
-                  <span className={clsx(
-                    'text-[10px] font-black px-2 py-0.5 rounded-full',
-                    e.statut === 'TERMINE' ? 'bg-slate-100 text-slate-700' : 'bg-emerald-100 text-emerald-800'
-                  )}>
-                    {e.statut}
-                  </span>
-                </div>
-
-                <h3 className="font-black text-slate-900 text-base">{e.titre}</h3>
-                <p className="text-xs text-slate-400 mt-0.5">
-                  📅 {e.date_evenement} • De {e.heure_debut} à {e.heure_fin} • ~{e.nb_participants} participants
-                </p>
-                {e.notes && <p className="text-xs text-slate-500 italic mt-2 bg-slate-50 p-2.5 rounded-xl">{e.notes}</p>}
-              </div>
-
-              {/* Bilan Financier Événement */}
-              <div className="pt-3 border-t border-slate-100 grid grid-cols-3 gap-2 text-xs">
+            return (
+              <div key={e.id} className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-4 flex flex-col justify-between">
                 <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">Recettes</span>
-                  <p className="font-mono font-black text-slate-900">{fmt(Number(e.recettes_realisees) || 0)}</p>
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-50 text-rose-700 uppercase">
+                      {e.type_evenement}
+                    </span>
+                    <span className={clsx(
+                      'text-[10px] font-black px-2 py-0.5 rounded-full',
+                      e.statut === 'TERMINE' ? 'bg-slate-100 text-slate-700' : 'bg-emerald-100 text-emerald-800'
+                    )}>
+                      {e.statut}
+                    </span>
+                  </div>
+
+                  <h3 className="font-black text-slate-900 text-base">{e.titre}</h3>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    📅 {e.date_evenement} • De {e.heure_debut} à {e.heure_fin} • ~{e.nb_participants} participants
+                  </p>
+                  {e.notes && <p className="text-xs text-slate-500 italic mt-2 bg-slate-50 p-2.5 rounded-xl">{e.notes}</p>}
                 </div>
-                <div>
-                  <span className="text-[10px] text-slate-400 font-bold block">Dépenses</span>
-                  <p className="font-mono font-bold text-rose-600">{fmt(Number(e.depenses_realisees) || 0)}</p>
-                </div>
-                <div className="text-right">
-                  <span className="text-[10px] text-slate-400 font-bold block">Bénéfice</span>
-                  <p className="font-mono font-black text-emerald-600">{fmt(benef)}</p>
+
+                {/* Bilan Financier Événement */}
+                <div className="pt-3 border-t border-slate-100 grid grid-cols-3 gap-2 text-xs">
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold block">Recettes</span>
+                    <p className="font-mono font-black text-slate-900">{fmt(Number(e.recettes_realisees) || 0)}</p>
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-slate-400 font-bold block">Dépenses</span>
+                    <p className="font-mono font-bold text-rose-600">{fmt(Number(e.depenses_realisees) || 0)}</p>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-400 font-bold block">Bénéfice</span>
+                    <p className="font-mono font-black text-emerald-600">{fmt(benef)}</p>
+                  </div>
                 </div>
               </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* Modal Programmer Événement */}
       {showModal && (

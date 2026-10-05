@@ -33,51 +33,6 @@ export const ReservationsPage: React.FC = () => {
     commentaire: ''
   })
 
-  const defaultReservations = [
-    {
-      id: 'r1',
-      reference: 'RES-2026-001',
-      client_nom: 'M. Adéoti Dossou',
-      client_tel: '+229 97 00 11 22',
-      nb_personnes: 6,
-      table_numero: 'VIP 01',
-      zone: 'VIP',
-      date_reservation: new Date().toISOString().slice(0, 10),
-      heure_reservation: '20:00',
-      acompte: 25000,
-      statut: 'CONFIRMEE',
-      commentaire: 'Dîner d\'affaires, champagne au frais'
-    },
-    {
-      id: 'r2',
-      reference: 'RES-2026-002',
-      client_nom: 'Mme Sossou Clarisse',
-      client_tel: '+229 95 44 33 22',
-      nb_personnes: 4,
-      table_numero: 'T 03',
-      zone: 'Salle principale',
-      date_reservation: new Date().toISOString().slice(0, 10),
-      heure_reservation: '21:00',
-      acompte: 0,
-      statut: 'RESERVEE',
-      commentaire: 'Anniversaire surprise'
-    },
-    {
-      id: 'r3',
-      reference: 'RES-2026-003',
-      client_nom: 'Cabinet Legis Conseil',
-      client_tel: '+229 66 88 99 00',
-      nb_personnes: 12,
-      table_numero: 'TER 01',
-      zone: 'Terrasse',
-      date_reservation: new Date().toISOString().slice(0, 10),
-      heure_reservation: '19:30',
-      acompte: 50000,
-      statut: 'ARRIVEE',
-      commentaire: 'Pot de départ'
-    }
-  ]
-
   const loadData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -87,17 +42,13 @@ export const ReservationsPage: React.FC = () => {
         supabaseTenant('restaurant_tables').select('id, numero_table, zone, capacite, statut')
       ])
 
-      if (resData.data && resData.data.length > 0) {
-        setReservations(resData.data)
-      } else {
-        setReservations(defaultReservations)
-      }
+      setReservations(resData.data || [])
       if (tabData.data && tabData.data.length > 0) {
         setTables(tabData.data)
       }
     } catch (err: any) {
-      console.warn('[Reservations] Fallback utilisé:', err.message)
-      setReservations(defaultReservations)
+      console.error('[Reservations] Erreur chargement:', err.message)
+      setReservations([])
     } finally {
       setLoading(false)
     }
@@ -245,8 +196,21 @@ export const ReservationsPage: React.FC = () => {
 
       {/* Table des réservations */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+            <h3 className="text-base font-bold text-slate-700">Aucune réservation enregistrée</h3>
+            <p className="text-xs text-slate-400 mt-1 mb-4">Enregistrez les réservations de vos clients pour planifier le service.</p>
+            <button
+              onClick={() => setShowModal(true)}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
+            >
+              <Plus className="w-4 h-4" /> Nouvelle réservation
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
             <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
               <tr>
                 <th className="py-3 px-4">Client & Contact</th>
@@ -322,6 +286,7 @@ export const ReservationsPage: React.FC = () => {
             </tbody>
           </table>
         </div>
+      )}
       </div>
 
       {/* Modal Nouvelle Réservation */}

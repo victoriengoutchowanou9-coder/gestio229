@@ -28,22 +28,6 @@ export const RecettesFichesPage: React.FC = () => {
     notes: ''
   })
 
-  const defaultFiches = [
-    { id: 'f1', plat_nom: 'Poulet Braisé Entier', ingredient_nom: 'Poulet fermier frais', quantite_necessaire: 1, unite: 'pièce', cout_unitaire: 2800, cout_matiere_ligne: 2800 },
-    { id: 'f2', plat_nom: 'Poulet Braisé Entier', ingredient_nom: 'Épices & Marinade maquis', quantite_necessaire: 0.15, unite: 'kg', cout_unitaire: 3000, cout_matiere_ligne: 450 },
-    { id: 'f3', plat_nom: 'Poulet Braisé Entier', ingredient_nom: 'Huile végétale', quantite_necessaire: 0.05, unite: 'L', cout_unitaire: 1200, cout_matiere_ligne: 60 },
-    { id: 'f4', plat_nom: 'Poulet Braisé Entier', ingredient_nom: 'Oignons & Piments frais', quantite_necessaire: 0.20, unite: 'kg', cout_unitaire: 800, cout_matiere_ligne: 160 },
-    { id: 'f5', plat_nom: 'Poulet Braisé Entier', ingredient_nom: 'Charbon de bois de cuisson', quantite_necessaire: 0.50, unite: 'kg', cout_unitaire: 300, cout_matiere_ligne: 150 },
-
-    { id: 'f6', plat_nom: 'Cocktail Mojito Passion', ingredient_nom: 'Rhum blanc', quantite_necessaire: 0.05, unite: 'L', cout_unitaire: 6000, cout_matiere_ligne: 300 },
-    { id: 'f7', plat_nom: 'Cocktail Mojito Passion', ingredient_nom: 'Sirop de fruit de la passion', quantite_necessaire: 0.03, unite: 'L', cout_unitaire: 4000, cout_matiere_ligne: 120 },
-    { id: 'f8', plat_nom: 'Cocktail Mojito Passion', ingredient_nom: 'Feuilles de menthe fraîche', quantite_necessaire: 1, unite: 'botte', cout_unitaire: 100, cout_matiere_ligne: 100 },
-    { id: 'f9', plat_nom: 'Cocktail Mojito Passion', ingredient_nom: 'Eau gazeuse & Glace', quantite_necessaire: 0.20, unite: 'L', cout_unitaire: 500, cout_matiere_ligne: 100 },
-
-    { id: 'f10', plat_nom: 'Poisson Braisé Capitaine', ingredient_nom: 'Poisson Capitaine 800g', quantite_necessaire: 0.8, unite: 'kg', cout_unitaire: 4500, cout_matiere_ligne: 3600 },
-    { id: 'f11', plat_nom: 'Poisson Braisé Capitaine', ingredient_nom: 'Sauce tomate & garniture', quantite_necessaire: 1, unite: 'portion', cout_unitaire: 400, cout_matiere_ligne: 400 }
-  ]
-
   const loadFiches = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -53,14 +37,10 @@ export const RecettesFichesPage: React.FC = () => {
         .order('plat_nom')
 
       if (error) throw error
-      if (data && data.length > 0) {
-        setFiches(data)
-      } else {
-        setFiches(defaultFiches)
-      }
+      setFiches(data || [])
     } catch (err: any) {
-      console.warn('[Recettes] Fallback recettes:', err.message)
-      setFiches(defaultFiches)
+      console.error('[Recettes] Erreur chargement recettes:', err.message)
+      setFiches([])
     } finally {
       setLoading(false)
     }
@@ -152,47 +132,61 @@ export const RecettesFichesPage: React.FC = () => {
       </div>
 
       {/* Cartes Synthèse Rentabilité par Plat */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {Object.values(platsGroupes).map(p => {
-          const foodCostPct = p.prixVenteEstime > 0 ? ((p.coutTotal / p.prixVenteEstime) * 100).toFixed(1) : '0'
-          const margeBrute = p.prixVenteEstime - p.coutTotal
+      {fiches.length === 0 ? (
+        <div className="bg-white rounded-3xl border border-dashed border-slate-300 p-12 text-center">
+          <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+          <h3 className="text-base font-bold text-slate-700">Aucune fiche technique enregistrée</h3>
+          <p className="text-xs text-slate-400 mt-1 mb-4">Créez votre première recette pour décomposer les coûts matières et calculer votre Food Cost.</p>
+          <button
+            onClick={() => setShowModal(true)}
+            className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus className="w-4 h-4" /> Nouvel Ingrédient Recette
+          </button>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {Object.values(platsGroupes).map(p => {
+            const foodCostPct = p.prixVenteEstime > 0 ? ((p.coutTotal / p.prixVenteEstime) * 100).toFixed(1) : '0'
+            const margeBrute = p.prixVenteEstime - p.coutTotal
 
-          return (
-            <div key={p.plat} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="font-black text-slate-900 text-sm">{p.plat}</h3>
-                  <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
-                    {p.ingredients.length} ingrédient(s)
+            return (
+              <div key={p.plat} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="font-black text-slate-900 text-sm">{p.plat}</h3>
+                    <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
+                      {p.ingredients.length} ingrédient(s)
+                    </span>
+                  </div>
+
+                  <div className="space-y-1.5 text-xs">
+                    <div className="flex items-center justify-between text-slate-500">
+                      <span>Coût Matière Direct :</span>
+                      <strong className="text-slate-900 font-mono">{fmt(p.coutTotal)}</strong>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-500">
+                      <span>Prix Vente Conseillé :</span>
+                      <strong className="text-rose-600 font-mono">{fmt(p.prixVenteEstime)}</strong>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-500">
+                      <span>Marge Brute Estimée :</span>
+                      <strong className="text-emerald-600 font-mono">{fmt(margeBrute)}</strong>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+                  <span className="font-bold text-slate-400">Ratio Coût / Vente :</span>
+                  <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold font-mono">
+                    {foodCostPct} % Food Cost
                   </span>
                 </div>
-
-                <div className="space-y-1.5 text-xs">
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span>Coût Matière Direct :</span>
-                    <strong className="text-slate-900 font-mono">{fmt(p.coutTotal)}</strong>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span>Prix Vente Conseillé :</span>
-                    <strong className="text-rose-600 font-mono">{fmt(p.prixVenteEstime)}</strong>
-                  </div>
-                  <div className="flex items-center justify-between text-slate-500">
-                    <span>Marge Brute Estimée :</span>
-                    <strong className="text-emerald-600 font-mono">{fmt(margeBrute)}</strong>
-                  </div>
-                </div>
               </div>
-
-              <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-400">Ratio Coût / Vente :</span>
-                <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold font-mono">
-                  {foodCostPct} % Food Cost
-                </span>
-              </div>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
 
       {/* Tableau détaillé des fiches techniques */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">

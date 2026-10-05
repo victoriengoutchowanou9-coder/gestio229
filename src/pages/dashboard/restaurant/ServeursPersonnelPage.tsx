@@ -29,57 +29,6 @@ export const ServeursPersonnelPage: React.FC = () => {
     notes: ''
   })
 
-  const defaultPersonnel = [
-    {
-      id: 'srv-1',
-      matricule: 'SRV-001',
-      nom_complet: 'Koffi Dossou',
-      role: 'SERVEUR',
-      telephone: '+229 97 12 34 56',
-      zone_attribuee: 'Salle principale',
-      taux_commission: 3,
-      statut: 'ACTIF',
-      total_ventes: 345000,
-      nb_commandes: 28
-    },
-    {
-      id: 'srv-2',
-      matricule: 'SRV-002',
-      nom_complet: 'Awa Traoré',
-      role: 'SERVEUR',
-      telephone: '+229 95 67 89 01',
-      zone_attribuee: 'VIP & Terrasse',
-      taux_commission: 3,
-      statut: 'ACTIF',
-      total_ventes: 480000,
-      nb_commandes: 34
-    },
-    {
-      id: 'srv-3',
-      matricule: 'BAR-001',
-      nom_complet: 'Moussa Agbeko',
-      role: 'BARMAN',
-      telephone: '+229 66 11 22 33',
-      zone_attribuee: 'Comptoir Bar',
-      taux_commission: 2,
-      statut: 'ACTIF',
-      total_ventes: 590000,
-      nb_commandes: 52
-    },
-    {
-      id: 'srv-4',
-      matricule: 'CUIS-001',
-      nom_complet: 'Chef Paulin',
-      role: 'CUISINIER',
-      telephone: '+229 90 44 55 66',
-      zone_attribuee: 'Cuisine centrale',
-      taux_commission: 0,
-      statut: 'ACTIF',
-      total_ventes: 0,
-      nb_commandes: 0
-    }
-  ]
-
   const loadPersonnel = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -89,14 +38,10 @@ export const ServeursPersonnelPage: React.FC = () => {
         .order('nom_complet')
 
       if (error) throw error
-      if (data && data.length > 0) {
-        setPersonnel(data)
-      } else {
-        setPersonnel(defaultPersonnel)
-      }
+      setPersonnel(data || [])
     } catch (err: any) {
-      console.warn('[Serveurs] Fallback utilisé:', err.message)
-      setPersonnel(defaultPersonnel)
+      console.error('[Serveurs] Erreur chargement:', err.message)
+      setPersonnel([])
     } finally {
       setLoading(false)
     }
@@ -204,49 +149,63 @@ export const ServeursPersonnelPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
-              <tr>
-                <th className="py-3 px-4">Matricule & Nom</th>
-                <th className="py-3 px-4">Poste / Rôle</th>
-                <th className="py-3 px-4">Contact</th>
-                <th className="py-3 px-4">Zone Assignée</th>
-                <th className="py-3 px-4 text-center">Taux Comm.</th>
-                <th className="py-3 px-4 text-right">Ventes Générées</th>
-                <th className="py-3 px-4 text-center">Statut</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-50/60 transition">
-                  <td className="py-3 px-4">
-                    <p className="font-black text-slate-900">{p.nom_complet}</p>
-                    <p className="text-[10px] font-mono text-slate-400 font-bold">{p.matricule}</p>
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-50 text-rose-700">
-                      {p.role}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 font-mono text-slate-600">{p.telephone || '-'}</td>
-                  <td className="py-3 px-4 font-bold text-slate-700">{p.zone_attribuee}</td>
-                  <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">
-                    {p.taux_commission} %
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-black text-emerald-600">
-                    {p.total_ventes > 0 ? fmt(p.total_ventes) : '-'}
-                  </td>
-                  <td className="py-3 px-4 text-center">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
-                      {p.statut}
-                    </span>
-                  </td>
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <UserCheck className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+            <h3 className="text-base font-bold text-slate-700">Aucun membre d'équipe enregistré</h3>
+            <p className="text-xs text-slate-400 mt-1 mb-4">Ajoutez vos serveurs, barmen et cuisiniers pour suivre leurs commissions et ventes.</p>
+            <button
+              onClick={() => setShowModal(true)}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
+            >
+              <Plus className="w-4 h-4" /> Ajouter un serveur / membre
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4">Matricule & Nom</th>
+                  <th className="py-3 px-4">Poste / Rôle</th>
+                  <th className="py-3 px-4">Contact</th>
+                  <th className="py-3 px-4">Zone Assignée</th>
+                  <th className="py-3 px-4 text-center">Taux Comm.</th>
+                  <th className="py-3 px-4 text-right">Ventes Générées</th>
+                  <th className="py-3 px-4 text-center">Statut</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50/60 transition">
+                    <td className="py-3 px-4">
+                      <p className="font-black text-slate-900">{p.nom_complet}</p>
+                      <p className="text-[10px] font-mono text-slate-400 font-bold">{p.matricule}</p>
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-rose-50 text-rose-700">
+                        {p.role}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 font-mono text-slate-600">{p.telephone || '-'}</td>
+                    <td className="py-3 px-4 font-bold text-slate-700">{p.zone_attribuee}</td>
+                    <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">
+                      {p.taux_commission} %
+                    </td>
+                    <td className="py-3 px-4 text-right font-mono font-black text-emerald-600">
+                      {p.total_ventes > 0 ? fmt(p.total_ventes) : '-'}
+                    </td>
+                    <td className="py-3 px-4 text-center">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                        {p.statut}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Modal Ajout Personnel */}

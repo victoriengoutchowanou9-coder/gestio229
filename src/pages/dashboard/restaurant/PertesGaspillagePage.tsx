@@ -32,51 +32,6 @@ export const PertesGaspillagePage: React.FC = () => {
     notes: ''
   })
 
-  const defaultPertes = [
-    {
-      id: 'p1',
-      reference: 'PRT-2026-001',
-      produit_nom: 'Castel Beer 65cl',
-      categorie: 'Boissons',
-      quantite: 3,
-      unite: 'bouteille',
-      valeur_estimee: 3000,
-      motif: 'CASSE',
-      date_constat: new Date().toISOString().slice(0, 10),
-      declare_par: 'Moussa (Barman)',
-      valide_par: 'Gérant',
-      notes: 'Bouteille glissée lors du décapsulage au bar'
-    },
-    {
-      id: 'p2',
-      reference: 'PRT-2026-002',
-      produit_nom: 'Poulet entier braisé',
-      categorie: 'Plats',
-      quantite: 1,
-      unite: 'portion',
-      valeur_estimee: 4500,
-      motif: 'ERREUR_COMMANDE',
-      date_constat: new Date().toISOString().slice(0, 10),
-      declare_par: 'Awa (Serveuse)',
-      valide_par: 'Chef Cuisinier',
-      notes: 'Erreur table : le client avait demandé poisson'
-    },
-    {
-      id: 'p3',
-      reference: 'PRT-2026-003',
-      produit_nom: 'Champagne Moët & Chandon',
-      categorie: 'Boissons',
-      quantite: 1,
-      unite: 'bouteille',
-      valeur_estimee: 65000,
-      motif: 'OFFERT',
-      date_constat: new Date().toISOString().slice(0, 10),
-      declare_par: 'Koffi (Maître d\'hôtel)',
-      valide_par: 'Direction',
-      notes: 'Offert client VIP table VIP 01 anniversaire'
-    }
-  ]
-
   const loadPertes = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
@@ -86,14 +41,10 @@ export const PertesGaspillagePage: React.FC = () => {
         .order('date_constat', { ascending: false })
 
       if (error) throw error
-      if (data && data.length > 0) {
-        setPertes(data)
-      } else {
-        setPertes(defaultPertes)
-      }
+      setPertes(data || [])
     } catch (err: any) {
-      console.warn('[Pertes] Fallback pertes:', err.message)
-      setPertes(defaultPertes)
+      console.error('[Pertes] Erreur chargement pertes:', err.message)
+      setPertes([])
     } finally {
       setLoading(false)
     }
@@ -227,46 +178,60 @@ export const PertesGaspillagePage: React.FC = () => {
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
-              <tr>
-                <th className="py-3 px-4">Date</th>
-                <th className="py-3 px-4">Article & Catégorie</th>
-                <th className="py-3 px-4 text-center">Quantité</th>
-                <th className="py-3 px-4 text-right">Valeur Perdue</th>
-                <th className="py-3 px-4">Motif Justifié</th>
-                <th className="py-3 px-4">Déclaré Par</th>
-                <th className="py-3 px-4">Validation</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map((p) => (
-                <tr key={p.id} className="hover:bg-slate-50/60 transition">
-                  <td className="py-3 px-4 font-mono text-slate-500">{p.date_constat}</td>
-                  <td className="py-3 px-4">
-                    <p className="font-black text-slate-900">{p.produit_nom}</p>
-                    <p className="text-[10px] text-slate-400">{p.categorie}</p>
-                    {p.notes && <p className="text-[10px] text-slate-500 italic mt-0.5">{p.notes}</p>}
-                  </td>
-                  <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">
-                    {p.quantite} {p.unite}
-                  </td>
-                  <td className="py-3 px-4 text-right font-mono font-black text-rose-600">
-                    {fmt(p.valeur_estimee)}
-                  </td>
-                  <td className="py-3 px-4">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-800">
-                      {p.motif.replace(/_/g, ' ')}
-                    </span>
-                  </td>
-                  <td className="py-3 px-4 font-semibold text-slate-700">{p.declare_par}</td>
-                  <td className="py-3 px-4 font-semibold text-emerald-700">{p.valide_par || 'Validé'}</td>
+        {filtered.length === 0 ? (
+          <div className="p-12 text-center">
+            <Trash2 className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+            <h3 className="text-base font-bold text-slate-700">Aucune perte ou casse enregistrée</h3>
+            <p className="text-xs text-slate-400 mt-1 mb-4">Aucune avarie, bouteille cassée ou produit périmé constaté.</p>
+            <button
+              onClick={() => setShowModal(true)}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
+            >
+              <Plus className="w-4 h-4" /> Déclarer une perte
+            </button>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs text-left">
+              <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4">Date</th>
+                  <th className="py-3 px-4">Article & Catégorie</th>
+                  <th className="py-3 px-4 text-center">Quantité</th>
+                  <th className="py-3 px-4 text-right">Valeur Perdue</th>
+                  <th className="py-3 px-4">Motif Justifié</th>
+                  <th className="py-3 px-4">Déclaré Par</th>
+                  <th className="py-3 px-4">Validation</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {filtered.map((p) => (
+                  <tr key={p.id} className="hover:bg-slate-50/60 transition">
+                    <td className="py-3 px-4 font-mono text-slate-500">{p.date_constat}</td>
+                    <td className="py-3 px-4">
+                      <p className="font-black text-slate-900">{p.produit_nom}</p>
+                      <p className="text-[10px] text-slate-400">{p.categorie}</p>
+                      {p.notes && <p className="text-[10px] text-slate-500 italic mt-0.5">{p.notes}</p>}
+                    </td>
+                    <td className="py-3 px-4 text-center font-mono font-bold text-slate-700">
+                      {p.quantite} {p.unite}
+                    </td>
+                    <td className="py-3 px-4 text-right font-mono font-black text-rose-600">
+                      {fmt(p.valeur_estimee)}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-slate-100 text-slate-800">
+                        {p.motif.replace(/_/g, ' ')}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 font-semibold text-slate-700">{p.declare_par}</td>
+                    <td className="py-3 px-4 font-semibold text-emerald-700">{p.valide_par || 'Validé'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* Modal Déclaration de Perte */}

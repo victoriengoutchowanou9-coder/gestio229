@@ -22,36 +22,35 @@ export const RestaurantDashboardPage: React.FC = () => {
   const [kdsLignes, setKdsLignes] = useState<any[]>([])
   const [pertes, setPertes] = useState<any[]>([])
   const [serveurs, setServeurs] = useState<any[]>([])
-
-  const defaultTables = [
-    { id: '1', numero_table: 'T 01', zone: 'Salle', statut: 'LIBRE', montant_actuel: 0 },
-    { id: '2', numero_table: 'T 02', zone: 'Salle', statut: 'OCCUPEE', montant_actuel: 34500 },
-    { id: '3', numero_table: 'T 03', zone: 'Salle', statut: 'OCCUPEE', montant_actuel: 52000 },
-    { id: '4', numero_table: 'VIP 01', zone: 'VIP', statut: 'RESERVEE', montant_actuel: 0 },
-    { id: '5', numero_table: 'TER 01', zone: 'Terrasse', statut: 'OCCUPEE', montant_actuel: 28000 },
-    { id: '6', numero_table: 'BAR 01', zone: 'Bar', statut: 'LIBRE', montant_actuel: 0 },
-  ]
+  const [fiches, setFiches] = useState<any[]>([])
 
   const loadData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [tabRes, cmdRes, kdsRes, prtRes, srvRes] = await Promise.all([
+      const [tabRes, cmdRes, kdsRes, prtRes, srvRes, fchRes] = await Promise.all([
         supabaseTenant('restaurant_tables').select('*'),
         supabaseTenant('restaurant_commandes').select('*').order('created_at', { ascending: false }).limit(50),
         supabaseTenant('restaurant_commande_lignes').select('*').neq('statut_preparation', 'SERVI').limit(20),
         supabaseTenant('restaurant_pertes_gaspillage').select('*').order('date_constat', { ascending: false }).limit(10),
-        supabaseTenant('restaurant_serveurs').select('*').order('total_ventes', { ascending: false })
+        supabaseTenant('restaurant_serveurs').select('*').order('total_ventes', { ascending: false }),
+        supabaseTenant('restaurant_fiches_techniques').select('*')
       ])
 
-      setTables(tabRes.data && tabRes.data.length > 0 ? tabRes.data : defaultTables)
+      setTables(tabRes.data || [])
       setCommandes(cmdRes.data || [])
       setKdsLignes(kdsRes.data || [])
       setPertes(prtRes.data || [])
       setServeurs(srvRes.data || [])
+      setFiches(fchRes.data || [])
     } catch (err: any) {
-      console.warn('[RestaurantDashboard] Fallback data:', err.message)
-      setTables(defaultTables)
+      console.error('[RestaurantDashboard] Erreur chargement:', err.message)
+      setTables([])
+      setCommandes([])
+      setKdsLignes([])
+      setPertes([])
+      setServeurs([])
+      setFiches([])
     } finally {
       setLoading(false)
     }
@@ -74,11 +73,19 @@ export const RestaurantDashboardPage: React.FC = () => {
       .filter(c => c.statut === 'CLOTUREE' || c.statut_paiement === 'SOLDE')
       .reduce((acc, c) => acc + (Number(c.total_ttc) || 0), 0)
 
-    const totalCA = (caCloture > 0 ? caCloture : 485000) + caEnCours
-    const nbCommandes = (commandes.length > 0 ? commandes.length : 38)
+    const totalCA = caCloture + caEnCours
+    const nbCommandes = commandes.length
     const panierMoyen = nbCommandes > 0 ? Math.round(totalCA / nbCommandes) : 0
-
     const totalPertes = pertes.reduce((acc, p) => acc + (Number(p.valeur_estimee) || 0), 0)
+
+    // Calculs Food Cost réels issus des fiches techniques
+    const totalCoutMatiere = fiches.reduce((acc, f) => acc + (Number(f.cout_matiere_ligne) || 0), 0)
+    const nbPlats = new Set(fiches.map(f => f.plat_nom)).size
+    const coutMoyenPortion = nbPlats > 0 ? Math.round(totalCoutMatiere / nbPlats) : 0
+
+    const margeGlobalePct = totalCA > 0
+      ? Math.max(0, Math.round(((totalCA - totalPertes) / totalCA) * 100))
+      : 0
 
     return {
       totalCA,
@@ -88,9 +95,12 @@ export const RestaurantDashboardPage: React.FC = () => {
       occupTables,
       txOccupation,
       caEnCours,
-      totalPertes: totalPertes > 0 ? totalPertes : 8500
+      totalPertes,
+      coutMoyenPortion,
+      margeGlobalePct,
+      nbPlatsConfigures: nbPlats
     }
-  }, [tables, commandes, pertes])
+  }, [tables, commandes, pertes, fiches])
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -189,13 +199,17 @@ export const RestaurantDashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Ratios Restauration : Food Cost & Beverage Cost */}
+      {/* Ratios Restauration Réels : Coût Matière, Commandes, Marge */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Food Cost Moyen (Plats)</span>
-            <p className="text-2xl font-black text-orange-600 font-mono mt-0.5">32.4 %</p>
-            <p className="text-[11px] text-slate-500 mt-1">Seuil optimal : 30% - 35%</p>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coût Matière Moyen / Portion</span>
+            <p className="text-2xl font-black text-orange-600 font-mono mt-0.5">
+              {kpis.coutMoyenPortion > 0 ? fmt(kpis.coutMoyenPortion) : '0 FCFA'}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              {kpis.nbPlatsConfigures > 0 ? `${kpis.nbPlatsConfigures} recette(s) configurée(s)` : 'À définir dans Fiches & Recettes'}
+            </p>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center">
             <Flame className="w-6 h-6" />
@@ -204,9 +218,11 @@ export const RestaurantDashboardPage: React.FC = () => {
 
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Beverage Cost (Boissons/Bar)</span>
-            <p className="text-2xl font-black text-blue-600 font-mono mt-0.5">24.8 %</p>
-            <p className="text-[11px] text-slate-500 mt-1">Forte rentabilité maquis & bières</p>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commandes Clôturées</span>
+            <p className="text-2xl font-black text-blue-600 font-mono mt-0.5">{kpis.nbCommandes}</p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              {kpis.nbCommandes > 0 ? `Panier moyen : ${fmt(kpis.panierMoyen)}` : 'Aucune commande enregistrée'}
+            </p>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
             <Wine className="w-6 h-6" />
@@ -215,9 +231,11 @@ export const RestaurantDashboardPage: React.FC = () => {
 
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Marge Brute Globale</span>
-            <p className="text-2xl font-black text-emerald-600 font-mono mt-0.5">71.2 %</p>
-            <p className="text-[11px] text-slate-500 mt-1">Coefficient moyen x3.4</p>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Marge Brute Réalisée</span>
+            <p className="text-2xl font-black text-emerald-600 font-mono mt-0.5">{kpis.margeGlobalePct} %</p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              {kpis.totalCA > 0 ? 'Calculée sur le CA réel et pertes' : 'En attente de ventes réelles'}
+            </p>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
             <TrendingUp className="w-6 h-6" />
@@ -239,27 +257,33 @@ export const RestaurantDashboardPage: React.FC = () => {
             </Link>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            {tables.filter(t => t.statut === 'OCCUPEE').map(t => (
-              <div key={t.id} className="p-4 rounded-2xl border border-rose-200/80 bg-rose-50/30 flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono font-black text-xs text-rose-900 bg-rose-200 px-2 py-0.5 rounded-lg">
-                      {t.numero_table}
-                    </span>
-                    <span className="font-black text-xs text-slate-900">{t.nom || t.numero_table}</span>
+          {tables.filter(t => t.statut === 'OCCUPEE').length === 0 ? (
+            <p className="text-xs text-slate-400 py-8 text-center bg-slate-50 rounded-2xl">
+              Toutes les tables sont actuellement libres.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {tables.filter(t => t.statut === 'OCCUPEE').map(t => (
+                <div key={t.id} className="p-4 rounded-2xl border border-rose-200/80 bg-rose-50/30 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-mono font-black text-xs text-rose-900 bg-rose-200 px-2 py-0.5 rounded-lg">
+                        {t.numero_table}
+                      </span>
+                      <span className="font-black text-xs text-slate-900">{t.nom || t.numero_table}</span>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">{t.zone}</p>
                   </div>
-                  <p className="text-[10px] text-slate-500 mt-1">{t.zone}</p>
+                  <div className="text-right">
+                    <p className="text-xs text-slate-400 font-bold uppercase">Note</p>
+                    <p className="text-sm font-black font-mono text-rose-600">
+                      {fmt(Number(t.montant_actuel) || 0)}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-xs text-slate-400 font-bold uppercase">Note</p>
-                  <p className="text-sm font-black font-mono text-rose-600">
-                    {fmt(Number(t.montant_actuel) || 0)}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Colonne Droite : Commandes en attente Cuisine & Bar */}
@@ -276,7 +300,9 @@ export const RestaurantDashboardPage: React.FC = () => {
 
           <div className="space-y-2.5">
             {kdsLignes.length === 0 ? (
-              <p className="text-xs text-slate-400 py-8 text-center">Aucun plat en cours de préparation.</p>
+              <p className="text-xs text-slate-400 py-8 text-center bg-slate-50 rounded-2xl">
+                Aucun plat en cours de préparation.
+              </p>
             ) : (
               kdsLignes.slice(0, 5).map(it => (
                 <div key={it.id} className="p-3 bg-slate-50 rounded-2xl border border-slate-100 flex items-center justify-between">
@@ -286,7 +312,7 @@ export const RestaurantDashboardPage: React.FC = () => {
                     </span>
                     <div>
                       <p className="font-bold text-xs text-slate-900">{it.designation}</p>
-                      <p className="text-[10px] text-slate-400">Table {it.table_numero || 'T 02'} • {it.destination}</p>
+                      <p className="text-[10px] text-slate-400">Table {it.table_numero || '-'} • {it.destination}</p>
                     </div>
                   </div>
                   <span className={clsx(
