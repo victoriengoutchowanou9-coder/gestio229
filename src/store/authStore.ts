@@ -9,6 +9,7 @@ import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
 import SectorLoader, { TenantContext } from '../lib/SectorLoader'
 import { isSectorSubscribed } from '../lib/sectorClient'
+import { normalizeSectorSlug, getRolesForSector } from '../core/team/sectorRoles'
 import type { UserProfile, Company } from '../types/tenant'
 
 // =============================================================================
@@ -353,9 +354,17 @@ export const useAuthStore = create<AuthState>()(
 
           // 1. Déterminer et valider le secteur assigné à l'utilisateur interne
           const perm = (typeof profile.permissions === 'object' && profile.permissions) ? profile.permissions : {}
-          let assignedSector = (perm.sector_slug || perm.sector_id || profile.sector_id || '').toLowerCase().replace(/^sec-/, '').trim()
+          let assignedSector = normalizeSectorSlug(
+            perm.sector_slug ||
+            perm.sector ||
+            perm.assigned_sector ||
+            perm.sector_id ||
+            profile.sector_id ||
+            profile.sector_slug ||
+            ''
+          )
 
-          if (!assignedSector && perm.activity_id) {
+          if ((!assignedSector || assignedSector === 'boutique') && perm.activity_id) {
             try {
               const { data: act } = await supabase
                 .from('company_activities')
@@ -364,17 +373,26 @@ export const useAuthStore = create<AuthState>()(
                 .maybeSingle()
 
               if (act) {
-                assignedSector = (act.sector_slug || act.sector_code || '').toLowerCase().replace(/^sec-/, '').trim()
+                assignedSector = normalizeSectorSlug(act.sector_slug || act.sector_code || '')
                 localStorage.setItem('gestio229_active_activity_id', act.id)
                 localStorage.setItem('gestio229_active_activity_name', act.activity_name)
               }
             } catch (e) {}
           }
 
-          // 2. Vérifier obligatoirement que ce secteur existe dans les souscriptions réelles de l'entreprise
+          // Si toujours non déterminé, chercher dans le premier secteur souscrit par l'entreprise
+          if (!assignedSector) {
+            const rawSectors = (ctx.company as any)?.selected_sectors || (ctx.company as any)?.company_sectors || []
+            if (Array.isArray(rawSectors) && rawSectors.length > 0) {
+              const firstSec = rawSectors[0]
+              assignedSector = normalizeSectorSlug(typeof firstSec === 'string' ? firstSec : firstSec?.slug || firstSec?.sector_slug)
+            }
+          }
+
+          // 2. Vérifier que ce secteur existe dans les souscriptions réelles de l'entreprise
           const isSubscribed = Boolean(assignedSector && isSectorSubscribed(assignedSector, ctx.company))
           if (!isSubscribed) {
-            const unsubMsg = "Secteur non souscrit, contactez l'administrateur."
+            const unsubMsg = `Secteur "${assignedSector}" non souscrit, contactez l'administrateur.`
             await supabase.auth.signOut().catch(() => {})
             set({
               status: 'unauthenticated',
@@ -391,14 +409,19 @@ export const useAuthStore = create<AuthState>()(
           if (perm.activity_id) localStorage.setItem('gestio229_active_activity_id', perm.activity_id)
           if (perm.activity_name) localStorage.setItem('gestio229_active_activity_name', perm.activity_name)
 
-          // 4. Redirection directe vers /app/[sector_slug]/[module] (Accès au HUB formellement interdit)
-          let destModule = 'tableau-bord'
-          if (profile.role === 'caissier' || profile.role === 'vendeur') {
-            destModule = 'vente-pos'
-          } else if (profile.role === 'magasinier') {
-            destModule = 'stocks'
-          } else if (profile.role === 'comptable') {
-            destModule = 'syscohada'
+          // 4. Redirection intelligente vers le module métier dédié à ce rôle dans ce secteur
+          const sectorRoles = getRolesForSector(assignedSector)
+          const matchedRole = sectorRoles.find((r) => r.id === profile.role)
+          
+          let destModule = matchedRole?.defaultRoute || 'tableau-bord'
+          if (!matchedRole) {
+            if (profile.role === 'caissier' || profile.role === 'vendeur') {
+              destModule = assignedSector === 'microfinance' ? 'caisse' : 'vente-pos'
+            } else if (profile.role === 'magasinier') {
+              destModule = 'stocks'
+            } else if (profile.role === 'comptable') {
+              destModule = 'syscohada'
+            }
           }
           const targetRoute = `/app/${assignedSector}/${destModule}`
 

@@ -11,6 +11,7 @@ import { useAuthStore } from '../store/authStore'
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../core/modules/moduleRegistry'
 import { isSectorSubscribed } from '../lib/sectorClient'
 import { supabaseTenant, TenantQueryClient } from '../lib/supabaseTenant'
+import { normalizeSectorSlug } from '../core/team/sectorRoles'
 
 export interface TenantContext {
   companyId: string | null
@@ -66,7 +67,7 @@ export function useTenant(): TenantContext {
 
   // Normalisation : toujours en minuscule sans espace et sans préfixe "sec-"
   const sectorSlug = useMemo(() => {
-    return rawSlug ? rawSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+    return rawSlug ? normalizeSectorSlug(rawSlug) : ''
   }, [rawSlug])
 
   // 3. Validation contre les 19 secteurs référentiels
@@ -89,8 +90,8 @@ export function useTenant(): TenantContext {
   const assignedSectorSlug = useMemo(() => {
     if (!user) return null
     const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
-    const raw = perm.sector_slug || perm.sector_id || user.sector_id || ''
-    return raw ? String(raw).toLowerCase().trim().replace(/^sec-/, '') : null
+    const raw = perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || user.sector_id || user.sector_slug || ''
+    return raw ? normalizeSectorSlug(raw) : null
   }, [user])
 
   // 6. Client Supabase injectant automatiquement (company_id, sector_slug)

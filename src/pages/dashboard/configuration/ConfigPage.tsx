@@ -11,9 +11,18 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import { useTenant } from '../../../hooks/useTenant'
+import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
+import {
+  getRolesForSector,
+  normalizeSectorSlug,
+  SECTOR_ROLES_CATALOG,
+  SectorRoleDefinition
+} from '../../../core/team/sectorRoles'
 
 export const ConfigPage: React.FC = () => {
   const { company, user, refreshTenantContext } = useAuthStore()
+  const { sectorSlug: currentSectorSlug } = useTenant()
   const { toast } = useUIStore()
 
   const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs'>('etablissement')
@@ -45,6 +54,37 @@ export const ConfigPage: React.FC = () => {
     auto_send_closure_pdf: true,
   })
 
+  // ─── Secteurs souscrits par l'entreprise ──────────────────────────────────
+  const subscribedSectors = React.useMemo(() => {
+    const rawList: any[] = []
+    if (Array.isArray((company as any)?.selected_sectors)) rawList.push(...(company as any).selected_sectors)
+    if (Array.isArray((company as any)?.sectors)) rawList.push(...(company as any).sectors)
+    if ((company as any)?.active_sector) rawList.push((company as any).active_sector)
+    if (Array.isArray((company as any)?.company_sectors)) rawList.push(...(company as any).company_sectors)
+
+    const normalizedSlugs = new Set<string>()
+    rawList.forEach((s) => {
+      const slug = typeof s === 'string' ? s : s?.slug || s?.sector_slug || s?.code
+      if (slug) normalizedSlugs.add(normalizeSectorSlug(slug))
+    })
+
+    if (currentSectorSlug) {
+      normalizedSlugs.add(normalizeSectorSlug(currentSectorSlug))
+    }
+
+    if (normalizedSlugs.size === 0) {
+      return ALL_SECTORS_CATALOG
+    }
+
+    return ALL_SECTORS_CATALOG.filter((sec) => normalizedSlugs.has(sec.slug))
+  }, [company, currentSectorSlug])
+
+  // ─── Filtre par secteur dans la vue de l'équipe ───────────────────────────
+  // Par défaut, filtre sur le secteur actuellement ouvert (ex: microfinance)
+  const [sectorFilter, setSectorFilter] = useState<string>(
+    currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : 'all'
+  )
+
   // ─── États Équipe & Utilisateurs Internes ──────────────────────────────────
   const [usersList, setUsersList] = useState<any[]>([])
   const [loadingUsers, setLoadingUsers] = useState(false)
@@ -53,14 +93,14 @@ export const ConfigPage: React.FC = () => {
   const [createError, setCreateError] = useState('')
 
   // Formulaire création utilisateur interne
-  const [newUser, setNewUser] = useState({
-    full_name: '',
-    phone: '',
-    username: '',
-    initial_password: '',
-    role: 'caissier',
-    sector: 'boutique',
-    permissions: {
+  const defaultSector = currentSectorSlug
+    ? normalizeSectorSlug(currentSectorSlug)
+    : subscribedSectors[0]?.slug || 'boutique'
+
+  const initialRoles = getRolesForSector(defaultSector)
+  const initialRole = initialRoles[0] || {
+    id: 'caissier',
+    defaultPermissions: {
       ventes: true,
       caisse: true,
       stock: false,
@@ -70,8 +110,20 @@ export const ConfigPage: React.FC = () => {
       reporting: false,
       finances: false,
       syscohada: false,
-      admin: false
-    }
+      admin: false,
+    },
+  }
+
+  const [newUser, setNewUser] = useState({
+    full_name: '',
+    phone: '',
+    username: '',
+    initial_password: '',
+    role: initialRole.id,
+    sector: defaultSector,
+    permissions: {
+      ...initialRole.defaultPermissions,
+    },
   })
 
   // Réinitialisation mot de passe modal
@@ -200,7 +252,12 @@ export const ConfigPage: React.FC = () => {
       // Email synthétique pour respecter la contrainte DB NOT NULL UNIQUE
       const safeEmail = `${trimmedUsername}@${company?.id?.slice(0, 8) || 'ent'}.gestio229.local`
 
-      // 2. Insérer dans user_profiles
+      // 2. Insérer dans user_profiles avec TOUTES les clés de secteur pour zéro échec
+      const cleanSector = normalizeSectorSlug(newUser.sector)
+      const currentSectorRoles = getRolesForSector(cleanSector)
+      const selectedRoleMeta = currentSectorRoles.find((r) => r.id === newUser.role)
+      const roleLabel = selectedRoleMeta?.label || newUser.role
+
       const { error: insertErr } = await supabase
         .from('user_profiles')
         .insert({
@@ -214,8 +271,11 @@ export const ConfigPage: React.FC = () => {
           is_active: true,
           permissions: {
             ...newUser.permissions,
-            sector: newUser.sector,
-            assigned_sector: newUser.sector,
+            sector: cleanSector,
+            sector_slug: cleanSector,
+            assigned_sector: cleanSector,
+            sector_id: cleanSector,
+            role_label: roleLabel,
             commercial: newUser.permissions.ventes,
             treasury: newUser.permissions.finances,
             purchases: newUser.permissions.fournisseurs,
@@ -225,27 +285,20 @@ export const ConfigPage: React.FC = () => {
 
       if (insertErr) throw insertErr
 
-      toast.success(`Utilisateur ${newUser.full_name} créé avec succès !`)
+      toast.success(`Utilisateur ${newUser.full_name} créé avec succès pour le secteur ${cleanSector} !`)
       setShowCreateModal(false)
-      // Réinitialiser le formulaire
+      // Réinitialiser le formulaire avec le secteur actif
+      const nextRoles = getRolesForSector(defaultSector)
+      const nextRole = nextRoles[0]
       setNewUser({
         full_name: '',
         phone: '',
         username: '',
         initial_password: '',
-        role: 'caissier',
-        sector: 'boutique',
+        role: nextRole?.id || 'caissier',
+        sector: defaultSector,
         permissions: {
-          ventes: true,
-          caisse: true,
-          stock: false,
-          clients: true,
-          fournisseurs: false,
-          depenses: false,
-          reporting: false,
-          finances: false,
-          syscohada: false,
-          admin: false
+          ...(nextRole?.defaultPermissions || initialRole.defaultPermissions),
         }
       })
       await fetchUsers()
@@ -815,11 +868,59 @@ export const ConfigPage: React.FC = () => {
             </button>
           </div>
 
-          {/* Tableau des utilisateurs */}
+          {/* Filtres par Secteur d'Activité */}
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <button
+              onClick={() => setSectorFilter('all')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap shadow-sm ${
+                sectorFilter === 'all'
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+              }`}
+            >
+              <Briefcase className="w-3.5 h-3.5" />
+              <span>Toutes les activités ({usersList.length})</span>
+            </button>
+
+            {subscribedSectors.map((sec) => {
+              const count = usersList.filter((u) => {
+                const perm = (typeof u.permissions === 'object' && u.permissions) ? u.permissions : {}
+                const userSec = normalizeSectorSlug(
+                  perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || u.sector_id || ''
+                )
+                return userSec === sec.slug
+              }).length
+
+              return (
+                <button
+                  key={sec.slug}
+                  onClick={() => setSectorFilter(sec.slug)}
+                  className={`px-3.5 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 whitespace-nowrap shadow-sm ${
+                    sectorFilter === sec.slug
+                      ? 'bg-emerald-600 text-white ring-2 ring-emerald-600/30'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  <span>{sec.emoji}</span>
+                  <span>{sec.name}</span>
+                  <span className={`ml-1 px-1.5 py-0.2 rounded-full text-[10px] ${
+                    sectorFilter === sec.slug ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-slate-500'
+                  }`}>
+                    {count}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Tableau des utilisateurs filtrés */}
           <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-                Utilisateurs enregistrés ({usersList.length})
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-2">
+                <span>Équipe du secteur :</span>
+                <span className="text-emerald-700 font-black">
+                  {sectorFilter === 'all' ? 'Toutes activités confondues' : subscribedSectors.find(s => s.slug === sectorFilter)?.name || sectorFilter}
+                </span>
               </h3>
             </div>
 
@@ -827,82 +928,107 @@ export const ConfigPage: React.FC = () => {
               <div className="p-12 text-center text-slate-400 text-xs">
                 Chargement des profils utilisateurs...
               </div>
-            ) : usersList.length === 0 ? (
-              <div className="p-12 text-center text-slate-500 text-xs">
-                Aucun utilisateur interne enregistré pour le moment. Cliquez sur "Créer un utilisateur" pour en ajouter un.
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-100 overflow-x-auto">
-                {usersList.map((item) => {
-                  const isAdmin = item.role === 'administrateur' || item.role === 'super_admin'
-                  return (
-                    <div key={item.id} className="p-4 flex items-center justify-between gap-4 hover:bg-slate-50/80 transition">
-                      <div className="flex items-center gap-3 min-w-0">
-                        <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-xs ${
-                          isAdmin ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'
-                        }`}>
-                          {item.full_name?.charAt(0)?.toUpperCase() ?? 'U'}
+            ) : (() => {
+              const filteredList = usersList.filter((item) => {
+                if (sectorFilter === 'all') return true
+                const perm = (typeof item.permissions === 'object' && item.permissions) ? item.permissions : {}
+                const itemSector = normalizeSectorSlug(
+                  perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || item.sector_id || ''
+                )
+                const isAdmin = item.role === 'administrateur' || item.role === 'super_admin'
+                return isAdmin || itemSector === sectorFilter
+              })
+
+              if (filteredList.length === 0) {
+                return (
+                  <div className="p-12 text-center text-slate-500 text-xs">
+                    Aucun membre assigné à ce secteur pour le moment. Cliquez sur "Créer un utilisateur" pour en ajouter un.
+                  </div>
+                )
+              }
+
+              return (
+                <div className="divide-y divide-slate-100 overflow-x-auto">
+                  {filteredList.map((item) => {
+                    const isAdmin = item.role === 'administrateur' || item.role === 'super_admin'
+                    const perm = (typeof item.permissions === 'object' && item.permissions) ? item.permissions : {}
+                    const itemSector = normalizeSectorSlug(
+                      perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || item.sector_id || ''
+                    )
+                    const sectorMeta = ALL_SECTORS_CATALOG.find((s) => s.slug === itemSector)
+                    const sectorRoles = getRolesForSector(itemSector)
+                    const roleMeta = sectorRoles.find((r) => r.id === item.role)
+                    const roleLabel = perm.role_label || roleMeta?.label || item.role
+
+                    return (
+                      <div key={item.id} className="p-4 flex items-center justify-between gap-4 hover:bg-slate-50/80 transition">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-10 h-10 rounded-2xl flex items-center justify-center font-bold text-xs ${
+                            isAdmin ? 'bg-indigo-100 text-indigo-700' : 'bg-emerald-100 text-emerald-700'
+                          }`}>
+                            {item.full_name?.charAt(0)?.toUpperCase() ?? 'U'}
+                          </div>
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <p className="text-sm font-bold text-slate-800 truncate">{item.full_name}</p>
+                              {isAdmin && (
+                                <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
+                                  Administrateur Global
+                                </span>
+                              )}
+                              {!isAdmin && sectorMeta && (
+                                <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-full">
+                                  <span>{sectorMeta.emoji}</span>
+                                  <span>{sectorMeta.name}</span>
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
+                              <span>Identifiant : <strong className="text-slate-700 font-mono">{item.username}</strong></span>
+                              <span>•</span>
+                              <span>Rôle : <strong className="text-emerald-700 font-semibold">{roleLabel}</strong></span>
+                            </div>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2">
-                            <p className="text-sm font-bold text-slate-800 truncate">{item.full_name}</p>
-                            {isAdmin && (
-                              <span className="text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200 px-2 py-0.5 rounded-full">
-                                Administrateur
-                              </span>
-                            )}
-                          </div>
-                          <div className="flex items-center gap-3 text-xs text-slate-500 mt-0.5">
-                            <span>Identifiant : <strong className="text-slate-700 font-mono">{item.username}</strong></span>
-                            <span>•</span>
-                            <span className="capitalize">Rôle : <strong className="text-slate-700">{item.role}</strong></span>
-                            {item.permissions?.sector && (
-                              <>
-                                <span>•</span>
-                                <span>Secteur : <strong className="text-slate-700 capitalize">{item.permissions.sector}</strong></span>
-                              </>
-                            )}
-                          </div>
+
+                        {/* Actions */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
+                            item.is_active !== false ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
+                          }`}>
+                            {item.is_active !== false ? 'Actif' : 'Désactivé'}
+                          </span>
+
+                          {!isAdmin && (
+                            <>
+                              <button
+                                onClick={() => { setResetModalUser(item); setResetPasswordVal(''); }}
+                                className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition"
+                                title="Réinitialiser le mot de passe"
+                              >
+                                <KeyRound className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() => toggleUserStatus(item)}
+                                className={`p-2 rounded-xl transition ${
+                                  item.is_active !== false
+                                    ? 'text-rose-500 hover:bg-rose-50'
+                                    : 'text-emerald-600 hover:bg-emerald-50'
+                                }`}
+                                title={item.is_active !== false ? 'Désactiver le compte' : 'Activer le compte'}
+                              >
+                                {item.is_active !== false ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
+                              </button>
+                            </>
+                          )}
                         </div>
                       </div>
-
-                      {/* Actions */}
-                      <div className="flex items-center gap-2 shrink-0">
-                        <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${
-                          item.is_active !== false ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'
-                        }`}>
-                          {item.is_active !== false ? 'Actif' : 'Désactivé'}
-                        </span>
-
-                        {!isAdmin && (
-                          <>
-                            <button
-                              onClick={() => { setResetModalUser(item); setResetPasswordVal(''); }}
-                              className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition"
-                              title="Réinitialiser le mot de passe"
-                            >
-                              <KeyRound className="w-4 h-4" />
-                            </button>
-
-                            <button
-                              onClick={() => toggleUserStatus(item)}
-                              className={`p-2 rounded-xl transition ${
-                                item.is_active !== false
-                                  ? 'text-rose-500 hover:bg-rose-50'
-                                  : 'text-emerald-600 hover:bg-emerald-50'
-                              }`}
-                              title={item.is_active !== false ? 'Désactiver le compte' : 'Activer le compte'}
-                            >
-                              {item.is_active !== false ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}
@@ -917,7 +1043,7 @@ export const ConfigPage: React.FC = () => {
               <div>
                 <h3 className="font-bold text-base leading-snug">Créer un utilisateur interne</h3>
                 <p className="text-xs text-slate-400 mt-0.5">
-                  Renseignez l'identifiant, le mot de passe, le secteur et les permissions
+                  Renseignez l'identifiant, le mot de passe, l'activité et le rôle métier spécialisé
                 </p>
               </div>
               <button
@@ -935,6 +1061,40 @@ export const ConfigPage: React.FC = () => {
                   <span>{createError}</span>
                 </div>
               )}
+
+              {/* Secteur d'affectation en PREMIER pour orienter les rôles */}
+              <div className="p-4 bg-emerald-50/60 border border-emerald-200 rounded-2xl">
+                <label className="block text-xs font-bold text-slate-800 mb-1 flex items-center gap-1.5">
+                  <Store className="w-4 h-4 text-emerald-600" />
+                  <span>Activité / Secteur d'affectation *</span>
+                </label>
+                <select
+                  value={newUser.sector}
+                  onChange={(e) => {
+                    const newSector = normalizeSectorSlug(e.target.value)
+                    const rolesForSec = getRolesForSector(newSector)
+                    const firstR = rolesForSec[0]
+                    setNewUser({
+                      ...newUser,
+                      sector: newSector,
+                      role: firstR ? firstR.id : 'caissier',
+                      permissions: {
+                        ...(firstR ? firstR.defaultPermissions : newUser.permissions),
+                      },
+                    })
+                  }}
+                  className="w-full px-3 py-2.5 bg-white border border-emerald-300 rounded-xl text-sm font-bold text-slate-800"
+                >
+                  {subscribedSectors.map((sec) => (
+                    <option key={sec.slug} value={sec.slug}>
+                      {sec.emoji} {sec.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-emerald-800/80 mt-1">
+                  Les rôles et autorisations ci-dessous s'adaptent automatiquement à ce métier.
+                </p>
+              </div>
 
               {/* Nom & Téléphone */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -962,7 +1122,7 @@ export const ConfigPage: React.FC = () => {
               </div>
 
               {/* Identifiant & Mot de passe */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-emerald-50/50 border border-emerald-200/60 rounded-2xl">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 bg-slate-50 border border-slate-200 rounded-2xl">
                 <div>
                   <label className="block text-xs font-bold text-slate-800 mb-1">Identifiant de connexion *</label>
                   <input
@@ -970,7 +1130,7 @@ export const ConfigPage: React.FC = () => {
                     required
                     value={newUser.username}
                     onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
-                    placeholder="Ex: caissier1, magasinier"
+                    placeholder="Ex: agent_koffi, caissier1"
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono"
                   />
                   <p className="text-[10px] text-slate-500 mt-1">Utilisé pour se connecter (sans email).</p>
@@ -989,40 +1149,31 @@ export const ConfigPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Rôle & Secteur */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Rôle métier *</label>
-                  <select
-                    value={newUser.role}
-                    onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm capitalize"
-                  >
-                    <option value="caissier">Caissier / Caissière</option>
-                    <option value="vendeur">Vendeur / Commercial</option>
-                    <option value="magasinier">Magasinier</option>
-                    <option value="gestionnaire">Gestionnaire de stock</option>
-                    <option value="comptable">Comptable</option>
-                    <option value="responsable_secteur">Responsable de secteur</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Secteur d'affectation *</label>
-                  <select
-                    value={newUser.sector}
-                    onChange={(e) => setNewUser({ ...newUser, sector: e.target.value })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm capitalize"
-                  >
-                    <option value="boutique">Boutique & Commerce général</option>
-                    <option value="poissonnerie">Poissonnerie & Surgelés</option>
-                    <option value="quincaillerie">Quincaillerie & Matériaux</option>
-                    <option value="brasserie">Brasserie & Dépôt Boissons</option>
-                    <option value="station">Station-Service</option>
-                    <option value="pharmacie">Pharmacie</option>
-                    <option value="restaurant">Restaurant & Maquis</option>
-                    <option value="pressing">Pressing & Blanchisserie</option>
-                  </select>
-                </div>
+              {/* Rôle métier contextualisé pour ce secteur */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Rôle métier spécialisé pour {subscribedSectors.find(s => s.slug === newUser.sector)?.name || newUser.sector} *
+                </label>
+                <select
+                  value={newUser.role}
+                  onChange={(e) => {
+                    const chosenId = e.target.value
+                    const sectorRoles = getRolesForSector(newUser.sector)
+                    const roleDef = sectorRoles.find((r) => r.id === chosenId)
+                    setNewUser({
+                      ...newUser,
+                      role: chosenId,
+                      permissions: roleDef ? { ...roleDef.defaultPermissions } : newUser.permissions,
+                    })
+                  }}
+                  className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800"
+                >
+                  {getRolesForSector(newUser.sector).map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.label} — {r.description}
+                    </option>
+                  ))}
+                </select>
               </div>
 
               {/* Permissions & Droits d'accès */}

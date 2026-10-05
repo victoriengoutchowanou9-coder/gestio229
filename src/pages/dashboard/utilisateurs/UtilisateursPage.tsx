@@ -9,6 +9,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { isSectorSubscribed } from '../../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
+import { getRolesForSector, normalizeSectorSlug } from '../../../core/team/sectorRoles'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
@@ -560,12 +561,20 @@ const UtilisateursPage: React.FC = () => {
         throw new Error(`Création refusée : le secteur "${assignedSectorSlug}" n'a pas été souscrit par votre entreprise.`)
       }
 
+      const cleanSectorSlug = normalizeSectorSlug(assignedSectorSlug)
+      const sectorRolesList = getRolesForSector(cleanSectorSlug)
+      const roleItem = sectorRolesList.find((r) => r.id === form.role)
+      const roleLabel = roleItem?.label || form.role
+
       const permissionsPayload = {
         ...(form.permissions || {}),
-        sector_id: assignedSectorSlug,
-        sector_slug: assignedSectorSlug,
-        activity_id: currentActivityId || assignedSectorSlug,
-        activity_name: currentActivityName || assignedSectorSlug,
+        sector: cleanSectorSlug,
+        sector_slug: cleanSectorSlug,
+        assigned_sector: cleanSectorSlug,
+        sector_id: cleanSectorSlug,
+        role_label: roleLabel,
+        activity_id: currentActivityId || cleanSectorSlug,
+        activity_name: currentActivityName || cleanSectorSlug,
         is_internal_user: true,
         created_by_admin_id: user?.id ?? null,
       }
@@ -1162,15 +1171,17 @@ const UtilisateursPage: React.FC = () => {
 
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                      Rôle Attribué *
+                      Rôle Métier Spécialisé *
                     </label>
                     <select
                       value={form.role}
                       onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
-                      className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                      className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     >
-                      {DEFAULT_ROLES.map((r) => (
-                        <option key={r.value} value={r.value}>{r.label}</option>
+                      {getRolesForSector(form.sector_id || currentSectorSlug).map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.label} — {r.description}
+                        </option>
                       ))}
                     </select>
                   </div>

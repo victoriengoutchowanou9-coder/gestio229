@@ -13,6 +13,7 @@ import { useUIStore } from '../../store/uiStore'
 import { getActiveSectorSlug, isSectorSubscribed } from '../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
+import { normalizeSectorSlug } from '../../core/team/sectorRoles'
 
 interface SectorGuardProps {
   children: React.ReactNode
@@ -95,8 +96,10 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
 
   if (!isAdmin && user) {
     const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
-    const userSector = (perm.sector_slug || perm.sector_id || user.sector_id || '').toLowerCase().replace(/^sec-/, '').trim()
-    const targetClean = (targetSectorSlug || '').toLowerCase().replace(/^sec-/, '').trim()
+    const userSector = normalizeSectorSlug(
+      perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || user.sector_id || user.sector_slug || ''
+    )
+    const targetClean = normalizeSectorSlug(targetSectorSlug || '')
 
     // 1. Si le secteur assigné de l'utilisateur n'est pas souscrit par l'entreprise : blocage immédiat
     if (!userSector || !isSectorSubscribed(userSector, company)) {
