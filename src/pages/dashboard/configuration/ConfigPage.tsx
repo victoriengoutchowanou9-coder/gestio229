@@ -6,7 +6,7 @@ import React, { useState, useEffect } from 'react'
 import {
   Building2, Save, ShieldCheck, Users, Plus, KeyRound, Check,
   X, AlertCircle, Lock, UserCheck, Shield, ToggleLeft, ToggleRight,
-  Briefcase, Store
+  Briefcase, Store, Printer, Sparkles, Layers
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -19,13 +19,14 @@ import {
   SECTOR_ROLES_CATALOG,
   SectorRoleDefinition
 } from '../../../core/team/sectorRoles'
+import { imprimerieService, ImprimerieConfig } from '../../../services/imprimerieService'
 
 export const ConfigPage: React.FC = () => {
   const { company, user, refreshTenantContext } = useAuthStore()
   const { sectorSlug: currentSectorSlug } = useTenant()
   const { toast } = useUIStore()
 
-  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs'>('etablissement')
+  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'imprimerie'>('etablissement')
 
   // ─── États Établissement ──────────────────────────────────────────────────
   const [saving, setSaving] = useState(false)
@@ -78,6 +79,52 @@ export const ConfigPage: React.FC = () => {
 
     return ALL_SECTORS_CATALOG.filter((sec) => normalizedSlugs.has(sec.slug))
   }, [company, currentSectorSlug])
+
+  // ─── Configuration Métier : Imprimerie & Sérigraphie ───────────────────────
+  const isImprimerie = React.useMemo(() => {
+    const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
+    if (slug === 'imprimerie' || slug === 'impression') return true
+    return subscribedSectors.some((s) => s.slug === 'imprimerie' || s.slug === 'impression')
+  }, [currentSectorSlug, subscribedSectors])
+
+  const [imprimerieCfg, setImprimerieCfg] = useState<ImprimerieConfig>({
+    company_id: company?.id || '',
+    sector_slug: 'imprimerie',
+    mode_gestion: 'classique',
+    marge_cible_pct: 40,
+    mention_devis: "Validité de l'offre : 15 jours. Acompte de 50% à la commande, solde à la livraison.",
+    conditions_vente: 'B.A.T. signé obligatoire avant impression finale.',
+    taux_tva_defaut: 18,
+    taux_aib_defaut: 1,
+    devise: 'FCFA',
+  })
+  const [savingImprimerie, setSavingImprimerie] = useState(false)
+
+  useEffect(() => {
+    if (company?.id && isImprimerie) {
+      imprimerieService.getConfig(company.id, 'imprimerie').then((cfg) => {
+        if (cfg) setImprimerieCfg(cfg)
+      })
+    }
+  }, [company?.id, isImprimerie])
+
+  const handleSaveImprimerie = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!company?.id) return
+    setSavingImprimerie(true)
+    try {
+      await imprimerieService.saveConfig({
+        ...imprimerieCfg,
+        company_id: company.id,
+        sector_slug: 'imprimerie'
+      })
+      toast.success('Configuration Imprimerie enregistrée avec succès !')
+    } catch (err: any) {
+      toast.error('Erreur', err.message || 'Impossible d\'enregistrer la configuration')
+    } finally {
+      setSavingImprimerie(false)
+    }
+  }
 
   // ─── Filtre par secteur dans la vue de l'équipe ───────────────────────────
   // Par défaut, filtre sur le secteur actuellement ouvert (ex: microfinance)
@@ -414,6 +461,19 @@ export const ConfigPage: React.FC = () => {
             <Users className="w-4 h-4 text-emerald-600" />
             <span>Équipe & Accès</span>
           </button>
+          {isImprimerie && (
+            <button
+              onClick={() => setActiveTab('imprimerie')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                activeTab === 'imprimerie'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Printer className="w-4 h-4 text-emerald-600" />
+              <span>Atelier Imprimerie</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -1031,6 +1091,184 @@ export const ConfigPage: React.FC = () => {
             })()}
           </div>
         </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET 5 : ATELIER IMPRIMERIE & SÉRIGRAPHIE                         */}
+      {/* =================================================================== */}
+      {activeTab === 'imprimerie' && (
+        <form onSubmit={handleSaveImprimerie} className="space-y-6 animate-fadeIn">
+          {/* Mode de gestion du centre d'impression */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-5">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <Printer className="w-5 h-5 text-emerald-600" />
+                <span>Niveau de Gestion & Fonctionnement de l'Imprimerie</span>
+              </h3>
+              <span className="text-xs font-bold px-2.5 py-1 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full">
+                Mode actuel : {imprimerieCfg.mode_gestion === 'simplifie' ? 'Mode 1 — Simplifié' : 'Mode 2 — Classique'}
+              </span>
+            </div>
+
+            <p className="text-xs text-slate-500">
+              Choisissez le niveau de complexité adapté à votre organisation. Ce réglage adapte les écrans de devis, les workflows d'atelier et la gestion des matières.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Carte Mode 1 */}
+              <div
+                onClick={() => setImprimerieCfg({ ...imprimerieCfg, mode_gestion: 'simplifie' })}
+                className={`p-5 rounded-2xl border-2 cursor-pointer transition relative ${
+                  imprimerieCfg.mode_gestion === 'simplifie'
+                    ? 'border-emerald-500 bg-emerald-50/40 shadow-sm'
+                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Sparkles className="w-5 h-5 text-emerald-600" />
+                    <h4 className="font-bold text-slate-900 text-sm">Mode 1 — Centre Simplifié</h4>
+                  </div>
+                  <input
+                    type="radio"
+                    name="mode_gestion"
+                    checked={imprimerieCfg.mode_gestion === 'simplifie'}
+                    onChange={() => setImprimerieCfg({ ...imprimerieCfg, mode_gestion: 'simplifie' })}
+                    className="text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                  />
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed mb-3">
+                  Pour petits ateliers, graphistes indépendants et points de vente rapides. Vente express au comptoir, devis direct, encaissement immédiat et déduction automatique des matières premières.
+                </p>
+                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Vente rapide POS</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Devis express</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Encaissement direct</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Marge estimée</span>
+                </div>
+              </div>
+
+              {/* Carte Mode 2 */}
+              <div
+                onClick={() => setImprimerieCfg({ ...imprimerieCfg, mode_gestion: 'classique' })}
+                className={`p-5 rounded-2xl border-2 cursor-pointer transition relative ${
+                  imprimerieCfg.mode_gestion === 'classique'
+                    ? 'border-emerald-500 bg-emerald-50/40 shadow-sm'
+                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-emerald-600" />
+                    <h4 className="font-bold text-slate-900 text-sm">Mode 2 — Centre Classique</h4>
+                  </div>
+                  <input
+                    type="radio"
+                    name="mode_gestion"
+                    checked={imprimerieCfg.mode_gestion === 'classique'}
+                    onChange={() => setImprimerieCfg({ ...imprimerieCfg, mode_gestion: 'classique' })}
+                    className="text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                  />
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed mb-3">
+                  Pour centres d'impression structurés, imprimeries industrielles et ateliers de sérigraphie. Devis détaillés au m², file d'attente Graphiste & B.A.T., bons de production, consommations réelles vs chutes, sous-traitance et rentabilité analytique.
+                </p>
+                <div className="flex flex-wrap gap-1.5 text-[11px]">
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Devis au m²</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">File PAO & B.A.T.</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Suivi des chutes</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Sous-traitance</span>
+                  <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Rentabilité réelle</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Paramètres financiers et atelier */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+            <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
+              <Building2 className="w-5 h-5 text-emerald-600" />
+              <span>Paramètres Financiers & Atelier</span>
+            </h3>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Marge Cible Atelier (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={imprimerieCfg.marge_cible_pct}
+                  onChange={(e) => setImprimerieCfg({ ...imprimerieCfg, marge_cible_pct: Number(e.target.value) })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-900"
+                />
+                <span className="text-[10px] text-slate-400">Pourcentage d'alerte sous-rentabilité</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">TVA par Défaut (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={imprimerieCfg.taux_tva_defaut}
+                  onChange={(e) => setImprimerieCfg({ ...imprimerieCfg, taux_tva_defaut: Number(e.target.value) })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-900"
+                />
+                <span className="text-[10px] text-slate-400">Norme Bénin : 18%</span>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">AIB par Défaut (%)</label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={imprimerieCfg.taux_aib_defaut}
+                  onChange={(e) => setImprimerieCfg({ ...imprimerieCfg, taux_aib_defaut: Number(e.target.value) })}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm font-bold text-slate-900"
+                />
+                <span className="text-[10px] text-slate-400">1% (Prestataires immatriculés) ou 5%</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Mention Légale sur Devis</label>
+                <textarea
+                  rows={3}
+                  value={imprimerieCfg.mention_devis}
+                  onChange={(e) => setImprimerieCfg({ ...imprimerieCfg, mention_devis: e.target.value })}
+                  placeholder="Ex: Validité de l'offre : 15 jours. Acompte de 50% à la commande..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-600 mb-1">Conditions de Vente & B.A.T.</label>
+                <textarea
+                  rows={3}
+                  value={imprimerieCfg.conditions_vente}
+                  onChange={(e) => setImprimerieCfg({ ...imprimerieCfg, conditions_vente: e.target.value })}
+                  placeholder="Ex: B.A.T. signé obligatoire avant impression finale..."
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl text-xs text-slate-800"
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Bouton de sauvegarde */}
+          <div className="flex justify-end">
+            <button
+              type="submit"
+              disabled={savingImprimerie}
+              className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-md transition disabled:opacity-50 flex items-center gap-2"
+            >
+              <Save className="w-4 h-4" />
+              <span>{savingImprimerie ? 'Enregistrement en cours...' : 'Enregistrer les paramètres Imprimerie'}</span>
+            </button>
+          </div>
+        </form>
       )}
 
       {/* =================================================================== */}

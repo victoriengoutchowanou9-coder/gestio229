@@ -90,9 +90,14 @@ const AgentsCollecteursPage     = safeLazy(() => import('./pages/dashboard/micro
 const RisquesConformitePage     = safeLazy(() => import('./pages/dashboard/microfinance/RisquesConformitePage'))
 const MicrofinanceAchatsPage    = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceAchatsPage'))
 const MicrofinanceTresoreriePage = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceTresoreriePage'))
-// Imprimerie
-const DevisProductionPage    = mod('devis_production')
-const SousTraitancePage      = mod('sous_traitance')
+// Imprimerie & Sérigraphie Dédiée
+const ImprimerieDashboardPage       = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieDashboardPage'))
+const ImprimerieDevisProductionPage = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieDevisProductionPage'))
+const ImprimeriePrestationsPage     = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimeriePrestationsPage'))
+const ImprimerieMatieresPage        = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieMatieresPage'))
+const ImprimerieSousTraitancePage   = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieSousTraitancePage'))
+const ImprimerieReportingPage       = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieReportingPage'))
+const ImprimerieVenteRapidePage     = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieVenteRapidePage'))
 // Gestion Locative / Immobilier
 const BiensPage              = mod('biens_locations')
 const ContratsPage           = mod('contrats_loyers')
@@ -189,7 +194,20 @@ const SectorAwareDashboard: React.FC = () => {
   if (clean === 'microfinance' || clean === 'microfinance-tontine' || clean === 'tontine') {
     return <MicrofinanceDashboardPage />
   }
+  if (clean === 'imprimerie' || clean === 'impression') {
+    return <ImprimerieDashboardPage />
+  }
   return <DashboardPage />
+}
+
+// ─── Reporting conditionnel (Spécialisé Rentabilité par Prestation Imprimerie) ────
+const SectorAwareReporting: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'imprimerie' || clean === 'impression') {
+    return <ImprimerieReportingPage />
+  }
+  return <ReportingPage />
 }
 
 // ─── Fournisseurs & Achats conditionnel (Spécialisé Charges Exploitation IMF) ─────
@@ -326,8 +344,8 @@ const AppRoutes: React.FC = () => {
         <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
-        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
-        <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><SectorAwareReporting /></ModuleGuard>} />
+        <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><SectorAwareReporting /></ModuleGuard>} />
         <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
         <Route path="configuration"  element={<ModuleGuard moduleId="configuration"><ConfigPage /></ModuleGuard>} />
         <Route path="journal-audit"  element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
@@ -380,9 +398,12 @@ const AppRoutes: React.FC = () => {
         <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
         <Route path="tontine" element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
         <Route path="conformite" element={<RisquesConformitePage />} />
-        {/* ── Modules Impression ── */}
-        <Route path="devis"          element={<ModuleGuard moduleId="devis_production"><DevisProductionPage /></ModuleGuard>} />
-        <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><SousTraitancePage /></ModuleGuard>} />
+        {/* ── Modules Impression & Sérigraphie ── */}
+        <Route path="devis"          element={<ModuleGuard moduleId="devis"><ImprimerieDevisProductionPage /></ModuleGuard>} />
+        <Route path="prestations"    element={<ModuleGuard moduleId="prestations"><ImprimeriePrestationsPage /></ModuleGuard>} />
+        <Route path="matieres"       element={<ModuleGuard moduleId="matieres"><ImprimerieMatieresPage /></ModuleGuard>} />
+        <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><ImprimerieSousTraitancePage /></ModuleGuard>} />
+        <Route path="vente-rapide"   element={<ModuleGuard moduleId="ventes"><ImprimerieVenteRapidePage /></ModuleGuard>} />
         {/* ── Modules Gestion Locative ── */}
         <Route path="biens"      element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
         <Route path="contrats"   element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
@@ -424,8 +445,8 @@ const AppRoutes: React.FC = () => {
         <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="depenses"       element={<ModuleGuard moduleId="depenses"><DepensesPage /></ModuleGuard>} />
-        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
-        <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><ReportingPage /></ModuleGuard>} />
+        <Route path="reporting"      element={<ModuleGuard moduleId="rapports"><SectorAwareReporting /></ModuleGuard>} />
+        <Route path="rapports"        element={<ModuleGuard moduleId="rapports"><SectorAwareReporting /></ModuleGuard>} />
         <Route path="syscohada"      element={<ModuleGuard moduleId="syscohada"><SyscohadaPage /></ModuleGuard>} />
         <Route path="configuration"  element={<ModuleGuard moduleId="configuration"><ConfigPage /></ModuleGuard>} />
         <Route path="journal-audit"  element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
@@ -478,9 +499,12 @@ const AppRoutes: React.FC = () => {
         <Route path="cycles"  element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
         <Route path="tontine" element={<ModuleGuard moduleId="tontine_cycles"><TontinesCyclesPage /></ModuleGuard>} />
         <Route path="conformite" element={<RisquesConformitePage />} />
-        {/* ── Modules Impression ── */}
-        <Route path="devis"          element={<ModuleGuard moduleId="devis_production"><DevisProductionPage /></ModuleGuard>} />
-        <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><SousTraitancePage /></ModuleGuard>} />
+        {/* ── Modules Impression & Sérigraphie ── */}
+        <Route path="devis"          element={<ModuleGuard moduleId="devis"><ImprimerieDevisProductionPage /></ModuleGuard>} />
+        <Route path="prestations"    element={<ModuleGuard moduleId="prestations"><ImprimeriePrestationsPage /></ModuleGuard>} />
+        <Route path="matieres"       element={<ModuleGuard moduleId="matieres"><ImprimerieMatieresPage /></ModuleGuard>} />
+        <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><ImprimerieSousTraitancePage /></ModuleGuard>} />
+        <Route path="vente-rapide"   element={<ModuleGuard moduleId="ventes"><ImprimerieVenteRapidePage /></ModuleGuard>} />
         {/* ── Modules Gestion Locative ── */}
         <Route path="biens"      element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
         <Route path="contrats"   element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />

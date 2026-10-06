@@ -579,6 +579,39 @@ export const SectorLoader = {
       return { grouped, flat: stationNav }
     }
 
+    // ── Menu spécifique Imprimerie & Sérigraphie (Centre d'Impression) ─────────
+    const isImprimerie = cleanSlug === 'imprimerie' || cleanSlug === 'impression'
+    if (isImprimerie) {
+      const imprimerieNav: NavItem[] = [
+        // VUE D'ENSEMBLE
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        // ACTIVITÉS & VENTES
+        { id: 'ventes', label: 'Vente & POS', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
+        { id: 'stock', label: 'Stocks', icon: 'Package', href: `${prefix}/stocks`, group: 'commercial' },
+        { id: 'caisse', label: 'Caisse', icon: 'Wallet', href: `${prefix}/caisse`, group: 'commercial' },
+        { id: 'devis', label: 'Devis & Production', icon: 'Printer', href: `${prefix}/devis`, group: 'commercial' },
+        { id: 'prestations', label: 'Prestations & BOM', icon: 'Layers', href: `${prefix}/prestations`, group: 'commercial' },
+        // TRÉSORERIE & FINANCE
+        { id: 'finances', label: 'Trésorerie', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'clients', label: 'Clients & Créances', icon: 'Users', href: `${prefix}/clients`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+        // APPROVISIONNEMENTS & PRODUCTION
+        { id: 'fournisseurs', label: 'Fournisseurs & Achats', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+        { id: 'matieres', label: 'Matières premières', icon: 'Layers', href: `${prefix}/matieres`, group: 'gestion' },
+        { id: 'sous_traitance', label: 'Sous-traitance', icon: 'GitFork', href: `${prefix}/sous-traitance`, group: 'gestion' },
+        // ADMINISTRATION
+        { id: 'rapports', label: 'Rapports & Analyses', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(imprimerieNav)
+      return { grouped, flat: imprimerieNav }
+    }
+
     // ── Logique par défaut pour tous les autres secteurs (Strictement Inchangée) ──
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',
@@ -675,6 +708,10 @@ export const SectorLoader = {
     }
     if (moduleId === 'fournisseurs') {
       return ['magasinier', 'gestionnaire', 'comptable', 'gerant', 'gestionnaire_stock_quincaillerie'].includes(user.role)
+    }
+
+    if (moduleId === 'devis' || moduleId === 'prestations' || moduleId === 'matieres' || moduleId === 'sous_traitance') {
+      return ['commercial_imprimerie', 'graphiste_pao', 'production_imprimerie', 'responsable_imprimerie', 'magasinier_imprimerie', 'caissiere_imprimerie', 'comptable_imprimerie', 'gerant'].includes(user.role)
     }
 
     return false
