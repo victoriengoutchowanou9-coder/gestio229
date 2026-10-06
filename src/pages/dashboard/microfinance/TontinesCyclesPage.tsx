@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
+import clsx from 'clsx'
 import {
   Users2,
   Plus,
