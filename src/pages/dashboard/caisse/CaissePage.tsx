@@ -960,8 +960,8 @@ export const CaissePage: React.FC = () => {
             <AlertCircle className="w-6 h-6 text-amber-600 flex-shrink-0" />
             <div>
               <p className="font-black text-sm">Session de caisse antérieure toujours OUVERTE</p>
-              <p className="text-xs text-amber-700">
-                La caisse est restée ouverte depuis le {new Date(openedAt!).toLocaleString('fr-BJ')}. Conformément à la règle de gestion, elle n'a pas été fermée automatiquement. Vous devez clôturer cette session avant d'en ouvrir une nouvelle pour la journée en cours.
+              <p className="text-xs text-amber-700 mt-0.5">
+                La caisse est restée ouverte depuis le {new Date(openedAt!).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })} par <strong>{openedBy || 'un utilisateur'}</strong>. Conformément à la règle de gestion, elle n'a pas été fermée automatiquement. Vous devez clôturer cette session avant d'en ouvrir une nouvelle pour la journée en cours.
               </p>
             </div>
           </div>
@@ -974,19 +974,53 @@ export const CaissePage: React.FC = () => {
         </div>
       )}
 
+      {/* ── BANNER VERT : SESSION OUVERTE DU JOUR MÊME ─────────────────────── */}
+      {caisseStatus === 'OUVERTE' && !isPreviousDaySession && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
+              <Check className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="font-black text-emerald-900 text-sm">Caisse Ouverte</p>
+              <p className="text-emerald-700 text-xs">
+                N° {cashRegisterId ? `CS-${currentSectorSlug.slice(0, 4).toUpperCase()}` : 'CS-ACTIF'} &bull; Ouverte à {openedAt ? new Date(openedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--:--'} par <strong>{openedBy}</strong> {activeSessionId && `&bull; Depuis ID ${activeSessionId.slice(0, 8)}`}
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-4 text-right">
+            <div>
+              <p className="text-emerald-700 font-mono font-black">{fmt(initialCash)} Espèces</p>
+              {initialMomo > 0 && <p className="text-emerald-600 font-mono text-[11px]">{fmt(initialMomo)} MoMo</p>}
+            </div>
+            <button onClick={loadCaisseData} className="p-2 bg-white rounded-xl border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition shadow-sm">
+              <RefreshCw className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── En-tête du Module Caisse ─────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 ${
               caisseStatus === 'OUVERTE'
-                ? 'bg-emerald-100 text-emerald-800'
+                ? isPreviousDaySession
+                  ? 'bg-amber-100 text-amber-800'
+                  : 'bg-emerald-100 text-emerald-800'
                 : 'bg-rose-100 text-rose-800'
             }`}>
               {caisseStatus === 'OUVERTE' ? (
-                <>
-                  <Unlock className="w-3.5 h-3.5 text-emerald-600" /> Caisse Ouverte
-                </>
+                isPreviousDaySession ? (
+                  <>
+                    <AlertCircle className="w-3.5 h-3.5 text-amber-600" /> Session Antérieure Ouverte
+                  </>
+                ) : (
+                  <>
+                    <Unlock className="w-3.5 h-3.5 text-emerald-600" /> Caisse Ouverte
+                  </>
+                )
               ) : (
                 <>
                   <Lock className="w-3.5 h-3.5 text-rose-600" /> Caisse Fermée
@@ -1004,7 +1038,7 @@ export const CaissePage: React.FC = () => {
             Caisse Opérationnelle
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Gestion du tiroir espèces, réceptions Mobile Money, clôtures journalières et versements
+            Gestion du tiroir espèces, réceptions Mobile Money, clôtures journalières et versements &bull; Secteur : <strong className="text-slate-700 uppercase">{currentSectorSlug}</strong>
           </p>
         </div>
 
@@ -1023,7 +1057,7 @@ export const CaissePage: React.FC = () => {
           {/* Envoyer une demande vers Trésorerie */}
           <button
             onClick={() => setShowWithdrawalModal(true)}
-            disabled={caisseStatus !== 'OUVERTE'}
+            disabled={caisseStatus !== 'OUVERTE' || isPreviousDaySession}
             className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50"
           >
             <Send className="w-3.5 h-3.5" />
@@ -1034,11 +1068,21 @@ export const CaissePage: React.FC = () => {
           {caisseStatus === 'FERMEE' ? (
             <button
               onClick={() => {
+                if (isPreviousDaySession) {
+                  toast.error("Session antérieure non clôturée", "Vous devez clôturer la session de la veille avant d'ouvrir la caisse aujourd'hui.")
+                  return
+                }
                 setOpenInputCash(initialCash)
                 setOpenInputMomo(initialMomo)
                 setShowOpenModal(true)
               }}
-              className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md shadow-emerald-200 transition flex items-center gap-1.5"
+              disabled={isPreviousDaySession}
+              className={`px-4 py-2.5 rounded-xl text-xs font-black shadow-md transition flex items-center gap-1.5 ${
+                isPreviousDaySession
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+                  : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-200'
+              }`}
+              title={isPreviousDaySession ? "Clôturez d'abord la caisse d'hier" : "Ouvrir la caisse"}
             >
               <Unlock className="w-4 h-4" />
               <span>Ouvrir la caisse</span>
@@ -1052,7 +1096,7 @@ export const CaissePage: React.FC = () => {
               className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md shadow-rose-200 transition flex items-center gap-1.5"
             >
               <Lock className="w-4 h-4" />
-              <span>Fermer la caisse</span>
+              <span>{isPreviousDaySession ? "Clôturer la caisse d'hier" : "Fermer la caisse"}</span>
             </button>
           )}
 

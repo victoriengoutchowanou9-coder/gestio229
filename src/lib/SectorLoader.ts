@@ -19,6 +19,7 @@ import {
 import type { Company, Sector, UserProfile, RoutingDecision, RoutingType } from '../types/tenant'
 import { checkModuleAccess } from '../core/subscription/subscriptionEngine'
 import { isSectorSubscribed } from './sectorClient'
+import { normalizeSectorSlug, getRolesForSector } from '../core/team/sectorRoles'
 
 // =============================================================================
 // TYPES INTERNES
@@ -646,21 +647,34 @@ export const SectorLoader = {
       return !!perms[moduleId].view
     }
 
-    // Permissions spécifiques par rôle pour les modules clés
+    // Rôles métiers spécialisés par secteur d'activité
+    const userSector = normalizeSectorSlug(perms.sector_slug || perms.sector || perms.assigned_sector || user.sector_id || user.sector_slug || '')
+    if (userSector && user.role) {
+      const sectorRoles = getRolesForSector(userSector)
+      const roleDef = sectorRoles.find((r) => r.id === user.role)
+      if (roleDef?.defaultPermissions) {
+        const rolePerm = (roleDef.defaultPermissions as any)[moduleId]
+        if (rolePerm !== undefined) {
+          return Boolean(rolePerm)
+        }
+      }
+    }
+
+    // Permissions spécifiques par rôle pour les modules clés standards
     if (moduleId === 'ventes' || moduleId === 'caisse' || moduleId === 'consignation') {
-      return ['caissier', 'vendeur', 'commercial', 'magasinier', 'gestionnaire', 'gerant'].includes(user.role)
+      return ['caissier', 'vendeur', 'commercial', 'magasinier', 'gestionnaire', 'gerant', 'pompiste', 'chef_piste', 'receptionniste'].includes(user.role)
     }
     if (moduleId === 'stock') {
-      return ['magasinier', 'gestionnaire', 'gerant'].includes(user.role)
+      return ['magasinier', 'gestionnaire', 'gerant', 'gestionnaire_stock_quincaillerie', 'housekeeping', 'chef_piste'].includes(user.role)
     }
     if (moduleId === 'syscohada' || moduleId === 'finances' || moduleId === 'depenses') {
       return ['comptable', 'gestionnaire', 'gerant'].includes(user.role)
     }
     if (moduleId === 'clients') {
-      return ['caissier', 'vendeur', 'commercial', 'comptable', 'gerant'].includes(user.role)
+      return ['caissier', 'vendeur', 'commercial', 'comptable', 'gerant', 'agent_credit', 'receptionniste'].includes(user.role)
     }
     if (moduleId === 'fournisseurs') {
-      return ['magasinier', 'gestionnaire', 'comptable', 'gerant'].includes(user.role)
+      return ['magasinier', 'gestionnaire', 'comptable', 'gerant', 'gestionnaire_stock_quincaillerie'].includes(user.role)
     }
 
     return false

@@ -9,7 +9,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { isSectorSubscribed } from '../../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
-import { getRolesForSector, normalizeSectorSlug } from '../../../core/team/sectorRoles'
+import { getRolesForSector, normalizeSectorSlug, getSectorAvailableModules } from '../../../core/team/sectorRoles'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
@@ -108,7 +108,7 @@ interface NewUserForm {
   role: string
   sector_id: string
   phone: string
-  permissions: Record<string, Record<string, boolean>>
+  permissions: Record<string, any>
 }
 
 const DEFAULT_ROLES = [
@@ -208,6 +208,50 @@ const UtilisateursPage: React.FC = () => {
   const currentSectorSlug = (params.sectorSlug || (typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_sector') : '') || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
   const currentActivityId = typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_id') : null
   const currentActivityName = typeof window !== 'undefined' ? localStorage.getItem('gestio229_active_activity_name') : null
+
+  const targetFormSector = form.sector_id || currentSectorSlug
+  const availableSectorModules = useMemo(() => {
+    return getSectorAvailableModules(targetFormSector)
+  }, [targetFormSector])
+
+  const isModuleChecked = (moduleId: string): boolean => {
+    const val = (form.permissions as any)?.[moduleId]
+    if (val === true) return true
+    if (val === false) return false
+    if (typeof val === 'object' && val !== null) {
+      return Boolean(val.view || val.create || val.edit || val.admin)
+    }
+    return false
+  }
+
+  const toggleModulePermission = (moduleId: string) => {
+    const current = isModuleChecked(moduleId)
+    setForm((prev) => ({
+      ...prev,
+      permissions: {
+        ...prev.permissions,
+        [moduleId]: current ? false : { view: true, create: true, edit: true, delete: true },
+      },
+    }))
+  }
+
+  const handleRoleSelectChange = (newRole: string) => {
+    const roles = getRolesForSector(targetFormSector)
+    const roleObj = roles.find((r) => r.id === newRole)
+    const rolePerms = (roleObj?.defaultPermissions as any) || {}
+
+    const updatedPerms: Record<string, any> = { ...(form.permissions as any) }
+    availableSectorModules.forEach((m) => {
+      const allowed = Boolean(rolePerms[m.id])
+      updatedPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
+    })
+
+    setForm((prev) => ({
+      ...prev,
+      role: newRole,
+      permissions: updatedPerms,
+    }))
+  }
 
   useEffect(() => {
     if (company?.id) {
@@ -1079,11 +1123,25 @@ const UtilisateursPage: React.FC = () => {
                 setShowCreateForm(true)
                 setError('')
                 setSuccess('')
-                if (isSubSoftwareRoute && currentSectorSlug) {
-                  setForm((p) => ({ ...p, sector_id: currentSectorSlug }))
-                } else if (sectors.length > 0 && !form.sector_id) {
-                  setForm((p) => ({ ...p, sector_id: sectors[0].sector_slug || sectors[0].id }))
-                }
+                const targetSec = isSubSoftwareRoute && currentSectorSlug ? currentSectorSlug : (sectors[0]?.sector_slug || sectors[0]?.id || 'boutique')
+                const roles = getRolesForSector(targetSec)
+                const defaultRole = roles[0]?.id || 'vendeur'
+                const rolePerms = (roles[0]?.defaultPermissions as any) || {}
+                const mods = getSectorAvailableModules(targetSec)
+                const initPerms: Record<string, any> = {}
+                mods.forEach((m) => {
+                  const allowed = Boolean(rolePerms[m.id])
+                  initPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
+                })
+                setForm({
+                  full_name: '',
+                  login_identifier: '',
+                  password: '',
+                  phone: '',
+                  sector_id: targetSec,
+                  role: defaultRole,
+                  permissions: initPerms as any,
+                })
               }}
               className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-sm transition-all text-xs"
             >
@@ -1175,7 +1233,7 @@ const UtilisateursPage: React.FC = () => {
                     </label>
                     <select
                       value={form.role}
-                      onChange={(e) => setForm((p) => ({ ...p, role: e.target.value }))}
+                      onChange={(e) => handleRoleSelectChange(e.target.value)}
                       className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                     >
                       {getRolesForSector(form.sector_id || currentSectorSlug).map((r) => (
@@ -1204,7 +1262,24 @@ const UtilisateursPage: React.FC = () => {
                       <select
                         required
                         value={form.sector_id}
-                        onChange={(e) => setForm((p) => ({ ...p, sector_id: e.target.value }))}
+                        onChange={(e) => {
+                          const sec = e.target.value
+                          const roles = getRolesForSector(sec)
+                          const defaultRole = roles[0]?.id || 'vendeur'
+                          const rolePerms = (roles[0]?.defaultPermissions as any) || {}
+                          const mods = getSectorAvailableModules(sec)
+                          const initPerms: Record<string, any> = {}
+                          mods.forEach((m) => {
+                            const allowed = Boolean(rolePerms[m.id])
+                            initPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
+                          })
+                          setForm((p) => ({
+                            ...p,
+                            sector_id: sec,
+                            role: defaultRole,
+                            permissions: initPerms,
+                          }))
+                        }}
                         className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                       >
                         <option value="">-- Sélectionner un secteur souscrit --</option>
@@ -1216,42 +1291,46 @@ const UtilisateursPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Permissions par module */}
-                <div>
-                  <h3 className="text-xs font-bold text-slate-700 uppercase mb-2 flex items-center gap-1.5">
-                    <Shield className="w-4 h-4 text-emerald-600" /> Droits d'Accès aux Modules
-                  </h3>
-                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                    <table className="w-full text-xs">
-                      <thead className="bg-slate-50 font-bold text-slate-600">
-                        <tr>
-                          <th className="text-left px-3 py-2">Module</th>
-                          <th className="px-2 py-2 text-center">Voir</th>
-                          <th className="px-2 py-2 text-center">Créer</th>
-                          <th className="px-2 py-2 text-center">Modifier</th>
-                          <th className="px-2 py-2 text-center">Valider</th>
-                          <th className="px-2 py-2 text-center">Supprimer</th>
-                          <th className="px-2 py-2 text-center">Administrer</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {ALL_MODULES.map((mod) => (
-                          <tr key={mod.id} className="hover:bg-slate-50">
-                            <td className="px-3 py-2 font-medium text-slate-800">{mod.label}</td>
-                            {['view', 'create', 'edit', 'validate', 'delete', 'admin'].map((action) => (
-                              <td key={action} className="px-2 py-2 text-center">
-                                <input
-                                  type="checkbox"
-                                  checked={form.permissions[mod.id]?.[action] ?? false}
-                                  onChange={() => togglePermission(mod.id, action)}
-                                  className="w-4 h-4 accent-emerald-600 cursor-pointer"
-                                />
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                {/* Section PERMISSIONS ET DROITS D'ACCÈS - Grille 3 colonnes sectorielle */}
+                <div className="space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1 border-b border-slate-100">
+                    <h3 className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
+                      <Shield className="w-4 h-4 text-emerald-600" /> Permissions et Droits d'Accès aux Modules ({availableSectorModules.length})
+                    </h3>
+                    <span className="text-[11px] text-slate-500 italic">
+                      Modules filtrés pour le secteur et pré-cochés selon le rôle choisi
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {availableSectorModules.map((mod) => {
+                      const isChecked = isModuleChecked(mod.id)
+                      return (
+                        <label
+                          key={mod.id}
+                          className={`flex items-start gap-2.5 p-3 rounded-xl border transition-all cursor-pointer ${
+                            isChecked
+                              ? 'bg-emerald-50/70 border-emerald-300 text-slate-900 shadow-xs'
+                              : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            onChange={() => toggleModulePermission(mod.id)}
+                            className="w-4 h-4 mt-0.5 accent-emerald-600 rounded cursor-pointer shrink-0"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <span className="text-xs font-bold block leading-tight">
+                              {mod.label}
+                            </span>
+                            <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
+                              {mod.id}
+                            </span>
+                          </div>
+                        </label>
+                      )
+                    })}
                   </div>
                 </div>
 

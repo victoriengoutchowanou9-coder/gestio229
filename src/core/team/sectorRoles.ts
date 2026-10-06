@@ -1126,3 +1126,176 @@ export function getRolesForSector(sectorSlug?: string | null): SectorRoleDefinit
   const specific = SECTOR_ROLES_CATALOG[norm] || []
   return [...specific, ...COMMON_ROLES]
 }
+
+export interface SectorModuleItem {
+  id: string
+  label: string
+  category: 'commercial' | 'gestion' | 'finance' | 'admin'
+}
+
+/**
+ * Renvoie la liste spécifique des modules d'exploitation pour le secteur donné
+ * (Utilisé pour le filtrage strict des droits dans le formulaire utilisateur)
+ */
+export function getSectorAvailableModules(sectorSlug?: string | null): SectorModuleItem[] {
+  const norm = normalizeSectorSlug(sectorSlug)
+
+  if (norm === 'hotel') {
+    return [
+      { id: 'ventes', label: 'Vente & POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'stock', label: 'Stocks', category: 'gestion' },
+      { id: 'chambres', label: 'Chambres & Réservations', category: 'commercial' },
+      { id: 'housekeeping', label: 'Housekeeping', category: 'gestion' },
+      { id: 'clients', label: 'Clients', category: 'commercial' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'microfinance') {
+    return [
+      { id: 'membres', label: 'Membres & Épargne', category: 'commercial' },
+      { id: 'credits', label: 'Crédits', category: 'commercial' },
+      { id: 'tontine', label: 'Tontines', category: 'commercial' },
+      { id: 'caisse', label: 'Recettes Administratives / Caisse', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'clients', label: 'Clients & Adhérents', category: 'commercial' },
+      { id: 'reporting', label: 'Reporting & Réglementaire', category: 'gestion' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'station-service') {
+    return [
+      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'stock', label: 'Stocks Carburants', category: 'gestion' },
+      { id: 'pompes', label: 'Pompes & Cuves', category: 'commercial' },
+      { id: 'postes', label: 'Postes Pompistes', category: 'commercial' },
+      { id: 'clients', label: 'Clients & Flottes', category: 'commercial' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'quincaillerie') {
+    return [
+      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'stock', label: 'Stocks & Inventaires', category: 'gestion' },
+      { id: 'materiaux', label: 'Ciment & Fers', category: 'gestion' },
+      { id: 'chantiers', label: 'Chantiers & Camions', category: 'commercial' },
+      { id: 'clients', label: 'Clients', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Fournisseurs / Achats', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'reporting', label: 'Reporting & Rapports', category: 'gestion' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'poissonnerie') {
+    return [
+      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'pesee', label: 'Pesée Kg & Cartons', category: 'commercial' },
+      { id: 'chambres_froides', label: 'Chambres Froides & T°', category: 'gestion' },
+      { id: 'stock', label: 'Stocks Frigorifiques', category: 'gestion' },
+      { id: 'avaries', label: 'Avaries & Pertes', category: 'gestion' },
+      { id: 'clients', label: 'Clients', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Fournisseurs Maritimes', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'brasserie') {
+    return [
+      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'stock', label: 'Stocks Boissons & Fûts', category: 'gestion' },
+      { id: 'consignation', label: 'Consignations & Casiers', category: 'commercial' },
+      { id: 'grilles', label: 'Grilles Gros & Maquis', category: 'commercial' },
+      { id: 'clients', label: 'Clients & Débits', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Fournisseurs', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'restaurant') {
+    return [
+      { id: 'ventes', label: 'Commandes & POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse & Clôtures', category: 'finance' },
+      { id: 'tables', label: 'Service & Tables', category: 'commercial' },
+      { id: 'cuisine', label: 'Cuisine & Bar (KDS)', category: 'commercial' },
+      { id: 'stock', label: 'Stock Matières & Boissons', category: 'gestion' },
+      { id: 'recettes', label: 'Fiches Recettes', category: 'gestion' },
+      { id: 'pertes', label: 'Pertes & Offerts', category: 'gestion' },
+      { id: 'clients', label: 'Clients & Ardoises', category: 'commercial' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'ecole') {
+    return [
+      { id: 'eleves', label: 'Élèves & Classes', category: 'gestion' },
+      { id: 'frais', label: 'Frais Scolaires', category: 'finance' },
+      { id: 'caisse', label: 'Caisse Scolaire', category: 'finance' },
+      { id: 'notes', label: 'Notes & Résultats', category: 'gestion' },
+      { id: 'absences', label: 'Absences', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses École', category: 'finance' },
+      { id: 'reporting', label: 'Rapports Pédagogiques', category: 'gestion' },
+    ]
+  }
+
+  if (norm === 'immobilier' || norm === 'location') {
+    return [
+      { id: 'biens', label: 'Biens & Logements', category: 'gestion' },
+      { id: 'contrats', label: 'Contrats & Loyers', category: 'commercial' },
+      { id: 'quittances', label: 'Quittances', category: 'finance' },
+      { id: 'caisse', label: 'Caisse & Encaissements', category: 'finance' },
+      { id: 'clients', label: 'Locataires & Bailleurs', category: 'commercial' },
+      { id: 'depenses', label: 'Dépenses Travaux', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'garage') {
+    return [
+      { id: 'vehicules', label: 'Véhicules & Entrées', category: 'gestion' },
+      { id: 'reparations', label: 'Ordres de Réparation', category: 'commercial' },
+      { id: 'ventes', label: 'Vente Pièces / POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse Atelier', category: 'finance' },
+      { id: 'stock', label: 'Stocks Pièces', category: 'gestion' },
+      { id: 'clients', label: 'Clients & Propriétaires', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Fournisseurs Pièces', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses Garage', category: 'finance' },
+    ]
+  }
+
+  if (norm === 'pharmacie') {
+    return [
+      { id: 'ventes', label: 'Vente & POS', category: 'commercial' },
+      { id: 'ordonnances', label: 'Ordonnances', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse Officine', category: 'finance' },
+      { id: 'stock', label: 'Stocks Médicaments', category: 'gestion' },
+      { id: 'lots', label: 'Lots & Péremptions', category: 'gestion' },
+      { id: 'clients', label: 'Patients & Clients', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Laboratoires & Répartiteurs', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+    ]
+  }
+
+  // Par défaut pour les autres commerces (Boutique, Supermarché, Cosmétiques, etc.)
+  return [
+    { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
+    { id: 'caisse', label: 'Caisse', category: 'finance' },
+    { id: 'stock', label: 'Stocks & Inventaires', category: 'gestion' },
+    { id: 'clients', label: 'Clients & Créances', category: 'commercial' },
+    { id: 'fournisseurs', label: 'Fournisseurs / Achats', category: 'gestion' },
+    { id: 'depenses', label: 'Dépenses', category: 'finance' },
+    { id: 'reporting', label: 'Reporting & Rapports', category: 'gestion' },
+    { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+    { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+  ]
+}

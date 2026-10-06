@@ -687,6 +687,7 @@ export async function fetchResumeActivite(
  */
 export interface ActiveCaisseSession {
   id: string
+  caisse_id?: string
   session_number: string
   statut: 'ouverte' | 'open'
   date_ouverture: string
@@ -698,6 +699,7 @@ export interface ActiveCaisseSession {
   ouvert_par_id: string | null
   sector_slug: string
   company_id: string
+  is_previous_day?: boolean
 }
 
 function isValidUuid(val?: string | null): boolean {
@@ -708,7 +710,7 @@ function isValidUuid(val?: string | null): boolean {
 /**
  * Récupère la session de caisse active (statut='ouverte' ET closed_at/date_fermeture IS NULL)
  * pour le couple exact (company_id, sector_slug).
- * Supporte la table caisses officielle et le fallback cash_sessions.
+ * Supporte la table caisse_sessions officielle, caisses et le fallback cash_sessions.
  */
 export async function getCurrentCashSession(
   companyId: string,
@@ -718,7 +720,56 @@ export async function getCurrentCashSession(
   const cleanSlug = (sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
   if (!companyId || !cleanSlug) return null
 
-  // 1. Essai sur table caisses officielle
+  const now = new Date()
+
+  // 1. Essai sur la table dédiée caisse_sessions
+  try {
+    const { data: dbSessions, error: sessErr } = await supabase
+      .from('caisse_sessions')
+      .select('*, caisse:caisses(code, nom)')
+      .eq('company_id', companyId)
+      .or(`sector_slug.eq.${cleanSlug},secteur_slug.eq.${cleanSlug}`)
+      .in('statut', ['ouverte', 'open'])
+      .is('date_fermeture', null)
+      .order('date_ouverture', { ascending: false })
+      .limit(1)
+
+    if (!sessErr && dbSessions && dbSessions.length > 0) {
+      const s = dbSessions[0]
+      const openDate = new Date(s.date_ouverture)
+      const isDiffDate =
+        openDate.getFullYear() !== now.getFullYear() ||
+        openDate.getMonth() !== now.getMonth() ||
+        openDate.getDate() !== now.getDate()
+
+      const heureStr = !isNaN(openDate.getTime())
+        ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+        : '--:--'
+
+      const codeCaisse = s.caisse?.code || `CS-${cleanSlug.slice(0, 4).toUpperCase()}`
+
+      return {
+        id: s.id,
+        caisse_id: s.caisse_id,
+        session_number: codeCaisse,
+        statut: 'ouverte',
+        date_ouverture: s.date_ouverture,
+        heure_ouverture: heureStr,
+        fond_ouverture_especes: Number(s.fond_ouverture_especes) || 0,
+        fond_ouverture_momo: Number(s.fond_actuel_momo ?? s.fond_ouverture_momo) || 0,
+        total_ouverture: (Number(s.fond_ouverture_especes) || 0) + (Number(s.fond_ouverture_momo) || 0),
+        ouvert_par: s.ouvert_par_nom || 'Caissier',
+        ouvert_par_id: s.ouvert_par || null,
+        sector_slug: cleanSlug,
+        company_id: companyId,
+        is_previous_day: isDiffDate,
+      }
+    }
+  } catch (err) {
+    console.warn('[CASH-CHECK] Fallback caisse_sessions:', err)
+  }
+
+  // 2. Essai sur table caisses officielle
   try {
     const { data: openCaisses, error } = await supabase
       .from('caisses')
@@ -733,23 +784,30 @@ export async function getCurrentCashSession(
     if (!error && openCaisses && openCaisses.length > 0) {
       const c = openCaisses[0]
       const openDate = new Date(c.date_ouverture || c.created_at)
+      const isDiffDate =
+        openDate.getFullYear() !== now.getFullYear() ||
+        openDate.getMonth() !== now.getMonth() ||
+        openDate.getDate() !== now.getDate()
+
       const heureStr = !isNaN(openDate.getTime())
         ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
         : '--:--'
 
       const sessionInfo: ActiveCaisseSession = {
         id: c.id,
-        session_number: `CS-${cleanSlug.slice(0, 4).toUpperCase()}-${c.id.slice(0, 6).toUpperCase()}`,
+        caisse_id: c.id,
+        session_number: c.code || `CS-${cleanSlug.slice(0, 4).toUpperCase()}-${c.id.slice(0, 6).toUpperCase()}`,
         statut: 'ouverte',
         date_ouverture: c.date_ouverture || c.created_at,
         heure_ouverture: heureStr,
         fond_ouverture_especes: Number(c.fond_ouverture_especes) || 0,
         fond_ouverture_momo: Number(c.fond_ouverture_momo) || 0,
         total_ouverture: (Number(c.fond_ouverture_especes) || 0) + (Number(c.fond_ouverture_momo) || 0),
-        ouvert_par: c.opener?.full_name || c.opener?.username || 'Caissier',
+        ouvert_par: c.opener?.full_name || c.opener?.username || c.ouvert_par || 'Caissier',
         ouvert_par_id: c.ouvert_par || null,
         sector_slug: cleanSlug,
-        company_id: companyId
+        company_id: companyId,
+        is_previous_day: isDiffDate,
       }
 
       console.log('[CASH-CHECK]', {

@@ -11,6 +11,7 @@ import { Link } from 'react-router-dom'
 import { Lock, ShieldAlert, ArrowRight, ArrowLeft, Sparkles, CheckCircle2 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { checkModuleAccess } from '../../core/subscription/subscriptionEngine'
+import SectorLoader from '../../lib/SectorLoader'
 
 interface ModuleGuardProps {
   moduleId: string
@@ -19,9 +20,49 @@ interface ModuleGuardProps {
 
 export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) => {
   const company = useAuthStore((s) => s.company)
+  const user = useAuthStore((s) => s.user)
+
+  // 1. Contrôle abonnement entreprise
   const access = checkModuleAccess(moduleId, company)
 
   if (access.allowed) {
+    // 2. Contrôle droits & permissions de l'utilisateur interne (RBAC)
+    const hasUserAccess = SectorLoader.canAccess(user, moduleId, 'view', company)
+    if (!hasUserAccess) {
+      return (
+        <div className="min-h-[70vh] flex items-center justify-center p-4">
+          <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl border border-red-200 dark:border-red-900/60 p-8 shadow-xl text-center animate-fadeIn">
+            <div className="w-16 h-16 rounded-2xl bg-red-100 dark:bg-red-950/80 text-red-600 dark:text-red-400 flex items-center justify-center mx-auto mb-5 shadow-sm">
+              <Lock className="w-8 h-8" />
+            </div>
+
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300 mb-3">
+              <ShieldAlert className="w-3.5 h-3.5" />
+              Accès Refusé
+            </span>
+
+            <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
+              Module Non Autorisé
+            </h2>
+
+            <p className="text-slate-600 dark:text-slate-300 text-sm mt-3 leading-relaxed">
+              Votre profil collaborateur ne dispose pas des droits d'accès nécessaires pour exploiter ce module.
+            </p>
+
+            <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <Link
+                to="/hub"
+                className="w-full sm:w-auto px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center justify-center gap-2 transition"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Retourner au HUB</span>
+              </Link>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
     return <>{children}</>
   }
 

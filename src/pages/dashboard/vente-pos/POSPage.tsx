@@ -10,7 +10,7 @@ import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
-  ChevronRight, ArrowDown
+  ChevronRight, ArrowDown, Lock
 } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -739,12 +739,15 @@ export const POSPage: React.FC = () => {
     ? isMultiBalanced
     : (!isCashInsufficient && totalNetTTC > 0)
 
-  const canValidateSale = cart.length > 0 && isPaymentValid && !paying && !checkingCaisse && !!activeCaisse
+  const canValidateSale = cart.length > 0 && isPaymentValid && !paying && !checkingCaisse && !!activeCaisse && !activeCaisse.is_previous_day
 
   // Libellé dynamique du bouton de validation selon l'équilibre et l'état de caisse
   const validationButtonText = useMemo(() => {
     if (!checkingCaisse && !activeCaisse) {
       return "Veuillez ouvrir la caisse"
+    }
+    if (activeCaisse?.is_previous_day) {
+      return "Session antérieure non clôturée : Vente bloquée"
     }
     if (cart.length === 0) return 'Panier vide'
     if (paying) return 'Validation en cours...'
@@ -771,6 +774,11 @@ export const POSPage: React.FC = () => {
     // 0. Contrôle caisse ouverte obligatoire pour ce secteur
     if (!activeCaisse) {
       toast.error('Caisse fermée', 'Veuillez ouvrir la caisse avant d\'encaisser une vente.')
+      return
+    }
+
+    if (activeCaisse.is_previous_day) {
+      toast.error('Session de caisse antérieure non clôturée', 'La caisse est restée ouverte depuis un jour antérieur. Vous devez clôturer cette session avant d\'effectuer une nouvelle vente.')
       return
     }
 
@@ -1711,8 +1719,31 @@ export const POSPage: React.FC = () => {
         <div className="bg-slate-50 border border-slate-200 rounded-2xl p-3 text-xs text-slate-500 flex items-center gap-2 animate-pulse">
           <RefreshCw className="w-3 h-3 animate-spin" /> Vérification de la caisse en cours…
         </div>
+      ) : activeCaisse && activeCaisse.is_previous_day ? (
+        /* ── ALERTE ORANGE : SESSION ANTÉRIEURE TOUJOURS OUVERTE ── */
+        <div className="bg-amber-50 border-2 border-amber-300 text-amber-900 p-4 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs shadow-sm animate-in fade-in">
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-xl bg-amber-200 text-amber-800 flex items-center justify-center flex-shrink-0">
+              <AlertTriangle className="w-4 h-4 text-amber-700" />
+            </div>
+            <div>
+              <p className="font-black text-sm text-amber-900">Session de caisse antérieure toujours OUVERTE</p>
+              <p className="text-amber-800 text-xs mt-0.5">
+                La caisse est restée ouverte depuis le {new Date(activeCaisse.date_ouverture).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })} par <strong>{activeCaisse.ouvert_par}</strong>. Conformément à la règle de gestion, elle n'a pas été fermée automatiquement. Vous devez clôturer cette session avant d'en ouvrir une nouvelle pour la journée en cours.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 flex-shrink-0">
+            <Link
+              to={`/app/${currentSectorSlug}/caisse`}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition text-center text-xs whitespace-nowrap shadow-sm flex items-center gap-1.5"
+            >
+              <Lock className="w-3.5 h-3.5" /> Clôturer la caisse d'hier
+            </Link>
+          </div>
+        </div>
       ) : activeCaisse ? (
-        /* ── Caisse OUVERTE : affichage des infos de session ── */
+        /* ── Caisse OUVERTE DU JOUR : BANNER VERT ── */
         <div className="bg-emerald-50 border border-emerald-200 rounded-2xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-7 h-7 rounded-lg bg-emerald-500 text-white flex items-center justify-center flex-shrink-0">
@@ -1721,7 +1752,7 @@ export const POSPage: React.FC = () => {
             <div>
               <p className="font-bold text-emerald-900 text-sm">Caisse Ouverte</p>
               <p className="text-emerald-700">
-                N° {activeCaisse.session_number} &bull; Ouverte à {activeCaisse.heure_ouverture} par <strong>{activeCaisse.ouvert_par}</strong>
+                N° {activeCaisse.session_number} &bull; Ouverte à {activeCaisse.heure_ouverture} par <strong>{activeCaisse.ouvert_par}</strong> &bull; Depuis ID {activeCaisse.id.slice(0, 8)}
               </p>
             </div>
           </div>
