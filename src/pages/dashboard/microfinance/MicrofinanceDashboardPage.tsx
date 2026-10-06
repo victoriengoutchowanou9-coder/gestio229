@@ -26,6 +26,7 @@ export const MicrofinanceDashboardPage: React.FC = () => {
   const [collectes, setCollectes] = useState<any[]>([])
   const [tontines, setTontines] = useState<any[]>([])
   const [alertes, setAlertes] = useState<any[]>([])
+  const [tresoComptes, setTresoComptes] = useState<any[]>([])
 
   const loadDashboardData = useCallback(async () => {
     if (!companyId) return
@@ -38,7 +39,8 @@ export const MicrofinanceDashboardPage: React.FC = () => {
         agtRes,
         colRes,
         tntRes,
-        altRes
+        altRes,
+        trsRes
       ] = await Promise.all([
         supabaseTenant('microfinance_membres').select('*'),
         supabaseTenant('microfinance_comptes_epargne').select('*'),
@@ -46,7 +48,8 @@ export const MicrofinanceDashboardPage: React.FC = () => {
         supabaseTenant('microfinance_agents').select('*'),
         supabaseTenant('microfinance_collectes_terrain').select('*').order('date_collecte', { ascending: false }).limit(20),
         supabaseTenant('tontine_groupes').select('*'),
-        supabaseTenant('microfinance_conformite_alertes').select('*').eq('statut', 'OUVERTE').limit(10)
+        supabaseTenant('microfinance_conformite_alertes').select('*').eq('statut', 'OUVERTE').limit(10),
+        supabaseTenant('microfinance_tresorerie_comptes').select('*')
       ])
 
       setMembres(mbrRes.data || [])
@@ -56,6 +59,7 @@ export const MicrofinanceDashboardPage: React.FC = () => {
       setCollectes(colRes.data || [])
       setTontines(tntRes.data || [])
       setAlertes(altRes.data || [])
+      setTresoComptes(trsRes.data || [])
     } catch (err: any) {
       console.error('[MicrofinanceDashboard] Erreur chargement:', err.message)
       setMembres([])
@@ -65,6 +69,7 @@ export const MicrofinanceDashboardPage: React.FC = () => {
       setCollectes([])
       setTontines([])
       setAlertes([])
+      setTresoComptes([])
     } finally {
       setLoading(false)
     }
@@ -100,6 +105,9 @@ export const MicrofinanceDashboardPage: React.FC = () => {
       .filter(c => String(c.date_collecte).slice(0, 10) === aujourdhuiStr)
       .reduce((sum, c) => sum + (Number(c.montant) || 0), 0)
 
+    // Trésorerie globale multi-canaux
+    const totalTresorerie = tresoComptes.reduce((sum, c) => sum + (Number(c.solde_actuel) || 0), 0)
+
     return {
       totalMembres,
       membresActifs,
@@ -109,10 +117,11 @@ export const MicrofinanceDashboardPage: React.FC = () => {
       parPct,
       soldeAgentsDetenu,
       collecteJour,
+      totalTresorerie,
       nbGroupesTontine: tontines.length,
       nbAlertesOuvertes: alertes.length
     }
-  }, [membres, comptes, credits, agents, collectes, tontines, alertes])
+  }, [membres, comptes, credits, agents, collectes, tontines, alertes, tresoComptes])
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -291,6 +300,12 @@ export const MicrofinanceDashboardPage: React.FC = () => {
           className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-bold border border-slate-200 transition shadow-sm"
         >
           🛡️ Alertes & Conformité LBC/FT
+        </Link>
+        <Link
+          to={`/app/${sectorSlug}/tresorerie`}
+          className="px-3.5 py-1.5 bg-white hover:bg-slate-100 text-slate-800 rounded-xl text-xs font-bold border border-slate-200 transition shadow-sm"
+        >
+          🏦 Trésorerie Multi-Canaux & Recettes SFD
         </Link>
       </div>
 

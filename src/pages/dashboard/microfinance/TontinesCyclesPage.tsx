@@ -123,13 +123,34 @@ export const TontinesCyclesPage: React.FC = () => {
     membre_id: '',
     montant: '',
     tour_numero: '1',
-    agent_collecteur_nom: user?.name || 'Agent Tontine'
+    agent_collecteur_nom: user?.full_name || user?.email || 'Agent Tontine'
   })
 
   const [decaissementForm, setDecaissementForm] = useState({
     beneficiaire_id: '',
     tour_numero: '1',
     deductions: '0'
+  })
+
+  // ── States Spécifiques : Tontine Journalière (31 Jours) ──
+  const [activeTabSection, setActiveTabSection] = useState<'collectives' | 'journaliere_31'>('collectives')
+  const [contrats31j, setContrats31j] = useState<any[]>([])
+  const [selectedContrat31j, setSelectedContrat31j] = useState<any | null>(null)
+  const [mises31j, setMises31j] = useState<any[]>([])
+  const [showAddContratModal, setShowAddContratModal] = useState(false)
+  const [showEncaisserMiseModal, setShowEncaisserMiseModal] = useState(false)
+  const [selectedJourToPay, setSelectedJourToPay] = useState<number>(1)
+  const [printTicket31j, setPrintTicket31j] = useState<any | null>(null)
+  const [newContratForm, setNewContratForm] = useState({
+    membre_id: '',
+    agent_collecteur_nom: '',
+    date_inscription: new Date().toISOString().slice(0, 10),
+    mise_journaliere: '500',
+    notes: ''
+  })
+  const [miseForm, setMiseForm] = useState({
+    mode_paiement: 'ESPECES',
+    agent_nom: ''
   })
 
   // 1. Chargement initial
@@ -194,6 +215,210 @@ export const TontinesCyclesPage: React.FC = () => {
   const handleSelectCycle = (cycle: TontineCycle) => {
     setSelectedCycle(cycle)
     loadCycleDetails(cycle.id)
+  }
+
+  // ── Chargement & Logique Tontine Journalière (31 Jours) ──
+  const loadTontineJournaliere = useCallback(async () => {
+    if (!companyId) return
+    try {
+      const { data, error } = await supabaseTenant('microfinance_tontine_journaliere_contrats')
+        .select('*')
+        .order('created_at', { ascending: false })
+      if (!error && data) {
+        setContrats31j(data)
+      }
+    } catch (e: any) {
+      console.warn('Erreur chargement contrats 31j:', e.message)
+    }
+  }, [companyId, supabaseTenant])
+
+  useEffect(() => {
+    loadTontineJournaliere()
+  }, [loadTontineJournaliere])
+
+  const openContrat31j = async (contrat: any) => {
+    setSelectedContrat31j(contrat)
+    try {
+      const { data, error } = await supabaseTenant('microfinance_tontine_journaliere_mises')
+        .select('*')
+        .eq('contrat_id', contrat.id)
+        .order('jour_numero', { ascending: true })
+      if (!error && data) {
+        setMises31j(data)
+      } else {
+        setMises31j([])
+      }
+    } catch (e: any) {
+      setMises31j([])
+    }
+  }
+
+  const handleCreateContrat31j = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const m = membres.find((mem: any) => mem.id === newContratForm.membre_id)
+    if (!m) {
+      toast.error('Sélection requise', 'Veuillez choisir un membre titulaire.')
+      return
+    }
+    const mise = Number(newContratForm.mise_journaliere) || 500
+    const dInscr = new Date(newContratForm.date_inscription)
+    const dFin = new Date(dInscr.getTime() + 31 * 24 * 60 * 60 * 1000)
+    const ref = `TON31-${Date.now().toString().slice(-6)}`
+
+    try {
+      const { error } = await supabaseTenant('microfinance_tontine_journaliere_contrats').insert({
+        reference: ref,
+        membre_id: m.id,
+        membre_nom: m.nom_complet,
+        membre_tel: m.telephone,
+        agent_collecteur_nom: newContratForm.agent_collecteur_nom || (user?.full_name || user?.email || 'Agent Collecteur'),
+        date_inscription: newContratForm.date_inscription,
+        date_fin_prevue: dFin.toISOString().slice(0, 10),
+        mise_journaliere: mise,
+        j1_commission: mise,
+        montant_j1_paye: 0,
+        montant_epargne_accumule: 0,
+        jours_payes: 0,
+        jours_impayes: 0,
+        total_collecte: 0,
+        statut_cycle: 'ACTIF',
+        notes: newContratForm.notes || null
+      })
+      if (error) throw error
+
+      toast.success('Contrat Tontine 31 jours créé', `Référence : ${ref}`)
+      setShowAddContratModal(false)
+      loadTontineJournaliere()
+    } catch (err: any) {
+      toast.error('Erreur création contrat 31j', err.message)
+    }
+  }
+
+  const handleEncaisserMise = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedContrat31j) return
+    const jour = selectedJourToPay
+    const montant = Number(selectedContrat31j.mise_journaliere)
+    const isJ1 = jour === 1
+    const typeMise = isJ1 ? 'COMMISSION_J1' : 'EPARGNE'
+    const recuRef = `MISE-${jour}-${Date.now().toString().slice(-6)}`
+
+    try {
+      const { error: miseErr } = await supabaseTenant('microfinance_tontine_journaliere_mises').insert({
+        contrat_id: selectedContrat31j.id,
+        contrat_ref: selectedContrat31j.reference,
+        membre_id: selectedContrat31j.membre_id,
+        membre_nom: selectedContrat31j.membre_nom,
+        jour_numero: jour,
+        date_mise: new Date().toISOString().slice(0, 10),
+        montant: montant,
+        type_mise: typeMise,
+        mode_paiement: miseForm.mode_paiement,
+        agent_nom: miseForm.agent_nom || (user?.full_name || user?.email || 'Agent'),
+        recu_ref: recuRef,
+        statut: 'PAYE'
+      })
+      if (miseErr) throw miseErr
+
+      const newJoursPayes = Number(selectedContrat31j.jours_payes || 0) + 1
+      const newTotalCollecte = Number(selectedContrat31j.total_collecte || 0) + montant
+      const newJ1Paye = isJ1 ? montant : Number(selectedContrat31j.montant_j1_paye || 0)
+      const newEpargne = isJ1
+        ? Number(selectedContrat31j.montant_epargne_accumule || 0)
+        : Number(selectedContrat31j.montant_epargne_accumule || 0) + montant
+
+      await supabaseTenant('microfinance_tontine_journaliere_contrats')
+        .update({
+          jours_payes: newJoursPayes,
+          total_collecte: newTotalCollecte,
+          montant_j1_paye: newJ1Paye,
+          montant_epargne_accumule: newEpargne,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedContrat31j.id)
+
+      if (isJ1) {
+        await supabaseTenant('microfinance_commissions_tmf').insert({
+          agent_nom: miseForm.agent_nom || (user?.full_name || user?.email || 'Agent'),
+          membre_id: selectedContrat31j.membre_id,
+          membre_nom: selectedContrat31j.membre_nom,
+          type_produit: 'TONTINE_JOURNALIERE',
+          type_commission: 'PREMIERE_MISE',
+          montant_base: montant,
+          montant_commission: montant,
+          date_commission: new Date().toISOString().slice(0, 10),
+          reference_operation: recuRef,
+          statut: 'ENCAISSEE'
+        })
+      }
+
+      toast.success(
+        isJ1 ? 'Commission J1 Encaissée' : `Mise Jour ${jour} Encaissée`,
+        isJ1
+          ? `La mise J1 (${montant} FCFA) est acquise comme commission d'agence SFD.`
+          : `La mise de ${montant} FCFA est enregistrée dans l'épargne récupérable du membre.`
+      )
+
+      setPrintTicket31j({
+        reference: recuRef,
+        contrat_ref: selectedContrat31j.reference,
+        membre_nom: selectedContrat31j.membre_nom,
+        jour_numero: jour,
+        type_mise: typeMise,
+        montant: montant,
+        mode_paiement: miseForm.mode_paiement,
+        agent_nom: miseForm.agent_nom || (user?.full_name || user?.email || 'Agent'),
+        epargne_totale: newEpargne
+      })
+
+      setShowEncaisserMiseModal(false)
+      const updated = {
+        ...selectedContrat31j,
+        jours_payes: newJoursPayes,
+        total_collecte: newTotalCollecte,
+        montant_j1_paye: newJ1Paye,
+        montant_epargne_accumule: newEpargne
+      }
+      setSelectedContrat31j(updated)
+      openContrat31j(updated)
+      loadTontineJournaliere()
+    } catch (err: any) {
+      toast.error('Erreur encaissement mise', err.message)
+    }
+  }
+
+  const handleRestituerEpargne = async () => {
+    if (!selectedContrat31j) return
+    const montant = Number(selectedContrat31j.montant_epargne_accumule || 0)
+    if (montant <= 0) {
+      toast.error('Solde nul', 'Aucune épargne à restituer pour ce cycle.')
+      return
+    }
+
+    try {
+      await supabaseTenant('microfinance_tontine_journaliere_contrats')
+        .update({
+          statut_cycle: 'CLOTURE',
+          date_restitution: new Date().toISOString().slice(0, 10),
+          montant_restitue: montant,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', selectedContrat31j.id)
+
+      toast.success('Contrat 31 Jours Clôturé', `${montant} FCFA restitués à l'adhérent avec décharge.`)
+      setPrintTicket31j({
+        reference: `RESTIT-${selectedContrat31j.reference}`,
+        contrat_ref: selectedContrat31j.reference,
+        membre_nom: selectedContrat31j.membre_nom,
+        type_mise: 'RESTITUTION_EPARGNE_CLOTURE',
+        montant: montant,
+        agent_nom: user?.full_name || user?.email || 'Responsable Caisse'
+      })
+      setSelectedContrat31j({ ...selectedContrat31j, statut_cycle: 'CLOTURE', montant_restitue: montant })
+      loadTontineJournaliere()
+    } catch (err: any) {
+      toast.error('Erreur lors de la restitution', err.message)
+    }
   }
 
   // 3. Statistiques Globales Tontine
@@ -392,7 +617,7 @@ export const TontinesCyclesPage: React.FC = () => {
           deductions_penalites: dedu,
           montant_net_verse: net,
           date_versement: new Date().toISOString().slice(0, 10),
-          valide_par: user?.name || 'Responsable Tontine'
+          valide_par: user?.full_name || user?.email || 'Responsable Tontine'
         })
         .select()
         .single()
@@ -470,8 +695,34 @@ export const TontinesCyclesPage: React.FC = () => {
         </div>
       </div>
 
-      {/* 2. STATS CLÉS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* SÉLECTEUR DE SOUS-MODULE TONTINE SFD */}
+      <div className="flex bg-slate-100 p-1.5 rounded-2xl w-fit border border-slate-200">
+        <button
+          onClick={() => setActiveTabSection('collectives')}
+          className={clsx(
+            'px-5 py-2.5 rounded-xl text-xs font-black transition flex items-center gap-2',
+            activeTabSection === 'collectives' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+          )}
+        >
+          <Users2 className="w-4 h-4 text-amber-500" />
+          Tontines Collectives & Rotatives (TON-2026)
+        </button>
+        <button
+          onClick={() => setActiveTabSection('journaliere_31')}
+          className={clsx(
+            'px-5 py-2.5 rounded-xl text-xs font-black transition flex items-center gap-2',
+            activeTabSection === 'journaliere_31' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-900'
+          )}
+        >
+          <Calendar className="w-4 h-4 text-indigo-600" />
+          Tontine Journalière (Cycles 31 Jours)
+        </button>
+      </div>
+
+      {activeTabSection === 'collectives' && (
+        <>
+          {/* 2. STATS CLÉS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
           <div className="flex items-center justify-between text-slate-500 mb-2">
             <span className="text-xs font-bold uppercase tracking-wider">Groupes Actifs</span>
@@ -804,6 +1055,602 @@ export const TontinesCyclesPage: React.FC = () => {
           )}
         </div>
       </div>
+      </>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* VUE COMPLÈTE : TONTINE JOURNALIÈRE (CYCLES DE 31 JOURS)              */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTabSection === 'journaliere_31' && (
+        <div className="space-y-6">
+          {/* STATS 31 JOURS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider">Contrats Actifs (31j)</span>
+                <Calendar className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div className="text-2xl font-black text-slate-900">
+                {contrats31j.filter(c => c.statut_cycle === 'ACTIF').length}
+              </div>
+              <p className="text-[11px] font-medium text-slate-400 mt-1">Cycles en cours d'alimentation</p>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider">Cycles Clôturés</span>
+                <CheckCircle2 className="w-5 h-5 text-emerald-500" />
+              </div>
+              <div className="text-2xl font-black text-emerald-600">
+                {contrats31j.filter(c => c.statut_cycle === 'CLOTURE').length}
+              </div>
+              <p className="text-[11px] font-medium text-slate-400 mt-1">Épargne 30j restituée aux membres</p>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider">Épargne Restituable (J2-J31)</span>
+                <DollarSign className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div className="text-2xl font-black text-emerald-600">
+                {contrats31j.reduce((s, c) => s + Number(c.montant_epargne_accumule || 0), 0).toLocaleString('fr-FR')} <span className="text-xs font-semibold">FCFA</span>
+              </div>
+              <p className="text-[11px] font-medium text-slate-400 mt-1">Total accumulé pour les membres</p>
+            </div>
+
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center justify-between text-slate-500 mb-2">
+                <span className="text-xs font-bold uppercase tracking-wider">Commissions Agence (J1)</span>
+                <Award className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div className="text-2xl font-black text-indigo-700">
+                {contrats31j.reduce((s, c) => s + Number(c.montant_j1_paye || 0), 0).toLocaleString('fr-FR')} <span className="text-xs font-semibold">FCFA</span>
+              </div>
+              <p className="text-[11px] font-medium text-slate-400 mt-1">1ère mise acquise à l'agence SFD</p>
+            </div>
+          </div>
+
+          {/* TABLEAU DES CONTRATS 31 JOURS */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-black text-slate-900">Adhérents en Tontine Journalière (31 Jours)</h3>
+                <p className="text-xs text-slate-500">
+                  Règle métier : J1 = Commission d'agence TMF • Jours 2 à 31 = Épargne cumulée de l'adhérent
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={loadTontineJournaliere}
+                  className="p-2.5 bg-slate-100 hover:bg-slate-200 rounded-xl text-slate-600 text-xs font-bold transition"
+                  title="Actualiser"
+                >
+                  <RefreshCw className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => setShowAddContratModal(true)}
+                  className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-2 shadow-md shadow-indigo-600/30"
+                >
+                  <Plus className="w-4 h-4" />
+                  Nouveau Contrat 31 Jours
+                </button>
+              </div>
+            </div>
+
+            {contrats31j.length === 0 ? (
+              <div className="p-16 text-center text-slate-400">
+                <Calendar className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+                <h4 className="text-base font-black text-slate-700">Aucun contrat de tontine journalière</h4>
+                <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                  Enregistrez un contrat individuel de 31 jours pour commencer le pointage quotidien.
+                </p>
+                <button
+                  onClick={() => setShowAddContratModal(true)}
+                  className="mt-4 px-4 py-2 bg-indigo-50 text-indigo-700 rounded-xl text-xs font-bold hover:bg-indigo-100"
+                >
+                  + Créer le premier contrat
+                </button>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs text-left">
+                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200">
+                    <tr>
+                      <th className="py-3 px-4">Contrat & Adhérent</th>
+                      <th className="py-3 px-4">Agent Collecteur</th>
+                      <th className="py-3 px-4">Période (31 Jours)</th>
+                      <th className="py-3 px-4 text-right">Mise / Jour</th>
+                      <th className="py-3 px-4 text-center">J1 (Com. Agence)</th>
+                      <th className="py-3 px-4 text-right">Épargne J2..J31</th>
+                      <th className="py-3 px-4">Progression</th>
+                      <th className="py-3 px-4 text-center">Statut</th>
+                      <th className="py-3 px-4 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {contrats31j.map((c) => {
+                      const pct = Math.min(100, Math.round(((Number(c.jours_payes) || 0) / 31) * 100))
+                      const hasJ1 = Number(c.montant_j1_paye) > 0
+                      return (
+                        <tr key={c.id} className="hover:bg-slate-50/70 transition">
+                          <td className="py-3 px-4">
+                            <p className="font-black text-slate-900">{c.membre_nom}</p>
+                            <p className="font-mono text-[10px] text-indigo-700">{c.reference}</p>
+                          </td>
+                          <td className="py-3 px-4 text-slate-600 font-medium">
+                            {c.agent_collecteur_nom || 'Non assigné'}
+                          </td>
+                          <td className="py-3 px-4 text-slate-500 text-[11px]">
+                            <span>{new Date(c.date_inscription).toLocaleDateString('fr-FR')}</span>
+                            <span className="mx-1 text-slate-400">→</span>
+                            <span className="font-bold text-slate-700">{new Date(c.date_fin_prevue).toLocaleDateString('fr-FR')}</span>
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
+                            {Number(c.mise_journaliere).toLocaleString('fr-FR')} F
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            {hasJ1 ? (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-black bg-indigo-100 text-indigo-800">
+                                Encaissée ({Number(c.montant_j1_paye).toLocaleString('fr-FR')} F)
+                              </span>
+                            ) : (
+                              <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-amber-50 text-amber-700 border border-amber-200">
+                                En attente
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-black text-emerald-600">
+                            {Number(c.montant_epargne_accumule || 0).toLocaleString('fr-FR')} FCFA
+                          </td>
+                          <td className="py-3 px-4 min-w-[130px]">
+                            <div className="flex items-center justify-between text-[10px] mb-1 font-bold">
+                              <span>{c.jours_payes || 0}/31 jours</span>
+                              <span>{pct}%</span>
+                            </div>
+                            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+                              <div
+                                className={clsx(
+                                  'h-full transition-all rounded-full',
+                                  pct >= 100 ? 'bg-emerald-500' : 'bg-indigo-600'
+                                )}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <span className={clsx(
+                              'px-2 py-0.5 rounded-full text-[10px] font-bold',
+                              c.statut_cycle === 'ACTIF' ? 'bg-emerald-50 text-emerald-700' :
+                              c.statut_cycle === 'CLOTURE' ? 'bg-slate-100 text-slate-600' : 'bg-rose-50 text-rose-700'
+                            )}>
+                              {c.statut_cycle}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right">
+                            <button
+                              onClick={() => openContrat31j(c)}
+                              className="px-3 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-bold rounded-xl text-xs transition inline-flex items-center gap-1"
+                            >
+                              <Layers className="w-3.5 h-3.5" /> Grille 31 Jours
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* MODALE GRILLE INTERACTIVE DES 31 JOURS DU CONTRAT                    */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {selectedContrat31j && (
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
+          <div className="bg-white w-full max-w-4xl rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh] animate-scaleUp">
+            {/* EN-TÊTE MODALE */}
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white p-6 relative">
+              <button
+                onClick={() => setSelectedContrat31j(null)}
+                className="absolute top-5 right-5 p-2 bg-white/10 hover:bg-white/20 rounded-xl text-white transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/30 text-indigo-200 font-mono font-bold text-xs">
+                      {selectedContrat31j.reference}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-bold text-xs">
+                      ● {selectedContrat31j.statut_cycle}
+                    </span>
+                  </div>
+                  <h3 className="text-xl font-black text-white mt-1">
+                    {selectedContrat31j.membre_nom}
+                  </h3>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Agent Collecteur : <span className="font-bold text-white">{selectedContrat31j.agent_collecteur_nom}</span> • Mise : <span className="font-bold text-white font-mono">{Number(selectedContrat31j.mise_journaliere).toLocaleString('fr-FR')} FCFA/jour</span>
+                  </p>
+                </div>
+
+                <div className="bg-white/10 p-3 rounded-2xl border border-white/10 flex items-center gap-4 text-right">
+                  <div>
+                    <p className="text-[10px] text-slate-300 uppercase font-bold">Épargne Cumulée (J2-J31)</p>
+                    <p className="text-lg font-black text-emerald-400 font-mono">
+                      {Number(selectedContrat31j.montant_epargne_accumule || 0).toLocaleString('fr-FR')} FCFA
+                    </p>
+                  </div>
+                  <div className="h-8 w-px bg-white/20" />
+                  <div>
+                    <p className="text-[10px] text-slate-300 uppercase font-bold">Progression</p>
+                    <p className="text-base font-black text-white font-mono">
+                      {selectedContrat31j.jours_payes || 0}/31 J
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* GRILLE DES 31 CASES JOUR PAR JOUR */}
+            <div className="p-6 overflow-y-auto flex-1 bg-slate-50 space-y-4">
+              <div className="bg-amber-50 border border-amber-200 text-amber-900 p-3 rounded-2xl text-xs flex items-center gap-2 font-medium">
+                <Sparkles className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  <b>Règle SFD UEMOA :</b> La case <b>Jour 1</b> constitue la rémunération / commission agence TMF de gestion. Les cases <b>Jour 2 à Jour 31</b> constituent l'épargne restituée intégralement à l'adhérent à la clôture.
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-7 gap-2.5">
+                {Array.from({ length: 31 }, (_, i) => i + 1).map((jour) => {
+                  const isJ1 = jour === 1
+                  const miseRecord = mises31j.find((m: any) => Number(m.jour_numero) === jour)
+                  const isPaye = Boolean(miseRecord)
+
+                  return (
+                    <div
+                      key={jour}
+                      onClick={() => {
+                        if (!isPaye && selectedContrat31j.statut_cycle === 'ACTIF') {
+                          setSelectedJourToPay(jour)
+                          setShowEncaisserMiseModal(true)
+                        }
+                      }}
+                      className={clsx(
+                        'p-3 rounded-2xl border transition-all text-left relative flex flex-col justify-between min-h-[92px]',
+                        isPaye
+                          ? isJ1
+                            ? 'bg-indigo-50 border-indigo-300 text-indigo-900 shadow-sm'
+                            : 'bg-emerald-50 border-emerald-300 text-emerald-900 shadow-sm'
+                          : 'bg-white border-slate-200 text-slate-400 hover:border-indigo-400 hover:shadow-md cursor-pointer'
+                      )}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className={clsx(
+                          'text-xs font-black px-2 py-0.5 rounded-lg',
+                          isJ1 ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-800'
+                        )}>
+                          J{jour}
+                        </span>
+                        {isPaye ? (
+                          <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                        ) : (
+                          <span className="text-[10px] text-slate-400 font-bold">+ Payer</span>
+                        )}
+                      </div>
+
+                      <div className="mt-2">
+                        <p className="text-[10px] font-bold uppercase tracking-wider">
+                          {isJ1 ? 'Commission Agence' : 'Épargne Membre'}
+                        </p>
+                        <p className={clsx('text-xs font-mono font-black', isPaye ? 'text-slate-900' : 'text-slate-500')}>
+                          {Number(selectedContrat31j.mise_journaliere).toLocaleString('fr-FR')} F
+                        </p>
+                        {isPaye && (
+                          <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                            {new Date(miseRecord.date_mise).toLocaleDateString('fr-FR')}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+
+            {/* PIED DE MODALE ET ACTIONS */}
+            <div className="p-4 border-t border-slate-200 bg-white flex flex-col sm:flex-row items-center justify-between gap-3">
+              <div className="text-xs text-slate-500 font-medium">
+                Contrat du {new Date(selectedContrat31j.date_inscription).toLocaleDateString('fr-FR')} au {new Date(selectedContrat31j.date_fin_prevue).toLocaleDateString('fr-FR')}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setSelectedContrat31j(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
+                >
+                  Fermer
+                </button>
+
+                {selectedContrat31j.statut_cycle === 'ACTIF' && Number(selectedContrat31j.montant_epargne_accumule) > 0 && (
+                  <button
+                    onClick={handleRestituerEpargne}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md shadow-emerald-600/30"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    Restituer l'Épargne ({Number(selectedContrat31j.montant_epargne_accumule).toLocaleString('fr-FR')} FCFA) & Clôturer
+                  </button>
+                )}
+
+                {selectedContrat31j.statut_cycle === 'ACTIF' && (
+                  <button
+                    onClick={() => {
+                      const nextUnpaid = Array.from({ length: 31 }, (_, i) => i + 1).find(j => !mises31j.some((m: any) => Number(m.jour_numero) === j)) || 1
+                      setSelectedJourToPay(nextUnpaid)
+                      setShowEncaisserMiseModal(true)
+                    }}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30"
+                  >
+                    <Plus className="w-4 h-4" /> Encaisser une Mise
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* MODALE : CRÉER NOUVEAU CONTRAT 31 JOURS                              */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {showAddContratModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-200 shadow-2xl p-6 space-y-4 animate-scaleUp text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-black text-slate-900">Nouveau Contrat Tontine 31 Jours</h3>
+              <button
+                onClick={() => setShowAddContratModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateContrat31j} className="space-y-3.5">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Adhérent Titulaire *</label>
+                <select
+                  required
+                  value={newContratForm.membre_id}
+                  onChange={e => setNewContratForm({ ...newContratForm, membre_id: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold focus:outline-none"
+                >
+                  <option value="">Sélectionner un adhérent...</option>
+                  {membres.map((m: any) => (
+                    <option key={m.id} value={m.id}>{m.nom_complet} ({m.telephone})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mise Journalière (FCFA) *</label>
+                <input
+                  type="number"
+                  required
+                  min="100"
+                  step="100"
+                  value={newContratForm.mise_journaliere}
+                  onChange={e => setNewContratForm({ ...newContratForm, mise_journaliere: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-black text-slate-900 focus:outline-none"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">
+                  Jour 1 = {Number(newContratForm.mise_journaliere || 0).toLocaleString('fr-FR')} FCFA (Commission Agence) • Jours 2 à 31 = {((Number(newContratForm.mise_journaliere || 0)) * 30).toLocaleString('fr-FR')} FCFA (Épargne totale restituée)
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Date Inscription *</label>
+                  <input
+                    type="date"
+                    required
+                    value={newContratForm.date_inscription}
+                    onChange={e => setNewContratForm({ ...newContratForm, date_inscription: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Agent Collecteur</label>
+                  <input
+                    type="text"
+                    placeholder="Nom du collecteur"
+                    value={newContratForm.agent_collecteur_nom}
+                    onChange={e => setNewContratForm({ ...newContratForm, agent_collecteur_nom: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Observations</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Tontine marché Dantokpa, boutique n°12"
+                  value={newContratForm.notes}
+                  onChange={e => setNewContratForm({ ...newContratForm, notes: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAddContratModal(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl shadow-md shadow-indigo-600/30"
+                >
+                  Créer le Contrat
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* MODALE : ENCAISSER UNE MISE DU CYCLE 31 JOURS                         */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {showEncaisserMiseModal && selectedContrat31j && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full border border-slate-200 shadow-2xl p-6 space-y-4 animate-scaleUp text-xs">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="text-base font-black text-slate-900">
+                Encaisser Mise — Jour {selectedJourToPay}
+              </h3>
+              <button
+                onClick={() => setShowEncaisserMiseModal(false)}
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center text-slate-500"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEncaisserMise} className="space-y-3.5">
+              <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-1">
+                <p className="text-slate-500">Adhérent : <b className="text-slate-900">{selectedContrat31j.membre_nom}</b></p>
+                <p className="text-slate-500">Jour sélectionné : <b className="text-indigo-600">Jour {selectedJourToPay} sur 31</b></p>
+                <p className="text-slate-500">Affectation : <b className={selectedJourToPay === 1 ? 'text-indigo-700' : 'text-emerald-700'}>{selectedJourToPay === 1 ? 'Commission Agence SFD' : 'Épargne Adhérent'}</b></p>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Montant à Encaisser (FCFA) *</label>
+                <input
+                  type="number"
+                  readOnly
+                  value={selectedContrat31j.mise_journaliere}
+                  className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl font-mono font-black text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mode de Paiement</label>
+                <select
+                  value={miseForm.mode_paiement}
+                  onChange={e => setMiseForm({ ...miseForm, mode_paiement: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold focus:outline-none"
+                >
+                  <option value="ESPECES">Espèces (Guichet ou Terrain)</option>
+                  <option value="MTN_MOMO">MTN Mobile Money</option>
+                  <option value="MOOV_MONEY">Moov Money</option>
+                  <option value="BANQUE">Virement Bancaire</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Collecteur / Opérateur</label>
+                <input
+                  type="text"
+                  placeholder="Nom de l'agent"
+                  value={miseForm.agent_nom}
+                  onChange={e => setMiseForm({ ...miseForm, agent_nom: e.target.value })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEncaisserMiseModal(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-black rounded-xl shadow-md shadow-indigo-600/30"
+                >
+                  Valider la Mise & Imprimer Reçu
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* REÇU IMPRIMABLE TONTINE JOURNALIÈRE                                   */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {printTicket31j && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full border border-slate-200 shadow-2xl p-6 space-y-4 animate-scaleUp text-xs font-mono">
+            <div className="text-center border-b border-dashed border-slate-300 pb-3">
+              <h3 className="font-black text-slate-900 text-base">{company?.name || 'INSTITUTION DE MICROFINANCE'}</h3>
+              <p className="text-[10px] text-slate-500 uppercase font-sans">
+                {printTicket31j.type_mise === 'RESTITUTION_EPARGNE_CLOTURE' ? 'DÉCHARGE RESTITUTION ÉPARGNE TONTINE' : 'REÇU DE TONTINE JOURNALIÈRE (31J)'}
+              </p>
+              <p className="text-[11px] font-bold text-indigo-700 mt-1">{printTicket31j.reference}</p>
+            </div>
+
+            <div className="space-y-1.5 text-slate-700">
+              <div className="flex justify-between">
+                <span>Contrat:</span>
+                <span className="font-bold">{printTicket31j.contrat_ref}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Adhérent:</span>
+                <span className="font-bold">{printTicket31j.membre_nom}</span>
+              </div>
+              {printTicket31j.jour_numero && (
+                <div className="flex justify-between">
+                  <span>Mise du Jour:</span>
+                  <span className="font-black text-indigo-700">Jour {printTicket31j.jour_numero} / 31</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span>Nature:</span>
+                <span className="font-bold">
+                  {printTicket31j.type_mise === 'COMMISSION_J1' ? 'Commission Agence TMF' : printTicket31j.type_mise === 'RESTITUTION_EPARGNE_CLOTURE' ? 'Restitution Clôture' : 'Épargne Adhérent'}
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-dashed border-slate-300 pt-2 font-black text-sm text-slate-900">
+                <span>MONTANT:</span>
+                <span>{Number(printTicket31j.montant).toLocaleString('fr-FR')} FCFA</span>
+              </div>
+              {printTicket31j.epargne_totale !== undefined && (
+                <div className="flex justify-between text-emerald-700 font-bold pt-1">
+                  <span>Épargne Restituable :</span>
+                  <span>{Number(printTicket31j.epargne_totale).toLocaleString('fr-FR')} FCFA</span>
+                </div>
+              )}
+            </div>
+
+            <div className="flex gap-2 pt-3">
+              <button
+                onClick={() => window.print()}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 font-sans"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimer</span>
+              </button>
+              <button
+                onClick={() => setPrintTicket31j(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl font-sans"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* MODAL 1 : CRÉATION GROUPE */}
       {showAddGroupeModal && (

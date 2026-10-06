@@ -89,6 +89,7 @@ const TontinesCyclesPage        = safeLazy(() => import('./pages/dashboard/micro
 const AgentsCollecteursPage     = safeLazy(() => import('./pages/dashboard/microfinance/AgentsCollecteursPage'))
 const RisquesConformitePage     = safeLazy(() => import('./pages/dashboard/microfinance/RisquesConformitePage'))
 const MicrofinanceAchatsPage    = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceAchatsPage'))
+const MicrofinanceTresoreriePage = safeLazy(() => import('./pages/dashboard/microfinance/MicrofinanceTresoreriePage'))
 // Imprimerie
 const DevisProductionPage    = mod('devis_production')
 const SousTraitancePage      = mod('sous_traitance')
@@ -201,6 +202,16 @@ const SectorAwareFournisseurs: React.FC = () => {
   return <FournisseursPage />
 }
 
+// ─── Trésorerie conditionnelle (Multi-Canaux SFD pour Microfinance) ───────────
+const SectorAwareTresorerie: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'microfinance' || clean === 'microfinance-tontine' || clean === 'tontine') {
+    return <MicrofinanceTresoreriePage />
+  }
+  return <TresoreriePage />
+}
+
 // ─── Initialisation globale ─────────────────────────────────────────────────
 
 const AppInitializer: React.FC = () => {
@@ -310,7 +321,7 @@ const AppRoutes: React.FC = () => {
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
-        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
+        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><SectorAwareTresorerie /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
         <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
@@ -408,7 +419,7 @@ const AppRoutes: React.FC = () => {
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
-        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
+        <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><SectorAwareTresorerie /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
         <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
         <Route path="fournisseurs"   element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
