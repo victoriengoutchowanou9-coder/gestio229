@@ -95,6 +95,7 @@ export const TresoreriePage: React.FC = () => {
           .from('treasury_transfers')
           .select('*')
           .eq('company_id', currentCompanyId)
+          .or(`sector_slug.eq.${currentSectorSlug},sector_slug.is.null`)
           .order('created_at', { ascending: false })
         if (dbTransfers && dbTransfers.length > 0) {
           setPendingTransfers(dbTransfers)

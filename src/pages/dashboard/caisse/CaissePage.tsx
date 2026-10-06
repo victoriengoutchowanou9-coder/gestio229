@@ -22,9 +22,17 @@ import { getActiveCaisse } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../components/modals'
 import { logAuditEvent } from '../../../services/auditService'
+import { formatFCFA } from '../../../utils/formatters'
+import {
+  getOrCreateSectorCaisse,
+  getSectorCaisseClosures,
+  getSectorCaisseMovements,
+  ouvrirSessionCaisse,
+  cloturerSessionCaisse,
+  enregistrerMouvementCaisse
+} from '../../../services/caisseSectorService'
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
+const fmt = (n: number) => formatFCFA(n)
 
 interface CashMovement {
   id: string
@@ -125,17 +133,12 @@ export const CaissePage: React.FC = () => {
 
       // 0. Synchronisation persistante Supabase : Caisse active isolée par couple (company_id, sector_slug)
       try {
-        const { data: registers } = await supabase
-          .from('cash_registers')
-          .select('id, name, current_cash_balance, current_momo_balance')
-          .eq('company_id', currentCompanyId)
-          .limit(1)
-
-        if (registers && registers.length > 0) {
-          setCashRegisterId(registers[0].id)
+        const sectorCaisse = await getOrCreateSectorCaisse(currentCompanyId, currentSectorSlug)
+        if (sectorCaisse) {
+          setCashRegisterId(sectorCaisse.id)
         }
 
-        // Vérifier si une session/caisse est ouverte pour ce secteur (persistance nocturne)
+        // Vérifier si une session/caisse est ouverte pour ce secteur
         const activeCaisse = await getActiveCaisse(currentCompanyId, currentSectorSlug)
         if (activeCaisse) {
           setActiveSessionId(activeCaisse.id)
@@ -150,63 +153,15 @@ export const CaissePage: React.FC = () => {
           setOpenedAt(null)
         }
 
-        // Charger l'historique des clôtures archivées pour ce secteur
-        try {
-          const { data: dbClotures } = await supabase
-            .from('caisse_clotures')
-            .select('*')
-            .eq('company_id', currentCompanyId)
-            .eq('sector_slug', currentSectorSlug)
-            .order('date_cloture', { ascending: false })
-            .limit(30)
-
-          if (dbClotures && dbClotures.length > 0) {
-            const mappedClosures: CashClosure[] = dbClotures.map((cc: any) => ({
-              id: cc.id,
-              closed_at: cc.date_cloture || cc.created_at,
-              closed_by: cc.cloture_par || 'Caissier',
-              caisse_name: `Caisse ${currentSectorSlug.toUpperCase()}`,
-              fond_especes_theorique: Number(cc.fond_actuel_especes_apres) || 0,
-              fond_especes_physique: Number(cc.fond_actuel_especes_apres) || 0,
-              ecart_especes: 0,
-              fond_momo: Number(cc.fond_actuel_momo_apres) || 0,
-              total_fermeture: (Number(cc.fond_actuel_especes_apres) || 0) + (Number(cc.fond_actuel_momo_apres) || 0),
-              notes: 'Clôture archivée',
-              status: 'CLOTURE_VALIDEE',
-            }))
-            setClosuresHistory(mappedClosures)
-          } else {
-            // Fallback cash_sessions
-            const { data: closedSessions } = await supabase
-              .from('cash_sessions')
-              .select('*')
-              .eq('company_id', currentCompanyId)
-              .eq('status', 'cloturee')
-              .order('closed_at', { ascending: false })
-              .limit(30)
-
-            if (closedSessions && closedSessions.length > 0) {
-              const dbClosures: CashClosure[] = closedSessions.map((cs: any) => ({
-                id: cs.id,
-                closed_at: cs.closed_at || cs.opened_at,
-                closed_by: user?.full_name || 'Caissier',
-                caisse_name: `Caisse ${currentSectorSlug.toUpperCase()}`,
-                fond_especes_theorique: (Number(cs.closing_cash_counted) || 0) - (Number(cs.cash_discrepancy) || 0),
-                fond_especes_physique: Number(cs.closing_cash_counted) || 0,
-                ecart_especes: Number(cs.cash_discrepancy) || 0,
-                fond_momo: Number(cs.closing_momo_counted) || 0,
-                total_fermeture: (Number(cs.closing_cash_counted) || 0) + (Number(cs.closing_momo_counted) || 0),
-                notes: cs.closing_notes || 'Clôture archivée',
-                status: 'CLOTURE_VALIDEE',
-              }))
-              setClosuresHistory(dbClosures)
-            }
-          }
-        } catch (cErr) {
-          console.warn('Fallback lecture clôtures:', cErr)
+        // Charger l'historique des clôtures archivées STRICTEMENT pour la caisse de ce secteur (ZÉRO contamination)
+        if (sectorCaisse?.id) {
+          const closures = await getSectorCaisseClosures(currentCompanyId, sectorCaisse.id, currentSectorSlug, 50)
+          setClosuresHistory(closures)
+        } else {
+          setClosuresHistory([])
         }
       } catch (sessErr) {
-        console.warn('Fallback lecture caisses Supabase:', sessErr)
+        console.warn('Erreur synchronisation caisse Supabase:', sessErr)
       }
 
       // 1. Ventes du jour réelles depuis Supabase filtrées strictement par secteur
@@ -368,6 +323,7 @@ export const CaissePage: React.FC = () => {
           .from('treasury_transfers')
           .select('*')
           .eq('company_id', currentCompanyId)
+          .or(`sector_slug.eq.${currentSectorSlug},sector_slug.is.null`)
           .gte('created_at', startOfDay)
           .order('created_at', { ascending: false })
         if (dbTransfers && dbTransfers.length > 0) {
@@ -551,123 +507,34 @@ export const CaissePage: React.FC = () => {
       .reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
   }, [salesToday])
 
-  // ─── Action : Ouvrir la Caisse ─────────────────────────────────────────────
+  // ─── Action : Ouvrir la Caisse (Silo étanche par caisse_id et secteur) ───────
   const handleOpenCaisse = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsOperatingCaisse(true)
     const opBy = user?.full_name || user?.username || 'Caissier'
-    const nowIso = new Date().toISOString()
     const initC = Number(openInputCash) || 0
     const initM = Number(openInputMomo) || 0
     const cleanSlug = (currentSectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
     const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)
       ? user.id
-      : null
-
-    console.log('[CASH-OPEN]', {
-      company_id: currentCompanyId,
-      sector_slug: cleanSlug,
-      user_id: validUserId,
-      user_name: opBy,
-      fond_especes: initC,
-      fond_momo: initM,
-      date_ouverture: nowIso,
-      statut: 'ouverte'
-    })
-
-    let createdSessionId: string | null = null
+      : undefined
 
     try {
-      let regId = cashRegisterId
-      if (!regId && currentCompanyId) {
-        const { data: reg } = await supabase
-          .from('cash_registers')
-          .select('id')
-          .eq('company_id', currentCompanyId)
-          .limit(1)
-          .maybeSingle()
-        if (reg?.id) {
-          regId = reg.id
-          setCashRegisterId(reg.id)
-        }
+      const res = await ouvrirSessionCaisse(currentCompanyId, currentSectorSlug, validUserId, opBy, initC, initM)
+      if (!res.success) {
+        toast.error('Erreur ouverture de caisse', res.error || 'Impossible d\'ouvrir la caisse.')
+        setIsOperatingCaisse(false)
+        return
       }
 
-      if (currentCompanyId) {
-        // 1. Table caisses (standard 19 secteurs M025)
-        try {
-          const { data: newCaisse, error: caisseErr } = await supabase
-            .from('caisses')
-            .insert({
-              company_id: currentCompanyId,
-              sector_slug: cleanSlug,
-              date_ouverture: nowIso,
-              statut: 'ouverte',
-              fond_ouverture_especes: initC,
-              fond_ouverture_momo: initM,
-              ouvert_par: validUserId
-            })
-            .select()
-            .single()
-
-          if (caisseErr) {
-            console.error('[CASH-OPEN] Erreur insertion caisses:', caisseErr)
-          } else if (newCaisse?.id) {
-            createdSessionId = newCaisse.id
-            setActiveSessionId(newCaisse.id)
-            console.log('[CASH-OPEN] Caisse enregistrée avec succès dans caisses, ID:', newCaisse.id)
-          }
-        } catch (cErr) {
-          console.error('[CASH-OPEN] Exception insertion caisses:', cErr)
-        }
-
-        // 2. Rétro-compatibilité synchronisée cash_sessions
-        try {
-          const { data: newSession, error: sessErr } = await supabase
-            .from('cash_sessions')
-            .insert({
-              company_id: currentCompanyId,
-              cash_register_id: regId || null,
-              cashier_id: validUserId,
-              opened_at: nowIso,
-              opening_cash: initC,
-              opening_momo: initM,
-              status: 'ouverte',
-              closing_notes: `[SECTOR:${cleanSlug}] Fond initial: ${initC} FCFA par ${opBy}`
-            })
-            .select()
-            .single()
-
-          if (sessErr) {
-            console.warn('[CASH-OPEN] Avertissement cash_sessions:', sessErr)
-          } else if (newSession?.id) {
-            if (!createdSessionId) {
-              createdSessionId = newSession.id
-              setActiveSessionId(newSession.id)
-            }
-            console.log('[CASH-OPEN] Caisse enregistrée dans cash_sessions, ID:', newSession.id)
-          }
-        } catch (sErr) {
-          console.warn('[CASH-OPEN] Exception insertion cash_sessions:', sErr)
-        }
-
-        // 3. Mise à jour de la caisse physique (cash_registers)
-        if (regId) {
-          try {
-            await supabase
-              .from('cash_registers')
-              .update({
-                current_cash_balance: initC,
-                current_momo_balance: initM,
-                is_active: true
-              })
-              .eq('id', regId)
-          } catch (_) {}
-        }
+      const createdSessionId = res.session?.id || null
+      if (createdSessionId) {
+        setActiveSessionId(createdSessionId)
       }
 
-      saveCaisseState('OUVERTE', nowIso, opBy, initC, initM)
+      saveCaisseState('OUVERTE', new Date().toISOString(), opBy, initC, initM)
       setShowOpenModal(false)
-      toast.success('Caisse Ouverte avec succès !', `Fond initial tiroir : ${fmt(openInputCash)}`)
+      toast.success('Caisse Ouverte avec succès !', `Fond initial tiroir : ${fmt(initC)}`)
 
       await logAuditEvent({
         companyId: company?.id,
@@ -680,13 +547,13 @@ export const CaissePage: React.FC = () => {
         description: `Ouverture de la caisse ${currentSectorSlug} par ${opBy}. Fond tiroir : ${fmt(initC)}, MoMo : ${fmt(initM)}`
       })
 
-      // Recharger les données locales de la page caisse
       await loadCaisseData()
 
-      // Rediriger immédiatement vers le module Vente avec le nouvel ID de session
       navigate(`/app/${cleanSlug}/vente?session_id=${createdSessionId || ''}`, {
         state: { sessionId: createdSessionId, refreshCaisse: true }
       })
+    } catch (err: any) {
+      toast.error('Erreur', err.message || 'Impossible d\'ouvrir la caisse.')
     } finally {
       setIsOperatingCaisse(false)
     }
@@ -694,10 +561,6 @@ export const CaissePage: React.FC = () => {
 
   // ─── Action : Fermer la Caisse (avec Clôture Rigoureuse et Audit) ─────────────
   const handleConfirmCloseCaisse = async () => {
-    const totalEspecesJour = ventesEspeces + remboursementsEspeces
-    const totalMomoJour = ventesMomo + remboursementsMomo
-    const nouveauFondEspeces = initialCash + totalEspecesJour
-    const nouveauFondMomo = initialMomo + totalMomoJour
     const ecart = Number(closingPhysicalCash) - fondTheoriqueEsp
 
     if (ecart !== 0 && !closingNotes.trim()) {
@@ -717,6 +580,25 @@ export const CaissePage: React.FC = () => {
       if ((company as any)?.closure_email_3) recipientEmails.push((company as any).closure_email_3.trim())
       if (recipientEmails.length === 0 && company?.email) recipientEmails.push(company.email.trim())
 
+      // 1. Clôture officielle dans la base (caisse_sessions + caisses + caisse_clotures + mouvements)
+      const closeRes = await cloturerSessionCaisse(
+        activeSessionId || undefined,
+        cashRegisterId || undefined,
+        currentCompanyId,
+        currentSectorSlug,
+        closedBy,
+        fondTheoriqueEsp,
+        Number(closingPhysicalCash),
+        momoDuJour,
+        closingNotes
+      )
+
+      if (!closeRes.success) {
+        toast.error('Erreur lors de la clôture', closeRes.error || 'Impossible de clôturer la caisse.')
+        setIsOperatingCaisse(false)
+        return
+      }
+
       const newClosure: CashClosure = {
         id: `cloture-${Date.now()}`,
         closed_at: closedAt,
@@ -734,114 +616,36 @@ export const CaissePage: React.FC = () => {
 
       setClosuresHistory([newClosure, ...closuresHistory])
 
-      // Persistance Supabase
-      if (company?.id) {
-        try {
-          if (activeSessionId) {
-            const validCloseUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id)
-              ? user.id
-              : null
+      // Fermeture locale de la caisse
+      saveCaisseState('FERMEE', null, '', 0, 0)
+      setActiveSessionId(null)
+      setShowCloseModal(false)
+      setShowReportModal(false)
+      setClosingNotes('')
+      toast.success('Caisse clôturée avec succès !', `Nouveau fond espèces : ${fmt(Number(closingPhysicalCash))}`)
 
-            // 1. Mise à jour de la table caisses
-            await supabase.from('caisses').update({
-              statut: 'fermee',
-              date_fermeture: closedAt,
-              solde_especes_final: Number(closingPhysicalCash) || 0,
-              solde_momo_final: momoDuJour,
-              ferme_par: validCloseUserId
-            }).eq('id', activeSessionId)
-
-            // 2. Insertion dans caisse_clotures (standard 19 secteurs)
-            await supabase.from('caisse_clotures').insert({
-              company_id: currentCompanyId,
-              sector_slug: currentSectorSlug,
-              caisse_id: activeSessionId,
-              total_especes_jour: totalEspecesJour,
-              total_momo_jour: totalMomoJour,
-              fond_actuel_especes_apres: Number(closingPhysicalCash),
-              fond_actuel_momo_apres: momoDuJour,
-              cloture_par: closedBy,
-              date_cloture: closedAt
-            })
-
-            // Rétrocompatibilité cash_sessions
-            await supabase.from('cash_sessions').update({
-              closed_at: closedAt,
-              total_sales_cash: ventesEspeces,
-              total_sales_momo: ventesMomo,
-              total_credit_collected: remboursementsEspeces + remboursementsMomo,
-              total_transferred_to_treasury: totalRetraitsEspeces + totalRetraitsMomo,
-              closing_cash_counted: Number(closingPhysicalCash),
-              closing_momo_counted: momoDuJour,
-              cash_discrepancy: ecart,
-              status: 'cloturee',
-              closing_notes: closingNotes || 'Clôture de session normale',
-              email_report_sent: recipientEmails.length > 0
-            }).eq('id', activeSessionId)
-          }
-
-          // 3. Mise à jour coffre_fort
-          try {
-            const { data: exCoffre } = await supabase
-              .from('coffre_fort')
-              .select('*')
-              .eq('company_id', currentCompanyId)
-              .eq('sector_slug', currentSectorSlug)
-              .maybeSingle()
-
-            if (exCoffre) {
-              await supabase.from('coffre_fort').update({
-                solde_especes: Number(closingPhysicalCash),
-                solde_momo_marchand: momoDuJour,
-              }).eq('id', exCoffre.id)
-            } else {
-              await supabase.from('coffre_fort').insert({
-                company_id: currentCompanyId,
-                sector_slug: currentSectorSlug,
-                solde_especes: nouveauFondEspeces,
-                solde_momo_marchand: nouveauFondMomo,
-                solde_banque: 0
-              })
-            }
-          } catch (cfErr) {
-            console.warn('Avertissement mise à jour coffre_fort:', cfErr)
-          }
-
-          // 4. Rapport en arrière-plan envoyé par email (table report_emails)
-          try {
-            await supabase.from('report_emails').insert({
-              company_id: currentCompanyId,
-              sector_slug: currentSectorSlug,
-              report_type: 'cloture_caisse',
-              recipient: recipientEmails.join(', ') || company?.email || 'direction@gestio229.bj',
-              payload: {
-                caisse_id: activeSessionId,
-                closed_at: closedAt,
-                closed_by: closedBy,
-                total_especes_jour: totalEspecesJour,
-                total_momo_jour: totalMomoJour,
-                fond_ouverture_especes: initialCash,
-                fond_ouverture_momo: initialMomo,
-                fond_actuel_especes_apres: nouveauFondEspeces,
-                fond_actuel_momo_apres: nouveauFondMomo,
-                ecart_especes: ecart,
-                notes: closingNotes
-              },
-              status: 'sent'
-            })
-          } catch (reErr) {
-            console.warn('Avertissement insertion report_emails:', reErr)
-          }
-
-          if (cashRegisterId) {
-            await supabase.from('cash_registers').update({
-              current_cash_balance: 0,
-              current_momo_balance: 0
-            }).eq('id', cashRegisterId)
-          }
-        } catch (sessUpdErr) {
-          console.warn('Erreur clôture caisse Supabase:', sessUpdErr)
-        }
+      // Rapport en arrière-plan envoyé par email (table report_emails)
+      try {
+        await supabase.from('report_emails').insert({
+          company_id: currentCompanyId,
+          sector_slug: currentSectorSlug,
+          report_type: 'cloture_caisse',
+          recipient: recipientEmails.join(', ') || company?.email || 'direction@gestio229.bj',
+          payload: {
+            caisse_id: activeSessionId,
+            closed_at: closedAt,
+            closed_by: closedBy,
+            fond_especes_theorique: fondTheoriqueEsp,
+            fond_especes_physique: Number(closingPhysicalCash),
+            ecart_especes: ecart,
+            fond_momo: momoDuJour,
+            total_fermeture: Number(closingPhysicalCash) + momoDuJour,
+            notes: closingNotes,
+          },
+          status: 'sent'
+        })
+      } catch (emErr) {
+        console.warn('Avertissement insertion report_emails:', emErr)
       }
 
       // Traçabilité Audit Senior
@@ -853,19 +657,17 @@ export const CaissePage: React.FC = () => {
         action: 'CLOTURE_CAISSE',
         module: 'CAISSE',
         sector: currentSectorSlug.toUpperCase(),
-        description: `Clôture caisse ${currentSectorSlug} par ${closedBy}. Espèces comptées : ${fmt(closingPhysicalCash)} (Théorique : ${fmt(fondActuelEspeces)}, Écart : ${fmt(ecart)}). MoMo : ${fmt(fondActuelMomo)}. Fond reporté : ${fmt(nouveauFondEspeces)}.`
+        description: `Clôture caisse ${currentSectorSlug} par ${closedBy}. Espèces : ${fmt(Number(closingPhysicalCash))}, MoMo : ${fmt(momoDuJour)}`
       })
-
-      // Fermeture automatique, SANS modale rapport à l'écran
-      saveCaisseState('FERMEE', null, '', 0, 0)
-      setActiveSessionId(null)
-      setShowCloseModal(false)
-      setShowReportModal(false)
 
       toast.success(
         'Caisse Clôturée avec Succès !',
         `Rapport Z envoyé en arrière-plan. Total encaissé de la journée : ${fmt(totalEspecesJour + totalMomoJour)}`
       )
+
+      await loadCaisseData()
+    } catch (err: any) {
+      toast.error('Erreur clôture', err.message || 'Échec de la clôture de caisse.')
     } finally {
       setIsOperatingCaisse(false)
     }

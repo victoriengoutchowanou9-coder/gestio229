@@ -20,6 +20,7 @@ import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../..
 import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
+import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -545,6 +546,25 @@ export const FournisseursPage: React.FC = () => {
         })
       } catch (dpErr) {
         console.warn('Avertissement mise à jour dettes_fournisseurs / dette_paiements:', dpErr)
+      }
+
+      // Si payé en espèces ou MoMo, enregistrer la sortie de caisse du secteur
+      if (['especes', 'momo'].includes(paymentMode) && companyId) {
+        try {
+          await enregistrerMouvementCaisse({
+            company_id: companyId,
+            sector_slug: currentSectorSlug,
+            type: 'paiement_fournisseur',
+            sens: 'sortie',
+            montant_especes: paymentMode === 'especes' ? paymentAmount : 0,
+            montant_momo: paymentMode === 'momo' ? paymentAmount : 0,
+            source_module: 'fournisseurs_achats',
+            source_id: selectedSupplierForPay.id,
+            motif: `Paiement dette fournisseur: ${selectedSupplierForPay.company_name || selectedSupplierForPay.name}`,
+            user_name: user?.full_name || user?.name || 'Comptable',
+            user_id: user?.id
+          })
+        } catch (e) {}
       }
 
       setSuppliers((prev) =>

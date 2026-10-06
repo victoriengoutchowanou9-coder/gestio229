@@ -31,6 +31,7 @@ import {
 import clsx from 'clsx'
 import { StationFuelDispenser } from '../station/StationFuelDispenser'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
+import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -1247,34 +1248,25 @@ export const POSPage: React.FC = () => {
         : (['momo_mtn', 'momo_moov'].includes(singleMethod) ? totalNetTTC : 0)
 
       if (paidCash > 0 || paidMomo > 0) {
-        // Enregistrement dans caisse_mouvements pour la caisse active isolée
-        if (activeCaisse?.id) {
-          try {
-            if (paidCash > 0) {
-              await supabase.from('caisse_mouvements').insert({
-                company_id: company?.id ?? companyId ?? '',
-                sector_slug: currentSectorSlug,
-                caisse_id: activeCaisse.id,
-                type: 'especes',
-                sens: 'entree',
-                montant: paidCash,
-                motif: `Vente POS ${orderNum} - Encaissement espèces`
-              })
-            }
-            if (paidMomo > 0) {
-              await supabase.from('caisse_mouvements').insert({
-                company_id: company?.id ?? companyId ?? '',
-                sector_slug: currentSectorSlug,
-                caisse_id: activeCaisse.id,
-                type: 'momo',
-                sens: 'entree',
-                montant: paidMomo,
-                motif: `Vente POS ${orderNum} - Encaissement MoMo`
-              })
-            }
-          } catch (cmErr) {
-            console.warn('Avertissement caisse_mouvements:', cmErr)
-          }
+        // Enregistrement dans caisse_mouvements et mise à jour de la session de caisse
+        try {
+          await enregistrerMouvementCaisse({
+            company_id: company?.id ?? companyId ?? '',
+            sector_slug: currentSectorSlug,
+            caisse_id: activeCaisse?.caisse_id || activeCaisse?.id,
+            caisse_session_id: activeCaisse?.id,
+            type: 'vente',
+            sens: 'entree',
+            montant_especes: paidCash,
+            montant_momo: paidMomo,
+            source_module: 'vente_pos',
+            source_id: orderNum,
+            motif: `Vente POS ${orderNum} (Client: ${customerName || 'Comptoir'})`,
+            user_name: user?.full_name || 'Caissier',
+            user_id: user?.id,
+          })
+        } catch (cmErr) {
+          console.warn('Avertissement caisse_mouvements:', cmErr)
         }
 
         try {

@@ -19,6 +19,7 @@ import { getNextSectorCode, getCurrentCashSession } from '../../../lib/supabaseT
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
+import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -742,19 +743,24 @@ const ClientsPage: React.FC = () => {
               .eq('id', reg.id)
           }
         }
+      } catch (_) {}
 
-        await supabaseTenant('caisse_mouvements').insert({
+      // Enregistrement unifié dans caisse_mouvements et mise à jour de la caisse active
+      try {
+        await enregistrerMouvementCaisse({
           company_id: currentCompanyId,
-          session_id: activeSession.id,
-          user_id: user?.id,
+          sector_slug: currentSectorSlug,
+          caisse_id: activeSession.caisse_id || activeSession.id,
+          caisse_session_id: activeSession.id,
+          type: 'reglement_client',
+          sens: 'entree',
+          montant_especes: normalizedMethod === 'Espèces' ? paymentAmount : 0,
+          montant_momo: normalizedMethod !== 'Espèces' ? paymentAmount : 0,
+          source_module: 'clients_creances',
+          source_id: receiptNumber,
+          motif: `Règlement créance client ${selectedCustomer.name} (${receiptNumber})`,
           user_name: user?.full_name || 'Caissier',
-          type: 'REMBOURSEMENT',
-          payment_channel: normalizedMethod === 'Espèces' ? 'Espèces' : 'MoMo',
-          amount: paymentAmount,
-          motif: `Remboursement dette client ${selectedCustomer.name} (${receiptNumber})`,
-          reference: receiptNumber,
-          status: 'VALIDE',
-          created_at: new Date().toISOString(),
+          user_id: user?.id,
         })
       } catch (_) {}
 

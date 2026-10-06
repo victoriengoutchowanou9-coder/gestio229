@@ -18,9 +18,10 @@ import { useTenant } from '../../../hooks/useTenant'
 import { getNextSectorCode } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal } from '../../../components/modals'
+import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
+import { formatFCFA } from '../../../utils/formatters'
 
-const fmt = (n: number) =>
-  new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
+const fmt = (n: number) => formatFCFA(n)
 
 interface Expense {
   id: string
@@ -155,14 +156,30 @@ export const DepensesPage: React.FC = () => {
         throw new Error(insErr?.message || "Échec d'enregistrement de la dépense.")
       }
 
-      // Impact Caisse : si paiement en espèces, déduire immédiatement du tiroir caisse dans Supabase
-      if (form.payment_method === 'especes' && companyId) {
+      // Impact Caisse : si paiement en espèces ou MoMo, enregistrer le mouvement de caisse
+      if (['especes', 'momo'].includes(form.payment_method) && companyId) {
+        try {
+          await enregistrerMouvementCaisse({
+            company_id: companyId,
+            sector_slug: sectorSlug || 'boutique',
+            type: 'depense',
+            sens: 'sortie',
+            montant_especes: form.payment_method === 'especes' ? numAmount : 0,
+            montant_momo: form.payment_method === 'momo' ? numAmount : 0,
+            source_module: 'depenses',
+            source_id: insData.id,
+            motif: `Dépense: ${form.title.trim()} (${form.category})`,
+            user_name: user?.full_name || user?.username || 'Utilisateur',
+            user_id: user?.id,
+          })
+        } catch (e) {}
+
         try {
           const { data: reg } = await supabaseTenant('cash_registers')
             .select('id, current_cash_balance')
             .limit(1)
             .maybeSingle()
-          if (reg) {
+          if (reg && form.payment_method === 'especes') {
             await supabaseTenant('cash_registers')
               .update({
                 current_cash_balance: Math.max(0, (Number(reg.current_cash_balance) || 0) - numAmount)

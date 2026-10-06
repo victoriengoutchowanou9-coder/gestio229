@@ -23,10 +23,14 @@ import {
   AlertTriangle,
   RotateCcw as RestoreIcon,
   LogOut,
+  Sun,
+  Moon,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { supabase } from '../../lib/supabase';
 import { fetchResumeActivite } from '../../lib/supabaseTenant';
+import { useUIStore } from '../../store/uiStore';
+import { formatNumber, formatFCFA } from '../../utils/formatters';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES & ÉTATS (PARTIE 9 — POLITIQUE DE CONSERVATION DES DONNÉES)
@@ -86,7 +90,7 @@ const EMPTY_FORM = {
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const fmt = (n: number) => n.toLocaleString('fr-FR');
+const fmt = (n: number) => formatNumber(n);
 
 const generateId = () => `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -111,6 +115,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   onOpenSubscription,
 }) => {
   const isAdmin = !userRole || userRole === 'administrateur' || userRole === 'super_admin';
+  const { darkMode, toggleDarkMode } = useUIStore();
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [activities, setActivities] = useState<ActivityEntry[]>([]);
@@ -141,8 +146,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       return 'Mois en cours';
     }
   }, []);
-
-
 
   // ── Synchronisation Supabase company_activities ─────────────────────────────
   const loadActivitiesFromSupabase = useCallback(async () => {
@@ -183,7 +186,19 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           };
         });
 
-        setActivities(mapped);
+        // Déduplication stricte par (slug, nom) pour éviter les doublons sur le Hub
+        const seen = new Set<string>();
+        const uniqueMapped: ActivityEntry[] = [];
+        for (const item of mapped) {
+          const normSlug = (item.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+          const key = `${normSlug}_${item.name.toLowerCase().trim()}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            uniqueMapped.push(item);
+          }
+        }
+
+        setActivities(uniqueMapped);
       } else {
         // Auto-seed dans Supabase si aucune activité n'existe pour cette entreprise
         const sectorsToSeed: string[] = [];
@@ -197,10 +212,10 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           sectorsToSeed.push('boutique');
         }
 
+        const uniqueSectorsToSeed = Array.from(new Set(sectorsToSeed.map((s) => s.replace(/^sec-/, ''))));
         const seededRows: ActivityEntry[] = [];
-        for (const s of sectorsToSeed) {
-          const rawSlug = s.replace(/^sec-/, '');
-          const meta = getSectorMeta(rawSlug) || getSectorMeta(s);
+        for (const rawSlug of uniqueSectorsToSeed) {
+          const meta = getSectorMeta(rawSlug);
           const actName = `${companyName || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
           const { data: newAct, error: actErr } = await supabase
             .from('company_activities')
@@ -618,41 +633,45 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   // RENDER
   // ─────────────────────────────────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 p-4 sm:p-6 lg:p-8 selection:bg-emerald-500 selection:text-white">
+    <div className={`min-h-screen p-4 sm:p-6 lg:p-8 transition-colors duration-200 selection:bg-emerald-500 selection:text-white ${
+      darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
+    }`}>
 
       {/* ══ HEADER ══════════════════════════════════════════════════════════ */}
       <div className="max-w-7xl mx-auto mb-8">
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 pb-6 border-b border-slate-800">
+        <div className={`flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 pb-6 border-b ${
+          darkMode ? 'border-slate-800' : 'border-slate-200'
+        }`}>
           <div className="flex-1">
             <div className="flex items-center gap-2.5 flex-wrap">
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-400 border border-emerald-500/30">
+              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-500 border border-emerald-500/30">
                 HUB CENTRAL MULTISERVICES — GESTIO 229
               </span>
-              <span className="text-xs text-slate-400 font-mono">Bénin • UEMOA (FCFA)</span>
+              <span className={`text-xs font-mono ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Bénin • UEMOA (FCFA)</span>
             </div>
 
             {companyName ? (
-              <h1 className="text-2xl sm:text-3xl font-black text-white mt-2 tracking-tight">{companyName}</h1>
+              <h1 className={`text-2xl sm:text-3xl font-black mt-2 tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>{companyName}</h1>
             ) : (
-              <h1 className="text-2xl sm:text-3xl font-black text-slate-500 mt-2 tracking-tight italic">
+              <h1 className={`text-2xl sm:text-3xl font-black mt-2 tracking-tight italic ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                 — Nom de l'entreprise non configuré —
               </h1>
             )}
 
-            <p className="text-xs sm:text-sm text-slate-400 mt-1 flex items-center gap-2 flex-wrap">
+            <p className={`text-xs sm:text-sm mt-1 flex items-center gap-2 flex-wrap ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
               {companyIfu && (
                 <>
-                  <span>N° IFU : <strong className="text-slate-300 font-mono">{companyIfu}</strong></span>
+                  <span>N° IFU : <strong className={`font-mono ${darkMode ? 'text-slate-300' : 'text-slate-800'}`}>{companyIfu}</strong></span>
                   <span>•</span>
                 </>
               )}
-              <span>Régime : <strong className="text-slate-300">{companyRegime}</strong></span>
+              <span>Régime : <strong className={darkMode ? 'text-slate-300' : 'text-slate-800'}>{companyRegime}</strong></span>
               <span>•</span>
-              <span className="text-emerald-400 font-medium">{activeActivities.length} Activité(s) active(s)</span>
+              <span className="text-emerald-500 font-medium">{activeActivities.length} Activité(s) active(s)</span>
               {archivedActivities.length > 0 && (
                 <>
                   <span>•</span>
-                  <span className="text-slate-500">{archivedActivities.length} archivée(s)</span>
+                  <span className={darkMode ? 'text-slate-500' : 'text-slate-400'}>{archivedActivities.length} archivée(s)</span>
                 </>
               )}
             </p>
@@ -660,18 +679,40 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
           {/* Actions globales */}
           <div className="flex items-center gap-2 flex-wrap self-start">
+            {/* Toggle Mode Sombre / Clair */}
+            <button
+              type="button"
+              onClick={toggleDarkMode}
+              title={darkMode ? "Passer en mode clair" : "Passer en mode sombre"}
+              className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
+                darkMode
+                  ? 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-700'
+                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-sm'
+              }`}
+            >
+              {darkMode ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+
             <button
               onClick={handleRefresh}
               title="Actualiser"
-              className="p-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-xl text-slate-300 hover:text-white transition-colors"
+              className={`p-2 rounded-xl transition-colors border ${
+                darkMode
+                  ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
+                  : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+              }`}
             >
-              <RefreshCw size={15} className={isRefreshing ? 'animate-spin text-emerald-400' : ''} />
+              <RefreshCw size={15} className={isRefreshing ? 'animate-spin text-emerald-500' : ''} />
             </button>
             {isAdmin && (
               <>
                 <button
                   onClick={() => setShowCompanySettingsModal(true)}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-xs font-semibold text-slate-300 hover:text-white transition-colors"
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors border ${
+                    darkMode
+                      ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                      : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+                  }`}
                 >
                   <Settings size={14} /> Entreprise
                 </button>
@@ -693,7 +734,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               <button
                 onClick={onLogout}
                 title="Se déconnecter de la session"
-                className="flex items-center gap-1.5 px-3 py-2 bg-slate-900 hover:bg-rose-950/60 border border-slate-700 hover:border-rose-500/50 rounded-xl text-xs font-semibold text-slate-300 hover:text-rose-300 transition-colors"
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors border ${
+                  darkMode
+                    ? 'bg-slate-900 hover:bg-rose-950/60 border-slate-700 hover:border-rose-500/50 text-slate-300 hover:text-rose-300'
+                    : 'bg-white hover:bg-rose-50 border-slate-200 hover:border-rose-300 text-slate-700 hover:text-rose-600 shadow-sm'
+                }`}
               >
                 <LogOut size={14} /> Déconnexion
               </button>
@@ -706,103 +751,139 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
 
         {/* ── SECTION PARTIE 3 : TABLEAU DE BORD DU JOUR ────────────────── */}
-        <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-          <div className="flex items-center justify-between mb-5 border-b border-slate-800 pb-3">
+        <div className={`rounded-2xl p-6 shadow-xl relative overflow-hidden border ${
+          darkMode ? 'bg-slate-900/80 border-slate-800' : 'bg-white border-slate-200 shadow-sm'
+        }`}>
+          <div className={`flex items-center justify-between mb-5 border-b pb-3 ${
+            darkMode ? 'border-slate-800' : 'border-slate-100'
+          }`}>
             <div>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-slate-300 flex items-center gap-2">
-                <Calendar size={16} className="text-blue-400" />
+              <h2 className={`text-sm font-bold uppercase tracking-wider flex items-center gap-2 ${
+                darkMode ? 'text-slate-300' : 'text-slate-800'
+              }`}>
+                <Calendar size={16} className="text-blue-500" />
                 TABLEAU DE BORD DU JOUR
               </h2>
-              <span className="text-[11px] text-slate-500">Toutes activités confondues — Données du jour</span>
+              <span className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Toutes activités confondues — Données du jour</span>
             </div>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20 font-semibold">
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 font-semibold">
               Aujourd'hui
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {/* CA DU JOUR */}
-            <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                darkMode ? 'text-slate-400' : 'text-slate-500'
+              }`}>
                 CA DU JOUR
               </span>
-              <div className="text-2xl font-black text-white tracking-tight">
+              <div className={`text-2xl font-black tracking-tight ${
+                darkMode ? 'text-white' : 'text-slate-900'
+              }`}>
                 {fmt(dayTotals.totalRevenue)}
               </div>
-              <div className="text-xs text-blue-400 font-semibold mt-0.5">F CFA</div>
+              <div className="text-xs text-blue-500 font-semibold mt-0.5">F CFA</div>
             </div>
 
             {/* DÉPENSES DU JOUR */}
-            <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                darkMode ? 'text-slate-400' : 'text-slate-500'
+              }`}>
                 DÉPENSES DU JOUR
               </span>
-              <div className="text-2xl font-black text-rose-400 tracking-tight">
+              <div className="text-2xl font-black text-rose-500 tracking-tight">
                 {fmt(dayTotals.totalExpenses)}
               </div>
               <div className="text-xs text-rose-500 font-semibold mt-0.5">F CFA</div>
             </div>
 
             {/* MARGE NETTE DU JOUR */}
-            <div className="bg-slate-950/60 border border-emerald-500/20 p-4 rounded-xl">
-              <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block mb-1">
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-emerald-500/20' : 'bg-emerald-50/50 border-emerald-200'
+            }`}>
+              <span className="text-[11px] font-bold text-emerald-500 uppercase tracking-wider block mb-1">
                 MARGE NETTE DU JOUR
               </span>
-              <div className="text-2xl font-black text-emerald-400 tracking-tight">
+              <div className="text-2xl font-black text-emerald-500 tracking-tight">
                 {fmt(dayTotals.totalNetMargin)}
               </div>
-              <div className="text-xs text-emerald-500 font-semibold mt-0.5">F CFA</div>
+              <div className="text-xs text-emerald-600 font-semibold mt-0.5">F CFA</div>
             </div>
           </div>
         </div>
 
         {/* ── SECTION PARTIE 4 : SYNTHÈSE DU MOIS (MOIS EN COURS AUTOMATIQUE) ── */}
-        <div className="bg-slate-900/80 border border-indigo-500/30 rounded-2xl p-6 shadow-xl relative overflow-hidden">
-          <div className="flex items-center justify-between mb-5 border-b border-slate-800 pb-3">
+        <div className={`rounded-2xl p-6 shadow-xl relative overflow-hidden border ${
+          darkMode ? 'bg-slate-900/80 border-indigo-500/30' : 'bg-white border-indigo-200 shadow-sm'
+        }`}>
+          <div className={`flex items-center justify-between mb-5 border-b pb-3 ${
+            darkMode ? 'border-slate-800' : 'border-slate-100'
+          }`}>
             <div>
-              <h2 className="text-sm font-bold uppercase tracking-wider text-indigo-300 flex items-center gap-2">
-                <TrendingUp size={16} className="text-indigo-400" />
+              <h2 className={`text-sm font-bold uppercase tracking-wider flex items-center gap-2 ${
+                darkMode ? 'text-indigo-300' : 'text-indigo-900'
+              }`}>
+                <TrendingUp size={16} className="text-indigo-500" />
                 SYNTHÈSE DU MOIS
               </h2>
-              <span className="text-[11px] text-indigo-400/80">Toutes activités confondues — {currentMonthLabel}</span>
+              <span className={`text-[11px] ${darkMode ? 'text-indigo-400/80' : 'text-indigo-600'}`}>Toutes activités confondues — {currentMonthLabel}</span>
             </div>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-500/40 font-bold">
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 font-bold">
               {currentMonthLabel}
             </span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             {/* CA DU MOIS */}
-            <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                darkMode ? 'text-slate-400' : 'text-slate-500'
+              }`}>
                 CA DU MOIS
               </span>
-              <div className="text-2xl font-black text-white tracking-tight">
+              <div className={`text-2xl font-black tracking-tight ${
+                darkMode ? 'text-white' : 'text-slate-900'
+              }`}>
                 {fmt(monthTotals.totalRevenue)}
               </div>
-              <div className="text-xs text-indigo-400 font-semibold mt-0.5">F CFA</div>
+              <div className="text-xs text-indigo-500 font-semibold mt-0.5">F CFA</div>
             </div>
 
             {/* DÉPENSES DU MOIS */}
-            <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl">
-              <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+            }`}>
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                darkMode ? 'text-slate-400' : 'text-slate-500'
+              }`}>
                 DÉPENSES DU MOIS
               </span>
-              <div className="text-2xl font-black text-rose-400 tracking-tight">
+              <div className="text-2xl font-black text-rose-500 tracking-tight">
                 {fmt(monthTotals.totalExpenses)}
               </div>
               <div className="text-xs text-rose-500 font-semibold mt-0.5">F CFA</div>
             </div>
 
             {/* MARGE NETTE DU MOIS */}
-            <div className="bg-slate-950/60 border border-emerald-500/30 p-4 rounded-xl">
-              <span className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider block mb-1">
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-emerald-500/30' : 'bg-emerald-50/50 border-emerald-200'
+            }`}>
+              <span className="text-[11px] font-bold text-emerald-500 uppercase tracking-wider block mb-1">
                 MARGE NETTE DU MOIS
               </span>
-              <div className="text-2xl font-black text-emerald-400 tracking-tight">
+              <div className="text-2xl font-black text-emerald-500 tracking-tight">
                 {fmt(monthTotals.totalNetMargin)}
               </div>
-              <div className="text-xs text-emerald-500 font-semibold mt-0.5">F CFA</div>
+              <div className="text-xs text-emerald-600 font-semibold mt-0.5">F CFA</div>
             </div>
           </div>
         </div>
@@ -811,12 +892,16 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       {/* ══ ÉTAT VIDE (AUCUNE ACTIVITÉ ENREGISTRÉE) ══════════════════════════ */}
       {activeActivities.length === 0 && (
         <div className="max-w-7xl mx-auto mb-10">
-          <div className="bg-slate-900/50 border border-dashed border-slate-700 rounded-2xl p-12 text-center">
-            <div className="w-16 h-16 rounded-2xl bg-slate-800 border border-slate-700 flex items-center justify-center mx-auto mb-4">
-              <Building2 size={32} className="text-slate-600" />
+          <div className={`border border-dashed rounded-2xl p-12 text-center ${
+            darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-300'
+          }`}>
+            <div className={`w-16 h-16 rounded-2xl border flex items-center justify-center mx-auto mb-4 ${
+              darkMode ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400'
+            }`}>
+              <Building2 size={32} />
             </div>
-            <h3 className="text-lg font-bold text-slate-400 mb-2">Aucune activité active</h3>
-            <p className="text-sm text-slate-500 max-w-md mx-auto mb-6">
+            <h3 className={`text-lg font-bold mb-2 ${darkMode ? 'text-slate-400' : 'text-slate-700'}`}>Aucune activité active</h3>
+            <p className={`text-sm max-w-md mx-auto mb-6 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
               Renseignez vos établissements pour afficher leurs cartes et accéder à leurs espaces métiers dédiés.
             </p>
             <div className="flex items-center justify-center gap-3 flex-wrap">
@@ -836,15 +921,15 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         <div className="max-w-7xl mx-auto mb-12">
           <div className="flex items-center justify-between mb-6">
             <div>
-              <h3 className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+              <h3 className={`text-xl font-bold tracking-tight flex items-center gap-2 ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                 <span>Établissements & Activités ({activeActivities.length})</span>
               </h3>
-              <p className="text-xs text-slate-400 mt-0.5">Accès direct aux applications métiers autonomes</p>
+              <p className={`text-xs mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Accès direct aux applications métiers autonomes</p>
             </div>
             {archivedActivities.length > 0 && (
               <button
                 onClick={() => setShowArchived(!showArchived)}
-                className="text-xs text-slate-400 hover:text-white flex items-center gap-1.5 transition-colors"
+                className={`text-xs flex items-center gap-1.5 transition-colors ${darkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'}`}
               >
                 <Archive size={14} />
                 <span>{showArchived ? 'Masquer' : 'Voir'} archives ({archivedActivities.length})</span>
@@ -856,17 +941,21 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             {activeActivities.map((act) => (
               <div
                 key={act.id}
-                className="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-6 flex flex-col justify-between shadow-xl transition-all relative overflow-hidden"
+                className={`rounded-2xl p-6 flex flex-col justify-between shadow-xl transition-all relative overflow-hidden border ${
+                  darkMode
+                    ? 'bg-slate-900 border-slate-800 hover:border-slate-700'
+                    : 'bg-white border-slate-200 hover:border-slate-300 shadow-md'
+                }`}
               >
                 {/* 5.1 En-tête de la carte : Nom de l'activité & Lieu */}
                 <div>
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div className="flex-1 min-w-0">
-                      <h4 className="text-base font-black text-white uppercase tracking-tight leading-tight">
+                      <h4 className={`text-base font-black uppercase tracking-tight leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
                         {act.name}
                       </h4>
-                      <div className="text-xs text-slate-400 flex items-center gap-1 mt-1 font-medium">
-                        <MapPin size={12} className="text-slate-500 shrink-0" />
+                      <div className={`text-xs flex items-center gap-1 mt-1 font-medium ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                        <MapPin size={12} className={darkMode ? "text-slate-500 shrink-0" : "text-slate-400 shrink-0"} />
                         <span>{act.location || 'Lieu non spécifié'}</span>
                       </div>
                     </div>
@@ -878,30 +967,34 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                           ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
                           : act.status === 'SUSPENDUE'
                           ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                          : 'bg-slate-800 text-slate-400 border-slate-700'
+                          : darkMode ? 'bg-slate-800 text-slate-400 border-slate-700' : 'bg-slate-100 text-slate-600 border-slate-200'
                       }`}
                     >
                       {act.status}
                     </span>
                   </div>
 
-                  <div className="text-[11px] text-slate-500 mb-4 pl-9">
+                  <div className={`text-[11px] mb-4 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
                     {act.sectorLabel}
                   </div>
 
                   {/* 5.1 Corps financier obligatoire : CA, Dépenses, Marge Nette */}
-                  <div className="bg-slate-950/70 border border-slate-800/80 rounded-xl p-4 space-y-2 mb-6">
+                  <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
+                    darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+                  }`}>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400">CA :</span>
-                      <span className="font-mono font-bold text-white">{fmt(act.revenue)} F CFA</span>
+                      <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
+                      <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(act.revenue)} F CFA</span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-slate-400">Dépenses :</span>
-                      <span className="font-mono font-bold text-rose-400">{fmt(act.expenses)} F CFA</span>
+                      <span className={darkMode ? "text-slate-400" : "text-slate-500"}>Dépenses :</span>
+                      <span className="font-mono font-bold text-rose-500">{fmt(act.expenses)} F CFA</span>
                     </div>
-                    <div className="flex items-center justify-between text-xs pt-1.5 border-t border-slate-800/80">
-                      <span className="font-semibold text-emerald-400">Marge nette :</span>
-                      <span className="font-mono font-black text-emerald-400">{fmt(act.netMargin)} F CFA</span>
+                    <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
+                      darkMode ? 'border-slate-800/80' : 'border-slate-200'
+                    }`}>
+                      <span className="font-semibold text-emerald-500">Marge nette :</span>
+                      <span className="font-mono font-black text-emerald-500">{fmt(act.netMargin)} F CFA</span>
                     </div>
                   </div>
                 </div>
@@ -934,7 +1027,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                           setFormError('');
                           setShowSettingsModal(act);
                         }}
-                        className="py-2 px-3 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700/60"
+                        className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                          darkMode
+                            ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700/60'
+                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                        }`}
                       >
                         <Settings size={13} />
                         <span>Paramètres</span>
@@ -943,7 +1040,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                       <button
                         type="button"
                         onClick={() => initiateDelete(act)}
-                        className="py-2 px-3 bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border border-slate-700/60 hover:border-rose-800/40"
+                        className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                          darkMode
+                            ? 'bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border-slate-700/60 hover:border-rose-800/40'
+                            : 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200'
+                        }`}
                       >
                         <Trash2 size={13} />
                         <span>Supprimer</span>
@@ -1247,19 +1348,28 @@ interface ModalProps {
   wide?: boolean;
 }
 
-const Modal: React.FC<ModalProps> = ({ title, onClose, children, wide = false }) => (
-  <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
-    <div className={`bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full ${wide ? 'max-w-lg' : 'max-w-md'} max-h-[90vh] overflow-y-auto`}>
-      <div className="flex items-center justify-between p-5 border-b border-slate-800">
-        <h3 className="text-base font-bold text-white tracking-tight">{title}</h3>
-        <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors">
-          <X size={18} />
-        </button>
+const Modal: React.FC<ModalProps> = ({ title, onClose, children, wide = false }) => {
+  const { darkMode } = useUIStore();
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm">
+      <div className={`rounded-2xl shadow-2xl w-full ${wide ? 'max-w-lg' : 'max-w-md'} max-h-[90vh] overflow-y-auto border ${
+        darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+      }`}>
+        <div className={`flex items-center justify-between p-5 border-b ${
+          darkMode ? 'border-slate-800' : 'border-slate-100'
+        }`}>
+          <h3 className={`text-base font-bold tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>{title}</h3>
+          <button onClick={onClose} className={`p-1.5 rounded-lg transition-colors ${
+            darkMode ? 'hover:bg-slate-800 text-slate-400 hover:text-white' : 'hover:bg-slate-100 text-slate-400 hover:text-slate-900'
+          }`}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="p-5">{children}</div>
       </div>
-      <div className="p-5">{children}</div>
     </div>
-  </div>
-);
+  );
+};
 
 interface InputFieldProps {
   label: string;
@@ -1268,18 +1378,25 @@ interface InputFieldProps {
   onChange: (v: string) => void;
 }
 
-const InputField: React.FC<InputFieldProps> = ({ label, placeholder, value, onChange }) => (
-  <div className="mb-3">
-    <label className="block text-xs font-semibold text-slate-400 mb-1.5">{label}</label>
-    <input
-      type="text"
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      placeholder={placeholder}
-      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder:text-slate-600 focus:outline-none focus:border-emerald-500 transition-colors"
-    />
-  </div>
-);
+const InputField: React.FC<InputFieldProps> = ({ label, placeholder, value, onChange }) => {
+  const { darkMode } = useUIStore();
+  return (
+    <div className="mb-3">
+      <label className={`block text-xs font-semibold mb-1.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>{label}</label>
+      <input
+        type="text"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        className={`w-full rounded-xl px-3.5 py-2.5 text-sm transition-colors border focus:outline-none focus:border-emerald-500 ${
+          darkMode
+            ? 'bg-slate-800 border-slate-700 text-slate-100 placeholder:text-slate-600'
+            : 'bg-slate-50 border-slate-200 text-slate-900 placeholder:text-slate-400'
+        }`}
+      />
+    </div>
+  );
+};
 
 interface SectorSelectorProps {
   value: string;
