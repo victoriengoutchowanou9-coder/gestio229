@@ -5,6 +5,7 @@
 // =============================================================================
 
 import { supabase } from '../lib/supabase'
+import { enregistrerMouvementCaisse } from './caisseSectorService'
 
 export type ModeGestion = 'simplifie' | 'classique'
 export type ModeCalcul = 'm2' | 'unite' | 'page' | 'heure' | 'forfait' | 'personnalise'
@@ -888,22 +889,22 @@ export const imprimerieService = {
       })
       .eq('id', cmd.id)
 
-    // Audit log
-    await this.logAudit({
-      company_id: paiement.company_id,
-      sector_slug: paiement.sector_slug,
-      user_id: user?.id,
-      user_nom: user?.full_name || 'Caissière',
-      action: 'ENCAISSEMENT_COMMANDE',
-      module: 'Caisse',
-      document_ref: refRecu,
-      details: {
-        commande_num: cmd.numero_commande,
-        montant_verse: montantVerse,
-        solde_restant: nouveauSolde,
-        mode: paiement.mode_paiement,
-      },
-    })
+    // Intégration Caisse Opérationnelle Secteur GESTIO 229
+    try {
+      await enregistrerMouvementCaisse(paiement.company_id, paiement.sector_slug || 'imprimerie', {
+        type: 'encaissement',
+        sens: 'entree',
+        montant_especes: ['especes'].includes(paiement.mode_paiement) ? montantVerse : 0,
+        montant_momo: ['momo_mtn', 'momo_moov'].includes(paiement.mode_paiement) ? montantVerse : 0,
+        source_module: 'imprimerie',
+        source_id: cmd.id,
+        motif: `Encaissement impression ${cmd.numero_commande} - ${refRecu}`,
+        user_name: user?.full_name || 'Caissière',
+        user_id: user?.id,
+      })
+    } catch (caisseErr) {
+      console.warn('Erreur synchronisation caisse imprimerie:', caisseErr)
+    }
   },
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -996,6 +997,23 @@ export const imprimerieService = {
         caissier_nom: user?.full_name || 'Vente Comptoir',
         type_paiement: 'vente_rapide',
       })
+
+      // Mouvement Caisse Secteur
+      try {
+        await enregistrerMouvementCaisse(companyId, sectorSlug, {
+          type: 'vente',
+          sens: 'entree',
+          montant_especes: ['especes'].includes(params.modePaiement) ? montantPaye : 0,
+          montant_momo: ['momo_mtn', 'momo_moov'].includes(params.modePaiement) ? montantPaye : 0,
+          source_module: 'imprimerie',
+          source_id: cmd.id,
+          motif: `Vente rapide impression ${cmdNum} - ${params.clientNom}`,
+          user_name: user?.full_name || 'Vente Comptoir',
+          user_id: user?.id,
+        })
+      } catch (caisseErr) {
+        console.warn('Erreur synchro caisse vente rapide:', caisseErr)
+      }
     }
 
     // Déduire automatiquement les matières prévues si définies

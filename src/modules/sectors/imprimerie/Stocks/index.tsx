@@ -7,4 +7,4 @@
 // Clé d'isolation obligatoire : (company_id + sector_slug='imprimerie')
 // =============================================================================
 
-export { default, StocksPage } from '../../../../pages/dashboard/stocks/StocksPage'
+export { default, ImprimerieMatieresPage as Stocks } from '../../../../pages/dashboard/imprimerie/ImprimerieMatieresPage'

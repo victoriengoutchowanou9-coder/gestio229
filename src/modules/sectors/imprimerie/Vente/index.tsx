@@ -7,4 +7,4 @@
 // Clé d'isolation obligatoire : (company_id + sector_slug='imprimerie')
 // =============================================================================
 
-export { default, POSPage } from '../../../../pages/dashboard/vente-pos/POSPage'
+export { default, ImprimerieVenteRapidePage as Vente } from '../../../../pages/dashboard/imprimerie/ImprimerieVenteRapidePage'

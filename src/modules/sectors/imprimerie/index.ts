@@ -17,7 +17,10 @@ export const SECTOR_MANIFEST = {
     'Clients',
     'Fournisseurs',
     'Depenses',
-    'Reporting'
+    'Reporting',
+    'Devis',
+    'Prestations',
+    'SousTraitance'
   ]
 }
 
@@ -30,5 +33,8 @@ export { default as Clients } from './Clients'
 export { default as Fournisseurs } from './Fournisseurs'
 export { default as Depenses } from './Depenses'
 export { default as Reporting } from './Reporting'
+export { default as Devis } from '../../../pages/dashboard/imprimerie/ImprimerieDevisProductionPage'
+export { default as Prestations } from '../../../pages/dashboard/imprimerie/ImprimeriePrestationsPage'
+export { default as SousTraitance } from '../../../pages/dashboard/imprimerie/ImprimerieSousTraitancePage'
 
 export default SECTOR_MANIFEST

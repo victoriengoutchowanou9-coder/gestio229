@@ -200,6 +200,26 @@ const SectorAwareDashboard: React.FC = () => {
   return <DashboardPage />
 }
 
+// ─── Vente & POS conditionnel (Spécialisé Vente Rapide pour Imprimerie) ───────────
+const SectorAwareVentes: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'imprimerie' || clean === 'impression') {
+    return <ImprimerieVenteRapidePage />
+  }
+  return <POSPage />
+}
+
+// ─── Stocks conditionnel (Spécialisé Matières Premières & Bobines Imprimerie) ────
+const SectorAwareStocks: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'imprimerie' || clean === 'impression') {
+    return <ImprimerieMatieresPage />
+  }
+  return <StocksPage />
+}
+
 // ─── Reporting conditionnel (Spécialisé Rentabilité par Prestation Imprimerie) ────
 const SectorAwareReporting: React.FC = () => {
   const { sectorSlug } = useTenant()
@@ -335,9 +355,9 @@ const AppRoutes: React.FC = () => {
         <Route index element={<Navigate to="tableau-bord" replace />} />
         <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
-        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
-        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
-        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
+        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><SectorAwareTresorerie /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
@@ -436,9 +456,9 @@ const AppRoutes: React.FC = () => {
         <Route index element={<Navigate to="tableau-bord" replace />} />
         <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
-        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
-        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
-        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
+        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><SectorAwareTresorerie /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
