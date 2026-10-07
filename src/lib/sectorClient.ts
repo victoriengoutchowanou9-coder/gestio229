@@ -50,11 +50,29 @@ export function getActiveSectorMeta() {
 }
 
 /**
+ * Normalise canoniquement les slugs de secteurs pour réconcilier les alias et équivalences
+ * (ex: imprimerie <-> impression, immobilier <-> location, agrobusiness <-> agro, etc.)
+ */
+export function canonicalSectorSlug(slug?: string | null): string {
+  if (!slug) return 'boutique'
+  const clean = String(slug).toLowerCase().trim().replace(/^sec-/, '')
+  if (clean === 'impression' || clean === 'imprimerie') return 'imprimerie'
+  if (clean === 'station' || clean === 'stationservice' || clean === 'station-service') return 'station-service'
+  if (clean === 'microfinance-tontine' || clean === 'tontine' || clean === 'microfinance') return 'microfinance'
+  if (clean === 'location' || clean === 'gestion-locative' || clean === 'gestion_locative' || clean === 'locatif' || clean === 'locative' || clean === 'immobilier') return 'immobilier'
+  if (clean === 'agro-business' || clean === 'agro' || clean === 'agrobusiness') return 'agrobusiness'
+  if (clean === 'bar-restaurant-maquis' || clean === 'maquis' || clean === 'fast-food' || clean === 'restaurant') return 'restaurant'
+  if (clean === 'cosmetique' || clean === 'cosmetiques') return 'cosmetiques'
+  return clean
+}
+
+/**
  * Vérifie si l'entreprise a souscrit au secteur demandé
  */
 export function isSectorSubscribed(sectorSlug: string, company?: Company | null): boolean {
   if (!company) return false
   
+  const targetCanon = canonicalSectorSlug(sectorSlug)
   const normSlug = String(sectorSlug).replace(/^sec-/, '').toLowerCase().trim()
 
   // Liste des secteurs souscrits dans company_sectors ou selected_sectors
@@ -74,20 +92,19 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
 
   if (rawList.length === 0) return true
 
-  const normalizedList = rawList
-    .map((s) => {
-      if (typeof s === 'string') {
-        return s.replace(/^sec-/, '').toLowerCase().trim()
-      }
-      if (s && typeof s === 'object') {
-        const slug = s.slug || s.sector_slug || s.sector?.slug || s.code || ''
-        return String(slug).replace(/^sec-/, '').toLowerCase().trim()
-      }
-      return ''
-    })
-    .filter(Boolean)
+  for (const s of rawList) {
+    let slugStr = ''
+    if (typeof s === 'string') {
+      slugStr = s.replace(/^sec-/, '').toLowerCase().trim()
+    } else if (s && typeof s === 'object') {
+      slugStr = String(s.slug || s.sector_slug || s.sector?.slug || s.code || '').replace(/^sec-/, '').toLowerCase().trim()
+    }
+    if (slugStr === normSlug || canonicalSectorSlug(slugStr) === targetCanon) {
+      return true
+    }
+  }
 
-  return normalizedList.includes(normSlug)
+  return false
 }
 
 /**

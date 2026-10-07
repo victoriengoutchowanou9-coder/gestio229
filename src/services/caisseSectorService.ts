@@ -85,13 +85,22 @@ export async function getOrCreateSectorCaisse(
   if (!companyId) return null
   const clean = cleanSectorSlug(sectorSlug)
 
+  const eqSlugs = [clean, sectorSlug.toLowerCase().trim().replace(/^sec-/, '')]
+  if (clean === 'imprimerie' || clean === 'impression') eqSlugs.push('imprimerie', 'impression')
+  if (clean === 'station' || clean === 'station-service') eqSlugs.push('station', 'station-service')
+  if (clean === 'immobilier' || clean === 'location' || clean === 'locatif' || clean === 'locative') eqSlugs.push('immobilier', 'location', 'locatif', 'locative')
+  if (clean === 'agrobusiness' || clean === 'agro') eqSlugs.push('agrobusiness', 'agro')
+  if (clean === 'cosmetiques' || clean === 'cosmetique') eqSlugs.push('cosmetiques', 'cosmetique')
+  const uniqueEq = Array.from(new Set(eqSlugs)).filter(Boolean)
+  const orFilter = uniqueEq.map((s) => `sector_slug.eq.${s},secteur_slug.eq.${s}`).join(',')
+
   try {
     // 1. Chercher la caisse existante pour ce secteur
     const { data: existing, error } = await supabase
       .from('caisses')
       .select('*')
       .eq('company_id', companyId)
-      .or(`sector_slug.eq.${clean},secteur_slug.eq.${clean}`)
+      .or(orFilter)
       .order('created_at', { ascending: true })
       .limit(1)
 
@@ -99,7 +108,7 @@ export async function getOrCreateSectorCaisse(
       return existing[0] as CaisseEntity
     }
 
-    // 2. Si aucune caisse n'existe pour ce secteur, créer la caisse attitrée
+    // 2. Si aucune caisse n'existe pour ce secteur, créer la caisse attitrée avec UUID BDD réel
     const sectorPrefix = clean.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, 'X')
     const randomSuffix = Math.floor(1000 + Math.random() * 9000)
     const code = `CS-${sectorPrefix}-${randomSuffix}`
@@ -113,10 +122,10 @@ export async function getOrCreateSectorCaisse(
         secteur_slug: clean,
         code,
         nom,
-        statut: 'actif',
-        is_active: true,
+        statut: 'fermee',
         fond_ouverture_especes: 0,
         fond_ouverture_momo: 0,
+        solde_especes_final: 0,
       })
       .select()
       .maybeSingle()
@@ -125,16 +134,21 @@ export async function getOrCreateSectorCaisse(
       return created as CaisseEntity
     }
 
-    // Fallback mémoire si RLS ou table non encore migrée
-    return {
-      id: `caisse-${clean}-${companyId.slice(0, 8)}`,
-      company_id: companyId,
-      sector_slug: clean,
-      secteur_slug: clean,
-      code,
-      nom,
-      statut: 'actif',
+    if (createErr) {
+      console.warn('[CAISSE-SERVICE] Erreur insertion caisse, nouvelle tentative de lecture:', createErr.message)
+      const { data: retryList } = await supabase
+        .from('caisses')
+        .select('*')
+        .eq('company_id', companyId)
+        .or(orFilter)
+        .limit(1)
+
+      if (retryList && retryList.length > 0) {
+        return retryList[0] as CaisseEntity
+      }
     }
+
+    return null
   } catch (err) {
     console.warn('[CAISSE-SERVICE] Erreur getOrCreateSectorCaisse:', err)
     return null
@@ -340,17 +354,22 @@ export async function ouvrirSessionCaisse(
     if (sessErr) throw sessErr
 
     // 3. Mettre à jour l'état de la table caisses
+    const caisseUpdatePayload: any = {
+      statut: 'ouverte',
+      date_ouverture: nowIso,
+      date_fermeture: null,
+      fond_ouverture_especes: fondEspeces,
+      fond_ouverture_momo: fondMomo,
+      solde_especes_final: fondEspeces,
+      updated_at: nowIso,
+    }
+    if (userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
+      caisseUpdatePayload.ouvert_par = userId
+    }
+
     await supabase
       .from('caisses')
-      .update({
-        statut: 'ouverte',
-        date_ouverture: nowIso,
-        date_fermeture: null,
-        fond_ouverture_especes: fondEspeces,
-        fond_ouverture_momo: fondMomo,
-        ouvert_par: userName,
-        updated_at: nowIso,
-      })
+      .update(caisseUpdatePayload)
       .eq('id', caisse.id)
 
     // Enregistrer le mouvement d'ouverture

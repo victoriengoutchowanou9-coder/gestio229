@@ -442,6 +442,19 @@ const AppRoutes: React.FC = () => {
         <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
       </Route>
 
+      {/* Route directe normalisée Caisse Universelle /app/:companyId/secteur/:sectorKey/caisse */}
+      <Route
+        path="/app/:companyId/secteur/:sectorKey"
+        element={
+          <ProtectedRoute>
+            <SectorGuard>
+              <AppLayout />
+            </SectorGuard>
+          </ProtectedRoute>
+        }
+      >
+        <Route path="caisse" element={<CaissePage />} />
+      </Route>
 
       <Route
         path="/:sectorSlug"

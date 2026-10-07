@@ -10,7 +10,7 @@ import { Link, useParams, useLocation, Navigate } from 'react-router-dom'
 import { Lock, ArrowLeft, ShieldAlert, Sparkles, Clock, AlertTriangle } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
-import { getActiveSectorSlug, isSectorSubscribed } from '../../lib/sectorClient'
+import { getActiveSectorSlug, isSectorSubscribed, canonicalSectorSlug } from '../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
 import { normalizeSectorSlug } from '../../core/team/sectorRoles'
@@ -22,7 +22,7 @@ interface SectorGuardProps {
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   // ─── 1. RÈGLE DES HOOKS REACT : TOUS LES HOOKS APPELÉS AU TOP SANS EXCEPTION ───
   const location = useLocation()
-  const params = useParams<{ sectorSlug?: string }>()
+  const params = useParams<{ sectorSlug?: string; sectorKey?: string }>()
   const { toast } = useUIStore()
   const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
   const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
@@ -92,7 +92,7 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
 
   // Vérification de l'assignation sectorielle pour les utilisateurs internes (Non-admin)
   const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
-  const targetSectorSlug = params.sectorSlug || getActiveSectorSlug()
+  const targetSectorSlug = params.sectorKey || params.sectorSlug || getActiveSectorSlug()
 
   if (!isAdmin && user) {
     const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
@@ -132,7 +132,7 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
     }
 
     // 2. Si l'utilisateur tente de naviguer vers un autre secteur que son secteur assigné : redirection directe
-    if (userSector && targetClean && userSector !== targetClean) {
+    if (userSector && targetClean && userSector !== targetClean && canonicalSectorSlug(userSector) !== canonicalSectorSlug(targetClean)) {
       let dest = 'tableau-bord'
       if (user.role === 'caissier' || user.role === 'vendeur') {
         dest = 'vente-pos'

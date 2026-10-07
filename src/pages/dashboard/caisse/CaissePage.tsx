@@ -61,14 +61,20 @@ interface CashClosure {
   emailed_to?: string[]
 }
 
-export const CaissePage: React.FC = () => {
+export interface CaissePageProps {
+  sector_key?: string
+  sectorKey?: string
+}
+
+export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey }) => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
   const navigate = useNavigate()
   const { companyId, sectorSlug: tenantSectorSlug, supabaseTenant } = useTenant()
-  const params = useParams<{ sectorSlug?: string }>()
-  const currentSectorSlug = tenantSectorSlug || params.sectorSlug || getActiveSectorSlug()
-  const currentCompanyId = companyId || company?.id || ''
+  const params = useParams<{ sectorSlug?: string; sectorKey?: string; companyId?: string }>()
+  const rawSector = sector_key || sectorKey || params.sectorKey || tenantSectorSlug || params.sectorSlug || getActiveSectorSlug()
+  const currentSectorSlug = cleanSectorSlug(rawSector)
+  const currentCompanyId = companyId || params.companyId || company?.id || ''
 
   // État de la caisse : Ouverte ou Fermée
   const [caisseStatus, setCaisseStatus] = useState<'OUVERTE' | 'FERMEE'>('FERMEE')
@@ -1537,4 +1543,5 @@ export const CaissePage: React.FC = () => {
   )
 }
 
+export const CaisseOperationnellePage = CaissePage
 export default CaissePage

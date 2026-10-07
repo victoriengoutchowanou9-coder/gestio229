@@ -319,6 +319,35 @@ export const RegisterPage: React.FC = () => {
         console.warn('[Register] Insertion company_activities:', e)
       }
 
+      // 6. Initialiser automatiquement les caisses opérationnelles (1 caisse par secteur avec UUID BDD réel)
+      try {
+        for (const sId of form.selected_sectors) {
+          const matched = ALL_SECTORS.find((s) => s.id === sId || s.slug === sId)
+          const slug = matched ? matched.slug : sId.replace(/^sec-/, '').toLowerCase().trim()
+          await supabase.from('caisses').insert({
+            company_id: company.id,
+            sector_slug: slug,
+            secteur_slug: slug,
+            nom: `Caisse Principale ${slug.toUpperCase()}`,
+            statut: 'fermee',
+            fond_ouverture_especes: 0,
+            fond_ouverture_momo: 0,
+            solde_especes_final: 0
+          })
+
+          try {
+            await supabase.from('company_sectors').insert({
+              company_id: company.id,
+              sector_key: slug,
+              sector_slug: slug,
+              is_active: true
+            })
+          } catch (_) {}
+        }
+      } catch (caisseErr) {
+        console.warn('[Register] Initialisation caisses BDD:', caisseErr)
+      }
+
       // Déconnexion préventive de la session d'inscription
       try {
         await supabase.auth.signOut()
