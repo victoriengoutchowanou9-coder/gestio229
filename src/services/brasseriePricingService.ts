@@ -243,12 +243,14 @@ export async function fetchBrasserieGrilles(companyId: string, sectorSlug = 'bra
         counts[p.grille_id] = (counts[p.grille_id] || 0) + 1
       })
 
-      const formatted: BrasserieGrille[] = data.map((g: any) => ({
-        ...g,
-        seuil_min: Number(g.seuil_min) || 0,
-        seuil_max: g.seuil_max !== null && g.seuil_max !== undefined ? Number(g.seuil_max) : null,
-        produits_count: counts[g.id] || 0,
-      }))
+      const formatted: BrasserieGrille[] = data
+        .filter((g: any) => !g.id?.startsWith('default-'))
+        .map((g: any) => ({
+          ...g,
+          seuil_min: Number(g.seuil_min) || 0,
+          seuil_max: g.seuil_max !== null && g.seuil_max !== undefined ? Number(g.seuil_max) : null,
+          produits_count: counts[g.id] || 0,
+        }))
 
       localStorage.setItem(getStorageKey('grilles', companyId), JSON.stringify(formatted))
       return formatted
@@ -261,60 +263,15 @@ export async function fetchBrasserieGrilles(companyId: string, sectorSlug = 'bra
   const cached = localStorage.getItem(getStorageKey('grilles', companyId))
   if (cached) {
     try {
-      return JSON.parse(cached)
+      const parsed: BrasserieGrille[] = JSON.parse(cached)
+      const cleaned = Array.isArray(parsed) ? parsed.filter((g) => !g.id?.startsWith('default-')) : []
+      localStorage.setItem(getStorageKey('grilles', companyId), JSON.stringify(cleaned))
+      return cleaned
     } catch { /* noop */ }
   }
 
-  // Configuration par défaut professionnelle si aucune grille n'existe encore
-  const defaultGrilles: BrasserieGrille[] = [
-    {
-      id: 'default-detail',
-      company_id: companyId,
-      sector_slug: sectorSlug,
-      nom: 'Grille Détail',
-      seuil_min: 1,
-      seuil_max: 19,
-      statut: 'ACTIF',
-      description: 'Tarif standard pour les achats au détail (1 à 19 casiers)',
-      produits_count: 0,
-    },
-    {
-      id: 'default-maquis',
-      company_id: companyId,
-      sector_slug: sectorSlug,
-      nom: 'Grille Maquis',
-      seuil_min: 20,
-      seuil_max: 50,
-      statut: 'ACTIF',
-      description: 'Tarif préférentiel maquis et débits de boisson (20 à 50 casiers)',
-      produits_count: 0,
-    },
-    {
-      id: 'default-gros',
-      company_id: companyId,
-      sector_slug: sectorSlug,
-      nom: 'Grille Gros',
-      seuil_min: 51,
-      seuil_max: 100,
-      statut: 'ACTIF',
-      description: 'Tarif grossiste demi-gros (51 à 100 casiers)',
-      produits_count: 0,
-    },
-    {
-      id: 'default-super-gros',
-      company_id: companyId,
-      sector_slug: sectorSlug,
-      nom: 'Grille Super Gros',
-      seuil_min: 101,
-      seuil_max: null,
-      statut: 'ACTIF',
-      description: 'Tarif grands comptes et super-grossistes (101 casiers et plus)',
-      produits_count: 0,
-    },
-  ]
-
-  localStorage.setItem(getStorageKey('grilles', companyId), JSON.stringify(defaultGrilles))
-  return defaultGrilles
+  // ZÉRO DONNÉE FICTIVE : si aucune grille n'a été créée, renvoyer une liste vide
+  return []
 }
 
 export async function saveBrasserieGrille(

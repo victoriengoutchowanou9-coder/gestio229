@@ -85,6 +85,14 @@ export const BrasserieGrillesPage: React.FC = () => {
     if (!currentCompanyId) return
     setLoading(true)
     try {
+      // Purger immédiatement tout cache résiduel contenant des grilles fictives
+      try {
+        const rawCache = localStorage.getItem(`gestio229_brasserie_grilles_${currentCompanyId}`)
+        if (rawCache && rawCache.includes('default-')) {
+          localStorage.removeItem(`gestio229_brasserie_grilles_${currentCompanyId}`)
+        }
+      } catch { /* noop */ }
+
       // 1. Charger les grilles
       const gridList = await fetchBrasserieGrilles(currentCompanyId, currentSectorSlug)
       setGrilles(gridList)

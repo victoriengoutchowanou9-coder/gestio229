@@ -267,38 +267,10 @@ const BrasserieConsignationPage: React.FC = () => {
     setLoading(true)
     try {
       await Promise.all([loadEmballages(), loadConsignations(), loadMouvements(), loadInventaires()])
-      // Auto-créer les 3 emballages par défaut si aucun n'existe
-      await autoProvisionEmballages()
     } finally {
       setLoading(false)
     }
   }, [loadEmballages, loadConsignations, loadMouvements, loadInventaires])
-
-  const autoProvisionEmballages = useCallback(async () => {
-    if (!companyId) return
-    const { data: existing } = await supabase
-      .from('brasserie_emballages')
-      .select('code')
-      .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
-    if (existing && existing.length > 0) return
-    const defaults = [
-      { code: 'C12T', designation: 'Casier 12 Bouteilles', type: 'casier', unite: 'casier' },
-      { code: 'C20T', designation: 'Casier 20 Bouteilles', type: 'casier', unite: 'casier' },
-      { code: 'C24T', designation: 'Casier 24 Bouteilles', type: 'casier', unite: 'casier' },
-    ]
-    for (const d of defaults) {
-      await supabase.from('brasserie_emballages').insert({
-        company_id: companyId,
-        sector_slug: 'brasserie',
-        ...d,
-        valeur_consignation: 0,
-        stock_depot: 0,
-        is_active: true,
-      })
-    }
-    await loadEmballages()
-  }, [companyId, loadEmballages])
 
   useEffect(() => {
     loadAll()

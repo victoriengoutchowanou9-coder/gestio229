@@ -155,8 +155,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           setCaisseStatus('OUVERTE')
           setOpenedAt(activeCaisse.date_ouverture || activeCaisse.opened_at)
           setOpenedBy(activeCaisse.ouvert_par || user?.full_name || 'Caissier')
-          setInitialCash(Number(activeCaisse.fond_ouverture_especes ?? activeCaisse.opening_cash) || 0)
-          setInitialMomo(Number(activeCaisse.fond_ouverture_momo ?? activeCaisse.opening_momo) || 0)
+          setInitialCash(Number(activeCaisse.fond_ouverture_especes ?? (activeCaisse as any).opening_cash) || 0)
+          setInitialMomo(Number(activeCaisse.fond_ouverture_momo ?? (activeCaisse as any).opening_momo) || 0)
         } else {
           setActiveSessionId(null)
           setCaisseStatus('FERMEE')
@@ -531,9 +531,6 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       .reduce((sum, d) => sum + (Number(d.montant || d.amount) || 0), 0)
   }, [depensesToday])
 
-  // Total des sorties du jour (Dépenses + Retraits Trésorerie)
-  const totalSortiesDuJour = totalRetraitsEspeces + totalRetraitsMomo + depensesEspeces + depensesMomo
-
   // Total des retraits espèces exécutés vers trésorerie
   const totalRetraitsEspeces = useMemo(() => {
     return pendingRequests
@@ -546,6 +543,9 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       .filter((r) => r.type === 'MoMo' && r.status !== 'REFUSE')
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
+
+  // Total des sorties du jour (Dépenses + Retraits Trésorerie)
+  const totalSortiesDuJour = totalRetraitsEspeces + totalRetraitsMomo + depensesEspeces + depensesMomo
 
   // 1. Flux réels de la session en cours (NÉGATIF AUTORISÉ EN CAS DE DÉCOUVERT)
   const especesDuJour = (ventesEspeces + remboursementsEspeces) - (totalRetraitsEspeces + depensesEspeces)
@@ -734,7 +734,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
       toast.success(
         'Caisse Clôturée avec Succès !',
-        `Rapport Z envoyé en arrière-plan. Total encaissé de la journée : ${fmt(totalEspecesJour + totalMomoJour)}`
+        `Rapport Z envoyé en arrière-plan. Total encaissé de la journée : ${fmt(totalEntreesDuJour)}`
       )
 
       await loadCaisseData()
