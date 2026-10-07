@@ -24,6 +24,7 @@ import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../
 import { logAuditEvent } from '../../../services/auditService'
 import { formatFCFA } from '../../../utils/formatters'
 import {
+  cleanSectorSlug,
   getOrCreateSectorCaisse,
   getSectorCaisseClosures,
   getSectorCaisseMovements,

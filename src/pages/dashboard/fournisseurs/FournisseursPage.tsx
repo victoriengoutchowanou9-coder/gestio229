@@ -1199,10 +1199,19 @@ export const FournisseursPage: React.FC = () => {
 
           <div className="p-6 bg-white border border-slate-200 rounded-2xl space-y-5 text-xs font-sans text-slate-800">
             <div className="flex justify-between items-start border-b border-slate-200 pb-4">
-              <div>
-                <h2 className="text-lg font-black text-slate-900 uppercase">{company?.name ?? 'GESTIO 229'}</h2>
-                <p className="text-slate-500">IFU : {company?.ifu_number || 'Non renseigné'}</p>
-                <p className="text-slate-500">{company?.address || 'Cotonou, République du Bénin'}</p>
+              <div className="flex items-center gap-3">
+                {company?.logo_url ? (
+                  <img
+                    src={company.logo_url}
+                    alt="Logo Entreprise"
+                    className="w-14 h-14 object-contain rounded-lg border border-slate-200 bg-white p-1 shadow-xs"
+                  />
+                ) : null}
+                <div>
+                  <h2 className="text-lg font-black text-slate-900 uppercase">{company?.name ?? 'GESTIO 229'}</h2>
+                  <p className="text-slate-500">IFU : {company?.ifu_number || 'Non renseigné'}</p>
+                  <p className="text-slate-500">{company?.address || 'Cotonou, République du Bénin'}</p>
+                </div>
               </div>
               <div className="text-right">
                 <span className="px-3 py-1 bg-indigo-100 text-indigo-900 rounded-lg font-black text-xs">
@@ -1531,6 +1540,7 @@ export const FournisseursPage: React.FC = () => {
         isOpen={showPoModal}
         onClose={() => setShowPoModal(false)}
         onSuccess={handleCreatePoSuccess}
+        sectorSlug={currentSectorSlug}
       />
       <ReceiveBlModal
         isOpen={showReceiveModal}

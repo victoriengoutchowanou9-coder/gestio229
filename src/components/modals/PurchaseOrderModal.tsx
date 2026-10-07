@@ -17,6 +17,7 @@ interface PurchaseOrderModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess?: (order: any) => void
+  sectorSlug?: string
 }
 
 interface OrderItemRow {
@@ -28,9 +29,10 @@ interface OrderItemRow {
   qtyToOrder: number
   unitPriceTtc: number
   selected: boolean
+  imageUrl?: string
 }
 
-export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess }) => {
+export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess, sectorSlug }) => {
   const { company, user } = useAuthStore()
 
   const demandeurFullName = user?.full_name || user?.name || user?.username || 'Responsable Appro'
@@ -53,14 +55,42 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     if (!company?.id || !isOpen) return
 
     const fetchResources = async () => {
-      const activeSector = getActiveSectorSlug()
-      const [{ data: sData }, { data: pData }] = await Promise.all([
-        supabase.from('suppliers').select('id, company_name, phone, city, sector_slug, sector_meta').eq('company_id', company.id).order('company_name'),
-        supabase.from('products').select('id, code, name, unit, cost_price, stock_magasin, sector_slug, sector_meta').eq('company_id', company.id).order('name')
-      ])
+      const activeSector = sectorSlug || getActiveSectorSlug()
+      let rawSuppliers: any[] = []
+      let rawProducts: any[] = []
 
-      const filteredSData = filterItemsForSector(sData || [], activeSector)
-      const filteredPData = filterItemsForSector(pData || [], activeSector)
+      try {
+        const { data: sData } = await supabase
+          .from('suppliers')
+          .select('id, company_name, phone, city, sector_slug, sector_meta')
+          .eq('company_id', company.id)
+          .order('company_name')
+        if (sData) rawSuppliers = sData
+      } catch (e) {
+        console.warn('[PurchaseOrderModal] Suppliers fetch warning:', e)
+      }
+
+      try {
+        const { data: pData } = await supabase
+          .from('products')
+          .select('*')
+          .eq('company_id', company.id)
+          .neq('is_active', false)
+          .order('name')
+        if (pData) rawProducts = pData
+      } catch (e) {
+        console.warn('[PurchaseOrderModal] Products fetch warning:', e)
+      }
+
+      let filteredSData = filterItemsForSector(rawSuppliers, activeSector)
+      if (filteredSData.length === 0 && rawSuppliers.length > 0) {
+        filteredSData = rawSuppliers
+      }
+
+      let filteredPData = filterItemsForSector(rawProducts, activeSector)
+      if (filteredPData.length === 0 && rawProducts.length > 0) {
+        filteredPData = rawProducts
+      }
 
       const mappedSuppliers = filteredSData.map((s: any) => ({
         id: s.id,
@@ -70,13 +100,18 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         city: s.city
       }))
 
-      const mappedProducts = filteredPData.map((p: any) => ({
-        ...p,
-        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
-        unit: p.unit || p.sector_meta?.uv || 'Pièce',
-        cost_price: Number(p.cost_price) || 0,
-        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
-      }))
+      const mappedProducts = filteredPData.map((p: any) => {
+        const photo = p.image_url || p.photo_url || p.image || p.sector_meta?.image_url || p.sector_meta?.photo_url || p.sector_meta?.photo || p.sector_meta?.image || ''
+        return {
+          ...p,
+          imageUrl: photo,
+          ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
+          unit: p.unit || p.sector_meta?.uv || 'Pièce',
+          cost_price: Number(p.cost_price) || 0,
+          stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
+          stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
+        }
+      })
 
       setSuppliers(mappedSuppliers)
       setProducts(mappedProducts)
@@ -85,25 +120,26 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         setSelectedSupplierId(mappedSuppliers[0].id)
       }
 
-      // Initialiser la map des lignes de commande
+      // Initialiser la map des lignes de commande pour cocher les produits à commander
       const rowsMap: Record<string, OrderItemRow> = {}
-      mappedProducts.forEach((p: any, idx: number) => {
+      mappedProducts.forEach((p: any) => {
         rowsMap[p.id] = {
           productId: p.id,
           code: p.code,
           name: p.name,
           ucdUnit: p.ucd || 'Carton',
           currentStock: p.stock_magasin,
-          qtyToOrder: idx === 0 ? 5 : 0,
+          qtyToOrder: 0,
           unitPriceTtc: p.cost_price || 0,
-          selected: idx === 0
+          selected: false,
+          imageUrl: p.imageUrl
         }
       })
       setOrderRows(rowsMap)
     }
 
     fetchResources()
-  }, [company?.id, isOpen])
+  }, [company?.id, isOpen, sectorSlug])
 
   // Création fournisseur à la volée
   const handleCreateSupplierInline = async (e: React.FormEvent) => {
@@ -146,6 +182,38 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     const s = productSearch.toLowerCase()
     return products.filter((p) => p.name.toLowerCase().includes(s) || p.code.toLowerCase().includes(s))
   }, [products, productSearch])
+
+  // Statut du master checkbox "Tout cocher / Décocher"
+  const allFilteredSelected = useMemo(() => {
+    if (filteredProducts.length === 0) return false
+    return filteredProducts.every((p) => orderRows[p.id]?.selected)
+  }, [filteredProducts, orderRows])
+
+  const handleToggleSelectAll = () => {
+    const nextVal = !allFilteredSelected
+    setOrderRows((prev) => {
+      const next = { ...prev }
+      filteredProducts.forEach((p) => {
+        const existing = next[p.id] || {
+          productId: p.id,
+          code: p.code,
+          name: p.name,
+          ucdUnit: p.ucd || 'Carton',
+          currentStock: p.stock_magasin,
+          qtyToOrder: 0,
+          unitPriceTtc: p.cost_price || 0,
+          selected: false,
+          imageUrl: p.imageUrl,
+        }
+        next[p.id] = {
+          ...existing,
+          selected: nextVal,
+          qtyToOrder: nextVal && existing.qtyToOrder <= 0 ? 1 : (nextVal ? existing.qtyToOrder : 0)
+        }
+      })
+      return next
+    })
+  }
 
   // Liste des lignes sélectionnées avec quantité > 0
   const activeOrderItems = useMemo(() => {
@@ -405,74 +473,132 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
               </div>
             </div>
 
-            <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white max-h-60 overflow-y-auto">
+            <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white max-h-72 overflow-y-auto shadow-inner">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 sticky top-0 z-10">
+                <thead className="bg-slate-100 text-slate-700 font-bold border-b border-slate-200 sticky top-0 z-10 select-none">
                   <tr>
-                    <th className="p-2 text-center w-8">Choix</th>
-                    <th className="p-2">Réf</th>
-                    <th className="p-2">Désignation</th>
-                    <th className="p-2 text-center">Unité (UCD)</th>
-                    <th className="p-2 text-center text-slate-500">Stock Magasin</th>
-                    <th className="p-2 text-center w-28 bg-indigo-50/70 text-indigo-900">Qté à Commander</th>
-                    <th className="p-2 text-right w-28">Prix Achat TTC</th>
-                    <th className="p-2 text-right w-28 font-bold">Total Ligne</th>
+                    <th className="p-2.5 text-center w-10">
+                      <input
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={handleToggleSelectAll}
+                        title={allFilteredSelected ? 'Tout décocher' : 'Tout cocher'}
+                        className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer w-4 h-4"
+                      />
+                    </th>
+                    <th className="p-2.5 text-center w-14">Photo</th>
+                    <th className="p-2.5">Réf</th>
+                    <th className="p-2.5">Désignation</th>
+                    <th className="p-2.5 text-center">Unité (UCD)</th>
+                    <th className="p-2.5 text-center">Stock Magasin</th>
+                    <th className="p-2.5 text-center w-28 bg-indigo-50/70 text-indigo-900">Qté à Commander</th>
+                    <th className="p-2.5 text-right w-28">Prix Achat TTC</th>
+                    <th className="p-2.5 text-right w-28 font-bold">Total Ligne</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 font-mono">
-                  {filteredProducts.map((p) => {
-                    const row = orderRows[p.id] || {
-                      productId: p.id,
-                      code: p.code,
-                      name: p.name,
-                      ucdUnit: p.ucd || 'Carton',
-                      currentStock: p.stock_magasin,
-                      qtyToOrder: 0,
-                      unitPriceTtc: p.cost_price || 0,
-                      selected: false
-                    }
-                    const lineTotal = Math.round(row.qtyToOrder * row.unitPriceTtc)
+                <tbody className="divide-y divide-slate-100">
+                  {filteredProducts.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="p-8 text-center text-slate-400 font-sans">
+                        Aucun article trouvé dans le stock pour ce secteur.
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredProducts.map((p) => {
+                      const row = orderRows[p.id] || {
+                        productId: p.id,
+                        code: p.code,
+                        name: p.name,
+                        ucdUnit: p.ucd || 'Carton',
+                        currentStock: p.stock_magasin,
+                        qtyToOrder: 0,
+                        unitPriceTtc: p.cost_price || 0,
+                        selected: false,
+                        imageUrl: p.imageUrl
+                      }
+                      const lineTotal = Math.round(row.qtyToOrder * row.unitPriceTtc)
 
-                    return (
-                      <tr key={p.id} className={clsx('hover:bg-slate-50/80 transition', row.selected && 'bg-indigo-50/30')}>
-                        <td className="p-2 text-center">
-                          <input
-                            type="checkbox"
-                            checked={row.selected}
-                            onChange={() => handleToggleProduct(p.id)}
-                            className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-                          />
-                        </td>
-                        <td className="p-2 font-bold text-slate-900">{p.code}</td>
-                        <td className="p-2 font-sans font-medium text-slate-800">{p.name}</td>
-                        <td className="p-2 text-center font-sans text-slate-600">{p.ucd || 'Carton'}</td>
-                        <td className="p-2 text-center text-slate-500">{p.stock_magasin}</td>
-                        <td className="p-1.5 text-center bg-indigo-50/30">
-                          <input
-                            type="number"
-                            step="any"
-                            min="0"
-                            value={row.qtyToOrder || ''}
-                            onChange={(e) => handleQtyChange(p.id, Number(e.target.value))}
-                            placeholder="0"
-                            className="w-20 p-1 text-center font-bold font-mono border border-indigo-200 rounded text-xs bg-white focus:ring-1 focus:ring-indigo-500"
-                          />
-                        </td>
-                        <td className="p-1.5 text-right">
-                          <input
-                            type="number"
-                            min="0"
-                            value={row.unitPriceTtc || ''}
-                            onChange={(e) => handlePriceChange(p.id, Number(e.target.value))}
-                            className="w-24 p-1 text-right font-mono border border-slate-200 rounded text-xs bg-white"
-                          />
-                        </td>
-                        <td className="p-2 text-right font-bold text-indigo-900">
-                          {formatFCFA(lineTotal)}
-                        </td>
-                      </tr>
-                    )
-                  })}
+                      return (
+                        <tr
+                          key={p.id}
+                          className={clsx(
+                            'hover:bg-slate-50 transition cursor-pointer',
+                            row.selected && 'bg-indigo-50/40'
+                          )}
+                        >
+                          <td className="p-2.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={row.selected}
+                              onChange={() => handleToggleProduct(p.id)}
+                              className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer w-4 h-4"
+                            />
+                          </td>
+                          <td className="p-2 text-center w-14">
+                            {p.imageUrl ? (
+                              <div className="relative w-10 h-10 mx-auto">
+                                <img
+                                  src={p.imageUrl}
+                                  alt={p.name}
+                                  className="w-10 h-10 object-cover rounded-lg border border-slate-200 shadow-xs"
+                                  onError={(e) => {
+                                    ;(e.target as any).style.display = 'none'
+                                    const fb = (e.target as any).parentElement.querySelector('.fallback-img')
+                                    if (fb) fb.style.display = 'flex'
+                                  }}
+                                />
+                                <div className="fallback-img hidden w-10 h-10 rounded-lg bg-indigo-50 border border-indigo-100 items-center justify-center text-indigo-600">
+                                  <Package className="w-5 h-5" />
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="w-10 h-10 mx-auto rounded-lg bg-indigo-50 border border-indigo-100 flex items-center justify-center text-indigo-600">
+                                <Package className="w-5 h-5" />
+                              </div>
+                            )}
+                          </td>
+                          <td className="p-2 font-mono font-bold text-slate-900">{p.code}</td>
+                          <td className="p-2 font-sans font-medium text-slate-800">{p.name}</td>
+                          <td className="p-2 text-center font-sans text-slate-600">{p.ucd || 'Carton'}</td>
+                          <td className="p-2 text-center">
+                            <span
+                              className={clsx(
+                                'px-2 py-0.5 rounded-full text-[10px] font-bold font-mono inline-block',
+                                p.stock_magasin > 0
+                                  ? 'bg-emerald-100 text-emerald-800'
+                                  : 'bg-rose-100 text-rose-800'
+                              )}
+                            >
+                              {p.stock_magasin > 0 ? `${p.stock_magasin} dispo` : '0 épuisé'}
+                            </span>
+                          </td>
+                          <td className="p-1.5 text-center bg-indigo-50/30">
+                            <input
+                              type="number"
+                              step="any"
+                              min="0"
+                              value={row.qtyToOrder || ''}
+                              onChange={(e) => handleQtyChange(p.id, Number(e.target.value))}
+                              placeholder="0"
+                              className="w-20 p-1 text-center font-bold font-mono border border-indigo-200 rounded text-xs bg-white focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </td>
+                          <td className="p-1.5 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              value={row.unitPriceTtc || ''}
+                              onChange={(e) => handlePriceChange(p.id, Number(e.target.value))}
+                              className="w-24 p-1 text-right font-mono border border-slate-200 rounded text-xs bg-white"
+                            />
+                          </td>
+                          <td className="p-2 text-right font-bold text-indigo-900 font-mono">
+                            {formatFCFA(lineTotal)}
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
                 </tbody>
               </table>
             </div>
