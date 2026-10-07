@@ -573,12 +573,12 @@ const LoginPage: React.FC = () => {
                 <AlertCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" />
                 <div className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">
                   <p>{urlError || rateLimitError || errorMessage}</p>
-                  {(errorMessage?.includes('incorrect') || urlError?.includes('incorrect')) && (
+                  {(errorMessage?.includes('Échec') || errorMessage?.includes('incorrect') || errorMessage?.includes('confirmé') || errorMessage?.includes('Réinitialiser') || urlError) && (
                     <div className="mt-2.5 pt-2 border-t border-rose-200/60 dark:border-rose-800/60 flex flex-wrap items-center gap-3">
                       <button
                         type="button"
                         onClick={() => {
-                          setForgotEmail(identifier)
+                          setForgotEmail(identifier.includes('@') ? identifier : '')
                           setShowForgotModal(true)
                         }}
                         className="text-emerald-700 dark:text-emerald-400 font-bold underline hover:opacity-80"

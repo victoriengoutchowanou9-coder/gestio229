@@ -20,6 +20,7 @@ import {
   Sparkles
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { createConfirmedUser } from '../../lib/authAdminHelper'
 import SectorSelector, { ALL_SECTORS } from '../../components/auth/SectorSelector'
 import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
 import { rateLimiter } from '../../lib/rateLimiter'
@@ -121,37 +122,33 @@ export const RegisterPage: React.FC = () => {
       const now = new Date()
       const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
-      // 1. Création du compte utilisateur Auth Supabase (avec URL de redirection)
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      // 1. Création du compte utilisateur Auth Supabase avec email_confirm: true forcé
+      const authResult = await createConfirmedUser({
         email: cleanEmail,
         password: form.password,
-        options: {
-          data: {
-            company_name: form.company_name.trim(),
-            responsible_name: form.responsible_name.trim(),
-            phone: form.phone.trim(),
-            ifu_number: form.ifu_number.trim(),
-            city: form.city.trim(),
-            country: form.country,
-            selected_sectors: form.selected_sectors,
-            role: 'administrateur'
-          },
-          emailRedirectTo: `${window.location.origin}/login?confirmed=true`
+        company_id: 'pending',
+        identifiant: cleanEmail,
+        role: 'administrateur',
+        full_name: form.responsible_name.trim(),
+        phone: form.phone.trim(),
+        extra_metadata: {
+          company_name: form.company_name.trim(),
+          responsible_name: form.responsible_name.trim(),
+          ifu_number: form.ifu_number.trim(),
+          city: form.city.trim(),
+          country: form.country,
+          selected_sectors: form.selected_sectors,
         }
       })
 
-      // Récupérer l'ID utilisateur de manière robuste (même si "already registered")
-      let resolvedAuthUserId: string | null = authData?.user?.id || null
+      if (!authResult.success && authResult.error) {
+        throw new Error(authResult.error)
+      }
 
-      if (authError) {
-        if (authError.message.includes('already registered') || authError.message.includes('already exists')) {
-          // L'email est déjà dans Auth Supabase → récupérer la session existante
-          const { data: sessionData } = await supabase.auth.getSession()
-          resolvedAuthUserId = sessionData?.session?.user?.id || null
-          console.warn('[Register] Email déjà enregistré, auth_user_id récupéré :', resolvedAuthUserId)
-        } else {
-          throw new Error(authError.message)
-        }
+      let resolvedAuthUserId: string | null = authResult.userId || null
+      if (!resolvedAuthUserId) {
+        const { data: sessionData } = await supabase.auth.getSession()
+        resolvedAuthUserId = sessionData?.session?.user?.id || null
       }
 
       // 2. Création ou liaison de l'entreprise (Company) avec Essai Gratuit de 1 mois

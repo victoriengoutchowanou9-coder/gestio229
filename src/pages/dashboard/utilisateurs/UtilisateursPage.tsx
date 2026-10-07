@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useParams, useLocation } from 'react-router-dom'
 import { supabase } from '../../../lib/supabase'
+import { createConfirmedUser } from '../../../lib/authAdminHelper'
 import { useAuthStore } from '../../../store/authStore'
 import { isSectorSubscribed } from '../../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
@@ -566,25 +567,22 @@ const UtilisateursPage: React.FC = () => {
         throw new Error(`L'identifiant "${cleanIdent}" est déjà utilisé dans votre entreprise.`)
       }
 
-      const companyShort = company.id.substring(0, 8)
-      const internalEmail = `${cleanIdent.replace(/[^a-z0-9]/g, '_')}_${companyShort}@gestio229.internal`
-
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      // Création du compte utilisateur avec email_confirm: true OBLIGATOIRE
+      const authResult = await createConfirmedUser({
         email: internalEmail,
         password: form.password,
-        options: {
-          data: {
-            full_name: form.full_name.trim(),
-            company_id: company.id,
-            is_internal: true,
-          }
+        company_id: company.id,
+        identifiant: cleanIdent,
+        role: form.role,
+        full_name: form.full_name.trim(),
+        phone: form.phone.trim(),
+        extra_metadata: {
+          is_internal: true,
+          company_name: company.name,
         }
       })
 
-      let authUserId: string | null = null
-      if (!authError && authData?.user?.id) {
-        authUserId = authData.user.id
-      }
+      const authUserId: string | null = authResult.userId || null
 
       const assignedSectorSlug = (isSubSoftwareRoute ? currentSectorSlug : form.sector_id)
         .toLowerCase()

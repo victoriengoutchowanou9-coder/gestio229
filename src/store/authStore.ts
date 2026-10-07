@@ -163,12 +163,13 @@ export const useAuthStore = create<AuthState>()(
                 }
               }
 
-              const invalidMsg = 'Adresse email ou mot de passe incorrect. Vous pouvez réinitialiser votre mot de passe ou utiliser votre code PIN de caisse.'
-              set({ status: 'unauthenticated', errorMessage: invalidMsg })
-              return { success: false, error: invalidMsg }
+              const displayErrorMsg = `Échec connexion : ${errMsg || 'Identifiants incorrects'}. Si vous venez d'être créé, votre email n'est peut-être pas confirmé. Cliquez sur 'Réinitialiser mon mot de passe'.`
+              set({ status: 'unauthenticated', errorMessage: displayErrorMsg })
+              return { success: false, error: displayErrorMsg }
             }
 
             // Authentification Supabase réussie : charger le tenant et l'entreprise
+            // Ordre obligatoire : a) signInWithPassword fait -> b) get profile
             let ctx = await SectorLoader.loadTenantContext(authData.user.id, authData.user.email)
 
             // ── Résolution et auto-guérison du tenant et de l'entreprise ────────
