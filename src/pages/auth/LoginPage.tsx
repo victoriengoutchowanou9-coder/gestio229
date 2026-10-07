@@ -39,6 +39,14 @@ const LoginPage: React.FC = () => {
   const [forgotSuccess, setForgotSuccess] = useState(false)
   const [forgotError, setForgotError] = useState('')
 
+  // Modal Définition Nouveau Mot de passe (Password Recovery)
+  const [showResetPasswordModal, setShowResetPasswordModal] = useState(false)
+  const [newPassword, setNewPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [resetPwdLoading, setResetPwdLoading] = useState(false)
+  const [resetPwdError, setResetPwdError] = useState('')
+  const [resetPwdSuccess, setResetPwdSuccess] = useState(false)
+
   // Horloge temps réel (Mardi 29 septembre 2026 — 14:35)
   const [currentTime, setCurrentTime] = useState<Date>(new Date())
 
@@ -285,7 +293,53 @@ const LoginPage: React.FC = () => {
         }
       })
     }
+
+    // Écouter l'événement Supabase de réinitialisation de mot de passe (clic sur lien email)
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        setShowResetPasswordModal(true)
+        if (session?.user?.email) {
+          setIdentifier(session.user.email)
+        }
+      }
+    })
+
+    if (typeof window !== 'undefined' && window.location.hash.includes('type=recovery')) {
+      setShowResetPasswordModal(true)
+    }
+
+    return () => {
+      subscription?.unsubscribe()
+    }
   }, [urlEmail, isConfirmed, searchParams])
+
+  const handleUpdateNewPassword = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setResetPwdError('')
+    if (newPassword.length < 6) {
+      setResetPwdError('Le mot de passe doit comporter au moins 6 caractères.')
+      return
+    }
+    if (newPassword !== confirmPassword) {
+      setResetPwdError('Les deux mots de passe ne correspondent pas.')
+      return
+    }
+
+    setResetPwdLoading(true)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) throw error
+      setResetPwdSuccess(true)
+      setTimeout(() => {
+        setShowResetPasswordModal(false)
+        navigate('/hub', { replace: true })
+      }, 1500)
+    } catch (err: any) {
+      setResetPwdError(err.message || 'Impossible de mettre à jour le mot de passe.')
+    } finally {
+      setResetPwdLoading(false)
+    }
+  }
 
   const isLoading = status === 'loading'
 
@@ -517,7 +571,23 @@ const LoginPage: React.FC = () => {
             {(urlError || rateLimitError || errorMessage) && (
               <div className="flex items-start gap-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-2xl p-4 mb-6 animate-shake">
                 <AlertCircle className="w-5 h-5 text-rose-600 dark:text-rose-400 flex-shrink-0 mt-0.5" />
-                <p className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">{urlError || rateLimitError || errorMessage}</p>
+                <div className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-relaxed">
+                  <p>{urlError || rateLimitError || errorMessage}</p>
+                  {(errorMessage?.includes('incorrect') || urlError?.includes('incorrect')) && (
+                    <div className="mt-2.5 pt-2 border-t border-rose-200/60 dark:border-rose-800/60 flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setForgotEmail(identifier)
+                          setShowForgotModal(true)
+                        }}
+                        className="text-emerald-700 dark:text-emerald-400 font-bold underline hover:opacity-80"
+                      >
+                        → Réinitialiser mon mot de passe en 1 clic
+                      </button>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
@@ -699,6 +769,106 @@ const LoginPage: React.FC = () => {
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <span>Envoyer le lien</span>
+                    )}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DÉFINITION NOUVEAU MOT DE PASSE (PASSWORD RECOVERY) */}
+      {showResetPasswordModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-700 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-slate-100">
+                    Nouveau Mot de Passe
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Définissez un mot de passe sécurisé pour votre compte</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowResetPasswordModal(false)}
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 text-lg p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {resetPwdSuccess ? (
+              <div className="space-y-4 text-center py-4">
+                <div className="w-12 h-12 rounded-full bg-emerald-100 dark:bg-emerald-950/80 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto">
+                  <CheckCircle2 className="w-6 h-6" />
+                </div>
+                <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
+                  Mot de passe mis à jour avec succès !
+                </h4>
+                <p className="text-xs text-slate-500">
+                  Connexion automatique en cours vers votre espace de gestion...
+                </p>
+              </div>
+            ) : (
+              <form onSubmit={handleUpdateNewPassword} className="space-y-4">
+                {resetPwdError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300">
+                    {resetPwdError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-700 dark:text-slate-300 mb-1">
+                    Nouveau mot de passe (min. 6 caractères)
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-800 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-700 dark:text-slate-300 mb-1">
+                    Confirmer le mot de passe
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-800 dark:text-white"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowResetPasswordModal(false)}
+                    className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={resetPwdLoading}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+                  >
+                    {resetPwdLoading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <span>Valider & Me Connecter</span>
                     )}
                   </button>
                 </div>
