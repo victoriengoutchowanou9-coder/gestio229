@@ -20,7 +20,7 @@ import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
 import { getActiveCaisse, getCurrentCashSession, ActiveCaisseSession } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
-import { ModalPortal } from '../../../components/modals'
+import { ModalPortal, TransfertStockModal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
 import {
   BatchPricingConfig,
@@ -69,6 +69,7 @@ interface Customer {
   ifu_number?: string
   credit_limit?: number
   current_debt: number
+  solde_creance?: number
   credit_authorized?: boolean
   discount_eligible?: boolean
   discount_rate?: number
@@ -102,6 +103,9 @@ interface SaleRecord {
   total_exonere?: number
   amount_paid: number
   credit_amount: number
+  ancienne_dette_avant_facture?: number
+  montant_restant_du_global?: number
+  montant_credit_actuel?: number
   payments: PaymentLine[]
   is_deferred: boolean
   status: 'COMPLET' | 'A_LIVRER' | 'AVOIR'
@@ -145,6 +149,9 @@ export const POSPage: React.FC = () => {
   // Modale Détail Produit (clic sur un article du catalogue)
   const [selectedProductForDetail, setSelectedProductForDetail] = useState<Product | null>(null)
   const [detailQty, setDetailQty] = useState<number>(1)
+
+  // Modale Transfert Stock Magasin -> Vente (Règle Métier Double Stock)
+  const [transfertProduct, setTransfertProduct] = useState<Product | null>(null)
 
   // Panneau Panier & Checkout Intégré Glissant (Toujours visible par défaut sur grand écran)
   const [isCartVisible, setIsCartVisible] = useState(true)
@@ -335,9 +342,12 @@ export const POSPage: React.FC = () => {
         const isCreditAuth = Boolean(c.credit_authorized) || (creditLimit > 0)
         const isDiscount = Boolean(c.discount_eligible)
         const discountRate = Number(c.discount_rate) || 0
+        const debt = Number(c.solde_creance ?? c.current_debt ?? 0)
 
         return {
           ...c,
+          current_debt: debt,
+          solde_creance: debt,
           credit_limit: creditLimit,
           credit_authorized: isCreditAuth,
           discount_eligible: isDiscount,
@@ -370,7 +380,7 @@ export const POSPage: React.FC = () => {
 
       // Transformer les ventes réelles chargées depuis Supabase avec leurs lignes réelles
       // Isolation stricte : ne charger que les ventes du sous-logiciel actif
-      if (sales && !saleErr) {
+      if (sales && sales.length > 0) {
         const sectorFilteredSales = filterItemsForSector(sales, currentSectorSlug)
         const mappedSales: SaleRecord[] = sectorFilteredSales.map((s: any) => {
           let parsedNotes: any = {}
@@ -450,6 +460,10 @@ export const POSPage: React.FC = () => {
           const isDeferredSale = s.order_type === 'pos_deferred' || s.status === 'pending_delivery' || metaFromUid.st === 'A_LIVRER'
           const isAvoir = s.payment_status === 'avoir' || s.status === 'cancelled' || metaFromUid.st === 'AVOIR'
 
+          const ancienneDette = Number(s.ancienne_dette_avant_facture ?? parsedNotes.ancienne_dette_avant_facture ?? 0)
+          const creditActuel = Number(s.montant_credit_actuel ?? parsedNotes.montant_credit_actuel ?? s.credit_amount ?? 0)
+          const resteGlobal = Number(s.montant_restant_du_global ?? parsedNotes.montant_restant_du_global ?? (ancienneDette + creditActuel))
+
           return {
             id: s.id,
             order_number: s.order_number || `VTE-${s.id.slice(0, 6)}`,
@@ -464,6 +478,9 @@ export const POSPage: React.FC = () => {
             total_exonere: Number(parsedNotes.total_exonere) || 0,
             amount_paid: Number(s.paid_amount ?? s.amount_paid) || (s.payment_status === 'credit' ? 0 : Number(s.total_amount) || 0),
             credit_amount: Number(s.credit_amount) || (s.payment_status === 'credit' ? Number(s.total_amount) || 0 : 0),
+            ancienne_dette_avant_facture: ancienneDette,
+            montant_credit_actuel: creditActuel,
+            montant_restant_du_global: resteGlobal,
             payments: paymentsList,
             is_deferred: isDeferredSale,
             status: isAvoir ? 'AVOIR' : isDeferredSale ? 'A_LIVRER' : 'COMPLET',
@@ -513,9 +530,22 @@ export const POSPage: React.FC = () => {
     }
   }, [company?.id, loadData])
 
-  // ─── Gestion de la Modale Détail Produit ───────────────────────────────────
+  // ─── Gestion de la Modale Détail Produit & Contrôle Strict Double Stock ─────
 
   const handleOpenProductDetail = (product: Product) => {
+    const stockVente = Number(product.stock_vente ?? product.sector_meta?.stock_vente ?? 0)
+    const stockMagasin = Number(product.stock_magasin ?? product.sector_meta?.stock_magasin ?? 0)
+    const unitMagasin = product.ucd || product.sector_meta?.ucd || 'Carton'
+
+    if (stockVente <= 0) {
+      toast.error(
+        `Stock vente épuisé : ${product.name}`,
+        `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
+      )
+      setTransfertProduct(product)
+      return
+    }
+
     setSelectedProductForDetail(product)
     setDetailQty(1)
   }
@@ -525,6 +555,19 @@ export const POSPage: React.FC = () => {
     const qty = Number(detailQty)
     if (isNaN(qty) || qty <= 0) {
       toast.error('Quantité invalide', 'Veuillez saisir une quantité supérieure à 0.')
+      return
+    }
+
+    const stockVente = Number(selectedProductForDetail.stock_vente ?? selectedProductForDetail.sector_meta?.stock_vente ?? 0)
+    const unitVente = selectedProductForDetail.uv || selectedProductForDetail.sector_meta?.uv || selectedProductForDetail.unit || 'Pièce'
+    const existing = cart.find((i) => i.product.id === selectedProductForDetail.id)
+    const currentInCart = existing ? existing.qty : 0
+
+    if (currentInCart + qty > stockVente) {
+      toast.error(
+        'Stock vente insuffisant',
+        `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + qty} ${unitVente}. Veuillez effectuer un transfert depuis le magasin.`
+      )
       return
     }
 
@@ -574,6 +617,31 @@ export const POSPage: React.FC = () => {
   }
 
   const handleDirectAddToCart = (item: { product: any; qty: number; unitPrice: number; discount: number }) => {
+    const stockVente = Number(item.product.stock_vente ?? item.product.sector_meta?.stock_vente ?? 0)
+    const stockMagasin = Number(item.product.stock_magasin ?? item.product.sector_meta?.stock_magasin ?? 0)
+    const unitMagasin = item.product.ucd || item.product.sector_meta?.ucd || 'Carton'
+    const unitVente = item.product.uv || item.product.sector_meta?.uv || item.product.unit || 'Pièce'
+
+    if (stockVente <= 0) {
+      toast.error(
+        `Stock vente épuisé : ${item.product.name}`,
+        `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
+      )
+      setTransfertProduct(item.product)
+      return
+    }
+
+    const existing = cart.find((i) => i.product.id === item.product.id)
+    const currentInCart = existing ? existing.qty : 0
+
+    if (currentInCart + item.qty > stockVente) {
+      toast.error(
+        'Stock vente insuffisant',
+        `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + item.qty} ${unitVente}.`
+      )
+      return
+    }
+
     setCart((prev) => [
       ...prev,
       {
@@ -590,6 +658,18 @@ export const POSPage: React.FC = () => {
     if (newQty <= 0) {
       removeFromCart(productId)
       return
+    }
+    const item = cart.find(i => i.product.id === productId)
+    if (item) {
+      const stockVente = Number(item.product.stock_vente ?? item.product.sector_meta?.stock_vente ?? 0)
+      const unitVente = item.product.uv || item.product.sector_meta?.uv || item.product.unit || 'Pièce'
+      if (newQty > stockVente) {
+        toast.error(
+          'Stock vente insuffisant',
+          `Disponible en vente : ${stockVente} ${unitVente}. Vous ne pouvez pas dépasser le stock.`
+        )
+        return
+      }
     }
     const safeQty = Math.round(newQty * 1000) / 1000
     setCart((prev) =>
@@ -610,6 +690,30 @@ export const POSPage: React.FC = () => {
       })
     )
   }
+
+  const handleTransferSuccess = (productId: string, qteMagasinDed: number, qteVenteAjout: number) => {
+    setProducts((prev) =>
+      prev.map((p) => {
+        if (p.id !== productId) return p
+        const currentMeta = p.sector_meta || {}
+        const currentMag = Number(p.stock_magasin ?? currentMeta.stock_magasin ?? 0)
+        const currentVente = Number(p.stock_vente ?? currentMeta.stock_vente ?? 0)
+        const newMag = Math.max(0, Math.round((currentMag - qteMagasinDed) * 1000) / 1000)
+        const newVente = Math.round((currentVente + qteVenteAjout) * 1000) / 1000
+        return {
+          ...p,
+          stock_magasin: newMag,
+          stock_vente: newVente,
+          sector_meta: {
+            ...currentMeta,
+            stock_magasin: newMag,
+            stock_vente: newVente,
+          }
+        }
+      })
+    )
+  }
+
 
   const removeFromCart = (productId: string) => {
     setCart((prev) => prev.filter((i) => i.product.id !== productId))
@@ -933,6 +1037,26 @@ export const POSPage: React.FC = () => {
       // Marge d'exploitation stricte : CA HT - Coût d'Achat HT (hors TVA et hors AIB)
       const grossMarginHT = Math.round((cartFiscalSummary.ht - totalCostHTRounded) * 100) / 100
 
+      // Calcul strict dette antérieure et montant restant dû global (Règle Métier 1)
+      let ancienneDette = 0
+      if (selectedCustomer?.id) {
+        ancienneDette = Number(selectedCustomer.solde_creance ?? selectedCustomer.current_debt ?? 0)
+        try {
+          const { data: creances } = await supabase
+            .from('creances_clients')
+            .select('montant_restant_ttc')
+            .eq('client_id', selectedCustomer.id)
+            .neq('statut', 'payé')
+          if (creances && creances.length > 0) {
+            const sumCreances = creances.reduce((s, c) => s + Number(c.montant_restant_ttc || 0), 0)
+            if (sumCreances > 0) ancienneDette = sumCreances
+          }
+        } catch (_) {}
+      }
+
+      const creditActuel = creditAmount
+      const montantRestantDuGlobal = ancienneDette + creditActuel
+
       const notesPayload = {
         sector_slug: currentSectorSlug,
         payments: paymentsList,
@@ -940,6 +1064,9 @@ export const POSPage: React.FC = () => {
         customer_ifu: selectedCustomer?.ifu_number || null,
         is_deferred: isDeferred,
         total_exonere: cartFiscalSummary.totalExonere,
+        ancienne_dette_avant_facture: ancienneDette,
+        montant_credit_actuel: creditActuel,
+        montant_restant_du_global: montantRestantDuGlobal,
         lines: cart.map(c => ({
           product: {
             id: c.product.id,
@@ -987,6 +1114,9 @@ export const POSPage: React.FC = () => {
         total_cost: totalCostHTRounded,
         paid_amount: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
+        ancienne_dette_avant_facture: ancienneDette,
+        montant_credit_actuel: creditActuel,
+        montant_restant_du_global: montantRestantDuGlobal,
         payment_status: creditAmount >= totalNetTTC ? 'credit' : primaryMethod,
         e_mecef_uid: encodedMeta,
         created_by: user?.id || null
@@ -1146,20 +1276,64 @@ export const POSPage: React.FC = () => {
         }
       }
 
-      // 4. Si client avec crédit, mise à jour de la créance dans Supabase (client_debts + clients)
+      // 4. Si client avec crédit, mise à jour stricte de la créance dans Supabase (Règle 1)
       if (selectedCustomer && creditAmount > 0) {
-        const newDebt = (Number(selectedCustomer.current_debt) || 0) + creditAmount
         try {
           await supabaseTenant('customers')
-            .update({ current_debt: newDebt })
+            .update({
+              current_debt: montantRestantDuGlobal,
+              solde_creance: montantRestantDuGlobal
+            })
             .eq('id', selectedCustomer.id)
         } catch (_) {}
 
+        try {
+          await supabase
+            .from('clients')
+            .update({ solde_creance: montantRestantDuGlobal })
+            .eq('id', selectedCustomer.id)
+        } catch (_) {}
+
+        // Enregistrement créance individuelle rattachée à la vente
+        try {
+          await supabase.from('creances_clients').insert({
+            company_id: company?.id ?? companyId ?? '',
+            client_id: selectedCustomer.id,
+            facture_id: savedDbSale.id,
+            montant_initial_ttc: creditAmount,
+            montant_restant_ttc: creditAmount,
+            statut: 'impayé',
+            created_at: new Date().toISOString()
+          })
+        } catch (crErr) {
+          console.warn('[POSPage] Sauvegarde creances_clients non bloquante :', crErr)
+        }
+
+        // Enregistrement dans factures si la table existe
+        try {
+          await supabase.from('factures').insert({
+            company_id: company?.id ?? companyId ?? '',
+            numero: orderNum,
+            client_id: selectedCustomer.id,
+            total_ttc: totalNetTTC,
+            montant_paye: totalNetTTC - creditAmount,
+            montant_credit: creditAmount,
+            montant_credit_actuel: creditAmount,
+            ancienne_dette_avant_facture: ancienneDette,
+            montant_restant_du_global: montantRestantDuGlobal,
+            statut: 'credit'
+          })
+        } catch (_) {}
+
         setCustomers((prev) =>
-          prev.map((c) => (c.id === selectedCustomer.id ? { ...c, current_debt: newDebt } : c))
+          prev.map((c) =>
+            c.id === selectedCustomer.id
+              ? { ...c, current_debt: montantRestantDuGlobal, solde_creance: montantRestantDuGlobal }
+              : c
+          )
         )
 
-        // E. Logique Créances :
+        // E. Logique Créances Historiques (client_debts) :
         // - Nouvel achat à crédit si solde restant -> ajoute au total_dette de la créance en_cours
         // - Nouvel achat à crédit si ancienne soldée (ou aucune) -> crée une NOUVELLE ligne client_debts
         try {
@@ -1407,6 +1581,9 @@ export const POSPage: React.FC = () => {
         total_exonere: cartFiscalSummary.totalExonere,
         amount_paid: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
+        ancienne_dette_avant_facture: ancienneDette,
+        montant_credit_actuel: creditActuel,
+        montant_restant_du_global: montantRestantDuGlobal,
         payments: paymentsList,
         is_deferred: isDeferred,
         status: isDeferred ? 'A_LIVRER' : 'COMPLET',
@@ -1699,21 +1876,45 @@ export const POSPage: React.FC = () => {
       doc.setTextColor(5, 150, 105)
       doc.text(fmt(sale.total_amount), 196, netY + 4, { align: 'right' })
 
-      // Règlements
+      // Règlements (Règle Métier 1 : Montant Restant Dû Global)
       doc.setFontSize(9)
       doc.setFont('helvetica', 'bold')
       doc.setTextColor(71, 85, 105)
-      doc.text('Règlements :', 14, finalY)
+      doc.text('Règlements effectués :', 14, finalY)
       doc.setFont('helvetica', 'normal')
       let pY = finalY + 6
+
+      const ancienneDettePdf = Number(sale.ancienne_dette_avant_facture || 0)
+      const creditActuelPdf = Number(sale.montant_credit_actuel ?? sale.credit_amount ?? 0)
+      const resteGlobalPdf = Number(sale.montant_restant_du_global ?? (ancienneDettePdf + creditActuelPdf))
+
+      if (ancienneDettePdf > 0) {
+        doc.text(`• Dette antérieure : ${fmt(ancienneDettePdf)}`, 14, pY)
+        pY += 5
+      }
+
+      if (creditActuelPdf > 0) {
+        doc.text(`• Crédit actuel (${sale.order_number}) : ${fmt(creditActuelPdf)}`, 14, pY)
+        pY += 5
+      }
+
       sale.payments.forEach((p) => {
         doc.text(`• ${p.method.replace('_', ' ').toUpperCase()} : ${fmt(p.amount)}`, 14, pY)
         pY += 5
       })
-      if (sale.credit_amount > 0) {
+
+      if (creditActuelPdf > 0 || ancienneDettePdf > 0) {
         doc.setTextColor(225, 29, 72)
         doc.setFont('helvetica', 'bold')
-        doc.text(`• Reste Dû (Crédit) : ${fmt(sale.credit_amount)}`, 14, pY)
+        doc.text(`• MONTANT TOTAL RESTANT DÛ : ${fmt(resteGlobalPdf)}`, 14, pY)
+        pY += 5
+        if (ancienneDettePdf > 0) {
+          doc.setFontSize(7.5)
+          doc.setFont('helvetica', 'normal')
+          doc.setTextColor(100, 116, 139)
+          doc.text(`Détail : ${fmt(ancienneDettePdf)} (ancien) + ${fmt(creditActuelPdf)} (actuel) = ${fmt(resteGlobalPdf)}`, 14, pY)
+          pY += 5
+        }
       }
 
       // Mentions Légales
@@ -1960,10 +2161,15 @@ export const POSPage: React.FC = () => {
                     <div
                       key={p.id}
                       onClick={() => handleOpenProductDetail(p)}
-                      className="group relative flex flex-col justify-between p-3.5 bg-white hover:bg-emerald-50/40 border border-slate-200 hover:border-emerald-400 rounded-2xl text-left transition-all duration-150 shadow-sm hover:shadow cursor-pointer select-none"
+                      className={clsx(
+                        'group relative flex flex-col justify-between p-3.5 border rounded-2xl text-left transition-all duration-150 shadow-sm hover:shadow cursor-pointer select-none',
+                        stockVente <= 0
+                          ? 'bg-slate-50/90 border-rose-200 hover:border-rose-300'
+                          : 'bg-white hover:bg-emerald-50/40 border-slate-200 hover:border-emerald-400'
+                      )}
                     >
+                      {/* En-tête : Référence + Double Stock (Vente & Magasin) */}
                       <div>
-                        {/* En-tête : Référence + Badge Stock Vente */}
                         <div className="flex items-center justify-between gap-1.5 mb-1.5">
                           <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
                             {p.code}
@@ -1971,7 +2177,11 @@ export const POSPage: React.FC = () => {
                           <span
                             className={clsx(
                               'text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-0.5',
-                              stockVente > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
+                              stockVente <= 0
+                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                : stockVente < 5
+                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                : 'bg-emerald-100 text-emerald-800'
                             )}
                             title={`Stock disponible vente directe : ${stockVente} ${unitVente}`}
                           >
@@ -1981,7 +2191,12 @@ export const POSPage: React.FC = () => {
 
                         {/* Vignette Produit avec Photo ou Icône et Nom */}
                         <div className="flex items-start gap-2.5 my-1">
-                          <div className="w-10 h-10 rounded-xl bg-slate-100 group-hover:bg-emerald-100/60 flex items-center justify-center flex-shrink-0 text-slate-600 group-hover:text-emerald-700 transition">
+                          <div className={clsx(
+                            'w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition',
+                            stockVente <= 0
+                              ? 'bg-rose-50 text-rose-600'
+                              : 'bg-slate-100 group-hover:bg-emerald-100/60 text-slate-600 group-hover:text-emerald-700'
+                          )}>
                             <Layers className="w-5 h-5" />
                           </div>
                           <p className="font-bold text-xs text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-tight">
@@ -1990,8 +2205,10 @@ export const POSPage: React.FC = () => {
                         </div>
 
                         {/* Stock Magasin disponible */}
-                        <div className="text-[10px] text-slate-500 flex items-center justify-between mt-1 bg-slate-50 px-2 py-0.5 rounded-lg border border-slate-100 font-medium">
-                          <span>Stock Magasin :</span>
+                        <div className="text-[10px] text-slate-500 flex items-center justify-between mt-1 bg-slate-100/80 px-2 py-1 rounded-lg border border-slate-200 font-medium">
+                          <span className="flex items-center gap-1">
+                            <Package className="w-3 h-3 text-indigo-600" /> Magasin :
+                          </span>
                           <span className="font-bold text-indigo-700 font-mono">{stockMagasin} {unitMagasin}</span>
                         </div>
                       </div>
@@ -2006,6 +2223,22 @@ export const POSPage: React.FC = () => {
                           <div className="flex items-baseline justify-between text-[10px] text-slate-500">
                             <span>Prix Gros ({unitMagasin}) :</span>
                             <span className="font-mono font-semibold text-slate-700">{fmt(wholesalePrice)}</span>
+                          </div>
+                        )}
+
+                        {/* Overlay / Action si Rupture Stock Vente */}
+                        {stockVente <= 0 && (
+                          <div className="pt-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setTransfertProduct(p)
+                              }}
+                              className="w-full py-1.5 px-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-[10px] font-black flex items-center justify-center gap-1 transition"
+                            >
+                              <ArrowRightLeft className="w-3 h-3" /> RUPTURE VENTE — Transférer ({stockMagasin} {unitMagasin})
+                            </button>
                           </div>
                         )}
                       </div>
@@ -2895,17 +3128,38 @@ export const POSPage: React.FC = () => {
 
               {/* Récapitulatif Fiscal & Financier */}
               <div className="flex justify-between items-start pt-3 border-t border-slate-200">
-                <div className="text-[11px] text-slate-500 space-y-1">
-                  <p className="font-semibold text-slate-700">Règlements effectués :</p>
-                  {currentSale?.payments.map((p, idx) => (
-                    <p key={idx} className="capitalize">
-                      • {p.method.replace('_', ' ')} : <strong>{fmt(p.amount)}</strong>
-                    </p>
-                  ))}
+                <div className="text-[11px] text-slate-700 space-y-1.5 bg-slate-50 p-3 rounded-2xl border border-slate-200 max-w-xs">
+                  <p className="font-black text-slate-900 text-xs uppercase tracking-wide">Règlements effectués :</p>
+                  {(currentSale?.ancienne_dette_avant_facture || 0) > 0 && (
+                    <div className="flex justify-between gap-3 text-slate-600">
+                      <span>• Dette antérieure :</span>
+                      <span className="font-bold font-mono">{fmt(currentSale.ancienne_dette_avant_facture || 0)}</span>
+                    </div>
+                  )}
                   {currentSale?.credit_amount > 0 && (
-                    <p className="text-rose-600 font-bold">
-                      • Montant restant dû (Crédit) : {fmt(currentSale.credit_amount)}
-                    </p>
+                    <div className="flex justify-between gap-3 text-slate-800">
+                      <span>• Crédit actuel ({currentSale.order_number}) :</span>
+                      <span className="font-bold font-mono">{fmt(currentSale.credit_amount)}</span>
+                    </div>
+                  )}
+                  {currentSale?.payments.filter(p => p.amount > 0).map((p, idx) => (
+                    <div key={idx} className="flex justify-between gap-3 text-slate-600 capitalize">
+                      <span>• Payé ({p.method.replace('_', ' ')}) :</span>
+                      <span className="font-semibold font-mono">{fmt(p.amount)}</span>
+                    </div>
+                  ))}
+                  {(currentSale?.credit_amount > 0 || (currentSale?.ancienne_dette_avant_facture || 0) > 0) && (
+                    <div className="border-t border-slate-300 pt-1.5 mt-1">
+                      <div className="flex justify-between gap-3 font-black text-rose-600 text-xs">
+                        <span>• MONTANT TOTAL RESTANT DÛ :</span>
+                        <span className="font-mono text-sm">{fmt(currentSale.montant_restant_du_global ?? ((currentSale.ancienne_dette_avant_facture || 0) + currentSale.credit_amount))}</span>
+                      </div>
+                      {(currentSale?.ancienne_dette_avant_facture || 0) > 0 && (
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          Détail : {fmt(currentSale.ancienne_dette_avant_facture || 0)} (ancien) + {fmt(currentSale.credit_amount)} (actuel) = {fmt(currentSale.montant_restant_du_global ?? ((currentSale.ancienne_dette_avant_facture || 0) + currentSale.credit_amount))}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -3042,8 +3296,23 @@ export const POSPage: React.FC = () => {
                   <p className="text-[10px] text-amber-800 font-bold">Dont AIB : {fmt(currentSale?.total_aib || 0)}</p>
                 )}
                 <p className="text-xs text-emerald-700 font-bold">Payé : {fmt(currentSale?.amount_paid || 0)}</p>
+                {(currentSale?.ancienne_dette_avant_facture || 0) > 0 && (
+                  <p className="text-[11px] text-slate-600">Dette ant. : {fmt(currentSale?.ancienne_dette_avant_facture || 0)}</p>
+                )}
                 {(currentSale?.credit_amount || 0) > 0 && (
-                  <p className="text-xs text-rose-600 font-bold">Reste Dû : {fmt(currentSale?.credit_amount || 0)}</p>
+                  <p className="text-[11px] text-slate-800 font-bold">Crédit actuel : {fmt(currentSale?.credit_amount || 0)}</p>
+                )}
+                {(currentSale?.credit_amount > 0 || (currentSale?.ancienne_dette_avant_facture || 0) > 0) && (
+                  <div className="border-t border-dashed border-slate-400 pt-1 mt-1">
+                    <p className="text-xs text-rose-600 font-black">
+                      TOTAL RESTANT DÛ : {fmt(currentSale?.montant_restant_du_global ?? ((currentSale?.ancienne_dette_avant_facture || 0) + (currentSale?.credit_amount || 0)))}
+                    </p>
+                    {(currentSale?.ancienne_dette_avant_facture || 0) > 0 && (
+                      <p className="text-[9px] text-slate-500">
+                        ({fmt(currentSale?.ancienne_dette_avant_facture || 0)} + {fmt(currentSale?.credit_amount || 0)})
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -3054,6 +3323,19 @@ export const POSPage: React.FC = () => {
           )}
         </div>
       </ModalPortal>
+
+      {/* ── MODALE TRANSFERT STOCK MAGASIN -> VENTE (DOUBLE STOCK) ── */}
+      {transfertProduct && (
+        <TransfertStockModal
+          isOpen={!!transfertProduct}
+          onClose={() => setTransfertProduct(null)}
+          product={transfertProduct}
+          companyId={company?.id ?? companyId ?? ''}
+          caisseId={activeCaisse?.caisse_id || activeCaisse?.id}
+          userId={user?.id}
+          onTransferSuccess={handleTransferSuccess}
+        />
+      )}
     </div>
   )
 }

@@ -31,7 +31,7 @@ interface NewProductModalProps {
 
 // Unités UCD (Stockage / Gros)
 export const UCD_UNITS = [
-  'Carton', 'Sac', 'Bidon', 'Boîte', 'Caisse', 'Fût',
+  'Carton', 'Sac', 'Bidon', 'Boîte', 'Caisse', 'Casier', 'Paquet', 'Palette', 'Fût',
   'Rouleau', 'Bobine', 'Pelote', 'Mètre', 'Centimètre',
   'Sachet', 'Lot', 'Gramme', 'Tonne', 'Pièce'
 ]
@@ -39,6 +39,7 @@ export const UCD_UNITS = [
 // Unités UV (Vente / Détail)
 export const UV_UNITS = [
   'Pièce', 'Kg', 'Litre', 'Mètre', 'Centimètre', 'm²',
+  'Casier', 'Paquet', 'Palette',
   'Pelote', 'Douzaine', 'Sachet', 'Gramme', 'Portion'
 ]
 
@@ -544,7 +545,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                   />
                 </div>
                 <div className="col-span-4">
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Unité Vente (UV) *</label>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Unité Stock (UV) *</label>
                   <select
                     value={form.uv}
                     onChange={(e) => setForm({ ...form, uv: e.target.value })}
