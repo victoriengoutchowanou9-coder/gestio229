@@ -1,9 +1,10 @@
 // =============================================================================
 // GESTIO 229 SaaS — Module Vente Express & Centre d'Impression Moderne
-// Navigation tactile par onglets : Vente Express, Commandes, Production, En Attente, Articles & Catégories
+// Navigation tactile par onglets : Vente Express, Commandes, Production, En Attente, Articles & Catégories, Rapports Matières
 // Contrôle session de caisse, Panier multi-articles, Déduction matières BOM,
-// Workflow : Le Graphiste prépare / met en attente — La Caissière encaisse et valide.
-// Zéro donnée fictive : Supabase est la source de vérité.
+// Enregistrement des ventes & Création directe d'Articles et Matières Premières,
+// Coûts matières cumulés, Coût par matière, Filtres avancés & Traçabilité complète.
+// Zéro donnée fictive : Supabase est la source unique de vérité.
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
@@ -12,7 +13,8 @@ import {
   Printer, ShoppingCart, CheckCircle2, DollarSign, RefreshCw,
   Search, Plus, Minus, Trash2, Clock, AlertTriangle, Layers,
   Scissors, User, Phone, Check, ArrowRight, Play, Eye, FileText,
-  Lock, Unlock, ChevronRight, PackageCheck, AlertOctagon, Sparkles
+  Lock, Unlock, ChevronRight, PackageCheck, AlertOctagon, Sparkles,
+  Box, Edit3, X, BarChart3, Filter, Calendar, TrendingUp
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useAuthStore } from '../../../store/authStore'
@@ -21,12 +23,15 @@ import {
   imprimerieService,
   PrestationImprimerie,
   CommandeImprimerie,
+  MatierePremiere,
+  PrestationMatiereBOM,
   StatutCommande
 } from '../../../services/imprimerieService'
 import {
   checkSectorCaisseStatus,
   CaisseStatusResult
 } from '../../../services/caisseSectorService'
+import { supabase } from '../../../lib/supabase'
 
 interface CartItem {
   prestation: PrestationImprimerie
@@ -46,17 +51,19 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
   const activeSector = sectorSlug || 'imprimerie'
   const prefix = `/app/${activeSector}`
 
-  // ── Navigation par Onglets (comme le design de référence) ──
-  const [activeTab, setActiveTab] = useState<'express' | 'commandes' | 'production' | 'attente' | 'articles'>('express')
+  // ── Navigation par Onglets (Vente Express, Commandes, Production, En attente, Articles, Rapports Matières) ──
+  const [activeTab, setActiveTab] = useState<'express' | 'commandes' | 'production' | 'attente' | 'articles' | 'rapports'>('express')
 
   // ── Données Métier ──
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [prestations, setPrestations] = useState<PrestationImprimerie[]>([])
   const [commandes, setCommandes] = useState<CommandeImprimerie[]>([])
+  const [matieres, setMatieres] = useState<MatierePremiere[]>([])
+  const [consommations, setConsommations] = useState<any[]>([])
   const [caisseStatus, setCaisseStatus] = useState<CaisseStatusResult | null>(null)
 
-  // ── Filtres & Recherche ──
+  // ── Filtres & Recherche Articles ──
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState<string>('Tous')
 
@@ -72,6 +79,50 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
   const [dimLargeur, setDimLargeur] = useState<number>(1)
   const [dimHauteur, setDimHauteur] = useState<number>(1)
   const [dimQuantite, setDimQuantite] = useState<number>(1)
+
+  // ── Modal Détail Commande ──
+  const [selectedCommandeDetail, setSelectedCommandeDetail] = useState<CommandeImprimerie | null>(null)
+
+  // ── Modal Création / Modification Article & Prestation ──
+  const [showArticleModal, setShowArticleModal] = useState(false)
+  const [editingArticleId, setEditingArticleId] = useState<string | null>(null)
+  const [articleForm, setArticleForm] = useState({
+    code: '',
+    nom: '',
+    categorie: 'Impression',
+    mode_calcul: 'unite' as 'unite' | 'page' | 'm2',
+    prix_vente: 100,
+    unite_facturation: 'u',
+  })
+  const [articleBOM, setArticleBOM] = useState<Array<{
+    matiere_id: string
+    quantite_prevue: number
+    unite: string
+    cout_unitaire_prevu: number
+  }>>([])
+
+  // ── Modal Création Matière Première ──
+  const [showMatiereModal, setShowMatiereModal] = useState(false)
+  const [matiereForm, setMatiereForm] = useState({
+    code: '',
+    nom: '',
+    categorie: 'Supports',
+    unite: 'm2',
+    stock_actuel: 100,
+    stock_minimum: 10,
+    cout_moyen: 500,
+  })
+
+  // ── Filtres pour l'onglet Rapports Matières ──
+  const [rapportPeriode, setRapportPeriode] = useState<'jour' | 'semaine' | 'mois' | 'annee' | 'personnalise' | 'tout'>('mois')
+  const [rapportDateDebut, setRapportDateDebut] = useState('')
+  const [rapportDateFin, setRapportDateFin] = useState('')
+  const [rapportMatiereFilter, setRapportMatiereFilter] = useState('TOUTES')
+  const [rapportSearch, setRapportSearch] = useState('')
+
+  // ── Filtre Historique Commandes ──
+  const [commandeFilter, setCommandeFilter] = useState<'toutes' | 'jour' | 'soldes' | 'attente'>('toutes')
+  const [commandeSearch, setCommandeSearch] = useState('')
 
   // ── Reçu de succès après encaissement ──
   const [recuSuccess, setRecuSuccess] = useState<{
@@ -102,13 +153,21 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [presList, cmdsList, cStatus] = await Promise.all([
+      const [presList, cmdsList, matsList, consList, cStatus] = await Promise.all([
         imprimerieService.getPrestations(companyId, activeSector),
         imprimerieService.getCommandes(companyId, activeSector),
+        imprimerieService.getMatieres(companyId, activeSector),
+        supabase
+          .from('imprimerie_consommations')
+          .select('*, matiere:imprimerie_matieres(nom, code, unite, categorie, stock_actuel, stock_minimum, cout_moyen), commande:imprimerie_commandes(numero_commande, client_nom)')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false }),
         checkSectorCaisseStatus(companyId, activeSector),
       ])
       setPrestations(presList)
       setCommandes(cmdsList)
+      setMatieres(matsList)
+      setConsommations(consList.data || [])
       setCaisseStatus(cStatus)
     } catch (e) {
       console.error('[Imprimerie] Erreur chargement données:', e)
@@ -121,13 +180,13 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     loadAllData()
   }, [loadAllData])
 
-  // ── Catégories uniques extraites des vraies prestations ──
+  // ── Catégories uniques extraites des prestations ──
   const categoriesList = useMemo(() => {
     const cats = Array.from(new Set(prestations.map((p) => p.categorie || 'Impression'))).filter(Boolean)
     return ['Tous', ...cats]
   }, [prestations])
 
-  // ── Prestations filtrées ──
+  // ── Prestations filtrées pour la vente express ──
   const filteredPrestations = useMemo(() => {
     return prestations.filter((p) => {
       const matchSearch =
@@ -138,12 +197,11 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     })
   }, [prestations, searchTerm, selectedCategory])
 
-  // ── Calcul total panier ──
+  // ── Total panier ──
   const totalPanier = useMemo(() => {
     return panier.reduce((acc, it) => acc + it.totalLigne, 0)
   }, [panier])
 
-  // Ajuster le montant payé par défaut lorsque le panier change
   useEffect(() => {
     setMontantPaye(totalPanier)
   }, [totalPanier])
@@ -153,7 +211,6 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
   // ── Ajout d'une prestation au panier ──
   const handleSelectPrestation = (pres: PrestationImprimerie) => {
     if (pres.mode_calcul === 'm2') {
-      // Ouvrir le modal dimensions pour calcul surface
       setDimModalItem(pres)
       setDimLargeur(1)
       setDimHauteur(1)
@@ -161,7 +218,6 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       return
     }
 
-    // Prestation à l'unité / page
     setPanier((prev) => {
       const existing = prev.find((item) => item.prestation.id === pres.id)
       if (existing) {
@@ -181,8 +237,8 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
         {
           prestation: pres,
           quantite: 1,
-          largeur: 1,
-          hauteur: 1,
+          largeur: 0,
+          hauteur: 0,
           prixUnitaire: pu,
           totalLigne: pu,
         },
@@ -190,87 +246,99 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     })
   }
 
-  // ── Valider ajout avec dimensions m² ──
+  // ── Validation dimensions au m² ──
   const handleValiderDimensionsM2 = (e: React.FormEvent) => {
     e.preventDefault()
     if (!dimModalItem) return
-    const surface = (dimLargeur || 1) * (dimHauteur || 1)
+
+    const l = Math.max(0.1, dimLargeur)
+    const h = Math.max(0.1, dimHauteur)
+    const q = Math.max(1, dimQuantite)
+    const surfaceTotale = Number((l * h).toFixed(3))
     const pu = Number(dimModalItem.prix_vente || 0)
-    const totalLigne = Math.round(surface * (dimQuantite || 1) * pu)
+    const total = Math.round(surfaceTotale * q * pu)
 
     setPanier((prev) => [
       ...prev,
       {
         prestation: dimModalItem,
-        quantite: dimQuantite || 1,
-        largeur: dimLargeur || 1,
-        hauteur: dimHauteur || 1,
+        quantite: q,
+        largeur: l,
+        hauteur: h,
         prixUnitaire: pu,
-        totalLigne,
+        totalLigne: total,
       },
     ])
     setDimModalItem(null)
   }
 
   // ── Modification quantité panier ──
-  const handleUpdateQty = (index: number, delta: number) => {
-    setPanier((prev) => {
-      const item = prev[index]
-      if (!item) return prev
-      const newQty = item.quantite + delta
-      if (newQty <= 0) {
-        return prev.filter((_, i) => i !== index)
-      }
-      let newTotal = 0
-      if (item.prestation.mode_calcul === 'm2') {
-        const surface = (item.largeur || 1) * (item.hauteur || 1)
-        newTotal = Math.round(surface * newQty * item.prixUnitaire)
-      } else {
-        newTotal = Math.round(newQty * item.prixUnitaire)
-      }
-      return prev.map((it, i) => (i === index ? { ...it, quantite: newQty, totalLigne: newTotal } : it))
-    })
+  const handleUpdateQuantite = (index: number, delta: number) => {
+    setPanier((prev) =>
+      prev
+        .map((it, idx) => {
+          if (idx !== index) return it
+          const newQ = it.quantite + delta
+          if (newQ <= 0) return null
+          const surfaceFactor = it.prestation.mode_calcul === 'm2' && it.largeur && it.hauteur ? it.largeur * it.hauteur : 1
+          return {
+            ...it,
+            quantite: newQ,
+            totalLigne: Math.round(newQ * surfaceFactor * it.prixUnitaire),
+          }
+        })
+        .filter(Boolean) as CartItem[]
+    )
   }
 
+  // ── Suppression ligne panier ──
+  const handleRemoveItem = (index: number) => {
+    setPanier((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  // ── Vider le panier ──
   const handleViderPanier = () => {
     setPanier([])
     setClientNom('Client Comptoir')
     setClientTel('')
+    setMontantPaye(0)
   }
 
-  // ── Validation de la Vente Express / Mise en Attente ──
-  const handleValiderVente = async (mettreEnAttente: boolean = false) => {
-    if (!companyId || panier.length === 0) return
+  // ── Validation de la vente express ──
+  const handleValiderVente = async (isAttente: boolean = false) => {
+    if (panier.length === 0) {
+      notify('error', 'Le panier est vide !')
+      return
+    }
 
-    // Si la caisse est fermée et qu'on essaie d'encaisser directement
-    if (!mettreEnAttente && caisseStatus && !caisseStatus.isTodayOpen) {
-      notify('error', "La caisse n'est pas ouverte. Vous devez ouvrir la caisse ou mettre la vente en attente.")
+    if (!isAttente && !caisseStatus?.isTodayOpen) {
+      notify('error', "La session de caisse n'est pas ouverte. Veuillez d'abord ouvrir la caisse ou mettre la vente en attente.")
       return
     }
 
     setSubmitting(true)
     try {
       const res = await imprimerieService.creerVentePanier(
-        companyId,
+        companyId!,
         activeSector,
         {
           items: panier,
           clientNom: clientNom.trim() || 'Client Comptoir',
           clientTel: clientTel.trim() || undefined,
           modePaiement,
-          montantPaye: mettreEnAttente ? 0 : montantPaye,
-          isEnAttente: mettreEnAttente,
+          montantPaye: isAttente ? 0 : montantPaye,
+          isEnAttente: isAttente,
         },
         user
       )
 
-      if (mettreEnAttente) {
-        notify('success', `Vente ${res.commande.numero_commande} mise en attente pour validation/encaissement caisse !`)
+      if (isAttente) {
+        notify('success', `Commande ${res.commande.numero_commande} mise en attente pour validation par la caissière !`)
         handleViderPanier()
         loadAllData()
         setActiveTab('attente')
       } else {
-        // Enregistrement succès et affichage ticket
+        notify('success', `Vente ${res.commande.numero_commande} enregistrée et encaissée avec succès !`)
         setRecuSuccess({
           cmdNumero: res.commande.numero_commande,
           recuRef: res.recuRef,
@@ -279,7 +347,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
           reste: resteAPayer,
           date: new Date().toLocaleDateString('fr-FR', {
             day: '2-digit',
-            month: '2-digit',
+            month: 'short',
             year: 'numeric',
             hour: '2-digit',
             minute: '2-digit',
@@ -290,17 +358,18 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             total: p.totalLigne,
           })),
         })
-        notify('success', 'Vente encaissée et matières déduites du stock avec succès !')
+        handleViderPanier()
         loadAllData()
       }
     } catch (err: any) {
-      notify('error', err.message || 'Erreur lors de la validation.')
+      console.error('Erreur vente express:', err)
+      notify('error', err.message || 'Erreur lors de la validation de la vente.')
     } finally {
       setSubmitting(false)
     }
   }
 
-  // ── Encaissement d'une vente en attente par la caissière ──
+  // ── Encaissement d'une vente en attente par la caissière avec déduction matières ──
   const handleEncaisserAttente = async (cmd: CommandeImprimerie) => {
     if (!caisseStatus?.isTodayOpen) {
       notify('error', "Veuillez d'abord ouvrir la session de caisse du jour pour encaisser.")
@@ -308,29 +377,142 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     }
 
     try {
-      await imprimerieService.enregistrerPaiement(
-        {
-          company_id: cmd.company_id,
-          sector_slug: activeSector,
-          commande_id: cmd.id,
-          montant: Number(cmd.total_ttc),
-          mode_paiement: 'especes',
-          reference_recu: `REC-ATT-${Date.now().toString().slice(-5)}`,
-          type_paiement: 'solde',
-        },
+      await imprimerieService.validerEtEncaisserVenteAttente(
+        cmd.id,
+        cmd.company_id,
+        activeSector,
+        'especes',
         user
       )
-
-      // Passer le statut de la commande à 'livre'
-      await imprimerieService.updateCommandeStatus(cmd.id, 'livre', user)
-      notify('success', `Commande ${cmd.numero_commande} validée et encaissée avec succès !`)
+      notify('success', `Commande ${cmd.numero_commande} validée, matières déstockées et montant encaissé en caisse !`)
       loadAllData()
     } catch (e: any) {
       notify('error', e.message || 'Erreur encaissement.')
     }
   }
 
-  // ── Commandes en attente (non payées / à encaisser) ──
+  // ── Création / Modification d'un Article & Prestation ──
+  const handleOpenArticleModal = (pres?: PrestationImprimerie) => {
+    if (pres) {
+      setEditingArticleId(pres.id)
+      setArticleForm({
+        code: pres.code,
+        nom: pres.nom,
+        categorie: pres.categorie || 'Impression',
+        mode_calcul: pres.mode_calcul as any,
+        prix_vente: Number(pres.prix_vente || 0),
+        unite_facturation: pres.unite_facturation || 'u',
+      })
+      setArticleBOM(
+        (pres.matieres_bom || []).map((b) => ({
+          matiere_id: b.matiere_id,
+          quantite_prevue: Number(b.quantite_prevue || 1),
+          unite: b.unite || 'u',
+          cout_unitaire_prevu: Number(b.cout_unitaire_prevu || 0),
+        }))
+      )
+    } else {
+      setEditingArticleId(null)
+      setArticleForm({
+        code: `ART${String(prestations.length + 1).padStart(3, '0')}`,
+        nom: '',
+        categorie: 'Impression',
+        mode_calcul: 'unite',
+        prix_vente: 100,
+        unite_facturation: 'u',
+      })
+      setArticleBOM([])
+    }
+    setShowArticleModal(true)
+  }
+
+  const handleSaveArticle = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!articleForm.nom.trim()) {
+      notify('error', "Le nom de l'article est obligatoire.")
+      return
+    }
+
+    try {
+      await imprimerieService.savePrestation(
+        {
+          id: editingArticleId || undefined,
+          company_id: companyId!,
+          sector_slug: activeSector,
+          code: articleForm.code || `ART${Date.now().toString().slice(-4)}`,
+          nom: articleForm.nom.trim(),
+          categorie: articleForm.categorie,
+          mode_calcul: articleForm.mode_calcul,
+          prix_vente: Number(articleForm.prix_vente || 0),
+          unite_facturation: articleForm.mode_calcul === 'm2' ? 'm2' : articleForm.unite_facturation,
+          prix_minimum: Number(articleForm.prix_vente || 0),
+          prix_gros: Number(articleForm.prix_vente || 0),
+          tva_applicable: false,
+          aib_applicable: false,
+          cout_mo_defaut: 0,
+          cout_finition_defaut: 0,
+          cout_autres_defaut: 0,
+          est_actif: true,
+        },
+        articleBOM.map((b) => ({
+          matiere_id: b.matiere_id,
+          quantite_prevue: Number(b.quantite_prevue || 1),
+          unite: b.unite,
+          cout_unitaire_prevu: Number(b.cout_unitaire_prevu || 0),
+          cout_total_prevu: Number(b.quantite_prevue || 1) * Number(b.cout_unitaire_prevu || 0),
+        }))
+      )
+
+      notify('success', editingArticleId ? 'Article mis à jour avec succès !' : 'Nouvel article créé avec succès !')
+      setShowArticleModal(false)
+      loadAllData()
+    } catch (err: any) {
+      notify('error', err.message || "Erreur enregistrement de l'article.")
+    }
+  }
+
+  // ── Création d'une Matière Première ──
+  const handleSaveMatiere = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!matiereForm.nom.trim()) {
+      notify('error', 'Le nom de la matière première est obligatoire.')
+      return
+    }
+
+    try {
+      await imprimerieService.saveMatiere({
+        company_id: companyId!,
+        sector_slug: activeSector,
+        code: matiereForm.code || `MAT${Date.now().toString().slice(-4)}`,
+        nom: matiereForm.nom.trim(),
+        categorie: matiereForm.categorie,
+        unite: matiereForm.unite,
+        stock_actuel: Number(matiereForm.stock_actuel || 0),
+        stock_minimum: Number(matiereForm.stock_minimum || 5),
+        cout_moyen: Number(matiereForm.cout_moyen || 0),
+        dernier_cout_achat: Number(matiereForm.cout_moyen || 0),
+        valeur_stock: Number(matiereForm.stock_actuel || 0) * Number(matiereForm.cout_moyen || 0),
+        est_actif: true,
+      })
+
+      notify('success', 'Matière première enregistrée dans le stock avec succès !')
+      setShowMatiereModal(false)
+      setMatiereForm({
+        code: '',
+        nom: '',
+        categorie: 'Supports',
+        unite: 'm2',
+        stock_actuel: 100,
+        stock_minimum: 10,
+        cout_moyen: 500,
+      })
+      loadAllData()
+    } catch (err: any) {
+      notify('error', err.message || 'Erreur création matière.')
+    }
+  }
+
+  // ── Commandes en attente ──
   const commandesEnAttente = useMemo(() => {
     return commandes.filter(
       (c) => c.statut_paiement === 'non_paye' || c.statut === 'nouveau' || c.solde_restant > 0
@@ -346,11 +528,142 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     )
   }, [commandes])
 
+  // ── Commandes filtrées pour l'historique ──
+  const filteredCommandesHistorique = useMemo(() => {
+    const now = new Date()
+    return commandes.filter((c) => {
+      const matchSearch =
+        c.numero_commande.toLowerCase().includes(commandeSearch.toLowerCase()) ||
+        c.client_nom.toLowerCase().includes(commandeSearch.toLowerCase()) ||
+        c.titre_travail.toLowerCase().includes(commandeSearch.toLowerCase())
+
+      if (!matchSearch) return false
+
+      if (commandeFilter === 'jour') {
+        const d = new Date(c.date_commande)
+        return d.toDateString() === now.toDateString()
+      }
+      if (commandeFilter === 'soldes') {
+        return c.statut_paiement === 'solde'
+      }
+      if (commandeFilter === 'attente') {
+        return c.statut_paiement !== 'solde' || c.solde_restant > 0
+      }
+      return true
+    })
+  }, [commandes, commandeFilter, commandeSearch])
+
+  // ── ANALYSE RAPPORTS MATIÈRES PREMIÈRES ──
+  const isDateInRapportPeriode = useCallback((dateStr?: string) => {
+    if (!dateStr) return false
+    const d = new Date(dateStr)
+    const now = new Date()
+
+    if (rapportPeriode === 'tout') return true
+    if (rapportPeriode === 'jour') return d.toDateString() === now.toDateString()
+    if (rapportPeriode === 'semaine') {
+      const diff = (now.getTime() - d.getTime()) / (1000 * 3600 * 24)
+      return diff >= 0 && diff <= 7
+    }
+    if (rapportPeriode === 'mois') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear()
+    if (rapportPeriode === 'annee') return d.getFullYear() === now.getFullYear()
+    if (rapportPeriode === 'personnalise') {
+      if (rapportDateDebut && d < new Date(rapportDateDebut)) return false
+      if (rapportDateFin) {
+        const end = new Date(rapportDateFin)
+        end.setHours(23, 59, 59, 999)
+        if (d > end) return false
+      }
+      return true
+    }
+    return true
+  }, [rapportPeriode, rapportDateDebut, rapportDateFin])
+
+  const filteredConsommationsRapport = useMemo(() => {
+    return consommations.filter((c) => {
+      if (!isDateInRapportPeriode(c.created_at)) return false
+      if (rapportMatiereFilter !== 'TOUTES' && c.matiere_id !== rapportMatiereFilter) return false
+      if (rapportSearch.trim()) {
+        const q = rapportSearch.toLowerCase()
+        const matchText =
+          (c.matiere?.nom || '').toLowerCase().includes(q) ||
+          (c.matiere?.code || '').toLowerCase().includes(q)
+        if (!matchText) return false
+      }
+      return true
+    })
+  }, [consommations, isDateInRapportPeriode, rapportMatiereFilter, rapportSearch])
+
+  const statsRapportMatieres = useMemo(() => {
+    const cumulCout = filteredConsommationsRapport.reduce((acc, c) => acc + Number(c.cout_total || 0), 0)
+    const cumulQte = filteredConsommationsRapport.reduce((acc, c) => acc + Number(c.quantite_reelle || 0), 0)
+
+    const map: Record<string, {
+      id: string
+      nom: string
+      code: string
+      categorie: string
+      unite: string
+      stockActuel: number
+      stockMinimum: number
+      qteTotale: number
+      coutTotal: number
+      nbVentes: number
+      coutUnitaireMoyen: number
+      partPct: number
+    }> = {}
+
+    filteredConsommationsRapport.forEach((c) => {
+      const id = c.matiere_id || 'autre'
+      const nom = c.matiere?.nom || 'Matière Inconnue'
+      const code = c.matiere?.code || '-'
+      const categorie = c.matiere?.categorie || 'Général'
+      const unite = c.matiere?.unite || 'u'
+      const stockActuel = Number(c.matiere?.stock_actuel || 0)
+      const stockMinimum = Number(c.matiere?.stock_minimum || 0)
+
+      if (!map[id]) {
+        map[id] = {
+          id,
+          nom,
+          code,
+          categorie,
+          unite,
+          stockActuel,
+          stockMinimum,
+          qteTotale: 0,
+          coutTotal: 0,
+          nbVentes: 0,
+          coutUnitaireMoyen: 0,
+          partPct: 0,
+        }
+      }
+
+      map[id].qteTotale += Number(c.quantite_reelle || 0)
+      map[id].coutTotal += Number(c.cout_total || 0)
+      map[id].nbVentes += 1
+    })
+
+    const parMatiere = Object.values(map).map((item) => ({
+      ...item,
+      coutUnitaireMoyen: item.qteTotale > 0 ? item.coutTotal / item.qteTotale : 0,
+      partPct: cumulCout > 0 ? (item.coutTotal / cumulCout) * 100 : 0,
+    })).sort((a, b) => b.coutTotal - a.coutTotal)
+
+    return {
+      cumulCout,
+      cumulQte,
+      parMatiere,
+      nbSorties: filteredConsommationsRapport.length,
+    }
+  }, [filteredConsommationsRapport])
+
   return (
     <div className="space-y-5 pb-16 animate-fadeIn">
-      {/* ── BARRE DE NAVIGATION SUPÉRIEURE PAR ONGLETS (STYLE CAPTURE) ── */}
+      {/* ── BARRE DE NAVIGATION SUPÉRIEURE PAR ONGLETS (STYLE CAPTURE D'ÉCRAN) ── */}
       <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 -mx-4 sm:-mx-6 -mt-6 px-4 sm:px-6 pt-3 flex items-center justify-between overflow-x-auto gap-2">
         <div className="flex items-center gap-1 sm:gap-2">
+          {/* Onglet 1 : Vente Express */}
           <button
             onClick={() => setActiveTab('express')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -362,6 +675,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             <ShoppingCart className="w-4 h-4 text-purple-600" /> Vente Express
           </button>
 
+          {/* Onglet 2 : Commandes & Historique */}
           <button
             onClick={() => setActiveTab('commandes')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -376,6 +690,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             </span>
           </button>
 
+          {/* Onglet 3 : Production */}
           <button
             onClick={() => setActiveTab('production')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -392,6 +707,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             )}
           </button>
 
+          {/* Onglet 4 : En attente (Caissière) */}
           <button
             onClick={() => setActiveTab('attente')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -408,6 +724,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             )}
           </button>
 
+          {/* Onglet 5 : Articles & Catégories */}
           <button
             onClick={() => setActiveTab('articles')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
@@ -417,6 +734,24 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             }`}
           >
             <Layers className="w-4 h-4 text-slate-600" /> Articles & Catégories
+            <span className="px-1.5 py-0.2 bg-slate-100 text-slate-700 rounded-full text-[10px] font-black">
+              {prestations.length}
+            </span>
+          </button>
+
+          {/* Onglet 6 : Rapports Matières & Coûts */}
+          <button
+            onClick={() => setActiveTab('rapports')}
+            className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
+              activeTab === 'rapports'
+                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
+            }`}
+          >
+            <Box className="w-4 h-4 text-purple-600" /> Coûts Matières
+            <span className="px-1.5 py-0.2 bg-purple-100 text-purple-800 rounded-full text-[10px] font-black">
+              {Math.round(statsRapportMatieres.cumulCout).toLocaleString('fr-FR')} F
+            </span>
           </button>
         </div>
 
@@ -449,57 +784,50 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* VUE 1 : VENTE EXPRESS & PANIER (INTERFACE PRINCIPALE) */}
+      {/* VUE 1 : VENTE EXPRESS (GRILLE ARTICLES TACTILE + PANIER)              */}
       {/* ===================================================================== */}
       {activeTab === 'express' && (
         <>
-          {/* ÉCRAN TICKET APRÈS ENCAISSEMENT RÉUSSI */}
           {recuSuccess ? (
-            <div className="bg-white dark:bg-slate-800 rounded-3xl border border-emerald-200 dark:border-emerald-800 shadow-xl p-6 space-y-5 animate-scaleUp text-center max-w-md mx-auto">
-              <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 mx-auto flex items-center justify-center">
-                <CheckCircle2 className="w-8 h-8" />
+            <div className="max-w-md mx-auto bg-white dark:bg-slate-800 p-6 rounded-3xl border border-slate-200 shadow-md text-center space-y-4 animate-scaleUp">
+              <div className="w-12 h-12 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mx-auto">
+                <CheckCircle2 className="w-7 h-7" />
               </div>
 
               <div>
-                <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">Vente Encaissée avec Succès !</h3>
-                <p className="text-xs text-slate-500 font-mono">Reçu N° <strong>{recuSuccess.recuRef}</strong></p>
+                <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">
+                  Vente Encaissée avec Succès !
+                </h3>
+                <p className="text-xs text-slate-500 font-mono mt-0.5">
+                  Réf : {recuSuccess.recuRef} • {recuSuccess.cmdNumero}
+                </p>
               </div>
 
-              <div className="p-4 bg-slate-50 dark:bg-slate-900/50 rounded-2xl text-left space-y-1.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-500">N° Commande :</span>
-                  <span className="font-mono font-bold">{recuSuccess.cmdNumero}</span>
-                </div>
-                <div className="border-t border-slate-200 dark:border-slate-700 pt-2 space-y-1">
+              <div className="bg-slate-50 dark:bg-slate-900/50 p-4 rounded-2xl text-left text-xs space-y-2">
+                <div className="divide-y divide-slate-100">
                   {recuSuccess.items.map((it, idx) => (
-                    <div key={idx} className="flex justify-between text-slate-700 dark:text-slate-300">
-                      <span>{it.nom} (x{it.qte})</span>
-                      <span className="font-bold">{it.total.toLocaleString('fr-FR')} F</span>
+                    <div key={idx} className="py-1.5 flex justify-between">
+                      <span className="font-semibold text-slate-800">{it.nom} x {it.qte}</span>
+                      <span className="font-mono text-slate-600">{it.total.toLocaleString('fr-FR')} F</span>
                     </div>
                   ))}
                 </div>
-                <div className="flex justify-between border-t border-slate-200 dark:border-slate-700 pt-2 font-black text-sm">
-                  <span>Total :</span>
-                  <span>{recuSuccess.total.toLocaleString('fr-FR')} FCFA</span>
-                </div>
-                <div className="flex justify-between text-emerald-600 font-bold">
-                  <span>Encaissé :</span>
-                  <span>{recuSuccess.paye.toLocaleString('fr-FR')} FCFA</span>
+
+                <div className="border-t border-slate-200 pt-2 flex justify-between font-black text-sm">
+                  <span>Total Payé</span>
+                  <span className="text-emerald-700">{recuSuccess.paye.toLocaleString('fr-FR')} FCFA</span>
                 </div>
               </div>
 
               <div className="flex gap-2">
                 <button
                   onClick={() => window.print()}
-                  className="flex-1 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl text-xs flex items-center justify-center gap-1.5 transition"
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition flex items-center justify-center gap-1.5"
                 >
-                  <Printer className="w-4 h-4" /> Imprimer Ticket
+                  <Printer className="w-4 h-4" /> Imprimer le reçu
                 </button>
                 <button
-                  onClick={() => {
-                    setRecuSuccess(null)
-                    handleViderPanier()
-                  }}
+                  onClick={() => setRecuSuccess(null)}
                   className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs transition"
                 >
                   Nouvelle Vente
@@ -508,27 +836,27 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             </div>
           ) : (
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-              {/* ── COLONNE GAUCHE (8 COLONNES) : RECHERCHE + CATÉGORIES + ARTICLES ── */}
+              {/* ── COLONNE GAUCHE (8/12) : ARTICLES, RECHERCHE & CATÉGORIES ── */}
               <div className="lg:col-span-8 space-y-4">
-                {/* Champ de recherche rapide */}
+                {/* 1. Barre de Recherche */}
                 <div className="relative">
-                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
                   <input
                     type="text"
-                    placeholder="Rechercher par code, nom de prestation..."
+                    placeholder="Rechercher par code, nom..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-purple-500 shadow-2xs"
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition"
                   />
                 </div>
 
-                {/* Pilules Catégories */}
-                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                {/* 2. Pilules de Catégories */}
+                <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-none">
                   {categoriesList.map((cat) => (
                     <button
                       key={cat}
                       onClick={() => setSelectedCategory(cat)}
-                      className={`px-4 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap shadow-2xs ${
+                      className={`px-4 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap ${
                         selectedCategory === cat
                           ? 'bg-purple-600 text-white shadow-xs'
                           : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
@@ -539,185 +867,224 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                   ))}
                 </div>
 
-                {/* Grille des Articles / Prestations (Style Cartes Blanches Capture) */}
-                <div className="space-y-2">
-                  <h3 className="text-xs font-black text-slate-700 dark:text-slate-300 uppercase tracking-wider">
-                    Articles & Prestations
-                  </h3>
+                {/* 3. Titre Section Articles */}
+                <div className="flex items-center justify-between pt-1">
+                  <h2 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Articles ({filteredPrestations.length})
+                  </h2>
 
-                  {filteredPrestations.length === 0 ? (
-                    <div className="p-12 text-center bg-white dark:bg-slate-800 rounded-3xl border border-dashed border-slate-300 text-slate-400 text-xs">
-                      Aucune prestation trouvée. Créez vos prestations dans l'onglet "Articles & Catégories".
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                      {filteredPrestations.map((pres) => (
+                  <button
+                    onClick={() => handleOpenArticleModal()}
+                    className="text-xs font-bold text-purple-700 hover:text-purple-800 flex items-center gap-1"
+                  >
+                    <Plus className="w-3.5 h-3.5" /> Ajouter un article
+                  </button>
+                </div>
+
+                {/* 4. Grille des Articles */}
+                {filteredPrestations.length === 0 ? (
+                  <div className="bg-white dark:bg-slate-800 border border-slate-200 rounded-3xl p-12 text-center text-slate-400 space-y-3">
+                    <p className="text-xs">Aucun article ne correspond à votre recherche.</p>
+                    <button
+                      onClick={() => handleOpenArticleModal()}
+                      className="px-4 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold"
+                    >
+                      + Créer un article de vente rapide
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                    {filteredPrestations.map((pres) => {
+                      const nbBOM = pres.matieres_bom?.length || 0
+                      return (
                         <div
                           key={pres.id}
                           onClick={() => handleSelectPrestation(pres)}
-                          className="bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-purple-400 dark:hover:border-purple-500 shadow-2xs hover:shadow-md cursor-pointer transition-all flex flex-col justify-between text-center group active:scale-95 min-h-[125px]"
+                          className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3.5 text-center flex flex-col justify-between hover:border-purple-400 hover:shadow-md transition cursor-pointer select-none group min-h-[120px]"
                         >
                           <div>
-                            <span className="font-bold text-xs text-slate-900 dark:text-slate-100 group-hover:text-purple-600 block line-clamp-2 leading-tight">
+                            <h3 className="font-bold text-xs text-slate-900 dark:text-slate-100 group-hover:text-purple-700 transition line-clamp-2 leading-tight">
                               {pres.nom}
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono mt-0.5 block">
+                            </h3>
+                            <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
                               {pres.code}
                             </span>
                           </div>
 
-                          <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-700">
-                            <span className="text-xs font-black text-purple-700 dark:text-purple-400 block">
-                              {Number(pres.prix_vente || 0).toLocaleString('fr-FR')} FCFA
+                          <div className="pt-2">
+                            <span className="text-sm font-black text-purple-700 dark:text-purple-400 block">
+                              {Number(pres.prix_vente).toLocaleString('fr-FR')} FCFA
                             </span>
-                            {pres.mode_calcul === 'm2' && (
-                              <span className="text-[9px] text-slate-400 font-semibold block">
-                                au m²
+
+                            {/* Badge BOM */}
+                            {nbBOM > 0 ? (
+                              <span className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded-md mt-1">
+                                <Box className="w-2.5 h-2.5" /> {nbBOM} matière(s) liée(s)
+                              </span>
+                            ) : (
+                              <span className="text-[9px] text-slate-400 block mt-1">
+                                Prestation directe
                               </span>
                             )}
                           </div>
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
-              {/* ── COLONNE DROITE (4 COLONNES) : LE PANIER TACTILE ── */}
-              <div className="lg:col-span-4 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-xs space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-700 pb-3">
+              {/* ── COLONNE DROITE (4/12) : PANIER DE VENTE TACTILE ── */}
+              <div className="lg:col-span-4 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-4 sm:p-5 shadow-xs space-y-4 sticky top-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                    <ShoppingCart className="w-4 h-4 text-purple-600" /> Panier
+                    <ShoppingCart className="w-4 h-4 text-purple-600" /> Panier ({panier.length})
                   </h3>
+
                   {panier.length > 0 && (
-                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-purple-50 text-purple-700">
-                      {panier.length} article(s)
-                    </span>
+                    <button
+                      onClick={handleViderPanier}
+                      className="text-[11px] text-rose-600 font-bold hover:underline"
+                    >
+                      Vider
+                    </button>
                   )}
                 </div>
 
-                {/* Contenu du Panier */}
+                {/* Liste des articles du panier */}
                 {panier.length === 0 ? (
                   <div className="py-12 text-center text-slate-400 text-xs">
-                    Panier vide
+                    Panier vide. Cliquez sur un article à gauche pour l'ajouter.
                   </div>
                 ) : (
-                  <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1 divide-y divide-slate-100 dark:divide-slate-700/50">
-                    {panier.map((item, idx) => (
-                      <div key={idx} className="pt-2 flex items-center justify-between gap-2 text-xs">
-                        <div className="min-w-0 flex-1">
-                          <span className="font-bold text-slate-800 dark:text-slate-200 block truncate">
-                            {item.prestation.nom}
-                          </span>
-                          <span className="text-[10px] text-slate-400">
-                            {item.prixUnitaire.toLocaleString('fr-FR')} F
+                  <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto pr-1">
+                    {panier.map((item, index) => (
+                      <div key={index} className="py-2.5 flex items-center justify-between gap-2 text-xs">
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-slate-900 truncate">{item.prestation.nom}</p>
+                          <p className="text-[10px] text-slate-400">
                             {item.prestation.mode_calcul === 'm2'
-                              ? ` × (${item.largeur}m × ${item.hauteur}m)`
-                              : ''}
-                          </span>
+                              ? `${item.largeur}m x ${item.hauteur}m (${Number(item.largeur * item.hauteur).toFixed(2)}m²)`
+                              : `${item.prixUnitaire.toLocaleString('fr-FR')} F/u`}
+                          </p>
                         </div>
 
-                        {/* Boutons Quantité */}
-                        <div className="flex items-center gap-1.5 shrink-0">
+                        {/* Sélecteur quantité */}
+                        <div className="flex items-center gap-1.5 bg-slate-100 rounded-xl p-1">
                           <button
-                            onClick={() => handleUpdateQty(idx, -1)}
-                            className="w-5 h-5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition"
+                            onClick={() => handleUpdateQuantite(index, -1)}
+                            className="p-1 hover:bg-white rounded-lg text-slate-700 transition"
                           >
                             <Minus className="w-3 h-3" />
                           </button>
-                          <span className="font-bold w-5 text-center">{item.quantite}</span>
+                          <span className="font-bold text-xs px-1 min-w-[16px] text-center">
+                            {item.quantite}
+                          </span>
                           <button
-                            onClick={() => handleUpdateQty(idx, 1)}
-                            className="w-5 h-5 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-700 flex items-center justify-center transition"
+                            onClick={() => handleUpdateQuantite(index, 1)}
+                            className="p-1 hover:bg-white rounded-lg text-slate-700 transition"
                           >
                             <Plus className="w-3 h-3" />
                           </button>
                         </div>
 
-                        <span className="font-black text-slate-900 dark:text-slate-100 shrink-0 w-16 text-right">
+                        <div className="text-right font-black text-slate-900 min-w-[65px]">
                           {item.totalLigne.toLocaleString('fr-FR')} F
-                        </span>
+                        </div>
+
+                        <button
+                          onClick={() => handleRemoveItem(index)}
+                          className="p-1 text-slate-300 hover:text-rose-600 transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ))}
                   </div>
                 )}
 
-                {/* Total */}
-                <div className="pt-3 border-t border-slate-200 dark:border-slate-700 flex items-center justify-between">
-                  <span className="text-sm font-bold text-slate-700 dark:text-slate-300">Total</span>
-                  <span className="text-lg font-black text-slate-900 dark:text-slate-100">
-                    {totalPanier.toLocaleString('fr-FR')} FCFA
+                {/* Saisie Client */}
+                <div className="pt-2 border-t border-slate-100 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <User className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <input
+                      type="text"
+                      placeholder="Nom du client (Client Comptoir)"
+                      value={clientNom}
+                      onChange={(e) => setClientNom(e.target.value)}
+                      className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold"
+                    />
+                  </div>
+                </div>
+
+                {/* Choix Mode Paiement */}
+                <div className="space-y-1.5">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                    Mode de Règlement
+                  </span>
+                  <div className="grid grid-cols-3 gap-1.5 text-xs font-bold">
+                    <button
+                      type="button"
+                      onClick={() => setModePaiement('especes')}
+                      className={`py-1.5 rounded-xl border transition ${
+                        modePaiement === 'especes'
+                          ? 'bg-purple-50 border-purple-500 text-purple-700'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      Espèces
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setModePaiement('momo_mtn')}
+                      className={`py-1.5 rounded-xl border transition ${
+                        modePaiement === 'momo_mtn'
+                          ? 'bg-purple-50 border-purple-500 text-purple-700'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      MTN MoMo
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setModePaiement('momo_moov')}
+                      className={`py-1.5 rounded-xl border transition ${
+                        modePaiement === 'momo_moov'
+                          ? 'bg-purple-50 border-purple-500 text-purple-700'
+                          : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                      }`}
+                    >
+                      Moov Flooz
+                    </button>
+                  </div>
+                </div>
+
+                {/* Grand Total */}
+                <div className="pt-2 border-t border-slate-200 flex justify-between items-baseline">
+                  <span className="text-sm font-bold text-slate-700">Total</span>
+                  <span className="text-2xl font-black text-slate-900">
+                    {totalPanier.toLocaleString('fr-FR')} <span className="text-xs font-bold">FCFA</span>
                   </span>
                 </div>
 
-                {/* Informations Client */}
-                {panier.length > 0 && (
-                  <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-xs">
-                    <input
-                      type="text"
-                      placeholder="Nom du client (Client Comptoir par défaut)"
-                      value={clientNom}
-                      onChange={(e) => setClientNom(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs"
-                    />
-
-                    {/* Mode de paiement */}
-                    <div className="grid grid-cols-2 gap-2 pt-1">
-                      <select
-                        value={modePaiement}
-                        onChange={(e) => setModePaiement(e.target.value as any)}
-                        className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-semibold"
-                      >
-                        <option value="especes">Espèces</option>
-                        <option value="momo_mtn">MTN MoMo</option>
-                        <option value="momo_moov">Moov Money</option>
-                        <option value="banque">Banque</option>
-                        <option value="credit">Crédit</option>
-                      </select>
-
-                      <input
-                        type="number"
-                        min={0}
-                        max={totalPanier}
-                        placeholder="Montant payé"
-                        value={montantPaye}
-                        onChange={(e) => setMontantPaye(Number(e.target.value))}
-                        className="px-2.5 py-1.5 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-emerald-700"
-                      />
-                    </div>
-                  </div>
-                )}
-
-                {/* Boutons d'Action (Valider / Vider) */}
+                {/* Actions Panier */}
                 <div className="space-y-2 pt-2">
-                  {/* Bouton 1 : Valider et encaisser (Action Caissière / Responsable) */}
                   <button
                     disabled={panier.length === 0 || submitting}
                     onClick={() => handleValiderVente(false)}
-                    className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-2xl text-xs transition shadow-md disabled:opacity-50 flex items-center justify-center gap-2"
+                    className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-black rounded-2xl text-xs sm:text-sm transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-md shadow-purple-600/20"
                   >
                     <Check className="w-4 h-4" />
                     {submitting ? 'Validation...' : 'Valider ma vente'}
                   </button>
 
-                  {/* Bouton 2 : Mettre en attente (Action Graphiste avant validation caisse) */}
                   <button
                     disabled={panier.length === 0 || submitting}
                     onClick={() => handleValiderVente(true)}
                     className="w-full py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 font-bold rounded-2xl text-xs transition disabled:opacity-50 flex items-center justify-center gap-2"
-                    title="Enregistrer la commande pour que la caissière l'encaisse"
                   >
                     <Clock className="w-3.5 h-3.5" />
                     Mettre en attente (Validation Caissière)
-                  </button>
-
-                  {/* Bouton 3 : Vider le panier */}
-                  <button
-                    disabled={panier.length === 0}
-                    onClick={handleViderPanier}
-                    className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 font-semibold rounded-xl text-xs transition disabled:opacity-50 flex items-center justify-center gap-1.5"
-                  >
-                    <Trash2 className="w-3.5 h-3.5 text-slate-400" /> Vider le panier
                   </button>
                 </div>
               </div>
@@ -727,39 +1094,88 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* VUE 2 : COMMANDES */}
+      {/* VUE 2 : HISTORIQUE DES COMMANDES & VENTES ENREGISTRÉES                */}
       {/* ===================================================================== */}
       {activeTab === 'commandes' && (
         <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-blue-600" /> Historique des Commandes d'Impression
-            </h3>
-            <span className="text-xs text-slate-500">{commandes.length} commande(s)</span>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-600" /> Historique de Toutes les Ventes & Commandes
+              </h3>
+              <p className="text-xs text-slate-400">
+                Toutes les ventes rapides et commandes enregistrées avec traçabilité complète
+              </p>
+            </div>
+
+            {/* Filtres Rapides */}
+            <div className="flex items-center gap-2">
+              <div className="flex bg-slate-100 p-1 rounded-xl text-xs font-bold text-slate-600">
+                <button
+                  onClick={() => setCommandeFilter('toutes')}
+                  className={`px-2.5 py-1 rounded-lg ${commandeFilter === 'toutes' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Toutes
+                </button>
+                <button
+                  onClick={() => setCommandeFilter('jour')}
+                  className={`px-2.5 py-1 rounded-lg ${commandeFilter === 'jour' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Aujourd'hui
+                </button>
+                <button
+                  onClick={() => setCommandeFilter('soldes')}
+                  className={`px-2.5 py-1 rounded-lg ${commandeFilter === 'soldes' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Soldées
+                </button>
+                <button
+                  onClick={() => setCommandeFilter('attente')}
+                  className={`px-2.5 py-1 rounded-lg ${commandeFilter === 'attente' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  En attente
+                </button>
+              </div>
+            </div>
           </div>
 
-          {commandes.length === 0 ? (
+          {/* Recherche */}
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              placeholder="Rechercher par N° commande, client..."
+              value={commandeSearch}
+              onChange={(e) => setCommandeSearch(e.target.value)}
+              className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium"
+            />
+          </div>
+
+          {filteredCommandesHistorique.length === 0 ? (
             <div className="p-12 text-center text-slate-400 text-xs">
-              Aucune commande enregistrée.
+              Aucune vente trouvée avec ces critères.
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-600 font-bold border-b border-slate-200">
                   <tr>
-                    <th className="text-left px-3 py-2.5">N° Commande</th>
+                    <th className="text-left px-3 py-2.5">N° Vente</th>
+                    <th className="text-left px-3 py-2.5">Date</th>
                     <th className="text-left px-3 py-2.5">Client</th>
                     <th className="text-left px-3 py-2.5">Travail</th>
                     <th className="text-right px-3 py-2.5">Total TTC</th>
                     <th className="text-right px-3 py-2.5">Payé</th>
                     <th className="text-center px-3 py-2.5">Statut</th>
                     <th className="text-center px-3 py-2.5">Paiement</th>
+                    <th className="text-center px-3 py-2.5">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {commandes.map((c) => (
+                  {filteredCommandesHistorique.map((c) => (
                     <tr key={c.id} className="hover:bg-slate-50/80 transition">
                       <td className="px-3 py-2.5 font-mono font-bold text-slate-900">{c.numero_commande}</td>
+                      <td className="px-3 py-2.5 text-slate-500">{c.date_commande}</td>
                       <td className="px-3 py-2.5 font-semibold text-slate-800">{c.client_nom}</td>
                       <td className="px-3 py-2.5 text-slate-600 truncate max-w-xs">{c.titre_travail}</td>
                       <td className="px-3 py-2.5 text-right font-black text-slate-900">
@@ -781,8 +1197,16 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                               : 'bg-amber-100 text-amber-800'
                           }`}
                         >
-                          {c.statut_paiement === 'solde' ? 'Payé ✓' : 'Partiel / En attente'}
+                          {c.statut_paiement === 'solde' ? 'Payé ✓' : 'En attente'}
                         </span>
+                      </td>
+                      <td className="px-3 py-2.5 text-center">
+                        <button
+                          onClick={() => setSelectedCommandeDetail(c)}
+                          className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-bold transition flex items-center gap-1 mx-auto"
+                        >
+                          <Eye className="w-3 h-3" /> Détails
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -794,7 +1218,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* VUE 3 : FILE DE PRODUCTION ATELIER */}
+      {/* VUE 3 : FILE DE PRODUCTION                                            */}
       {/* ===================================================================== */}
       {activeTab === 'production' && (
         <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-xs space-y-4">
@@ -812,7 +1236,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {commandesProduction.map((cmd) => (
-                <div key={cmd.id} className="p-4 bg-slate-50 dark:bg-slate-900/40 rounded-2xl border border-slate-200 space-y-3">
+                <div key={cmd.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
                   <div className="flex justify-between items-start">
                     <div>
                       <span className="font-mono font-bold text-xs text-slate-900 block">{cmd.numero_commande}</span>
@@ -853,7 +1277,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* VUE 4 : EN ATTENTE DE VALIDATION CAISSIÈRE */}
+      {/* VUE 4 : EN ATTENTE DE VALIDATION CAISSIÈRE                           */}
       {/* ===================================================================== */}
       {activeTab === 'attente' && (
         <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-xs space-y-4">
@@ -863,7 +1287,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 <Clock className="w-4 h-4 text-amber-500" /> Ventes en Attente d'Encaissement
               </h3>
               <p className="text-xs text-slate-400">
-                Commandes saisies par le graphiste ou mises en attente, prêtes à être encaissées par la caissière.
+                Commandes saisies par le graphiste prêtes à être encaissées et validées par la caissière.
               </p>
             </div>
             <span className="text-xs font-bold px-2.5 py-1 bg-amber-100 text-amber-800 rounded-full">
@@ -895,7 +1319,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                     onClick={() => handleEncaisserAttente(cmd)}
                     className="w-full py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-xs"
                   >
-                    <DollarSign className="w-4 h-4" /> Encaisser & Valider
+                    <DollarSign className="w-4 h-4" /> Encaisser & Valider (Déstocker Matières)
                   </button>
                 </div>
               ))}
@@ -905,39 +1329,731 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* VUE 5 : ARTICLES & CATÉGORIES (GESTION DU CATALOGUE) */}
+      {/* VUE 5 : ARTICLES & CATÉGORIES (GESTION DU CATALOGUE & MATIÈRES)      */}
       {/* ===================================================================== */}
       {activeTab === 'articles' && (
         <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-5 shadow-xs space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <Layers className="w-4 h-4 text-purple-600" /> Catalogue des Prestations & Articles
-            </h3>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                <Layers className="w-4 h-4 text-purple-600" /> Catalogue des Articles & Liaison Matières Premières
+              </h3>
+              <p className="text-xs text-slate-400">
+                Ajoutez vos articles de vente express et associez les matières premières consommées à chaque vente
+              </p>
+            </div>
 
-            <button
-              onClick={() => navigate(`${prefix}/prestations`)}
-              className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1"
-            >
-              <Plus className="w-3.5 h-3.5" /> Gérer Prestations & BOM
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleOpenArticleModal()}
+                className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" /> Nouvel Article de Vente
+              </button>
+
+              <button
+                onClick={() => setShowMatiereModal(true)}
+                className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+              >
+                <Box className="w-3.5 h-3.5 text-purple-600" /> Nouvelle Matière Première
+              </button>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {prestations.map((p) => (
-              <div key={p.id} className="p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 text-xs space-y-1">
-                <span className="font-bold text-slate-900 dark:text-slate-100 block">{p.nom}</span>
-                <span className="text-[10px] text-slate-400 font-mono block">{p.code} · {p.categorie}</span>
-                <span className="font-black text-purple-700 block mt-1">
-                  {Number(p.prix_vente).toLocaleString('fr-FR')} FCFA /{p.unite_facturation}
-                </span>
-              </div>
-            ))}
+          {/* Grille des articles existants avec bouton d'édition */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 pt-2">
+            {prestations.map((p) => {
+              const nbBOM = p.matieres_bom?.length || 0
+              return (
+                <div
+                  key={p.id}
+                  className="p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 text-xs flex flex-col justify-between space-y-2 hover:border-purple-300 transition"
+                >
+                  <div>
+                    <div className="flex justify-between items-start">
+                      <span className="font-bold text-slate-900 dark:text-slate-100">{p.nom}</span>
+                      <button
+                        onClick={() => handleOpenArticleModal(p)}
+                        className="text-slate-400 hover:text-purple-600 p-1 transition"
+                        title="Modifier cet article & ses matières"
+                      >
+                        <Edit3 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <span className="text-[10px] text-slate-400 font-mono block">
+                      {p.code} • {p.categorie}
+                    </span>
+
+                    <span className="font-black text-purple-700 block mt-1">
+                      {Number(p.prix_vente).toLocaleString('fr-FR')} FCFA /{p.unite_facturation}
+                    </span>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-200 flex justify-between items-center text-[10px]">
+                    <span className={nbBOM > 0 ? 'text-emerald-700 font-bold' : 'text-slate-400'}>
+                      {nbBOM > 0 ? `${nbBOM} matière(s) liée(s)` : 'Sans matière'}
+                    </span>
+                    <button
+                      onClick={() => handleOpenArticleModal(p)}
+                      className="text-purple-600 font-bold hover:underline"
+                    >
+                      Configurer BOM
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
           </div>
         </div>
       )}
 
       {/* ===================================================================== */}
-      {/* MODAL CALCUL SURFACES AU M² POUR IMPRESSIONS GRAND FORMAT / BÂCHE */}
+      {/* VUE 6 : COÛTS MATIÈRES PREMIÈRES (CUMUL & PAR MATIÈRE + FILTRES)      */}
+      {/* ===================================================================== */}
+      {activeTab === 'rapports' && (
+        <div className="space-y-5">
+          {/* ── BARRE DE FILTRES RAPIDES ── */}
+          <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-xs space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-2xl text-xs font-bold text-slate-600">
+                <button
+                  onClick={() => setRapportPeriode('jour')}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'jour' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Aujourd'hui
+                </button>
+                <button
+                  onClick={() => setRapportPeriode('semaine')}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'semaine' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  7 jours
+                </button>
+                <button
+                  onClick={() => setRapportPeriode('mois')}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'mois' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Ce mois
+                </button>
+                <button
+                  onClick={() => setRapportPeriode('annee')}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'annee' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Cette année
+                </button>
+                <button
+                  onClick={() => setRapportPeriode('personnalise')}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'personnalise' ? 'bg-white text-purple-700 shadow-xs' : ''}`}
+                >
+                  Personnalisé
+                </button>
+                <button
+                  onClick={() => setRapportPeriode('tout')}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'tout' ? 'bg-white text-slate-900 shadow-xs' : ''}`}
+                >
+                  Tout
+                </button>
+              </div>
+
+              {rapportPeriode === 'personnalise' && (
+                <div className="flex items-center gap-2 text-xs font-medium">
+                  <span className="text-slate-500">Du :</span>
+                  <input
+                    type="date"
+                    value={rapportDateDebut}
+                    onChange={(e) => setRapportDateDebut(e.target.value)}
+                    className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                  <span className="text-slate-500">Au :</span>
+                  <input
+                    type="date"
+                    value={rapportDateFin}
+                    onChange={(e) => setRapportDateFin(e.target.value)}
+                    className="px-2.5 py-1 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
+              )}
+            </div>
+
+            {/* Filtre par matière et recherche */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2 border-t border-slate-100 text-xs">
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  placeholder="Rechercher matière par nom..."
+                  value={rapportSearch}
+                  onChange={(e) => setRapportSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium"
+                />
+              </div>
+
+              <select
+                value={rapportMatiereFilter}
+                onChange={(e) => setRapportMatiereFilter(e.target.value)}
+                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-medium"
+              >
+                <option value="TOUTES">Toutes les matières premières</option>
+                {matieres.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.nom} ({m.unite})
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* ── CARTES KPIS MATIÈRES PREMIÈRES ── */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 text-xs">
+            {/* KPI 1 : CUMUL COÛT MATIÈRES */}
+            <div className="bg-purple-900 text-white p-4 rounded-3xl shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-purple-200">
+                <span className="font-bold uppercase tracking-wider text-[10px]">Coût Cumulé Matières</span>
+                <Box className="w-4 h-4 text-purple-300" />
+              </div>
+              <p className="text-2xl font-black text-white">
+                {Math.round(statsRapportMatieres.cumulCout).toLocaleString('fr-FR')}{' '}
+                <span className="text-xs font-normal">FCFA</span>
+              </p>
+              <p className="text-[11px] text-purple-200">
+                Cumul sur la période sélectionnée
+              </p>
+            </div>
+
+            {/* KPI 2 : VOLUME CONSOMMÉ */}
+            <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-slate-400">
+                <span className="font-bold uppercase tracking-wider text-[10px]">Quantité Déstockée</span>
+                <Scissors className="w-4 h-4 text-purple-600" />
+              </div>
+              <p className="text-2xl font-black text-slate-900">
+                {statsRapportMatieres.cumulQte.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                {statsRapportMatieres.parMatiere.length} matière(s) utilisée(s)
+              </p>
+            </div>
+
+            {/* KPI 3 : NOMBRE DE SORTIES */}
+            <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-xs space-y-1">
+              <div className="flex items-center justify-between text-slate-400">
+                <span className="font-bold uppercase tracking-wider text-[10px]">Sorties Enregistrées</span>
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              </div>
+              <p className="text-2xl font-black text-emerald-700">
+                {statsRapportMatieres.nbSorties}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Liaisons ventes express & commandes
+              </p>
+            </div>
+
+            {/* KPI 4 : LIEN PAGE COMPLÈTE */}
+            <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-xs flex flex-col justify-between">
+              <div>
+                <span className="font-bold uppercase tracking-wider text-[10px] text-slate-400">Rapport Complet</span>
+                <p className="text-xs font-bold text-slate-800 mt-1">Marges, rentabilité clients et pertes</p>
+              </div>
+              <button
+                onClick={() => navigate(`${prefix}/reporting`)}
+                className="py-1.5 px-3 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl text-xs transition flex items-center justify-between mt-2"
+              >
+                <span>Voir le rapport financier</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* ── TABLEAU ANALYTIQUE COÛT PAR MATIÈRE PREMIÈRE ── */}
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-xs overflow-hidden">
+            <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+              <div>
+                <h3 className="font-black text-sm text-slate-900 flex items-center gap-2">
+                  <Box className="w-4 h-4 text-purple-600" /> Coût & Consommation par Matière Première
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Détail du coût de chaque matière première consommée lors des ventes
+                </p>
+              </div>
+
+              <span className="text-xs font-bold px-3 py-1 bg-purple-50 text-purple-700 rounded-full">
+                {statsRapportMatieres.parMatiere.length} matière(s)
+              </span>
+            </div>
+
+            {statsRapportMatieres.parMatiere.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 text-xs">
+                Aucune matière première consommée sur cette période ou selon les filtres.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600">
+                    <tr>
+                      <th className="text-left px-4 py-3">Matière Première</th>
+                      <th className="text-left px-4 py-3">Catégorie</th>
+                      <th className="text-center px-4 py-3">Unité</th>
+                      <th className="text-center px-4 py-3">Ventes</th>
+                      <th className="text-right px-4 py-3">Quantité Cumulée</th>
+                      <th className="text-right px-4 py-3">Coût Unitaire Moyen</th>
+                      <th className="text-right px-4 py-3">Coût Total (Cumul)</th>
+                      <th className="text-left px-4 py-3 w-40">Part (%)</th>
+                      <th className="text-center px-4 py-3">Stock Restant</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {statsRapportMatieres.parMatiere.map((m) => {
+                      const isStockAlerte = m.stockActuel <= m.stockMinimum
+                      return (
+                        <tr key={m.id} className="hover:bg-slate-50 transition">
+                          <td className="px-4 py-3">
+                            <span className="font-bold text-slate-900 block">{m.nom}</span>
+                            <span className="text-[10px] text-slate-400 font-mono">{m.code}</span>
+                          </td>
+                          <td className="px-4 py-3">
+                            <span className="px-2 py-0.5 rounded-lg bg-slate-100 text-slate-700 text-[10px] font-semibold">
+                              {m.categorie}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-center font-semibold text-slate-600">{m.unite}</td>
+                          <td className="px-4 py-3 text-center font-bold text-slate-700">{m.nbVentes}</td>
+                          <td className="px-4 py-3 text-right font-black text-slate-900">
+                            {m.qteTotale.toLocaleString('fr-FR', { maximumFractionDigits: 2 })} {m.unite}
+                          </td>
+                          <td className="px-4 py-3 text-right text-slate-600">
+                            {Math.round(m.coutUnitaireMoyen).toLocaleString('fr-FR')} F
+                          </td>
+                          <td className="px-4 py-3 text-right font-black text-purple-700 text-sm">
+                            {Math.round(m.coutTotal).toLocaleString('fr-FR')} F
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="space-y-1">
+                              <span className="text-[10px] font-bold">{m.partPct.toFixed(1)}%</span>
+                              <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
+                                <div
+                                  className="bg-purple-600 h-full rounded-full"
+                                  style={{ width: `${Math.min(100, m.partPct)}%` }}
+                                />
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span
+                              className={`px-2 py-0.5 rounded-full text-[10px] font-black ${
+                                isStockAlerte ? 'bg-rose-100 text-rose-800' : 'bg-emerald-100 text-emerald-800'
+                              }`}
+                            >
+                              {m.stockActuel} {m.unite} {isStockAlerte ? '⚠️' : '✓'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  <tfoot className="bg-purple-50/70 border-t-2 border-purple-200 font-black text-slate-900">
+                    <tr>
+                      <td colSpan={4} className="px-4 py-3 text-right uppercase tracking-wider text-purple-900">
+                        Total Cumulé Coûts Matières :
+                      </td>
+                      <td className="px-4 py-3 text-right text-purple-900">
+                        {statsRapportMatieres.cumulQte.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
+                      </td>
+                      <td className="px-4 py-3 text-right text-slate-400">-</td>
+                      <td className="px-4 py-3 text-right text-purple-950 text-sm">
+                        {Math.round(statsRapportMatieres.cumulCout).toLocaleString('fr-FR')} FCFA
+                      </td>
+                      <td colSpan={2} className="px-4 py-3 text-purple-700 text-left">
+                        100%
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL 1 : CRÉATION / MODIFICATION ARTICLE & LIAISON MATIÈRES (BOM)    */}
+      {/* ===================================================================== */}
+      {showArticleModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-fadeIn overflow-y-auto">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-lg w-full space-y-4 shadow-2xl border border-slate-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h4 className="font-black text-base text-slate-900 dark:text-slate-100">
+                  {editingArticleId ? "Modifier l'Article de Vente" : "Nouvel Article de Vente Express"}
+                </h4>
+                <p className="text-xs text-slate-400">
+                  Définissez le tarif et les matières premières associées (déstockées à la vente)
+                </p>
+              </div>
+              <button
+                onClick={() => setShowArticleModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveArticle} className="space-y-4 text-xs font-semibold">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-600 block mb-1">Code Article</label>
+                  <input
+                    type="text"
+                    value={articleForm.code}
+                    onChange={(e) => setArticleForm({ ...articleForm, code: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                    placeholder="ART026"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-600 block mb-1">Catégorie</label>
+                  <input
+                    type="text"
+                    value={articleForm.categorie}
+                    onChange={(e) => setArticleForm({ ...articleForm, categorie: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                    placeholder="Impression, Fournitures..."
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="text-slate-600 block mb-1">Désignation de l'Article *</label>
+                <input
+                  type="text"
+                  required
+                  value={articleForm.nom}
+                  onChange={(e) => setArticleForm({ ...articleForm, nom: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  placeholder="Ex: Chemise dossier, Bâche 510g HD, Couché A3..."
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-600 block mb-1">Mode de Calcul</label>
+                  <select
+                    value={articleForm.mode_calcul}
+                    onChange={(e) => setArticleForm({ ...articleForm, mode_calcul: e.target.value as any })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  >
+                    <option value="unite">À l'unité (pièce / article)</option>
+                    <option value="page">Par page</option>
+                    <option value="m2">Au m² (Largeur x Hauteur)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-600 block mb-1">Prix de Vente (FCFA) *</label>
+                  <input
+                    type="number"
+                    required
+                    min="0"
+                    value={articleForm.prix_vente}
+                    onChange={(e) => setArticleForm({ ...articleForm, prix_vente: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-purple-700"
+                  />
+                </div>
+              </div>
+
+              {/* ── SECTION MATIÈRES PREMIÈRES ASSOCIÉES (BOM) ── */}
+              <div className="pt-3 border-t border-slate-100 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-slate-800 flex items-center gap-1.5">
+                    <Box className="w-3.5 h-3.5 text-purple-600" /> Matières Premières Liées (BOM)
+                  </span>
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (matieres.length === 0) {
+                        notify('error', "Veuillez d'abord créer au moins une matière première !")
+                        return
+                      }
+                      setArticleBOM((prev) => [
+                        ...prev,
+                        {
+                          matiere_id: matieres[0].id,
+                          quantite_prevue: 1,
+                          unite: matieres[0].unite,
+                          cout_unitaire_prevu: Number(matieres[0].cout_moyen || 0),
+                        },
+                      ])
+                    }}
+                    className="text-[11px] font-bold text-purple-700 hover:underline flex items-center gap-1"
+                  >
+                    <Plus className="w-3 h-3" /> Associer une matière
+                  </button>
+                </div>
+
+                {articleBOM.length === 0 ? (
+                  <p className="text-[11px] text-slate-400 bg-slate-50 p-2.5 rounded-xl text-center">
+                    Aucune matière première liée. La vente ne déduira pas de stock de matière.
+                  </p>
+                ) : (
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-1">
+                    {articleBOM.map((bom, bIdx) => {
+                      const matObj = matieres.find((m) => m.id === bom.matiere_id)
+                      return (
+                        <div key={bIdx} className="p-2 bg-slate-50 rounded-xl flex items-center gap-2 text-xs">
+                          <select
+                            value={bom.matiere_id}
+                            onChange={(e) => {
+                              const selectedM = matieres.find((m) => m.id === e.target.value)
+                              setArticleBOM((prev) =>
+                                prev.map((item, idx) =>
+                                  idx === bIdx
+                                    ? {
+                                        ...item,
+                                        matiere_id: e.target.value,
+                                        unite: selectedM?.unite || 'u',
+                                        cout_unitaire_prevu: Number(selectedM?.cout_moyen || 0),
+                                      }
+                                    : item
+                                )
+                              )
+                            }}
+                            className="flex-1 px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs"
+                          >
+                            {matieres.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.nom} ({m.unite})
+                              </option>
+                            ))}
+                          </select>
+
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0.01"
+                              value={bom.quantite_prevue}
+                              onChange={(e) => {
+                                const val = Number(e.target.value)
+                                setArticleBOM((prev) =>
+                                  prev.map((item, idx) =>
+                                    idx === bIdx ? { ...item, quantite_prevue: val } : item
+                                  )
+                                )
+                              }}
+                              className="w-16 px-2 py-1 bg-white border border-slate-200 rounded-lg text-xs font-bold text-center"
+                            />
+                            <span className="text-[10px] text-slate-500">{bom.unite}</span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setArticleBOM((prev) => prev.filter((_, idx) => idx !== bIdx))}
+                            className="p-1 text-slate-400 hover:text-rose-600 transition"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowArticleModal(false)}
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition shadow-xs"
+                >
+                  Enregistrer l'Article
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL 2 : NOUVELLE MATIÈRE PREMIÈRE                                  */}
+      {/* ===================================================================== */}
+      {showMatiereModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl border border-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+              <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
+                <Box className="w-4 h-4 text-purple-600" /> Nouvelle Matière Première
+              </h4>
+              <button
+                onClick={() => setShowMatiereModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveMatiere} className="space-y-3 text-xs font-semibold">
+              <div>
+                <label className="text-slate-600 block mb-1">Nom de la Matière *</label>
+                <input
+                  type="text"
+                  required
+                  value={matiereForm.nom}
+                  onChange={(e) => setMatiereForm({ ...matiereForm, nom: e.target.value })}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  placeholder="Ex: Bâche 510g, Papier couché 300g, Encre noire..."
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-slate-600 block mb-1">Catégorie</label>
+                  <select
+                    value={matiereForm.categorie}
+                    onChange={(e) => setMatiereForm({ ...matiereForm, categorie: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  >
+                    <option value="Supports">Supports (Bâche, Vinyle)</option>
+                    <option value="Papier">Papier / Carton</option>
+                    <option value="Encres">Encres & Toners</option>
+                    <option value="Textiles">Textiles & T-shirts</option>
+                    <option value="Finition">Finition (Œillets, Colle)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-600 block mb-1">Unité</label>
+                  <select
+                    value={matiereForm.unite}
+                    onChange={(e) => setMatiereForm({ ...matiereForm, unite: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  >
+                    <option value="m2">m²</option>
+                    <option value="feuille">Feuille</option>
+                    <option value="ml">ml / Litre</option>
+                    <option value="piece">Pièce / Unité</option>
+                    <option value="rouleau">Rouleau</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="text-slate-600 block mb-1">Stock Initial</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={matiereForm.stock_actuel}
+                    onChange={(e) => setMatiereForm({ ...matiereForm, stock_actuel: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="text-slate-600 block mb-1">Coût Achat (FCFA)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={matiereForm.cout_moyen}
+                    onChange={(e) => setMatiereForm({ ...matiereForm, cout_moyen: Number(e.target.value) })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-purple-700"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowMatiereModal(false)}
+                  className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition"
+                >
+                  Ajouter au Stock
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL 3 : DÉTAIL D'UNE VENTE / COMMANDE ENREGISTRÉE                   */}
+      {/* ===================================================================== */}
+      {selectedCommandeDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-fadeIn">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-md w-full space-y-4 shadow-2xl border border-slate-200 text-xs">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+              <div>
+                <span className="font-mono font-bold text-sm text-slate-900 block">
+                  {selectedCommandeDetail.numero_commande}
+                </span>
+                <span className="text-slate-500">{selectedCommandeDetail.client_nom} • {selectedCommandeDetail.date_commande}</span>
+              </div>
+              <button
+                onClick={() => setSelectedCommandeDetail(null)}
+                className="p-1 text-slate-400 hover:text-slate-700"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <span className="font-bold text-slate-700 block uppercase tracking-wider text-[10px]">
+                Lignes d'articles vendus :
+              </span>
+              <div className="bg-slate-50 p-3 rounded-2xl space-y-2">
+                {selectedCommandeDetail.lignes?.map((lig, idx) => (
+                  <div key={idx} className="flex justify-between items-center text-xs">
+                    <div>
+                      <span className="font-bold text-slate-900">{lig.designation}</span>
+                      <span className="text-slate-500 block text-[10px]">Quantité : {lig.quantite}</span>
+                    </div>
+                    <span className="font-mono font-black text-slate-900">
+                      {Number(lig.montant_ttc).toLocaleString('fr-FR')} F
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-purple-50 p-3 rounded-2xl space-y-1 font-semibold">
+              <div className="flex justify-between text-slate-700">
+                <span>Total Vente :</span>
+                <span className="font-black text-slate-900">{Number(selectedCommandeDetail.total_ttc).toLocaleString('fr-FR')} FCFA</span>
+              </div>
+              <div className="flex justify-between text-emerald-700">
+                <span>Montant Payé :</span>
+                <span className="font-black">{Number(selectedCommandeDetail.montant_paye).toLocaleString('fr-FR')} FCFA</span>
+              </div>
+              <div className="flex justify-between text-amber-700">
+                <span>Reste Dû :</span>
+                <span className="font-black">{Number(selectedCommandeDetail.solde_restant).toLocaleString('fr-FR')} FCFA</span>
+              </div>
+            </div>
+
+            <button
+              onClick={() => setSelectedCommandeDetail(null)}
+              className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl transition"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* MODAL CALCUL SURFACES AU M² POUR BÂCHE & GRAND FORMAT                */}
       {/* ===================================================================== */}
       {dimModalItem && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 animate-fadeIn">

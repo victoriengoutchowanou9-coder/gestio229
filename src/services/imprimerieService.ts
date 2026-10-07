@@ -1028,8 +1028,9 @@ export const imprimerieService = {
       }
     }
 
-    // 4. Déduire automatiquement les matières premières BOM si validé
+    // 4. Déduire automatiquement les matières premières BOM et tracer dans imprimerie_consommations si validé
     if (!isAttente) {
+      let totalCoutMatieresReel = 0
       for (const it of params.items) {
         if (it.prestation.matieres_bom && it.prestation.matieres_bom.length > 0) {
           for (const bom of it.prestation.matieres_bom) {
@@ -1037,13 +1038,154 @@ export const imprimerieService = {
               ? (it.largeur * it.hauteur)
               : 1
             const qtyConsommee = Number(bom.quantite_prevue || 1) * it.quantite * surfaceFactor
+            const puMatiere = Number(bom.cout_unitaire_prevu || 0)
+            const coutLigneMatiere = qtyConsommee * puMatiere
+            totalCoutMatieresReel += coutLigneMatiere
+
+            try {
+              await supabase.from('imprimerie_consommations').insert({
+                company_id: companyId,
+                sector_slug: sectorSlug,
+                commande_id: cmd.id,
+                matiere_id: bom.matiere_id,
+                quantite_prevue: qtyConsommee,
+                quantite_reelle: qtyConsommee,
+                ecart_perte: 0,
+                cout_unitaire: puMatiere,
+                cout_total: coutLigneMatiere,
+                motif_perte: 'chute',
+                est_reimpression: false,
+                notes: `Vente express: ${it.prestation.nom} x ${it.quantite}`,
+              })
+            } catch (consoErr) {
+              console.warn('Erreur traçabilité consommation:', consoErr)
+            }
+
             await this.adjustStockMatiere(bom.matiere_id, qtyConsommee, 'sortie')
+          }
+        }
+      }
+
+      if (totalCoutMatieresReel > 0) {
+        const ca = Number(cmd.total_ttc || 0)
+        const marge = ca - totalCoutMatieresReel
+        const tauxMarge = ca > 0 ? (marge / ca) * 100 : 0
+        await supabase
+          .from('imprimerie_commandes')
+          .update({
+            cout_matieres_reel: totalCoutMatieresReel,
+            cout_revient_total: totalCoutMatieresReel,
+            marge_reelle: marge,
+            taux_marge_reel: Number(tauxMarge.toFixed(2)),
+          })
+          .eq('id', cmd.id)
+      }
+    }
+
+    return { commande: cmd, recuRef }
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 9.b VALIDATION & ENCAISSEMENT D'UNE VENTE EN ATTENTE AVEC DÉDUCTION MATIÈRES
+  // ───────────────────────────────────────────────────────────────────────────
+  async validerEtEncaisserVenteAttente(
+    commandeId: string,
+    companyId: string,
+    sectorSlug: string = 'imprimerie',
+    modePaiement: 'especes' | 'momo_mtn' | 'momo_moov' | 'banque' = 'especes',
+    user?: any
+  ): Promise<void> {
+    const { data: cmd, error } = await supabase
+      .from('imprimerie_commandes')
+      .select('*, lignes:imprimerie_commande_lignes(*)')
+      .eq('id', commandeId)
+      .single()
+
+    if (error || !cmd) throw new Error('Commande introuvable')
+
+    const montant = Number(cmd.solde_restant || cmd.total_ttc || 0)
+    const recuRef = `REC-ATT-${Date.now().toString().slice(-5)}`
+
+    // 1. Enregistrer le paiement
+    await this.enregistrerPaiement(
+      {
+        company_id: companyId,
+        sector_slug: sectorSlug,
+        commande_id: cmd.id,
+        montant,
+        mode_paiement: modePaiement,
+        reference_recu: recuRef,
+        type_paiement: 'solde',
+      },
+      user
+    )
+
+    // 2. Déduire les matières premières si la commande a des lignes
+    if (cmd.lignes && cmd.lignes.length > 0) {
+      const presIds = cmd.lignes.map((l: any) => l.prestation_id).filter(Boolean)
+      if (presIds.length > 0) {
+        const { data: boms } = await supabase
+          .from('imprimerie_prestation_matieres')
+          .select('*')
+          .in('prestation_id', presIds)
+
+        if (boms && boms.length > 0) {
+          let totalCoutMatieres = 0
+          for (const ligne of cmd.lignes) {
+            const ligneBoms = boms.filter((b) => b.prestation_id === ligne.prestation_id)
+            const surfaceFactor = (ligne.mode_calcul === 'm2' && ligne.largeur && ligne.hauteur)
+              ? (Number(ligne.largeur) * Number(ligne.hauteur))
+              : 1
+
+            for (const bom of ligneBoms) {
+              const qtyConsommee = Number(bom.quantite_prevue || 1) * Number(ligne.quantite || 1) * surfaceFactor
+              const puMatiere = Number(bom.cout_unitaire_prevu || 0)
+              const coutLigneMatiere = qtyConsommee * puMatiere
+              totalCoutMatieres += coutLigneMatiere
+
+              try {
+                await supabase.from('imprimerie_consommations').insert({
+                  company_id: companyId,
+                  sector_slug: sectorSlug,
+                  commande_id: cmd.id,
+                  matiere_id: bom.matiere_id,
+                  quantite_prevue: qtyConsommee,
+                  quantite_reelle: qtyConsommee,
+                  ecart_perte: 0,
+                  cout_unitaire: puMatiere,
+                  cout_total: coutLigneMatiere,
+                  motif_perte: 'chute',
+                  est_reimpression: false,
+                  notes: `Validation caisse commande: ${cmd.numero_commande}`,
+                })
+              } catch (consoErr) {
+                console.warn('Erreur traçabilité consommation:', consoErr)
+              }
+
+              await this.adjustStockMatiere(bom.matiere_id, qtyConsommee, 'sortie')
+            }
+          }
+
+          if (totalCoutMatieres > 0) {
+            const ca = Number(cmd.total_ttc || 0)
+            const marge = ca - totalCoutMatieres
+            const tauxMarge = ca > 0 ? (marge / ca) * 100 : 0
+            await supabase
+              .from('imprimerie_commandes')
+              .update({
+                cout_matieres_reel: totalCoutMatieres,
+                cout_revient_total: totalCoutMatieres,
+                marge_reelle: marge,
+                taux_marge_reel: Number(tauxMarge.toFixed(2)),
+              })
+              .eq('id', cmd.id)
           }
         }
       }
     }
 
-    return { commande: cmd, recuRef }
+    // 3. Mettre à jour le statut de la commande en 'livre'
+    await this.updateCommandeStatus(cmd.id, 'livre', user)
   },
 
   // ───────────────────────────────────────────────────────────────────────────
