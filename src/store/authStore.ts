@@ -129,15 +129,15 @@ export const useAuthStore = create<AuthState>()(
                 .maybeSingle()
 
               if (fallbackUser && fallbackUser.is_active !== false) {
-                // Vérifier si le mot de passe correspond au PIN caisse, téléphone, ou mot de passe de secours
-                const pin = String(fallbackUser.pos_pin_code || '').trim()
+                // Vérifier si le mot de passe correspond au mot de passe / PIN enregistré, au téléphone, ou mot de passe de secours
+                const savedPwdOrPin = String(fallbackUser.pos_pin_code || '').trim()
                 const phone = String(fallbackUser.phone || '').replace(/\D/g, '')
                 const rawClean = rawPassword.replace(/\D/g, '')
+                const isPasswordMatch = Boolean(savedPwdOrPin && (rawPassword.trim() === savedPwdOrPin || rawClean === savedPwdOrPin))
                 const isEmergencyPwd = rawPassword === 'Admin2026!' || rawPassword === 'Gestio229!' || rawPassword === '123456' || rawPassword === '1234'
-                const isPinMatch = Boolean(pin && rawPassword.trim() === pin)
                 const isPhoneMatch = Boolean(phone && rawClean && (phone.endsWith(rawClean) || rawClean.endsWith(phone)))
 
-                if (isPinMatch || isPhoneMatch || isEmergencyPwd) {
+                if (isPasswordMatch || isPhoneMatch || isEmergencyPwd) {
                   const ctx = await SectorLoader.loadTenantContext(
                     fallbackUser.auth_user_id || fallbackUser.id,
                     fallbackUser.email,

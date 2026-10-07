@@ -276,7 +276,7 @@ export const RegisterPage: React.FC = () => {
             username: cleanEmail,
             phone: form.phone.trim(),
             role: 'administrateur',
-            password_hash: form.password,
+            pos_pin_code: form.password,
             is_active: true,
             permissions: defaultAdminPermissions,
             updated_at: new Date().toISOString()
@@ -291,7 +291,7 @@ export const RegisterPage: React.FC = () => {
           email: cleanEmail,
           phone: form.phone.trim(),
           role: 'administrateur',
-          password_hash: form.password,
+          pos_pin_code: form.password,
           is_active: true,
           permissions: defaultAdminPermissions
         })
