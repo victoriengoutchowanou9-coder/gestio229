@@ -134,6 +134,7 @@ export const POSPage: React.FC = () => {
   const [cart, setCart] = useState<CartItem[]>([])
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   // Emballages & Consignations (Brasserie & Dépôt de Boissons)
   const [brasserieEmballagesList, setBrasserieEmballagesList] = useState<{ id: string; code: string; designation: string; stock_depot?: number }[]>([])
@@ -190,115 +191,64 @@ export const POSPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     setCheckingCaisse(true)
+    setLoadError(null)
+
+    // 0. Vérification stricte de la caisse ouverte pour ce secteur
     try {
-      // 0. Vérification stricte de la caisse ouverte pour ce secteur
-      try {
-        let caisse = await getCurrentCashSession(companyId, currentSectorSlug, user?.id)
-        if (!caisse) {
-          const statusRes = await checkSectorCaisseStatus(companyId, currentSectorSlug)
-          if (statusRes.isTodayOpen || statusRes.statusType === 'OUVERTE_AUJOURDHUI' || statusRes.statusType === 'ANTERIEURE_OUVERTE') {
-            caisse = {
-              id: statusRes.session?.id || statusRes.caisse?.id || 'simulated',
-              caisse_id: statusRes.caisse?.id || '',
-              session_number: statusRes.caisseCode || `CS-${currentSectorSlug.slice(0, 4).toUpperCase()}`,
-              statut: 'ouverte',
-              date_ouverture: statusRes.session?.date_ouverture || new Date().toISOString(),
-              heure_ouverture: statusRes.heureOuverture || '--:--',
-              fond_ouverture_especes: Number(statusRes.session?.fond_ouverture_especes ?? statusRes.caisse?.fond_ouverture_especes ?? 0),
-              fond_ouverture_momo: Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0),
-              total_ouverture: (Number(statusRes.session?.fond_ouverture_especes ?? statusRes.caisse?.fond_ouverture_especes ?? 0)) +
-                               (Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0)),
-              ouvert_par: statusRes.ouvertParNom || 'Caissier',
-              ouvert_par_id: statusRes.session?.ouvert_par || null,
-              sector_slug: currentSectorSlug,
-              company_id: companyId,
-              is_previous_day: statusRes.isPreviousDay,
-            }
+      let caisse = await getCurrentCashSession(companyId, currentSectorSlug, user?.id)
+      if (!caisse) {
+        const statusRes = await checkSectorCaisseStatus(companyId, currentSectorSlug)
+        if (statusRes.isTodayOpen || statusRes.statusType === 'OUVERTE_AUJOURDHUI' || statusRes.statusType === 'ANTERIEURE_OUVERTE') {
+          caisse = {
+            id: statusRes.session?.id || statusRes.caisse?.id || 'simulated',
+            caisse_id: statusRes.caisse?.id || '',
+            session_number: statusRes.caisseCode || `CS-${currentSectorSlug.slice(0, 4).toUpperCase()}`,
+            statut: 'ouverte',
+            date_ouverture: statusRes.session?.date_ouverture || new Date().toISOString(),
+            heure_ouverture: statusRes.heureOuverture || '--:--',
+            fond_ouverture_especes: Number(statusRes.session?.fond_ouverture_especes ?? statusRes.caisse?.fond_ouverture_especes ?? 0),
+            fond_ouverture_momo: Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0),
+            total_ouverture: (Number(statusRes.session?.fond_ouverture_especes ?? statusRes.caisse?.fond_ouverture_especes ?? 0)) +
+                             (Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0)),
+            ouvert_par: statusRes.ouvertParNom || 'Caissier',
+            ouvert_par_id: statusRes.session?.ouvert_par || null,
+            sector_slug: currentSectorSlug,
+            company_id: companyId,
+            is_previous_day: statusRes.isPreviousDay,
           }
         }
-        setActiveCaisse(caisse)
-      } catch (err) {
-        console.warn('[CASH-CHECK] Erreur vérification caisse:', err)
-        setActiveCaisse(null)
       }
+      setActiveCaisse(caisse)
+    } catch (err) {
+      console.warn('[CASH-CHECK] Erreur vérification caisse:', err)
+      setActiveCaisse(null)
+    } finally {
+      setCheckingCaisse(false)
+    }
 
-      // 1. Récupération robuste des produits (avec fallback si filtre ou RLS restrictif)
+    // 1. Récupération robuste des produits (isolée)
+    try {
       let rawProds: any[] = []
-      try {
-        const { data, error } = await supabaseTenant('products')
-          .select('*, category:product_categories(name)')
+      const { data, error: prodsError } = await supabaseTenant('products')
+        .select('*, category:product_categories(name)')
+        .neq('is_active', false)
+        .order('name')
+      if (!prodsError && data && data.length > 0) {
+        rawProds = data
+      } else {
+        const { data: fbData } = await supabase
+          .from('products')
+          .select('*')
+          .eq('company_id', companyId)
           .neq('is_active', false)
           .order('name')
-        if (!error && data && data.length > 0) {
-          rawProds = data
-        } else {
-          const { data: fbData } = await supabase
-            .from('products')
-            .select('*')
-            .eq('company_id', companyId)
-            .neq('is_active', false)
-            .order('name')
-          if (fbData && fbData.length > 0) {
-            const secProds = filterItemsForSector(fbData, currentSectorSlug)
-            rawProds = secProds.length > 0 ? secProds : fbData
-          }
+        if (fbData && fbData.length > 0) {
+          const secProds = filterItemsForSector(fbData, currentSectorSlug)
+          rawProds = secProds.length > 0 ? secProds : fbData
         }
-      } catch (pErr) {
-        console.warn('[POSPage] Erreur récupération produits:', pErr)
-        try {
-          const { data: fbData } = await supabase
-            .from('products')
-            .select('*')
-            .eq('company_id', companyId)
-            .order('name')
-          if (fbData) rawProds = filterItemsForSector(fbData, currentSectorSlug)
-        } catch (_) {}
       }
 
-      // 2. Récupération robuste des clients et de leurs dettes
-      let rawCusts: any[] = []
-      try {
-        const { data, error } = await supabaseTenant('customers')
-          .select('*')
-          .order('name')
-        if (!error && data && data.length > 0) {
-          rawCusts = data
-        } else {
-          const { data: fbCusts } = await supabase
-            .from('customers')
-            .select('*')
-            .eq('company_id', companyId)
-            .order('name')
-          if (fbCusts && fbCusts.length > 0) {
-            const secCusts = filterItemsForSector(fbCusts, currentSectorSlug)
-            rawCusts = secCusts.length > 0 ? secCusts : fbCusts
-          }
-        }
-      } catch (cErr) {
-        console.warn('[POSPage] Erreur récupération clients:', cErr)
-        try {
-          const { data: fbCusts } = await supabase
-            .from('customers')
-            .select('*')
-            .eq('company_id', companyId)
-          if (fbCusts) rawCusts = fbCusts
-        } catch (_) {}
-      }
-
-      // 3. Récupération des ventes
-      let sales: any[] = []
-      try {
-        const { data } = await supabaseTenant('sales_orders')
-          .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
-          .order('created_at', { ascending: false })
-          .limit(100)
-        if (data) sales = data
-      } catch (_) {}
-
-      const prods = rawProds
-      const custs = rawCusts
-
-      const mappedProds = (prods || []).map((p: any) => {
+      const mappedProds = (rawProds || []).map((p: any) => {
         const isVat = Boolean(
           p.is_taxable ??
           p.is_vat_subject ??
@@ -335,9 +285,32 @@ export const POSPage: React.FC = () => {
         }
       })
       setProducts(mappedProds)
+    } catch (prodErr: any) {
+      console.error('[POSPage] Erreur récupération produits:', prodErr)
+      setLoadError(`Erreur produits: ${prodErr.message || 'Impossible de charger le catalogue'}`)
+    }
 
-      // Charger les clients avec métadonnées de crédit et remise
-      const mappedCusts: Customer[] = (custs || []).map((c: any) => {
+    // 2. Récupération robuste des clients et de leurs dettes (isolée)
+    try {
+      let rawCusts: any[] = []
+      const { data, error: custsError } = await supabaseTenant('customers')
+        .select('*')
+        .order('name')
+      if (!custsError && data && data.length > 0) {
+        rawCusts = data
+      } else {
+        const { data: fbCusts } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('company_id', companyId)
+          .order('name')
+        if (fbCusts && fbCusts.length > 0) {
+          const secCusts = filterItemsForSector(fbCusts, currentSectorSlug)
+          rawCusts = secCusts.length > 0 ? secCusts : fbCusts
+        }
+      }
+
+      const mappedCusts: Customer[] = (rawCusts || []).map((c: any) => {
         const creditLimit = Number(c.credit_limit) || 0
         const isCreditAuth = Boolean(c.credit_authorized) || (creditLimit > 0)
         const isDiscount = Boolean(c.discount_eligible)
@@ -355,33 +328,41 @@ export const POSPage: React.FC = () => {
         }
       })
       setCustomers(mappedCusts)
+    } catch (custErr: any) {
+      console.warn('[POSPage] Erreur récupération clients:', custErr)
+    }
 
-      // Charger les types d'emballages si secteur Brasserie
-      if (currentSectorSlug === 'brasserie') {
-        const cId = company?.id ?? companyId ?? ''
-        try {
-          const { data: embData } = await supabase
-            .from('brasserie_emballages')
-            .select('id, code, designation, stock_depot')
-            .eq('company_id', cId)
-            .eq('sector_slug', 'brasserie')
-            .eq('is_active', true)
-          if (embData && embData.length > 0) {
-            setBrasserieEmballagesList(embData)
-          } else {
-            setBrasserieEmballagesList([
-              { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles', stock_depot: 0 },
-              { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles', stock_depot: 0 },
-              { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles', stock_depot: 0 },
-            ])
-          }
-        } catch (_) {}
-      }
+    // 3. Charger les types d'emballages si secteur Brasserie (isolé)
+    if (currentSectorSlug === 'brasserie') {
+      const cId = company?.id ?? companyId ?? ''
+      try {
+        const { data: embData } = await supabase
+          .from('brasserie_emballages')
+          .select('id, code, designation, stock_depot')
+          .eq('company_id', cId)
+          .eq('sector_slug', 'brasserie')
+          .eq('is_active', true)
+        if (embData && embData.length > 0) {
+          setBrasserieEmballagesList(embData)
+        } else {
+          setBrasserieEmballagesList([
+            { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles', stock_depot: 0 },
+            { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles', stock_depot: 0 },
+            { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles', stock_depot: 0 },
+          ])
+        }
+      } catch (_) {}
+    }
 
-      // Transformer les ventes réelles chargées depuis Supabase avec leurs lignes réelles
-      // Isolation stricte : ne charger que les ventes du sous-logiciel actif
-      if (sales && sales.length > 0) {
-        const sectorFilteredSales = filterItemsForSector(sales, currentSectorSlug)
+    // 4. Récupération des ventes (isolée - NE DOIT JAMAIS VIDER LES PRODUITS NI CRASHER LE POS)
+    try {
+      const { data: salesData, error: salesOrdersError } = await supabaseTenant('sales_orders')
+        .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
+        .order('created_at', { ascending: false })
+        .limit(100)
+
+      if (!salesOrdersError && salesData && salesData.length > 0) {
+        const sectorFilteredSales = filterItemsForSector(salesData, currentSectorSlug)
         const mappedSales: SaleRecord[] = sectorFilteredSales.map((s: any) => {
           let parsedNotes: any = {}
           try {
@@ -404,7 +385,6 @@ export const POSPage: React.FC = () => {
             } catch (e) {}
           }
 
-          // 1. Récupération des lignes depuis sales_order_items (source de vérité Supabase)
           let lines: CartItem[] = []
           if (s.items && Array.isArray(s.items) && s.items.length > 0) {
             lines = s.items.map((item: any) => ({
@@ -490,16 +470,12 @@ export const POSPage: React.FC = () => {
         })
         setSalesHistory(mappedSales)
       }
-    } catch (err: any) {
-      toast.error('Erreur chargement données', err.message)
-      setProducts([])
-      setCustomers([])
-      setSalesHistory([])
+    } catch (salesErr: any) {
+      console.warn('[POSPage] Erreur récupération historique des ventes:', salesErr)
     } finally {
       setLoading(false)
-      setCheckingCaisse(false)
     }
-  }, [companyId, currentSectorSlug, toast, supabaseTenant])
+  }, [companyId, currentSectorSlug, toast, supabaseTenant, company?.id, user?.id])
 
   useEffect(() => {
     loadData()
@@ -1136,15 +1112,15 @@ export const POSPage: React.FC = () => {
       let savedDbSale: any = null
 
       // Tentative avec colonnes étendues d'abord
-      const { data: dbSale, error: dbSaleErr } = await supabaseTenant('sales_orders')
+      const { data: dbSale, error: salesDbError } = await supabaseTenant('sales_orders')
         .insert(fullSalePayload)
         .select()
         .single()
 
-      if (!dbSaleErr && dbSale) {
+      if (!salesDbError && dbSale) {
         savedDbSale = dbSale
       } else {
-        console.warn('Fallback insertion sales_orders:', dbSaleErr)
+        console.warn('Fallback insertion sales_orders:', salesDbError)
         // Fallback garanti sur le schéma natif Supabase (sans sector_slug ni colonnes manquantes)
         const { data: fbSale, error: fbErr } = await supabaseTenant('sales_orders')
           .insert(baseSalePayload)
@@ -1152,8 +1128,8 @@ export const POSPage: React.FC = () => {
           .single()
 
         if (fbErr || !fbSale) {
-          console.error('Erreur critique insertion sales_orders:', fbErr, dbSaleErr)
-          const errDetail = fbErr?.message || (fbErr as any)?.details || dbSaleErr?.message || 'Erreur inconnue'
+          console.error('Erreur critique insertion sales_orders:', fbErr, salesDbError)
+          const errDetail = fbErr?.message || (fbErr as any)?.details || salesDbError?.message || 'Erreur inconnue'
           throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${errDetail}`)
         }
         savedDbSale = fbSale
@@ -2077,6 +2053,21 @@ export const POSPage: React.FC = () => {
 
       {activeTab === 'pos' ? (
         <div className="space-y-4">
+          {loadError && (
+            <div className="bg-red-50 border border-red-200 text-red-800 p-3.5 rounded-2xl flex items-center justify-between gap-3 text-xs shadow-sm">
+              <div className="flex items-center gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-red-600 flex-shrink-0" />
+                <span>{loadError}</span>
+              </div>
+              <button
+                onClick={loadData}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs transition flex items-center gap-1.5 flex-shrink-0"
+              >
+                <RefreshCw className="w-3.5 h-3.5" /> Réessayer
+              </button>
+            </div>
+          )}
+
           {isStation && (
             <StationFuelDispenser onAddToCart={handleDirectAddToCart} />
           )}
