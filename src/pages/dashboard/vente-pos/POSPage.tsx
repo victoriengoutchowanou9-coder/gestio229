@@ -10,7 +10,7 @@ import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
-  ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft
+  ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft, Tag
 } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -28,10 +28,19 @@ import {
   formatUvQty,
   getBatchTiersList
 } from '../../../utils/batchPricing'
+import {
+  BrasserieGrille,
+  fetchBrasserieGrilles,
+  fetchGrillePrix,
+  fetchClientPrixMap,
+  findApplicableGrille,
+  calculateLinePricing
+} from '../../../services/brasseriePricingService'
 import clsx from 'clsx'
 import { StationFuelDispenser } from '../station/StationFuelDispenser'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
+import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -44,6 +53,7 @@ interface Product {
   unit: string
   selling_price: number // Prix TTC
   cost_price: number    // Coût TTC
+  wholesale_price?: number
   coef?: number
   ucd?: string
   uv?: string
@@ -82,6 +92,12 @@ interface CartItem {
   discount: number
   batchTierLabel?: string
   isBatchTier?: boolean
+  pricingSource?: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD'
+  appliedGridName?: string | null
+  appliedGridId?: string | null
+  standardPrice?: number
+  unitCostPrice?: number
+  unitSaving?: number
 }
 
 interface PaymentLine {
@@ -143,6 +159,92 @@ export const POSPage: React.FC = () => {
   // Client sélectionné (défaut = vide = Client Comptoir)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
   const selectedCustomer = customers.find((c) => c.id === selectedCustomerId)
+
+  // Grilles Gros & Maquis — Tarification dynamique (Brasserie & Dépôt de Boissons)
+  const [brasserieGrilles, setBrasserieGrilles] = useState<BrasserieGrille[]>([])
+  const [brasserieGrillesPrixCache, setBrasserieGrillesPrixCache] = useState<Record<string, Record<string, number>>>({})
+  const [brasserieClientPrixMap, setBrasserieClientPrixMap] = useState<Record<string, number>>({})
+
+  // Chargement des grilles et de leurs prix
+  useEffect(() => {
+    if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && companyId) {
+      fetchBrasserieGrilles(companyId, 'brasserie').then((list) => {
+        setBrasserieGrilles(list)
+        list.filter((g) => g.statut === 'ACTIF').forEach(async (g) => {
+          const pMap = await fetchGrillePrix(companyId, g.id)
+          setBrasserieGrillesPrixCache((prev) => ({ ...prev, [g.id]: pMap }))
+        })
+      })
+    }
+  }, [currentSectorSlug, companyId])
+
+  // Chargement des prix personnalisés du client sélectionné
+  useEffect(() => {
+    if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && companyId) {
+      if (selectedCustomerId) {
+        fetchClientPrixMap(companyId, selectedCustomerId).then((map) => {
+          setBrasserieClientPrixMap(map)
+        })
+      } else {
+        setBrasserieClientPrixMap({})
+      }
+    }
+  }, [selectedCustomerId, currentSectorSlug, companyId])
+
+  // Cumul commercial total du panier pour le secteur Brasserie
+  const totalBrasserieQuantity = useMemo(() => {
+    if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') return 0
+    return cart.reduce((sum, item) => sum + (Number(item.qty) || 0), 0)
+  }, [cart, currentSectorSlug])
+
+  // Détermination automatique de la grille active applicable selon la quantité totale
+  const currentBrasserieGrid = useMemo(() => {
+    if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') return null
+    return findApplicableGrille(brasserieGrilles, totalBrasserieQuantity)
+  }, [brasserieGrilles, totalBrasserieQuantity, currentSectorSlug])
+
+  // Recalcul automatique et dynamique des prix de toutes les lignes du panier dès que la quantité ou le client change
+  useEffect(() => {
+    if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') return
+    if (cart.length === 0) return
+
+    const gridPrices = currentBrasserieGrid ? (brasserieGrillesPrixCache[currentBrasserieGrid.id] || {}) : {}
+
+    setCart((prev) => {
+      let hasChanges = false
+      const updated = prev.map((item) => {
+        const pricing = calculateLinePricing({
+          product: item.product,
+          qteLigne: item.qty,
+          qteTotaleVente: totalBrasserieQuantity,
+          clientId: selectedCustomerId || null,
+          grilleApplicable: currentBrasserieGrid,
+          grillePrixMap: gridPrices,
+          clientPrixMap: brasserieClientPrixMap,
+        })
+
+        if (
+          item.unitPrice !== pricing.prix_applique ||
+          item.pricingSource !== pricing.source_prix ||
+          item.appliedGridName !== (pricing.grille_utilisee || null)
+        ) {
+          hasChanges = true
+          return {
+            ...item,
+            unitPrice: pricing.prix_applique,
+            pricingSource: pricing.source_prix,
+            appliedGridName: pricing.grille_utilisee || null,
+            appliedGridId: pricing.grille_id || null,
+            standardPrice: pricing.prix_standard,
+            unitCostPrice: pricing.prix_achat,
+            unitSaving: pricing.economie_unitaire,
+          }
+        }
+        return item
+      })
+      return hasChanges ? updated : prev
+    })
+  }, [currentBrasserieGrid, totalBrasserieQuantity, brasserieClientPrixMap, brasserieGrillesPrixCache, selectedCustomerId, currentSectorSlug])
 
   // Vente différée
   const [isDeferred, setIsDeferred] = useState(false)
@@ -547,6 +649,7 @@ export const POSPage: React.FC = () => {
       return
     }
 
+    const isBrasserie = currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons'
     const match = calculateBatchLinePrice(
       qty,
       selectedProductForDetail.batch_pricing,
@@ -562,27 +665,101 @@ export const POSPage: React.FC = () => {
           selectedProductForDetail.batch_pricing,
           selectedProductForDetail.selling_price
         )
+
+        let effPrice = combinedMatch.effectiveUnitPriceTtc
+        let pricingSource: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD' = 'STANDARD'
+        let appliedGridName: string | null = null
+        let appliedGridId: string | null = null
+        let standardPrice = selectedProductForDetail.selling_price
+        let unitCostPrice = selectedProductForDetail.cost_price || 0
+        let unitSaving = 0
+
+        if (isBrasserie) {
+          const nextTotal = (totalBrasserieQuantity || 0) + qty
+          const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
+          const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
+          const pr = calculateLinePricing({
+            product: selectedProductForDetail,
+            qteLigne: combinedQty,
+            qteTotaleVente: nextTotal,
+            clientId: selectedCustomerId || null,
+            grilleApplicable: nextGrid,
+            grillePrixMap: gridPrices,
+            clientPrixMap: brasserieClientPrixMap,
+          })
+          effPrice = pr.prix_applique
+          pricingSource = pr.source_prix
+          appliedGridName = pr.grille_utilisee || null
+          appliedGridId = pr.grille_id || null
+          standardPrice = pr.prix_standard
+          unitCostPrice = pr.prix_achat
+          unitSaving = pr.economie_unitaire
+        }
+
         return prev.map((i) =>
           i.product.id === selectedProductForDetail.id
             ? {
                 ...i,
                 qty: combinedQty,
-                unitPrice: combinedMatch.effectiveUnitPriceTtc,
+                unitPrice: effPrice,
                 batchTierLabel: combinedMatch.matchedTierLabel,
                 isBatchTier: combinedMatch.isMatched,
+                pricingSource,
+                appliedGridName,
+                appliedGridId,
+                standardPrice,
+                unitCostPrice,
+                unitSaving,
               }
             : i
         )
       }
+
+      let effPrice = match.effectiveUnitPriceTtc
+      let pricingSource: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD' = 'STANDARD'
+      let appliedGridName: string | null = null
+      let appliedGridId: string | null = null
+      let standardPrice = selectedProductForDetail.selling_price
+      let unitCostPrice = selectedProductForDetail.cost_price || 0
+      let unitSaving = 0
+
+      if (isBrasserie) {
+        const nextTotal = (totalBrasserieQuantity || 0) + qty
+        const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
+        const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
+        const pr = calculateLinePricing({
+          product: selectedProductForDetail,
+          qteLigne: qty,
+          qteTotaleVente: nextTotal,
+          clientId: selectedCustomerId || null,
+          grilleApplicable: nextGrid,
+          grillePrixMap: gridPrices,
+          clientPrixMap: brasserieClientPrixMap,
+        })
+        effPrice = pr.prix_applique
+        pricingSource = pr.source_prix
+        appliedGridName = pr.grille_utilisee || null
+        appliedGridId = pr.grille_id || null
+        standardPrice = pr.prix_standard
+        unitCostPrice = pr.prix_achat
+        unitSaving = pr.economie_unitaire
+      }
+
       return [
         ...prev,
         {
           product: selectedProductForDetail,
           qty,
-          unitPrice: match.effectiveUnitPriceTtc,
+          unitPrice: effPrice,
           discount: 0,
           batchTierLabel: match.matchedTierLabel,
           isBatchTier: match.isMatched,
+          pricingSource,
+          appliedGridName,
+          appliedGridId,
+          standardPrice,
+          unitCostPrice,
+          unitSaving,
         }
       ]
     })
@@ -618,13 +795,50 @@ export const POSPage: React.FC = () => {
       return
     }
 
+    const isBrasserie = currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons'
+    let effPrice = item.unitPrice
+    let pricingSource: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD' = 'STANDARD'
+    let appliedGridName: string | null = null
+    let appliedGridId: string | null = null
+    let standardPrice = item.product.selling_price
+    let unitCostPrice = item.product.cost_price || 0
+    let unitSaving = 0
+
+    if (isBrasserie) {
+      const nextTotal = (totalBrasserieQuantity || 0) + item.qty
+      const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
+      const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
+      const pr = calculateLinePricing({
+        product: item.product,
+        qteLigne: item.qty,
+        qteTotaleVente: nextTotal,
+        clientId: selectedCustomerId || null,
+        grilleApplicable: nextGrid,
+        grillePrixMap: gridPrices,
+        clientPrixMap: brasserieClientPrixMap,
+      })
+      effPrice = pr.prix_applique
+      pricingSource = pr.source_prix
+      appliedGridName = pr.grille_utilisee || null
+      appliedGridId = pr.grille_id || null
+      standardPrice = pr.prix_standard
+      unitCostPrice = pr.prix_achat
+      unitSaving = pr.economie_unitaire
+    }
+
     setCart((prev) => [
       ...prev,
       {
         product: item.product,
         qty: item.qty,
-        unitPrice: item.unitPrice,
-        discount: item.discount || 0
+        unitPrice: effPrice,
+        discount: item.discount || 0,
+        pricingSource,
+        appliedGridName,
+        appliedGridId,
+        standardPrice,
+        unitCostPrice,
+        unitSaving,
       }
     ])
     setIsCartVisible(true)
@@ -648,6 +862,8 @@ export const POSPage: React.FC = () => {
       }
     }
     const safeQty = Math.round(newQty * 1000) / 1000
+    const isBrasserie = currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons'
+
     setCart((prev) =>
       prev.map((i) => {
         if (i.product.id !== productId) return i
@@ -656,10 +872,42 @@ export const POSPage: React.FC = () => {
           i.product.batch_pricing,
           i.product.selling_price
         )
+        let effPrice = match.effectiveUnitPriceTtc
+
+        if (isBrasserie) {
+          const deltaQty = safeQty - i.qty
+          const nextTotal = (totalBrasserieQuantity || 0) + deltaQty
+          const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
+          const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
+          const pr = calculateLinePricing({
+            product: i.product,
+            qteLigne: safeQty,
+            qteTotaleVente: nextTotal,
+            clientId: selectedCustomerId || null,
+            grilleApplicable: nextGrid,
+            grillePrixMap: gridPrices,
+            clientPrixMap: brasserieClientPrixMap,
+          })
+          effPrice = pr.prix_applique
+          return {
+            ...i,
+            qty: safeQty,
+            unitPrice: effPrice,
+            batchTierLabel: match.matchedTierLabel,
+            isBatchTier: match.isMatched,
+            pricingSource: pr.source_prix,
+            appliedGridName: pr.grille_utilisee || null,
+            appliedGridId: pr.grille_id || null,
+            standardPrice: pr.prix_standard,
+            unitCostPrice: pr.prix_achat,
+            unitSaving: pr.economie_unitaire,
+          }
+        }
+
         return {
           ...i,
           qty: safeQty,
-          unitPrice: match.effectiveUnitPriceTtc,
+          unitPrice: effPrice,
           batchTierLabel: match.matchedTierLabel,
           isBatchTier: match.isMatched,
         }
@@ -1106,6 +1354,8 @@ export const POSPage: React.FC = () => {
         payment_method: primaryMethod,
         customer_name: custName,
         status: isDeferred ? 'pending_delivery' : 'COMPLET',
+        grille_appliquee: currentBrasserieGrid?.nom || null,
+        grille_id: currentBrasserieGrid?.id || null,
         notes: JSON.stringify(notesPayload)
       }
 
@@ -1164,7 +1414,13 @@ export const POSPage: React.FC = () => {
           total_cost: lineCostHT,
           tva_rate: itemVatRate,
           total_ht: lineHt,
-          total_ttc: lineTotal
+          total_ttc: lineTotal,
+          type_tarification: line.pricingSource || 'STANDARD',
+          grille_utilisee: line.appliedGridName || null,
+          grille_id: line.appliedGridId || null,
+          prix_standard: line.standardPrice || line.product.selling_price,
+          prix_applique: line.unitPrice,
+          marge_unitaire: Math.round((line.unitPrice - uvCostTTC) * 100) / 100
         }
       })
       const { error: linesErr } = await supabase.from('sales_order_items').insert(lineItems)
@@ -1491,7 +1747,7 @@ export const POSPage: React.FC = () => {
             montant_momo: paidMomo,
             source_module: 'vente_pos',
             source_id: orderNum,
-            motif: `Vente POS ${orderNum} (Client: ${customerName || 'Comptoir'})`,
+            motif: `Vente POS ${orderNum} (Client: ${custName || 'Comptoir'})`,
             user_name: user?.full_name || 'Caissier',
             user_id: user?.id,
           })
@@ -1524,6 +1780,35 @@ export const POSPage: React.FC = () => {
           }
         } catch (e) {
           console.warn('Avertissement cash_registers Supabase:', e)
+        }
+
+        // Réajustement automatique du fond de caisse (Règle métier officielle Caisse / Dépenses)
+        try {
+          const compId = company?.id ?? companyId ?? ''
+          if (paidCash > 0) {
+            await enregistrerEntreeCaisse({
+              company_id: compId,
+              secteur_id: currentSectorSlug,
+              caisse_id: activeCaisse?.caisse_id || activeCaisse?.id || null,
+              montant: paidCash,
+              mode_paiement: 'espece',
+              source: 'VENTE',
+              reference_id: savedDbSale?.id || null
+            })
+          }
+          if (paidMomo > 0) {
+            await enregistrerEntreeCaisse({
+              company_id: compId,
+              secteur_id: currentSectorSlug,
+              caisse_id: activeCaisse?.caisse_id || activeCaisse?.id || null,
+              montant: paidMomo,
+              mode_paiement: 'mtn_momo',
+              source: 'VENTE',
+              reference_id: savedDbSale?.id || null
+            })
+          }
+        } catch (faErr) {
+          console.warn('Avertissement fonds_actuels réajustement:', faErr)
         }
       }
 
@@ -2320,6 +2605,33 @@ export const POSPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* BANNIÈRE GRILLE TARIFAIRE AUTOMATIQUE (BRASSERIE) */}
+                {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && cart.length > 0 && (
+                  <div className="p-2.5 bg-gradient-to-r from-amber-50 to-orange-50 border border-amber-200/90 rounded-2xl flex items-center justify-between shadow-sm">
+                    <div className="flex items-center gap-2">
+                      <div className="p-1.5 bg-amber-500 text-slate-950 rounded-xl shadow-xs">
+                        <Tag className="w-3.5 h-3.5" />
+                      </div>
+                      <div>
+                        <div className="text-[11px] font-bold text-slate-900 flex items-center gap-1.5">
+                          <span>Grille automatique :</span>
+                          <span className="text-amber-900 bg-amber-200/80 px-2 py-0.5 rounded-md font-black">
+                            {currentBrasserieGrid ? currentBrasserieGrid.nom : 'Détail standard'}
+                          </span>
+                        </div>
+                        <div className="text-[9px] text-slate-500">
+                          Total commande : <strong>{totalBrasserieQuantity} casiers/articles</strong>
+                        </div>
+                      </div>
+                    </div>
+                    {currentBrasserieGrid && (
+                      <span className="text-[9px] font-bold text-emerald-800 bg-emerald-100/90 px-2 py-0.5 rounded-lg border border-emerald-300">
+                        {currentBrasserieGrid.seuil_min} à {currentBrasserieGrid.seuil_max !== null ? `${currentBrasserieGrid.seuil_max} casiers` : 'Illimité'}
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* 2. Liste des lignes du Panier */}
                 <div className="space-y-1.5">
                   <h4 className="text-[10px] font-black uppercase tracking-wider text-slate-400">
@@ -2340,10 +2652,30 @@ export const POSPage: React.FC = () => {
                           <div key={item.product.id} className="py-2 first:pt-0 flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <p className="font-bold text-xs text-slate-800 truncate">{item.product.name}</p>
-                              <div className="flex items-center gap-1.5 flex-wrap">
+                              <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
                                 <p className="text-[10px] text-slate-500 font-mono">
                                   {fmt(item.unitPrice)} / {item.product.unit || 'Pièce'}
                                 </p>
+                                {item.pricingSource === 'PRIX_PERSONNALISE' && (
+                                  <span className="text-[9px] bg-amber-100 text-amber-900 border border-amber-300 font-bold px-1.5 py-0.2 rounded-full flex items-center gap-0.5">
+                                    ★ Prix personnalisé
+                                  </span>
+                                )}
+                                {item.pricingSource === 'GRILLE' && (
+                                  <span className="text-[9px] bg-emerald-100 text-emerald-800 border border-emerald-200 font-bold px-1.5 py-0.2 rounded-full">
+                                    Grille {item.appliedGridName}
+                                  </span>
+                                )}
+                                {item.pricingSource === 'STANDARD' && (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && (
+                                  <span className="text-[9px] bg-slate-100 text-slate-600 font-medium px-1.5 py-0.2 rounded-full">
+                                    Prix standard
+                                  </span>
+                                )}
+                                {item.unitSaving && item.unitSaving > 0 ? (
+                                  <span className="text-[9px] text-emerald-600 font-bold">
+                                    - {fmt(item.unitSaving * item.qty)}
+                                  </span>
+                                ) : null}
                                 {item.batchTierLabel && (
                                   <span className="text-[9px] bg-emerald-100 text-emerald-800 font-semibold px-1 rounded">
                                     {item.batchTierLabel}

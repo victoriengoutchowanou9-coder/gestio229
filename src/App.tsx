@@ -24,6 +24,7 @@ const DashboardPage   = safeLazy(() => import('./pages/dashboard/DashboardPage')
 const POSPage         = safeLazy(() => import('./pages/dashboard/vente-pos/POSPage'))
 const StocksPage         = safeLazy(() => import('./pages/dashboard/stocks/StocksPage'))
 const CaissePage         = safeLazy(() => import('./pages/dashboard/caisse/CaissePage'))
+const ClotureCaisse      = safeLazy(() => import('./pages/dashboard/caisse/ClotureCaisse'))
 const TresoreriePage     = safeLazy(() => import('./pages/dashboard/tresorerie/TresoreriePage'))
 const ClientsPage        = safeLazy(() => import('./pages/dashboard/clients/ClientsPage'))
 const FournisseursPage   = safeLazy(() => import('./pages/dashboard/fournisseurs/FournisseursPage'))
@@ -40,8 +41,9 @@ const FournisseursPage2  = FournisseursPage // alias
 // Hub multi-services
 const HubPage = safeLazy(() => import('./pages/HubPage'))
 
-// Brasserie - Consignation & Emballages
+// Brasserie - Consignation & Emballages & Grilles
 const ConsignationPage = safeLazy(() => import('./pages/dashboard/brasserie/ConsignationPage'))
+const BrasserieGrillesPage = safeLazy(() => import('./pages/dashboard/brasserie/GrillesPage'))
 
 // Modules spécifiques par secteur : une page générique pilotée par configuration
 const SectorModulePage = safeLazy(() => import('./pages/dashboard/sector-modules/SectorModulePage'))
@@ -250,6 +252,16 @@ const SectorAwareTresorerie: React.FC = () => {
   return <TresoreriePage />
 }
 
+// ─── Grilles Gros & Maquis conditionnel (Dédié Brasserie & Dépôt de Boissons) ──
+const SectorAwareGrilles: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  if (clean === 'brasserie' || clean === 'brasserie-depot-boissons' || clean === 'depot-boissons') {
+    return <BrasserieGrillesPage />
+  }
+  return <GrillesPage />
+}
+
 // ─── Initialisation globale ─────────────────────────────────────────────────
 
 const AppInitializer: React.FC = () => {
@@ -359,6 +371,8 @@ const AppRoutes: React.FC = () => {
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
+        <Route path="cloture-caisse" element={<ModuleGuard moduleId="caisse"><ClotureCaisse /></ModuleGuard>} />
+        <Route path="cloture"        element={<ModuleGuard moduleId="caisse"><ClotureCaisse /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><SectorAwareTresorerie /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />
         <Route path="achats"         element={<ModuleGuard moduleId="fournisseurs"><SectorAwareFournisseurs /></ModuleGuard>} />
@@ -375,7 +389,7 @@ const AppRoutes: React.FC = () => {
         <Route path="isolation"       element={<IsolationHealthPage />} />
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
         <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
-        <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><GrillesPage /></ModuleGuard>} />
+        <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><SectorAwareGrilles /></ModuleGuard>} />
         {/* ── Modules École ── */}
         <Route path="eleves"   element={<ModuleGuard moduleId="eleves"><ElevesPage /></ModuleGuard>} />
         <Route path="frais"    element={<ModuleGuard moduleId="frais_scolaires"><FraisScolairesPage /></ModuleGuard>} />
@@ -489,7 +503,7 @@ const AppRoutes: React.FC = () => {
         <Route path="isolation"       element={<IsolationHealthPage />} />
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
         <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
-        <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><GrillesPage /></ModuleGuard>} />
+        <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><SectorAwareGrilles /></ModuleGuard>} />
         {/* ── Modules École ── */}
         <Route path="eleves"   element={<ModuleGuard moduleId="eleves"><ElevesPage /></ModuleGuard>} />
         <Route path="frais"    element={<ModuleGuard moduleId="frais_scolaires"><FraisScolairesPage /></ModuleGuard>} />

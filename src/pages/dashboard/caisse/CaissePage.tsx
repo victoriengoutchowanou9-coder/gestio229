@@ -12,7 +12,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
-  Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History
+  Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -32,6 +32,7 @@ import {
   cloturerSessionCaisse,
   enregistrerMouvementCaisse
 } from '../../../services/caisseSectorService'
+import ClotureCaisse from './ClotureCaisse'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -86,13 +87,15 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null)
   const [cashRegisterId, setCashRegisterId] = useState<string | null>(null)
 
-  // Données réelles des ventes et remboursements du jour
+  // Données réelles des ventes, remboursements et dépenses du jour
   const [salesToday, setSalesToday] = useState<any[]>([])
   const [repaymentsToday, setRepaymentsToday] = useState<any[]>([])
+  const [depensesToday, setDepensesToday] = useState<any[]>([])
   const [closuresHistory, setClosuresHistory] = useState<CashClosure[]>([])
   const [movementsHistory, setMovementsHistory] = useState<CashMovement[]>([])
   const [pendingRequests, setPendingRequests] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [showClotureModal, setShowClotureModal] = useState(false)
 
   // Modals
   const [showOpenModal, setShowOpenModal] = useState(false)
@@ -384,8 +387,56 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         }
       } catch (e) {}
 
+      // 4. Dépenses réelles du jour (déduites des fonds conformément à la règle officielle)
+      let depensesList: any[] = []
+      try {
+        const { data: dbDeps } = await supabase
+          .from('depenses')
+          .select('*')
+          .eq('company_id', currentCompanyId)
+          .gte('created_at', startOfDay)
+          .order('created_at', { ascending: false })
+        if (dbDeps && dbDeps.length > 0) {
+          depensesList = dbDeps
+        }
+      } catch (_) {}
+
+      try {
+        const { data: dbExps } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('company_id', currentCompanyId)
+          .gte('created_at', startOfDay)
+          .order('created_at', { ascending: false })
+        if (dbExps && dbExps.length > 0) {
+          const secExps = filterItemsForSector(dbExps, currentSectorSlug)
+          secExps.forEach((e: any) => {
+            if (!depensesList.some((d) => d.id === e.id)) {
+              depensesList.push(e)
+            }
+          })
+        }
+      } catch (_) {}
+
+      setDepensesToday(depensesList)
+
+      const depensesMovements: CashMovement[] = depensesList.map((d: any) => {
+        const isCash = ['espece', 'especes', 'cash'].includes((d.mode_paiement || d.payment_method || '').toLowerCase())
+        return {
+          id: `dep-${d.id}`,
+          created_at: d.created_at || d.date_depense || new Date().toISOString(),
+          user_name: d.created_by_name || 'Utilisateur',
+          type: 'RETRAIT',
+          payment_channel: isCash ? 'Espèces' : 'MoMo',
+          amount: Number(d.montant || d.amount) || 0,
+          motif: `Dépense : ${d.description || d.title || d.categorie || d.category || 'Sortie'}`,
+          reference: `DEP-${d.id.slice(0, 6)}`,
+          status: 'VALIDE'
+        }
+      })
+
       setMovementsHistory(
-        [...transferMovements, ...repaymentMovements, ...saleMovements].sort(
+        [...transferMovements, ...depensesMovements, ...repaymentMovements, ...saleMovements].sort(
           (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         )
       )
@@ -466,6 +517,23 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   // 5. Total entrées du jour
   const totalEntreesDuJour = ventesEspeces + ventesMomo + remboursementsEspeces + remboursementsMomo
 
+  // Dépenses espèces du jour
+  const depensesEspeces = useMemo(() => {
+    return depensesToday
+      .filter((d) => ['espece', 'especes', 'cash'].includes((d.mode_paiement || d.payment_method || '').toLowerCase()))
+      .reduce((sum, d) => sum + (Number(d.montant || d.amount) || 0), 0)
+  }, [depensesToday])
+
+  // Dépenses MoMo du jour
+  const depensesMomo = useMemo(() => {
+    return depensesToday
+      .filter((d) => !['espece', 'especes', 'cash'].includes((d.mode_paiement || d.payment_method || '').toLowerCase()))
+      .reduce((sum, d) => sum + (Number(d.montant || d.amount) || 0), 0)
+  }, [depensesToday])
+
+  // Total des sorties du jour (Dépenses + Retraits Trésorerie)
+  const totalSortiesDuJour = totalRetraitsEspeces + totalRetraitsMomo + depensesEspeces + depensesMomo
+
   // Total des retraits espèces exécutés vers trésorerie
   const totalRetraitsEspeces = useMemo(() => {
     return pendingRequests
@@ -479,27 +547,24 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [pendingRequests])
 
-  // 1. Flux réels de la session en cours
-  // Espèces du jour : Ventes espèces + Remboursements créances espèces - Retraits espèces validés
-  const especesDuJour = Math.max(0, ventesEspeces + remboursementsEspeces - totalRetraitsEspeces)
+  // 1. Flux réels de la session en cours (NÉGATIF AUTORISÉ EN CAS DE DÉCOUVERT)
+  const especesDuJour = (ventesEspeces + remboursementsEspeces) - (totalRetraitsEspeces + depensesEspeces)
+  const momoDuJour = (ventesMomo + remboursementsMomo) - (totalRetraitsMomo + depensesMomo)
 
-  // MoMo du jour : Ventes MoMo + Remboursements créances MoMo - Retraits MoMo validés
-  const momoDuJour = Math.max(0, ventesMomo + remboursementsMomo - totalRetraitsMomo)
+  // Fond théorique calculé en cours de session : PEUT ÊTRE NÉGATIF (DÉCOUVERT AUTORISÉ)
+  // RÈGLE : Fond final = Fond ouverture + Entrées - Dépenses
+  const fondTheoriqueEsp = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces - depensesEspeces
+  const fondTheoriqueMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo - depensesMomo
 
-  // Fond théorique calculé en cours de session (pour contrôle et comptage lors de la clôture)
-  const fondTheoriqueEsp = initialCash + ventesEspeces + remboursementsEspeces - totalRetraitsEspeces
-  const fondTheoriqueMomo = initialMomo + ventesMomo + remboursementsMomo - totalRetraitsMomo
-
-  // 2. Fond actuel espèces & MoMo :
-  // RÈGLE : C'est APRÈS clôture de caisse que les espèces du jour et momo du jour vont
-  // respectivement dans fond actuel espèces et fond actuel momo (reflétant le tiroir réel clôturé).
+  // 2. Fond actuel espèces & MoMo en temps réel
   const lastClosure = closuresHistory.length > 0 ? closuresHistory[0] : null
-  const fondActuelEspeces = lastClosure
-    ? (Number(lastClosure.fond_especes_physique) || 0)
-    : (caisseStatus === 'FERMEE' ? 0 : initialCash)
-  const fondActuelMomo = lastClosure
-    ? (Number(lastClosure.fond_momo) || 0)
-    : (caisseStatus === 'FERMEE' ? 0 : initialMomo)
+  const fondActuelEspeces = caisseStatus === 'OUVERTE'
+    ? fondTheoriqueEsp
+    : (lastClosure ? (Number(lastClosure.fond_especes_physique) || 0) : initialCash)
+
+  const fondActuelMomo = caisseStatus === 'OUVERTE'
+    ? fondTheoriqueMomo
+    : (lastClosure ? (Number(lastClosure.fond_momo) || 0) : initialMomo)
 
   // 3. Fond initial global
   const fondInitialTotal = initialCash + initialMomo
@@ -909,6 +974,15 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             </button>
           )}
 
+          <button
+            onClick={() => setShowClotureModal(true)}
+            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+            title="Consulter et exécuter la clôture journalière multi-secteurs"
+          >
+            <Building2 className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Clôture Multi-Secteurs</span>
+          </button>
+
           {closuresHistory.length > 0 && (
             <button
               onClick={() => {
@@ -931,51 +1005,80 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           <div>
             <h2 className="text-sm font-extrabold text-slate-900 uppercase tracking-wider flex items-center gap-2">
               <TrendingUp className="w-4 h-4 text-emerald-600" />
-              Compteurs d'Activités Journalières
+              Compteurs d'Activités Journalières & Situation de Caisse
             </h2>
-            <p className="text-xs text-slate-400">Ventilation des encaissements du jour et situation réelle des tiroirs après clôtures</p>
+            <p className="text-xs text-slate-400">
+              Flux réels : Ventes + Recouvrements - Sorties & Dépenses (Découvert autorisé si fond insuffisant)
+            </p>
           </div>
-          <span className="text-xs font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl">
-            Total Entrées : {fmt(totalEntreesDuJour)}
-          </span>
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-3 py-1 rounded-xl">
+              Entrées : +{fmt(totalEntreesDuJour)}
+            </span>
+            <span className="text-xs font-mono font-bold text-rose-700 bg-rose-50 border border-rose-200 px-3 py-1 rounded-xl">
+              Sorties : -{fmt(totalSortiesDuJour)}
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* ── 5 Indicateurs Clés Globaux de Caisse ────────────────────────────── */}
+      {/* ── Indicateurs Clés Globaux de Caisse ────────────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         {/* A. Fond actuel — Espèces */}
-        <div className="bg-white rounded-3xl border-2 border-emerald-300 p-4 shadow-sm flex flex-col justify-between">
+        <div className={`bg-white rounded-3xl border-2 p-4 shadow-sm flex flex-col justify-between ${
+          fondActuelEspeces < 0 ? 'border-red-400 bg-red-50/20' : 'border-emerald-300'
+        }`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-black text-emerald-800 uppercase tracking-wider">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${
+              fondActuelEspeces < 0 ? 'text-red-700' : 'text-emerald-800'
+            }`}>
               Fond Actuel Espèces
             </span>
-            <Wallet className="w-4 h-4 text-emerald-600" />
+            <Wallet className={`w-4 h-4 ${fondActuelEspeces < 0 ? 'text-red-600' : 'text-emerald-600'}`} />
           </div>
-          <p className="text-xl font-black text-slate-900 font-mono">
-            {fmt(fondActuelEspeces)}
-          </p>
+          <div>
+            <p className={`text-xl font-black font-mono ${fondActuelEspeces < 0 ? 'text-red-600' : 'text-slate-900'}`}>
+              {fmt(fondActuelEspeces)}
+            </p>
+            {fondActuelEspeces < 0 && (
+              <span className="inline-block mt-1 text-[10px] font-bold text-red-700 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full">
+                DÉCOUVERT AUTORISÉ
+              </span>
+            )}
+          </div>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Tiroir réel après clôtures
+            Initial ({fmt(initialCash)}) + Ventes ({fmt(ventesEspeces)}) - Dépenses ({fmt(depensesEspeces)})
           </p>
         </div>
 
         {/* B. Fond actuel — MoMo */}
-        <div className="bg-white rounded-3xl border-2 border-amber-300 p-4 shadow-sm flex flex-col justify-between">
+        <div className={`bg-white rounded-3xl border-2 p-4 shadow-sm flex flex-col justify-between ${
+          fondActuelMomo < 0 ? 'border-red-400 bg-red-50/20' : 'border-amber-300'
+        }`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-black text-amber-800 uppercase tracking-wider">
+            <span className={`text-[11px] font-black uppercase tracking-wider ${
+              fondActuelMomo < 0 ? 'text-red-700' : 'text-amber-800'
+            }`}>
               Fond Actuel MoMo
             </span>
-            <Smartphone className="w-4 h-4 text-amber-600" />
+            <Smartphone className={`w-4 h-4 ${fondActuelMomo < 0 ? 'text-red-600' : 'text-amber-600'}`} />
           </div>
-          <p className="text-xl font-black text-slate-900 font-mono">
-            {fmt(fondActuelMomo)}
-          </p>
+          <div>
+            <p className={`text-xl font-black font-mono ${fondActuelMomo < 0 ? 'text-red-600' : 'text-slate-900'}`}>
+              {fmt(fondActuelMomo)}
+            </p>
+            {fondActuelMomo < 0 && (
+              <span className="inline-block mt-1 text-[10px] font-bold text-red-700 bg-red-100 border border-red-200 px-2 py-0.5 rounded-full">
+                DÉCOUVERT AUTORISÉ
+              </span>
+            )}
+          </div>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Comptes marchands (MTN/Moov)
+            Initial ({fmt(initialMomo)}) + MoMo ({fmt(ventesMomo)}) - Dépenses ({fmt(depensesMomo)})
           </p>
         </div>
 
-        {/* C. Espèces du jour */}
+        {/* C. Espèces du jour nettes */}
         <div className="bg-white rounded-3xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -985,15 +1088,15 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               <TrendingUp className="w-3.5 h-3.5" />
             </div>
           </div>
-          <p className="text-xl font-black text-emerald-700 font-mono">
-            {fmt(ventesEspeces + remboursementsEspeces)}
+          <p className={`text-xl font-black font-mono ${especesDuJour < 0 ? 'text-red-600' : 'text-emerald-700'}`}>
+            {fmt(especesDuJour)}
           </p>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Ventes ({fmt(ventesEspeces)}) + Recouvr. ({fmt(remboursementsEspeces)})
+            Net : +{fmt(ventesEspeces + remboursementsEspeces)} / -{fmt(totalRetraitsEspeces + depensesEspeces)}
           </p>
         </div>
 
-        {/* D. MoMo du jour */}
+        {/* D. MoMo du jour net */}
         <div className="bg-white rounded-3xl border border-slate-200 p-4 shadow-sm flex flex-col justify-between">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
@@ -1003,11 +1106,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               <Smartphone className="w-3.5 h-3.5" />
             </div>
           </div>
-          <p className="text-xl font-black text-amber-700 font-mono">
-            {fmt(ventesMomo + remboursementsMomo)}
+          <p className={`text-xl font-black font-mono ${momoDuJour < 0 ? 'text-red-600' : 'text-amber-700'}`}>
+            {fmt(momoDuJour)}
           </p>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Ventes ({fmt(ventesMomo)}) + Recouvr. ({fmt(remboursementsMomo)})
+            Net : +{fmt(ventesMomo + remboursementsMomo)} / -{fmt(totalRetraitsMomo + depensesMomo)}
           </p>
         </div>
 
@@ -1027,6 +1130,29 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           </p>
         </div>
       </div>
+
+      {/* Modal Clôture Journalière Multi-Secteurs */}
+      {showClotureModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-6xl w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4 my-8 max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-700 pb-3">
+              <div className="flex items-center gap-2">
+                <Building2 className="w-5 h-5 text-emerald-600" />
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white">
+                  Clôture Journalière Multi-Secteurs
+                </h2>
+              </div>
+              <button
+                onClick={() => setShowClotureModal(false)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-500"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <ClotureCaisse />
+          </div>
+        </div>
+      )}
 
       {/* ── Section Demandes de Retrait vers Trésorerie ──────────────────────── */}
       {pendingRequests.length > 0 && (

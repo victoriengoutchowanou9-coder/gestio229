@@ -684,8 +684,8 @@ export async function enregistrerMouvementCaisse(params: {
       const curCaDuJour = Number(activeSession.ca_du_jour) || 0
       const fondOuverture = Number(activeSession.fond_ouverture_especes) || 0
 
-      const newEspDuJour = sens === 'entree' ? curEspDuJour + esp : Math.max(0, curEspDuJour - esp)
-      const newMomoDuJour = sens === 'entree' ? curMomoDuJour + momo : Math.max(0, curMomoDuJour - momo)
+      const newEspDuJour = sens === 'entree' ? curEspDuJour + esp : curEspDuJour - esp
+      const newMomoDuJour = sens === 'entree' ? curMomoDuJour + momo : curMomoDuJour - momo
       const newCaDuJour = params.type === 'vente' ? curCaDuJour + totalMontant : curCaDuJour
       const newEspTheorique = fondOuverture + newEspDuJour
 

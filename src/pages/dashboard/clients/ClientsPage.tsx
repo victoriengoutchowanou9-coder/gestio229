@@ -9,7 +9,8 @@ import { useParams } from 'react-router-dom'
 import {
   Users, Plus, Search, Phone, MapPin, AlertCircle, RefreshCw, X,
   DollarSign, MessageCircle, FileText, Printer, CheckCircle2, ArrowDownCircle,
-  CreditCard, Smartphone, ShieldCheck, History, Edit3, Trash2, AlertTriangle
+  CreditCard, Smartphone, ShieldCheck, History, Edit3, Trash2, AlertTriangle,
+  Tag, SlidersHorizontal
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -20,6 +21,12 @@ import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../..
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
+import {
+  BrasserieClientPrixPersonnalise,
+  fetchClientPrixPersonnalises,
+  saveClientPrixPersonnalise,
+  deleteClientPrixPersonnalise
+} from '../../../services/brasseriePricingService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -213,6 +220,112 @@ const ClientsPage: React.FC = () => {
     debt?: ClientDebt | null
   } | null>(null)
   const [activeGlobalStatement, setActiveGlobalStatement] = useState<Customer | null>(null)
+
+  // ─── Tarification Personnalisée Client (Brasserie & Dépôt de Boissons) ────────
+  const [customPricesCustomer, setCustomPricesCustomer] = useState<Customer | null>(null)
+  const [customPricesList, setCustomPricesList] = useState<BrasserieClientPrixPersonnalise[]>([])
+  const [brasserieProducts, setBrasserieProducts] = useState<any[]>([])
+  const [loadingCustomPrices, setLoadingCustomPrices] = useState(false)
+  const [savingCustomPrice, setSavingCustomPrice] = useState(false)
+  const [customPriceEditingProdId, setCustomPriceEditingProdId] = useState<string | null>(null)
+  const [customPriceForm, setCustomPriceForm] = useState<{
+    produit_id: string
+    prix_personnalise_fcfa: number | string
+    statut: 'ACTIF' | 'INACTIF'
+    notes: string
+  }>({
+    produit_id: '',
+    prix_personnalise_fcfa: '',
+    statut: 'ACTIF',
+    notes: '',
+  })
+
+  const openCustomPricesModal = async (c: Customer) => {
+    setCustomPricesCustomer(c)
+    setLoadingCustomPrices(true)
+    setCustomPriceEditingProdId(null)
+    setCustomPriceForm({
+      produit_id: '',
+      prix_personnalise_fcfa: '',
+      statut: 'ACTIF',
+      notes: '',
+    })
+
+    try {
+      if (brasserieProducts.length === 0 && currentCompanyId) {
+        const { data: prods } = await supabase
+          .from('products')
+          .select('*')
+          .eq('company_id', currentCompanyId)
+          .neq('is_active', false)
+          .order('name')
+        if (prods) setBrasserieProducts(prods)
+      }
+
+      const prices = await fetchClientPrixPersonnalises(currentCompanyId, c.id)
+      setCustomPricesList(prices)
+    } catch (err) {
+      console.error(err)
+      toast.error('Erreur', 'Impossible de charger les prix personnalisés du client.')
+    } finally {
+      setLoadingCustomPrices(false)
+    }
+  }
+
+  const handleSaveCustomPrice = async () => {
+    if (!customPricesCustomer || !customPriceForm.produit_id) {
+      toast.error('Sélection requise', 'Veuillez sélectionner un produit.')
+      return
+    }
+
+    const price = Number(customPriceForm.prix_personnalise_fcfa)
+    if (isNaN(price) || price < 0) {
+      toast.error('Prix invalide', 'Veuillez saisir un prix positif.')
+      return
+    }
+
+    setSavingCustomPrice(true)
+    try {
+      await saveClientPrixPersonnalise(currentCompanyId, currentSectorSlug, {
+        client_id: customPricesCustomer.id,
+        produit_id: customPriceForm.produit_id,
+        prix_personnalise_fcfa: price,
+        statut: customPriceForm.statut,
+        notes: customPriceForm.notes,
+      })
+
+      toast.success('Succès', 'Prix personnalisé enregistré.')
+      setCustomPriceEditingProdId(null)
+      setCustomPriceForm({
+        produit_id: '',
+        prix_personnalise_fcfa: '',
+        statut: 'ACTIF',
+        notes: '',
+      })
+
+      const refreshed = await fetchClientPrixPersonnalises(currentCompanyId, customPricesCustomer.id)
+      setCustomPricesList(refreshed)
+    } catch (err: any) {
+      console.error(err)
+      toast.error('Erreur', `Échec d'enregistrement : ${err?.message || err}`)
+    } finally {
+      setSavingCustomPrice(false)
+    }
+  }
+
+  const handleDeleteCustomPrice = async (produitId: string) => {
+    if (!customPricesCustomer) return
+    if (!window.confirm('Supprimer ce prix personnalisé ? Ce client basculera sur la grille automatique ou le prix standard pour ce produit.')) return
+
+    try {
+      await deleteClientPrixPersonnalise(currentCompanyId, customPricesCustomer.id, produitId)
+      toast.success('Succès', 'Prix personnalisé supprimé.')
+      const refreshed = await fetchClientPrixPersonnalises(currentCompanyId, customPricesCustomer.id)
+      setCustomPricesList(refreshed)
+    } catch (err: any) {
+      toast.error('Erreur', 'Impossible de supprimer le prix personnalisé.')
+    }
+  }
 
   // Modal Suppression Client (Contrôle d'intégrité & Soft/Hard delete)
   const [deleteCustomerModal, setDeleteCustomerModal] = useState<Customer | null>(null)
@@ -1002,6 +1115,15 @@ const ClientsPage: React.FC = () => {
                           >
                             <FileText className="w-3.5 h-3.5 text-slate-500" /> Détails
                           </button>
+                          {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && (
+                            <button
+                              onClick={() => openCustomPricesModal(item)}
+                              title="Gérer les prix personnalisés pour ce client"
+                              className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200/80 rounded-xl text-xs font-bold transition flex items-center gap-1 shadow-sm"
+                            >
+                              <Tag className="w-3.5 h-3.5 text-amber-600" /> Prix perso
+                            </button>
+                          )}
                           {soldeDu > 0 && (
                             <>
                               <button
@@ -1847,6 +1969,30 @@ const ClientsPage: React.FC = () => {
                     </div>
                   )}
 
+                  {/* SECTION TARIFICATION PERSONNALISÉE CLIENT (BRASSERIE UNIQUEMENT — PRIORITÉ 1) */}
+                  {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && (
+                    <div className="bg-indigo-50/80 border border-indigo-200 rounded-2xl p-4 space-y-3">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <Tag className="w-4 h-4 text-indigo-700" />
+                          <h4 className="font-bold text-xs uppercase tracking-wider text-indigo-900">
+                            Tarification Personnalisée Client (Priorité 1)
+                          </h4>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => openCustomPricesModal(activeDetailsCustomer)}
+                          className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-sm"
+                        >
+                          <SlidersHorizontal className="w-3.5 h-3.5" /> Gérer les prix personnalisés
+                        </button>
+                      </div>
+                      <p className="text-xs text-indigo-700 leading-relaxed">
+                        Configurez des prix spécifiques pour ce client sur certains produits. Ces prix s'appliqueront en <strong>priorité absolue</strong> à la vente, indépendamment du palier de quantité atteint.
+                      </p>
+                    </div>
+                  )}
+
                   {/* Historique des Remboursements issu de debt_payments — JAMAIS VIDÉ */}
                   <div>
                     <div className="flex items-center justify-between mb-2.5">
@@ -2147,6 +2293,274 @@ const ClientsPage: React.FC = () => {
                   </button>
                 </>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6 : PRIX PERSONNALISÉS CLIENT (BRASSERIE — PRIORITÉ 1) */}
+      {customPricesCustomer && (
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl overflow-hidden border border-slate-200 flex flex-col max-h-[92vh]">
+            {/* Header */}
+            <div className="px-6 py-4 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-500/20 text-amber-400 rounded-2xl">
+                  <Tag className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-lg text-white">
+                    Prix Personnalisés — {customPricesCustomer.name}
+                  </h3>
+                  <p className="text-xs text-slate-300 mt-0.5">
+                    Priorité 1 : Ces tarifs spécifiques sont appliqués en priorité lors de toute vente à ce client.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCustomPricesCustomer(null)}
+                className="p-1.5 text-slate-400 hover:text-white rounded-xl transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-6 overflow-y-auto flex-1">
+              {/* Formulaire Saisie Rapide */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-4.5 space-y-4">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                  <SlidersHorizontal className="w-3.5 h-3.5 text-indigo-600" />
+                  {customPriceEditingProdId ? 'Modifier le prix personnalisé' : 'Définir un nouveau prix personnalisé'}
+                </h4>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3.5">
+                  <div className="sm:col-span-2 md:col-span-1">
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Produit *
+                    </label>
+                    <select
+                      value={customPriceForm.produit_id}
+                      onChange={(e) => {
+                        const pid = e.target.value
+                        const prod = brasserieProducts.find((p) => p.id === pid)
+                        const existing = customPricesList.find((x) => x.produit_id === pid)
+                        setCustomPriceForm({
+                          ...customPriceForm,
+                          produit_id: pid,
+                          prix_personnalise_fcfa: existing ? existing.prix_personnalise_fcfa : (prod ? prod.selling_price : ''),
+                          statut: existing ? existing.statut : 'ACTIF',
+                          notes: existing?.notes || '',
+                        })
+                        setCustomPriceEditingProdId(existing ? existing.produit_id : null)
+                      }}
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30 font-medium"
+                    >
+                      <option value="">Sélectionner un produit...</option>
+                      {brasserieProducts.map((p) => {
+                        const hasCustom = customPricesList.some((x) => x.produit_id === p.id)
+                        return (
+                          <option key={p.id} value={p.id}>
+                            {p.name} (Std: {fmt(p.selling_price)}) {hasCustom ? '★' : ''}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Prix Spécial Client (FCFA) *
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="25"
+                      value={customPriceForm.prix_personnalise_fcfa}
+                      onChange={(e) => setCustomPriceForm({ ...customPriceForm, prix_personnalise_fcfa: e.target.value })}
+                      placeholder="Ex: 1350"
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl font-bold text-indigo-900 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-600 uppercase mb-1">
+                      Statut
+                    </label>
+                    <select
+                      value={customPriceForm.statut}
+                      onChange={(e) => setCustomPriceForm({ ...customPriceForm, statut: e.target.value as any })}
+                      className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    >
+                      <option value="ACTIF">ACTIF (Appliqué)</option>
+                      <option value="INACTIF">INACTIF (Suspendu)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
+                  <div className="w-full sm:flex-1">
+                    <input
+                      type="text"
+                      value={customPriceForm.notes}
+                      onChange={(e) => setCustomPriceForm({ ...customPriceForm, notes: e.target.value })}
+                      placeholder="Notes ou motif (ex: accord commercial, client fidèle...)"
+                      className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
+                    {customPriceEditingProdId && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomPriceEditingProdId(null)
+                          setCustomPriceForm({ produit_id: '', prix_personnalise_fcfa: '', statut: 'ACTIF', notes: '' })
+                        }}
+                        className="px-3 py-1.5 text-xs font-semibold text-slate-500 hover:text-slate-800 transition"
+                      >
+                        Annuler
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={savingCustomPrice}
+                      onClick={handleSaveCustomPrice}
+                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5"
+                    >
+                      {savingCustomPrice ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <CheckCircle2 className="w-3.5 h-3.5" />}
+                      <span>{customPriceEditingProdId ? 'Mettre à jour' : 'Enregistrer'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tableau des Prix Personnalisés Définis */}
+              <div className="space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Prix Personnalisés Définis ({customPricesList.length})
+                  </h4>
+                  <span className="text-[11px] text-slate-400">Priorité 1 sur la vente</span>
+                </div>
+
+                {loadingCustomPrices ? (
+                  <div className="py-10 text-center text-slate-400">
+                    <RefreshCw className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-500" />
+                    <p className="text-xs">Chargement des prix personnalisés...</p>
+                  </div>
+                ) : customPricesList.length === 0 ? (
+                  <div className="py-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400 text-xs">
+                    <Tag className="w-6 h-6 mx-auto mb-1 text-slate-300" />
+                    <p className="font-semibold text-slate-600">Aucun prix personnalisé défini</p>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Ce client bénéficiera automatiquement des prix des grilles selon la quantité achetée.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                    <table className="w-full text-left border-collapse text-xs">
+                      <thead>
+                        <tr className="bg-slate-100/80 text-slate-600 font-bold uppercase text-[10px] border-b border-slate-200">
+                          <th className="py-2.5 px-3">Produit</th>
+                          <th className="py-2.5 px-3 text-right">Prix Standard</th>
+                          <th className="py-2.5 px-3 text-right">Prix Client</th>
+                          <th className="py-2.5 px-3 text-center">Économie</th>
+                          <th className="py-2.5 px-3 text-center">Statut</th>
+                          <th className="py-2.5 px-3 text-right">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {customPricesList.map((cp) => {
+                          const prod = brasserieProducts.find((p) => p.id === cp.produit_id)
+                          const stdPrice = Number(prod?.selling_price) || 0
+                          const customPrice = Number(cp.prix_personnalise_fcfa) || 0
+                          const diff = stdPrice - customPrice
+
+                          return (
+                            <tr key={cp.produit_id} className="hover:bg-indigo-50/20 transition">
+                              <td className="py-2.5 px-3">
+                                <div className="font-bold text-slate-900">{prod?.name || 'Produit'}</div>
+                                {cp.notes && <div className="text-[10px] text-slate-400 italic">{cp.notes}</div>}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-medium text-slate-500">
+                                {fmt(stdPrice)}
+                              </td>
+                              <td className="py-2.5 px-3 text-right font-bold text-indigo-900">
+                                {fmt(customPrice)}
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                {diff > 0 ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                                    -{fmt(diff)}
+                                  </span>
+                                ) : diff < 0 ? (
+                                  <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                                    +{fmt(Math.abs(diff))}
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 text-[10px] font-medium">Identique</span>
+                                )}
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <span
+                                  className={clsx(
+                                    'inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold',
+                                    cp.statut === 'ACTIF'
+                                      ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                      : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                  )}
+                                >
+                                  {cp.statut}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-right">
+                                <div className="inline-flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCustomPriceEditingProdId(cp.produit_id)
+                                      setCustomPriceForm({
+                                        produit_id: cp.produit_id,
+                                        prix_personnalise_fcfa: cp.prix_personnalise_fcfa,
+                                        statut: cp.statut,
+                                        notes: cp.notes || '',
+                                      })
+                                    }}
+                                    className="p-1 text-slate-500 hover:text-indigo-600 rounded transition"
+                                    title="Modifier ce prix"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteCustomPrice(cp.produit_id)}
+                                    className="p-1 text-slate-500 hover:text-rose-600 rounded transition"
+                                    title="Supprimer ce prix personnalisé"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setCustomPricesCustomer(null)}
+                className="px-5 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl transition shadow-sm"
+              >
+                Fermer
+              </button>
             </div>
           </div>
         </div>
