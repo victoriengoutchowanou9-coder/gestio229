@@ -908,7 +908,146 @@ export const imprimerieService = {
   },
 
   // ───────────────────────────────────────────────────────────────────────────
-  // 9. VENTE RAPIDE (MODE SIMPLIFIÉ)
+  // 9. VENTE EXPRESS & PANIER MULTI-PRESTATIONS (AVEC DÉDUCTION MATIÈRES BOM)
+  // ───────────────────────────────────────────────────────────────────────────
+  async creerVentePanier(
+    companyId: string,
+    sectorSlug: string = 'imprimerie',
+    params: {
+      items: Array<{
+        prestation: PrestationImprimerie
+        quantite: number
+        largeur?: number
+        hauteur?: number
+        prixUnitaire: number
+        totalLigne: number
+      }>
+      clientNom: string
+      clientTel?: string
+      modePaiement: 'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'credit'
+      montantPaye: number
+      isEnAttente?: boolean
+    },
+    user?: any
+  ): Promise<{ commande: CommandeImprimerie; recuRef: string }> {
+    const cmdNum = `VEX-${Date.now().toString().slice(-6)}`
+    const recuRef = `REC-${Date.now().toString().slice(-6)}`
+    const totalTtc = params.items.reduce((acc, it) => acc + it.totalLigne, 0)
+    const isAttente = Boolean(params.isEnAttente)
+    const montantPaye = isAttente ? 0 : Math.min(totalTtc, Number(params.montantPaye || 0))
+    const soldeRestant = Math.max(0, totalTtc - montantPaye)
+    const statutPaiement = isAttente ? 'non_paye' : soldeRestant === 0 ? 'solde' : montantPaye > 0 ? 'acompte' : 'credit'
+    const statutCmd: StatutCommande = isAttente ? 'nouveau' : 'livre'
+
+    // Coût théorique cumulé des matières
+    let coutMatieresTotal = 0
+    params.items.forEach((it) => {
+      coutMatieresTotal += Number(it.prestation.cout_revient_theorique || 0) * it.quantite
+    })
+    const marge = totalTtc - coutMatieresTotal
+    const tauxMarge = totalTtc > 0 ? (marge / totalTtc) * 100 : 0
+
+    const titreTravail = params.items.map((it) => `${it.prestation.nom} x${it.quantite}`).join(', ').slice(0, 250)
+
+    // 1. Créer la commande
+    const { data: cmd, error } = await supabase
+      .from('imprimerie_commandes')
+      .insert({
+        company_id: companyId,
+        sector_slug: sectorSlug,
+        numero_commande: cmdNum,
+        client_nom: params.clientNom || 'Client Comptoir',
+        client_tel: params.clientTel || null,
+        titre_travail: titreTravail || 'Vente Express',
+        date_commande: new Date().toISOString().split('T')[0],
+        date_livraison_prevue: new Date().toISOString().split('T')[0],
+        priorite: 'normale',
+        statut: statutCmd,
+        total_ttc: totalTtc,
+        montant_acompte: montantPaye,
+        montant_paye: montantPaye,
+        solde_restant: soldeRestant,
+        statut_paiement: statutPaiement,
+        cout_matieres_prevu: coutMatieresTotal,
+        cout_matieres_reel: coutMatieresTotal,
+        cout_revient_total: coutMatieresTotal,
+        marge_reelle: marge,
+        taux_marge_reel: Number(tauxMarge.toFixed(2)),
+      })
+      .select()
+      .single()
+
+    if (error) throw error
+
+    // 2. Insérer toutes les lignes du panier
+    const lignesPayload = params.items.map((it) => ({
+      company_id: companyId,
+      sector_slug: sectorSlug,
+      commande_id: cmd.id,
+      prestation_id: it.prestation.id,
+      designation: it.prestation.nom,
+      mode_calcul: it.prestation.mode_calcul,
+      largeur: it.largeur || 0,
+      hauteur: it.hauteur || 0,
+      surface_m2: it.largeur && it.hauteur ? it.largeur * it.hauteur : 0,
+      quantite: it.quantite,
+      prix_unitaire: it.prixUnitaire,
+      montant_ttc: it.totalLigne,
+    }))
+    await supabase.from('imprimerie_commande_lignes').insert(lignesPayload)
+
+    // 3. Encaissement si non en attente et montantPaye > 0
+    if (!isAttente && montantPaye > 0) {
+      await supabase.from('imprimerie_paiements').insert({
+        company_id: companyId,
+        sector_slug: sectorSlug,
+        commande_id: cmd.id,
+        montant: montantPaye,
+        mode_paiement: params.modePaiement === 'credit' ? 'especes' : params.modePaiement,
+        reference_recu: recuRef,
+        caissier_id: user?.id || null,
+        caissier_nom: user?.full_name || 'Caissière',
+        type_paiement: 'vente_rapide',
+      })
+
+      // Mouvement Caisse Secteur
+      try {
+        await enregistrerMouvementCaisse(companyId, sectorSlug, {
+          type: 'vente',
+          sens: 'entree',
+          montant_especes: ['especes'].includes(params.modePaiement) ? montantPaye : 0,
+          montant_momo: ['momo_mtn', 'momo_moov'].includes(params.modePaiement) ? montantPaye : 0,
+          source_module: 'imprimerie',
+          source_id: cmd.id,
+          motif: `Vente express impression ${cmdNum} - ${params.clientNom}`,
+          user_name: user?.full_name || 'Caissière',
+          user_id: user?.id,
+        })
+      } catch (caisseErr) {
+        console.warn('Erreur synchro caisse vente express:', caisseErr)
+      }
+    }
+
+    // 4. Déduire automatiquement les matières premières BOM si validé
+    if (!isAttente) {
+      for (const it of params.items) {
+        if (it.prestation.matieres_bom && it.prestation.matieres_bom.length > 0) {
+          for (const bom of it.prestation.matieres_bom) {
+            const surfaceFactor = (it.largeur && it.hauteur && it.prestation.mode_calcul === 'm2')
+              ? (it.largeur * it.hauteur)
+              : 1
+            const qtyConsommee = Number(bom.quantite_prevue || 1) * it.quantite * surfaceFactor
+            await this.adjustStockMatiere(bom.matiere_id, qtyConsommee, 'sortie')
+          }
+        }
+      }
+    }
+
+    return { commande: cmd, recuRef }
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 9.b VENTE RAPIDE MONO-ARTICLE (Rétro-compatibilité)
   // ───────────────────────────────────────────────────────────────────────────
   async creerVenteRapide(
     companyId: string,
@@ -926,106 +1065,31 @@ export const imprimerieService = {
     },
     user?: any
   ): Promise<{ commande: CommandeImprimerie; recuRef: string }> {
-    const cmdNum = `VR-${Date.now().toString().slice(-6)}`
-    const recuRef = `REC-VR-${Date.now().toString().slice(-6)}`
-    const totalTtc = params.prixVente
-    const montantPaye = Math.min(totalTtc, Number(params.montantPaye || 0))
-    const soldeRestant = Math.max(0, totalTtc - montantPaye)
-    const statutPaiement = soldeRestant === 0 ? 'solde' : montantPaye > 0 ? 'acompte' : 'credit'
-
-    // Coût théorique matières
-    const coutRevient = Number(params.prestation.cout_revient_theorique || 0)
-    const marge = totalTtc - coutRevient
-    const tauxMarge = totalTtc > 0 ? (marge / totalTtc) * 100 : 0
-
-    // Créer la commande terminée directement
-    const { data: cmd, error } = await supabase
-      .from('imprimerie_commandes')
-      .insert({
-        company_id: companyId,
-        sector_slug: sectorSlug,
-        numero_commande: cmdNum,
-        client_nom: params.clientNom || 'Client Comptoir',
-        client_tel: params.clientTel || null,
-        titre_travail: `${params.prestation.nom} x ${params.quantite}`,
-        date_commande: new Date().toISOString().split('T')[0],
-        date_livraison_prevue: new Date().toISOString().split('T')[0],
-        priorite: 'normale',
-        statut: 'livre',
-        total_ttc: totalTtc,
-        montant_acompte: montantPaye,
-        montant_paye: montantPaye,
-        solde_restant: soldeRestant,
-        statut_paiement: statutPaiement,
-        cout_matieres_prevu: coutRevient,
-        cout_matieres_reel: coutRevient,
-        cout_revient_total: coutRevient,
-        marge_reelle: marge,
-        taux_marge_reel: Number(tauxMarge.toFixed(2)),
-      })
-      .select()
-      .single()
-
-    if (error) throw error
-
-    // Ligne de commande
-    await supabase.from('imprimerie_commande_lignes').insert({
-      company_id: companyId,
-      sector_slug: sectorSlug,
-      commande_id: cmd.id,
-      prestation_id: params.prestation.id,
-      designation: params.prestation.nom,
-      mode_calcul: params.prestation.mode_calcul,
-      largeur: params.largeur || 0,
-      hauteur: params.hauteur || 0,
-      surface_m2: params.largeur && params.hauteur ? params.largeur * params.hauteur : 0,
-      quantite: params.quantite,
-      prix_unitaire: params.prixVente / Math.max(1, params.quantite),
-      montant_ttc: totalTtc,
-    })
-
-    // Encaissement si payé
-    if (montantPaye > 0) {
-      await supabase.from('imprimerie_paiements').insert({
-        company_id: companyId,
-        sector_slug: sectorSlug,
-        commande_id: cmd.id,
-        montant: montantPaye,
-        mode_paiement: params.modePaiement === 'credit' ? 'especes' : params.modePaiement,
-        reference_recu: recuRef,
-        caissier_id: user?.id || null,
-        caissier_nom: user?.full_name || 'Vente Comptoir',
-        type_paiement: 'vente_rapide',
-      })
-
-      // Mouvement Caisse Secteur
-      try {
-        await enregistrerMouvementCaisse(companyId, sectorSlug, {
-          type: 'vente',
-          sens: 'entree',
-          montant_especes: ['especes'].includes(params.modePaiement) ? montantPaye : 0,
-          montant_momo: ['momo_mtn', 'momo_moov'].includes(params.modePaiement) ? montantPaye : 0,
-          source_module: 'imprimerie',
-          source_id: cmd.id,
-          motif: `Vente rapide impression ${cmdNum} - ${params.clientNom}`,
-          user_name: user?.full_name || 'Vente Comptoir',
-          user_id: user?.id,
-        })
-      } catch (caisseErr) {
-        console.warn('Erreur synchro caisse vente rapide:', caisseErr)
-      }
-    }
-
-    // Déduire automatiquement les matières prévues si définies
-    if (params.prestation.matieres_bom && params.prestation.matieres_bom.length > 0) {
-      for (const bom of params.prestation.matieres_bom) {
-        const qtyConsommee = Number(bom.quantite_prevue || 1) * params.quantite
-        await this.adjustStockMatiere(bom.matiere_id, qtyConsommee, 'sortie')
-      }
-    }
-
-    return { commande: cmd, recuRef }
+    return this.creerVentePanier(
+      companyId,
+      sectorSlug,
+      {
+        items: [
+          {
+            prestation: params.prestation,
+            quantite: params.quantite,
+            largeur: params.largeur,
+            hauteur: params.hauteur,
+            prixUnitaire: params.prixVente / Math.max(1, params.quantite),
+            totalLigne: params.prixVente,
+          },
+        ],
+        clientNom: params.clientNom,
+        clientTel: params.clientTel,
+        modePaiement: params.modePaiement,
+        montantPaye: params.montantPaye,
+        isEnAttente: false,
+      },
+      user
+    )
   },
+
+
 
   // ───────────────────────────────────────────────────────────────────────────
   // 10. SOUS-TRAITANCE
