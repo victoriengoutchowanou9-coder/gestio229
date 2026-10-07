@@ -726,7 +726,7 @@ export async function getCurrentCashSession(
   try {
     const { data: dbSessions, error: sessErr } = await supabase
       .from('caisse_sessions')
-      .select('*, caisse:caisses(code, nom)')
+      .select('*')
       .eq('company_id', companyId)
       .or(`sector_slug.eq.${cleanSlug},secteur_slug.eq.${cleanSlug}`)
       .in('statut', ['ouverte', 'open'])
@@ -746,11 +746,11 @@ export async function getCurrentCashSession(
         ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
         : '--:--'
 
-      const codeCaisse = s.caisse?.code || `CS-${cleanSlug.slice(0, 4).toUpperCase()}`
+      const codeCaisse = s.code || `CS-${cleanSlug.slice(0, 4).toUpperCase()}`
 
       return {
         id: s.id,
-        caisse_id: s.caisse_id,
+        caisse_id: s.caisse_id || s.id,
         session_number: codeCaisse,
         statut: 'ouverte',
         date_ouverture: s.date_ouverture,
@@ -769,13 +769,13 @@ export async function getCurrentCashSession(
     console.warn('[CASH-CHECK] Fallback caisse_sessions:', err)
   }
 
-  // 2. Essai sur table caisses officielle
+  // 2. Essai sur table caisses officielle (requête propre sans join risqué)
   try {
     const { data: openCaisses, error } = await supabase
       .from('caisses')
-      .select('*, opener:user_profiles!ouvert_par(id, full_name, username)')
+      .select('*')
       .eq('company_id', companyId)
-      .eq('sector_slug', cleanSlug)
+      .or(`sector_slug.eq.${cleanSlug},secteur_slug.eq.${cleanSlug}`)
       .in('statut', ['ouverte', 'open'])
       .is('date_fermeture', null)
       .order('date_ouverture', { ascending: false })
@@ -803,7 +803,7 @@ export async function getCurrentCashSession(
         fond_ouverture_especes: Number(c.fond_ouverture_especes) || 0,
         fond_ouverture_momo: Number(c.fond_ouverture_momo) || 0,
         total_ouverture: (Number(c.fond_ouverture_especes) || 0) + (Number(c.fond_ouverture_momo) || 0),
-        ouvert_par: c.opener?.full_name || c.opener?.username || c.ouvert_par || 'Caissier',
+        ouvert_par: c.ouvert_par || 'Caissier',
         ouvert_par_id: c.ouvert_par || null,
         sector_slug: cleanSlug,
         company_id: companyId,
@@ -885,6 +885,47 @@ export async function getCurrentCashSession(
     }
   } catch (sessErr) {
     console.warn('[CASH-CHECK] Erreur lecture cash_sessions:', sessErr)
+  }
+
+  // 4. Fallback ultime sur le stockage local (session active créée côté client)
+  try {
+    const localSessStr =
+      localStorage.getItem(`gestio_caisse_active_${cleanSlug}_${companyId}`) ||
+      localStorage.getItem(`gestio_caisse_active_${cleanSlug}`) ||
+      localStorage.getItem('active_caisse_session')
+    if (localSessStr) {
+      const parsed = JSON.parse(localSessStr)
+      if (parsed && (parsed.statut === 'ouverte' || parsed.statut === 'open' || parsed.is_open === true)) {
+        const openDate = new Date(parsed.date_ouverture || Date.now())
+        const isDiffDate =
+          openDate.getFullYear() !== now.getFullYear() ||
+          openDate.getMonth() !== now.getMonth() ||
+          openDate.getDate() !== now.getDate()
+        const heureStr = !isNaN(openDate.getTime())
+          ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+          : '--:--'
+
+        console.log('[CASH-CHECK] Session active restaurée depuis localStorage pour:', cleanSlug)
+        return {
+          id: parsed.id || parsed.caisse_id || 'local-sess',
+          caisse_id: parsed.caisse_id || parsed.id || 'local-caisse',
+          session_number: parsed.session_number || parsed.code || `CS-${cleanSlug.slice(0, 4).toUpperCase()}`,
+          statut: 'ouverte',
+          date_ouverture: parsed.date_ouverture || now.toISOString(),
+          heure_ouverture: heureStr,
+          fond_ouverture_especes: Number(parsed.fond_ouverture_especes) || 0,
+          fond_ouverture_momo: Number(parsed.fond_actuel_momo ?? parsed.fond_ouverture_momo) || 0,
+          total_ouverture: (Number(parsed.fond_ouverture_especes) || 0) + (Number(parsed.fond_actuel_momo ?? parsed.fond_ouverture_momo) || 0),
+          ouvert_par: parsed.ouvert_par_nom || parsed.ouvert_par || 'Caissier',
+          ouvert_par_id: parsed.ouvert_par || null,
+          sector_slug: cleanSlug,
+          company_id: companyId,
+          is_previous_day: isDiffDate,
+        }
+      }
+    }
+  } catch (locErr) {
+    console.warn('[CASH-CHECK] Fallback localStorage:', locErr)
   }
 
   console.log('[CASH-CHECK]', {

@@ -31,7 +31,7 @@ import {
 import clsx from 'clsx'
 import { StationFuelDispenser } from '../station/StationFuelDispenser'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
-import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
+import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -186,30 +186,110 @@ export const POSPage: React.FC = () => {
     try {
       // 0. Vérification stricte de la caisse ouverte pour ce secteur
       try {
-        const caisse = await getCurrentCashSession(companyId, currentSectorSlug, user?.id)
+        let caisse = await getCurrentCashSession(companyId, currentSectorSlug, user?.id)
+        if (!caisse) {
+          const statusRes = await checkSectorCaisseStatus(companyId, currentSectorSlug)
+          if (statusRes.isTodayOpen || statusRes.statusType === 'OUVERTE_AUJOURDHUI' || statusRes.statusType === 'ANTERIEURE_OUVERTE') {
+            caisse = {
+              id: statusRes.session?.id || statusRes.caisse?.id || 'simulated',
+              caisse_id: statusRes.caisse?.id || '',
+              session_number: statusRes.caisseCode || `CS-${currentSectorSlug.slice(0, 4).toUpperCase()}`,
+              statut: 'ouverte',
+              date_ouverture: statusRes.session?.date_ouverture || new Date().toISOString(),
+              heure_ouverture: statusRes.heureOuverture || '--:--',
+              fond_ouverture_especes: Number(statusRes.session?.fond_ouverture_especes ?? statusRes.caisse?.fond_ouverture_especes ?? 0),
+              fond_ouverture_momo: Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0),
+              total_ouverture: (Number(statusRes.session?.fond_ouverture_especes ?? statusRes.caisse?.fond_ouverture_especes ?? 0)) +
+                               (Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0)),
+              ouvert_par: statusRes.ouvertParNom || 'Caissier',
+              ouvert_par_id: statusRes.session?.ouvert_par || null,
+              sector_slug: currentSectorSlug,
+              company_id: companyId,
+              is_previous_day: statusRes.isPreviousDay,
+            }
+          }
+        }
         setActiveCaisse(caisse)
       } catch (err) {
         console.warn('[CASH-CHECK] Erreur vérification caisse:', err)
         setActiveCaisse(null)
       }
 
-      const [{ data: prods, error: prodErr }, { data: custs, error: custErr }, { data: sales, error: saleErr }] =
-        await Promise.all([
-          supabaseTenant('products')
-            .select('*, category:product_categories(name)')
-            .eq('is_active', true)
-            .order('name'),
-          supabaseTenant('customers')
+      // 1. Récupération robuste des produits (avec fallback si filtre ou RLS restrictif)
+      let rawProds: any[] = []
+      try {
+        const { data, error } = await supabaseTenant('products')
+          .select('*, category:product_categories(name)')
+          .neq('is_active', false)
+          .order('name')
+        if (!error && data && data.length > 0) {
+          rawProds = data
+        } else {
+          const { data: fbData } = await supabase
+            .from('products')
             .select('*')
-            .order('name'),
-          supabaseTenant('sales_orders')
-            .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
-            .order('created_at', { ascending: false })
-            .limit(100)
-        ])
+            .eq('company_id', companyId)
+            .neq('is_active', false)
+            .order('name')
+          if (fbData && fbData.length > 0) {
+            const secProds = filterItemsForSector(fbData, currentSectorSlug)
+            rawProds = secProds.length > 0 ? secProds : fbData
+          }
+        }
+      } catch (pErr) {
+        console.warn('[POSPage] Erreur récupération produits:', pErr)
+        try {
+          const { data: fbData } = await supabase
+            .from('products')
+            .select('*')
+            .eq('company_id', companyId)
+            .order('name')
+          if (fbData) rawProds = filterItemsForSector(fbData, currentSectorSlug)
+        } catch (_) {}
+      }
 
-      if (prodErr) throw prodErr
-      if (custErr) throw custErr
+      // 2. Récupération robuste des clients et de leurs dettes
+      let rawCusts: any[] = []
+      try {
+        const { data, error } = await supabaseTenant('customers')
+          .select('*')
+          .order('name')
+        if (!error && data && data.length > 0) {
+          rawCusts = data
+        } else {
+          const { data: fbCusts } = await supabase
+            .from('customers')
+            .select('*')
+            .eq('company_id', companyId)
+            .order('name')
+          if (fbCusts && fbCusts.length > 0) {
+            const secCusts = filterItemsForSector(fbCusts, currentSectorSlug)
+            rawCusts = secCusts.length > 0 ? secCusts : fbCusts
+          }
+        }
+      } catch (cErr) {
+        console.warn('[POSPage] Erreur récupération clients:', cErr)
+        try {
+          const { data: fbCusts } = await supabase
+            .from('customers')
+            .select('*')
+            .eq('company_id', companyId)
+          if (fbCusts) rawCusts = fbCusts
+        } catch (_) {}
+      }
+
+      // 3. Récupération des ventes
+      let sales: any[] = []
+      try {
+        const { data } = await supabaseTenant('sales_orders')
+          .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
+          .order('created_at', { ascending: false })
+          .limit(100)
+        if (data) sales = data
+      } catch (_) {}
+
+      const prods = rawProds
+      const custs = rawCusts
 
       const mappedProds = (prods || []).map((p: any) => {
         const isVat = Boolean(

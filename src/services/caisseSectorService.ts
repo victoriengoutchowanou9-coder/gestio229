@@ -388,31 +388,35 @@ export async function ouvrirSessionCaisse(
 
     try {
       localStorage.setItem(`gestio_caisse_active_${clean}_${companyId}`, JSON.stringify(newSess))
+      localStorage.setItem(`gestio_caisse_active_${clean}`, JSON.stringify(newSess))
+      localStorage.setItem('active_caisse_session', JSON.stringify(newSess))
     } catch (_) {}
 
-    // 3. Mettre à jour l'état de la table caisses (Table maîtresse accessible)
-    const caisseUpdatePayload: any = {
+    // 3. Mettre à jour l'état de la table caisses (Table maîtresse accessible sans colonnes non reconnues)
+    const caisseCorePayload: any = {
       statut: 'ouverte',
-      is_open: true,
       date_ouverture: nowIso,
       date_fermeture: null,
       fond_ouverture_especes: fondEspeces,
       fond_ouverture_momo: fondMomo,
       solde_especes_final: fondEspeces,
-      solde_actuel: fondEspeces,
       updated_at: nowIso,
     }
     if (userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) {
-      caisseUpdatePayload.ouvert_par = userId
+      caisseCorePayload.ouvert_par = userId
     }
 
-    const { error: caisseErr } = await supabase
-      .from('caisses')
-      .update(caisseUpdatePayload)
-      .eq('id', caisse.id)
+    try {
+      const { error: caisseErr } = await supabase
+        .from('caisses')
+        .update(caisseCorePayload)
+        .eq('id', caisse.id)
 
-    if (caisseErr) {
-      console.warn('[CAISSE-SERVICE] Mise à jour table caisses notice:', caisseErr.message)
+      if (caisseErr) {
+        console.warn('[CAISSE-SERVICE] Mise à jour table caisses notice:', caisseErr.message)
+      }
+    } catch (cEx) {
+      console.warn('[CAISSE-SERVICE] Exception mise à jour caisses:', cEx)
     }
 
     // Enregistrer le mouvement d'ouverture
@@ -520,6 +524,8 @@ export async function cloturerSessionCaisse(
 
     try {
       localStorage.removeItem(`gestio_caisse_active_${clean}_${companyId}`)
+      localStorage.removeItem(`gestio_caisse_active_${clean}`)
+      localStorage.removeItem('active_caisse_session')
     } catch (_) {}
 
     // 3. Mettre à jour la table caisses (Table maîtresse garantie)
@@ -529,12 +535,10 @@ export async function cloturerSessionCaisse(
           .from('caisses')
           .update({
             statut: 'fermee',
-            is_open: false,
             date_fermeture: nowIso,
             fond_ouverture_especes: nouveauFondEspeces,
             fond_ouverture_momo: nouveauFondMomo,
             solde_especes_final: nouveauFondEspeces,
-            solde_actuel: nouveauFondEspeces,
             updated_at: nowIso,
           })
           .eq('id', caisseId)
