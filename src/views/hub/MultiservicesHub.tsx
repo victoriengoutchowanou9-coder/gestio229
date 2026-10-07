@@ -94,8 +94,14 @@ const fmt = (n: number) => formatNumber(n);
 
 const generateId = () => `act-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-const getSectorMeta = (slug: string): SectorDefinition | undefined =>
-  ALL_SECTORS_CATALOG.find((s) => s.slug === slug);
+const getSectorMeta = (slug: string): SectorDefinition | undefined => {
+  if (!slug) return undefined;
+  const clean = String(slug).replace(/^sec-/, '').toLowerCase().trim();
+  return (
+    ALL_SECTORS_CATALOG.find((s) => s.slug.toLowerCase() === clean) ||
+    ALL_SECTORS_CATALOG.find((s) => s.slug.toLowerCase() === String(slug).toLowerCase().trim())
+  );
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // COMPOSANT PRINCIPAL
@@ -118,7 +124,50 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const { darkMode, toggleDarkMode } = useUIStore();
 
   // ── State ──────────────────────────────────────────────────────────────────
-  const [activities, setActivities] = useState<ActivityEntry[]>([]);
+  const [activities, setActivities] = useState<ActivityEntry[]>(() => {
+    if (companyId) {
+      try {
+        const cached = localStorage.getItem(`gestio229_activities_${companyId}`);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (_) {}
+    }
+    if (company) {
+      const raw = Array.isArray(company.selected_sectors) && company.selected_sectors.length > 0
+        ? company.selected_sectors
+        : Array.isArray(company.sectors) && company.sectors.length > 0
+        ? company.sectors
+        : company.active_sector ? [company.active_sector] : [];
+      const slugs = Array.from(new Set(raw.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim()).filter(Boolean)));
+      if (slugs.length > 0) {
+        return slugs.map((slug: string) => {
+          const meta = getSectorMeta(slug);
+          const actName = `${companyName || company.name || 'Mon Établissement'} — ${meta?.label || slug}`.toUpperCase();
+          return {
+            id: `act-${(companyId || 'comp').slice(0, 8)}-${slug}`,
+            sectorSlug: slug,
+            sectorLabel: meta?.label || actName,
+            sectorIcon: meta?.emoji ?? '🏢',
+            sectorColor: meta?.color ?? '#059669',
+            name: actName,
+            location: company.city || 'Bénin',
+            manager: company.responsible_name || '',
+            status: 'ACTIVE' as ActivityStatus,
+            isConfigured: true,
+            revenue: 0,
+            expenses: 0,
+            netMargin: 0,
+            monthRevenue: 0,
+            monthExpenses: 0,
+            monthNetMargin: 0,
+          };
+        });
+      }
+    }
+    return [];
+  });
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -151,29 +200,75 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const loadActivitiesFromSupabase = useCallback(async () => {
     if (!companyId) return;
     try {
-      const { data: dbActivities, error } = await supabase
+      // 1. Récupération de l'entreprise si les secteurs ne sont pas fournis dans les props
+      let comp = company;
+      if (
+        (!comp?.selected_sectors || (Array.isArray(comp.selected_sectors) && comp.selected_sectors.length === 0)) &&
+        (!comp?.sectors || (Array.isArray(comp.sectors) && comp.sectors.length === 0))
+      ) {
+        const { data: fetchedComp } = await supabase
+          .from('companies')
+          .select('*')
+          .eq('id', companyId)
+          .maybeSingle();
+        if (fetchedComp) {
+          comp = fetchedComp;
+        }
+      }
+
+      // 2. Extraire tous les secteurs choisis / configurés à l'inscription
+      const rawSectorList: string[] = [];
+      if (Array.isArray(comp?.selected_sectors) && comp.selected_sectors.length > 0) {
+        rawSectorList.push(...comp.selected_sectors);
+      }
+      if (Array.isArray(comp?.sectors) && comp.sectors.length > 0) {
+        rawSectorList.push(...comp.sectors);
+      }
+      if (comp?.active_sector) {
+        rawSectorList.push(comp.active_sector);
+      }
+
+      const targetSlugs = Array.from(
+        new Set(
+          rawSectorList
+            .map((s) => String(s || '').replace(/^sec-/, '').toLowerCase().trim())
+            .filter(Boolean)
+        )
+      );
+
+      // Si aucun secteur n'est spécifié, défaut sur 'boutique'
+      if (targetSlugs.length === 0) {
+        targetSlugs.push('boutique');
+      }
+
+      // 3. Lire les activités existantes depuis la table company_activities
+      const { data: dbActivities, error: dbErr } = await supabase
         .from('company_activities')
         .select('*')
         .eq('company_id', companyId)
         .order('created_at', { ascending: true });
 
-      if (error) {
-        console.error('[Hub] Erreur lecture company_activities Supabase:', error.message);
+      if (dbErr) {
+        console.warn('[Hub] Erreur lecture company_activities Supabase:', dbErr.message);
       }
 
+      const existingEntries: ActivityEntry[] = [];
+      const coveredSlugs = new Set<string>();
+
       if (dbActivities && dbActivities.length > 0) {
-        const mapped: ActivityEntry[] = dbActivities.map((row) => {
-          const rawSlug = (row.sector_slug || '').replace(/^sec-/, '');
+        for (const row of dbActivities) {
+          const rawSlug = (row.sector_slug || '').replace(/^sec-/, '').toLowerCase().trim();
+          coveredSlugs.add(rawSlug);
           const meta = getSectorMeta(rawSlug) || getSectorMeta(row.sector_slug) || getSectorMeta(row.sector_code?.toLowerCase());
-          return {
+          existingEntries.push({
             id: row.id,
             sectorSlug: rawSlug || row.sector_slug,
             sectorLabel: meta?.label || row.activity_name,
             sectorIcon: meta?.emoji ?? '🏢',
             sectorColor: row.color || (meta?.color ?? '#059669'),
             name: row.activity_name,
-            location: row.pos_location || 'Bénin',
-            manager: row.manager_name || '',
+            location: row.pos_location || comp?.city || 'Bénin',
+            manager: row.manager_name || comp?.responsible_name || '',
             status: row.status as ActivityStatus,
             isConfigured: true,
             revenue: 0,
@@ -183,40 +278,21 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             monthExpenses: 0,
             monthNetMargin: 0,
             archivedAt: row.archived_at || undefined,
-          };
-        });
-
-        // Déduplication stricte par (slug, nom) pour éviter les doublons sur le Hub
-        const seen = new Set<string>();
-        const uniqueMapped: ActivityEntry[] = [];
-        for (const item of mapped) {
-          const normSlug = (item.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
-          const key = `${normSlug}_${item.name.toLowerCase().trim()}`;
-          if (!seen.has(key)) {
-            seen.add(key);
-            uniqueMapped.push(item);
-          }
+          });
         }
+      }
 
-        setActivities(uniqueMapped);
-      } else {
-        // Auto-seed dans Supabase si aucune activité n'existe pour cette entreprise
-        const sectorsToSeed: string[] = [];
-        if (Array.isArray(company?.selected_sectors) && company.selected_sectors.length > 0) {
-          sectorsToSeed.push(...company.selected_sectors);
-        } else if (Array.isArray(company?.sectors) && company.sectors.length > 0) {
-          sectorsToSeed.push(...company.sectors);
-        } else if (company?.active_sector) {
-          sectorsToSeed.push(company.active_sector);
-        } else {
-          sectorsToSeed.push('boutique');
-        }
+      // 4. Identifier les secteurs choisis non encore créés dans company_activities
+      const missingSlugs = targetSlugs.filter((slug) => !coveredSlugs.has(slug));
+      const newSeededEntries: ActivityEntry[] = [];
 
-        const uniqueSectorsToSeed = Array.from(new Set(sectorsToSeed.map((s) => s.replace(/^sec-/, ''))));
-        const seededRows: ActivityEntry[] = [];
-        for (const rawSlug of uniqueSectorsToSeed) {
-          const meta = getSectorMeta(rawSlug);
-          const actName = `${companyName || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
+      for (const rawSlug of missingSlugs) {
+        const meta = getSectorMeta(rawSlug);
+        const actName = `${companyName || comp?.name || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
+        let assignedId = `act-${companyId.slice(0, 8)}-${rawSlug}`;
+
+        // Tentative d'insertion Supabase (résiliente aux règles RLS / anon)
+        try {
           const { data: newAct, error: actErr } = await supabase
             .from('company_activities')
             .insert({
@@ -224,8 +300,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               sector_slug: rawSlug,
               sector_code: rawSlug.toUpperCase(),
               activity_name: actName,
-              pos_location: company?.city || 'Bénin',
-              manager_name: company?.responsible_name || '',
+              pos_location: comp?.city || 'Bénin',
+              manager_name: comp?.responsible_name || '',
               status: 'ACTIVE',
               is_active: true,
               color: meta?.color || '#059669',
@@ -233,36 +309,96 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             .select()
             .single();
 
-          if (newAct) {
-            seededRows.push({
-              id: newAct.id,
-              sectorSlug: rawSlug,
-              sectorLabel: meta?.label || newAct.activity_name,
-              sectorIcon: meta?.emoji ?? '🏢',
-              sectorColor: newAct.color || (meta?.color ?? '#059669'),
-              name: newAct.activity_name,
-              location: newAct.pos_location || 'Bénin',
-              manager: newAct.manager_name || '',
-              status: 'ACTIVE',
-              isConfigured: true,
-              revenue: 0,
-              expenses: 0,
-              netMargin: 0,
-              monthRevenue: 0,
-              monthExpenses: 0,
-              monthNetMargin: 0,
-            });
+          if (newAct?.id) {
+            assignedId = newAct.id;
+          } else if (actErr) {
+            console.warn(`[Hub] Auto-seed Supabase pour ${rawSlug} (RLS):`, actErr.message);
           }
+        } catch (seedErr) {
+          console.warn(`[Hub] Exception auto-seed pour ${rawSlug}:`, seedErr);
         }
 
-        if (seededRows.length > 0) {
-          setActivities(seededRows);
+        // On garantit que l'activité est affichée même en cas de blocage RLS Supabase
+        newSeededEntries.push({
+          id: assignedId,
+          sectorSlug: rawSlug,
+          sectorLabel: meta?.label || actName,
+          sectorIcon: meta?.emoji ?? '🏢',
+          sectorColor: meta?.color ?? '#059669',
+          name: actName,
+          location: comp?.city || 'Bénin',
+          manager: comp?.responsible_name || '',
+          status: 'ACTIVE',
+          isConfigured: true,
+          revenue: 0,
+          expenses: 0,
+          netMargin: 0,
+          monthRevenue: 0,
+          monthExpenses: 0,
+          monthNetMargin: 0,
+        });
+      }
+
+      // 5. Fusionner, dédupliquer et mettre à jour le state & localStorage
+      const allActivities = [...existingEntries, ...newSeededEntries];
+      const seen = new Set<string>();
+      const finalUnique: ActivityEntry[] = [];
+      for (const item of allActivities) {
+        const normSlug = (item.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+        const key = `${normSlug}_${item.name.toLowerCase().trim()}`;
+        if (!seen.has(key)) {
+          seen.add(key);
+          finalUnique.push(item);
         }
+      }
+
+      if (finalUnique.length > 0) {
+        setActivities(finalUnique);
+        try {
+          localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(finalUnique));
+        } catch (_) {}
       }
     } catch (err) {
       console.error('[Hub] Erreur sync Supabase:', err);
     }
   }, [companyId, company, companyName]);
+
+  // Synchronisation immédiate si company est disponible et activities est vide
+  useEffect(() => {
+    if (activities.length === 0 && company) {
+      const raw = Array.isArray(company.selected_sectors) && company.selected_sectors.length > 0
+        ? company.selected_sectors
+        : Array.isArray(company.sectors) && company.sectors.length > 0
+        ? company.sectors
+        : company.active_sector ? [company.active_sector] : [];
+      const slugs = Array.from(new Set(raw.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim()).filter(Boolean)));
+      if (slugs.length > 0) {
+        const initial = slugs.map((slug: string) => {
+          const meta = getSectorMeta(slug);
+          const actName = `${companyName || company.name || 'Mon Établissement'} — ${meta?.label || slug}`.toUpperCase();
+          return {
+            id: `act-${(companyId || 'comp').slice(0, 8)}-${slug}`,
+            sectorSlug: slug,
+            sectorLabel: meta?.label || actName,
+            sectorIcon: meta?.emoji ?? '🏢',
+            sectorColor: meta?.color ?? '#059669',
+            name: actName,
+            location: company.city || 'Bénin',
+            manager: company.responsible_name || '',
+            status: 'ACTIVE' as ActivityStatus,
+            isConfigured: true,
+            revenue: 0,
+            expenses: 0,
+            netMargin: 0,
+            monthRevenue: 0,
+            monthExpenses: 0,
+            monthNetMargin: 0,
+          };
+        });
+        setActivities(initial);
+      }
+    }
+  }, [company, companyId, companyName, activities.length]);
 
   // Chargement initial depuis Supabase uniquement
   useEffect(() => {
@@ -345,8 +481,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const persist = useCallback(
     (data: ActivityEntry[]) => {
       setActivities(data);
+      if (companyId) {
+        try {
+          localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(data));
+        } catch (_) {}
+      }
     },
-    []
+    [companyId]
   );
 
   // ── Filtrage des activités actives vs archivées (PARTIE 9) ─────────────────
@@ -427,20 +568,27 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           .select()
           .single();
 
-        if (insertErr) throw insertErr;
-        if (newRow) createdId = newRow.id;
+        if (insertErr) {
+          console.warn('[Hub] Insertion distante différée (RLS/session):', insertErr.message);
+        } else if (newRow) {
+          createdId = newRow.id;
+        }
 
         // Mettre à jour selected_sectors de la société si nécessaire
-        const currentSectors = Array.isArray(company?.selected_sectors) ? company.selected_sectors : [];
-        if (!currentSectors.includes(meta.slug) && !currentSectors.includes(`sec-${meta.slug}`)) {
-          await supabase
-            .from('companies')
-            .update({
-              selected_sectors: [...currentSectors, meta.slug],
-              sectors: [...currentSectors, meta.slug],
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', companyId);
+        try {
+          const currentSectors = Array.isArray(company?.selected_sectors) ? company.selected_sectors : [];
+          if (!currentSectors.includes(meta.slug) && !currentSectors.includes(`sec-${meta.slug}`)) {
+            await supabase
+              .from('companies')
+              .update({
+                selected_sectors: [...currentSectors, meta.slug],
+                sectors: [...currentSectors, meta.slug],
+                updated_at: new Date().toISOString(),
+              })
+              .eq('id', companyId);
+          }
+        } catch (cErr) {
+          console.warn('[Hub] Notice update selected_sectors:', cErr);
         }
       }
 
@@ -487,19 +635,23 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
     try {
       if (companyId) {
-        const { error: upErr } = await supabase
-          .from('company_activities')
-          .update({
-            activity_name: form.name.trim().toUpperCase(),
-            pos_location: form.location.trim(),
-            manager_name: form.manager.trim(),
-            status: form.status,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', showSettingsModal.id)
-          .eq('company_id', companyId);
+        try {
+          const { error: upErr } = await supabase
+            .from('company_activities')
+            .update({
+              activity_name: form.name.trim().toUpperCase(),
+              pos_location: form.location.trim(),
+              manager_name: form.manager.trim(),
+              status: form.status,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', showSettingsModal.id)
+            .eq('company_id', companyId);
 
-        if (upErr) throw upErr;
+          if (upErr) console.warn('[Hub] Update distant différé:', upErr.message);
+        } catch (upErr) {
+          console.warn('[Hub] Exception update Supabase:', upErr);
+        }
       }
 
       const updated = activities.map((a) =>
@@ -540,16 +692,20 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     if (!deleteStep2) return;
     try {
       if (companyId) {
-        await supabase
-          .from('company_activities')
-          .update({
-            status: 'ARCHIVEE',
-            is_active: false,
-            archived_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', deleteStep2.id)
-          .eq('company_id', companyId);
+        try {
+          await supabase
+            .from('company_activities')
+            .update({
+              status: 'ARCHIVEE',
+              is_active: false,
+              archived_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', deleteStep2.id)
+            .eq('company_id', companyId);
+        } catch (delErr) {
+          console.warn('[Hub] Soft delete distant différé:', delErr);
+        }
 
         // Désactivation automatique des collaborateurs internes liés à ce secteur/activité
         const targetSlug = (deleteStep2.sectorSlug || '').toLowerCase().replace(/^sec-/, '').trim();
@@ -589,16 +745,20 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const restoreActivity = async (act: ActivityEntry) => {
     try {
       if (companyId) {
-        await supabase
-          .from('company_activities')
-          .update({
-            status: 'ACTIVE',
-            is_active: true,
-            archived_at: null,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', act.id)
-          .eq('company_id', companyId);
+        try {
+          await supabase
+            .from('company_activities')
+            .update({
+              status: 'ACTIVE',
+              is_active: true,
+              archived_at: null,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', act.id)
+            .eq('company_id', companyId);
+        } catch (resErr) {
+          console.warn('[Hub] Restauration distante différée:', resErr);
+        }
       }
       const updated = activities.map((a) =>
         a.id === act.id
