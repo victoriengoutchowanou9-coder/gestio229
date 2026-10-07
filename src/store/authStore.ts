@@ -275,11 +275,12 @@ export const useAuthStore = create<AuthState>()(
 
             // Mettre à jour last_login si id présent
             if (ctx.user?.id) {
-              await supabase
-                .from('user_profiles')
-                .update({ last_login: new Date().toISOString() })
-                .eq('id', ctx.user.id)
-                .catch(() => {})
+              try {
+                await supabase
+                  .from('user_profiles')
+                  .update({ last_login: new Date().toISOString() })
+                  .eq('id', ctx.user.id)
+              } catch (_) {}
             }
 
             set({
@@ -358,11 +359,12 @@ export const useAuthStore = create<AuthState>()(
 
           // Mettre à jour last_login
           if (profile?.id) {
-            await supabase
-              .from('user_profiles')
-              .update({ last_login: new Date().toISOString() })
-              .eq('id', profile.id)
-              .catch(() => {})
+            try {
+              await supabase
+                .from('user_profiles')
+                .update({ last_login: new Date().toISOString() })
+                .eq('id', profile.id)
+            } catch (_) {}
           }
 
           // 1. Déterminer et valider le secteur assigné à l'utilisateur interne
