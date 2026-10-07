@@ -10,7 +10,7 @@ import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
-  ChevronRight, ArrowDown, Lock, Package
+  ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft
 } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
