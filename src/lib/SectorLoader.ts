@@ -220,7 +220,7 @@ export const SectorLoader = {
                 finances: { view: true, caisse: true, tresorerie: true }
               }
 
-              if (profile) {
+              if (profile && profile.id && company?.id) {
                 const { data: updatedProf } = await supabase
                   .from('user_profiles')
                   .update({
@@ -239,7 +239,7 @@ export const SectorLoader = {
                   profile = updatedProf
                   company = (updatedProf.company as Company) || company
                 }
-              } else if (currentEmail) {
+              } else if (currentEmail && company?.id) {
                 const fullName = meta.responsible_name?.trim() || meta.full_name?.trim() || company.name || 'Administrateur'
                 const { data: newProf } = await supabase
                   .from('user_profiles')

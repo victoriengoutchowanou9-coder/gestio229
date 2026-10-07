@@ -264,19 +264,23 @@ export const useAuthStore = create<AuthState>()(
               }
             }
 
-            if (!ctx) {
+            if (!ctx || !ctx.user || !ctx.company) {
+              const msg = 'Erreur de profil ou de configuration entreprise. RLS peut bloquer ou le profil est introuvable.'
               set({
                 status: 'error',
-                errorMessage: 'Impossible de charger les données de votre entreprise. Veuillez actualiser la page ou contacter le support.',
+                errorMessage: msg,
               })
-              return { success: false, error: 'Profil introuvable' }
+              return { success: false, error: msg }
             }
 
-            // Mettre à jour last_login
-            await supabase
-              .from('user_profiles')
-              .update({ last_login: new Date().toISOString() })
-              .eq('id', ctx.user.id)
+            // Mettre à jour last_login si id présent
+            if (ctx.user?.id) {
+              await supabase
+                .from('user_profiles')
+                .update({ last_login: new Date().toISOString() })
+                .eq('id', ctx.user.id)
+                .catch(() => {})
+            }
 
             set({
               status: 'authenticated',
@@ -331,6 +335,12 @@ export const useAuthStore = create<AuthState>()(
             return { success: false, error: pwdMsg }
           }
 
+          if (!profile || !profile.id) {
+            const errProf = "Profil utilisateur introuvable ou inaccessible (RLS peut bloquer l'accès)."
+            set({ status: 'unauthenticated', errorMessage: errProf })
+            return { success: false, error: errProf }
+          }
+
           // Chargement du contexte tenant complet pour l'utilisateur interne
           const ctx = await SectorLoader.loadTenantContext(
             profile.auth_user_id || profile.id,
@@ -341,16 +351,19 @@ export const useAuthStore = create<AuthState>()(
           if (!ctx || !ctx.company) {
             set({
               status: 'error',
-              errorMessage: 'Entreprise rattachée introuvable pour ce profil.',
+              errorMessage: 'Entreprise rattachée introuvable pour ce profil ou accès restreint par les politiques de sécurité (RLS).',
             })
             return { success: false, error: 'Entreprise introuvable' }
           }
 
           // Mettre à jour last_login
-          await supabase
-            .from('user_profiles')
-            .update({ last_login: new Date().toISOString() })
-            .eq('id', profile.id)
+          if (profile?.id) {
+            await supabase
+              .from('user_profiles')
+              .update({ last_login: new Date().toISOString() })
+              .eq('id', profile.id)
+              .catch(() => {})
+          }
 
           // 1. Déterminer et valider le secteur assigné à l'utilisateur interne
           const perm = (typeof profile.permissions === 'object' && profile.permissions) ? profile.permissions : {}
