@@ -62,6 +62,8 @@ export function canonicalSectorSlug(slug?: string | null): string {
   if (clean === 'location' || clean === 'gestion-locative' || clean === 'gestion_locative' || clean === 'locatif' || clean === 'locative' || clean === 'immobilier') return 'immobilier'
   if (clean === 'agro-business' || clean === 'agro' || clean === 'agrobusiness') return 'agrobusiness'
   if (clean === 'bar-restaurant-maquis' || clean === 'maquis' || clean === 'fast-food' || clean === 'restaurant') return 'restaurant'
+  if (clean === 'brasserie' || clean === 'depot-boissons' || clean === 'depot_boissons' || clean === 'depot' || clean === 'boissons') return 'brasserie'
+  if (clean === 'poissonnerie' || clean === 'poissons' || clean === 'chambre-froide') return 'poissonnerie'
   if (clean === 'cosmetique' || clean === 'cosmetiques') return 'cosmetiques'
   return clean
 }
@@ -114,30 +116,33 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
 export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   if (!item) return false
   const active = (targetSectorSlug || getActiveSectorSlug()).toLowerCase().trim().replace(/^sec-/, '')
+  const activeCanon = canonicalSectorSlug(active)
 
   // 1. Tag explicite par colonne sector_slug ou sector_id
-  if (item.sector_slug && typeof item.sector_slug === 'string') {
-    return item.sector_slug.toLowerCase().trim().replace(/^sec-/, '') === active
-  }
-  if (item.sector_id && typeof item.sector_id === 'string') {
-    return item.sector_id.toLowerCase().trim().replace(/^sec-/, '') === active
+  const directSlug = item.sector_slug || item.sector_id
+  if (directSlug && typeof directSlug === 'string') {
+    const directCanon = canonicalSectorSlug(directSlug)
+    if (directCanon === activeCanon) return true
+    return false // Isolation stricte : appartient explicitement à un autre secteur
   }
 
   // 1b. Permissions (pour user_profiles)
   if (item.permissions && typeof item.permissions === 'object') {
     const permSlug = item.permissions.sector_slug || item.permissions.sector_id
     if (permSlug && typeof permSlug === 'string') {
-      return permSlug.toLowerCase().trim().replace(/^sec-/, '') === active
+      const permCanon = canonicalSectorSlug(permSlug)
+      if (permCanon === activeCanon) return true
+      return false
     }
   }
 
   // 2. Tag explicite dans sector_meta JSONB
   if (item.sector_meta && typeof item.sector_meta === 'object') {
-    if (item.sector_meta.sector_slug) {
-      return String(item.sector_meta.sector_slug).toLowerCase().trim().replace(/^sec-/, '') === active
-    }
-    if (item.sector_meta.sector) {
-      return String(item.sector_meta.sector).toLowerCase().trim().replace(/^sec-/, '') === active
+    const metaSlug = item.sector_meta.sector_slug || item.sector_meta.sector
+    if (metaSlug && typeof metaSlug === 'string') {
+      const metaCanon = canonicalSectorSlug(metaSlug)
+      if (metaCanon === activeCanon) return true
+      return false
     }
   }
 

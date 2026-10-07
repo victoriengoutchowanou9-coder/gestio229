@@ -24,6 +24,7 @@ import {
   deleteGrillePrix,
   checkGrillesOverlap
 } from '../../../services/brasseriePricingService'
+import { filterItemsForSector } from '../../../lib/sectorClient'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -97,7 +98,7 @@ export const BrasserieGrillesPage: React.FC = () => {
       const gridList = await fetchBrasserieGrilles(currentCompanyId, currentSectorSlug)
       setGrilles(gridList)
 
-      // 2. Charger les produits du secteur
+      // 2. Charger les produits STRICTEMENT isolés au secteur Brasserie & Dépôt de boissons
       const { data: prodsData, error: prodsErr } = await supabase
         .from('products')
         .select('*')
@@ -106,7 +107,9 @@ export const BrasserieGrillesPage: React.FC = () => {
         .order('name')
 
       if (!prodsErr && prodsData) {
-        setProducts(prodsData.map((p: any) => ({
+        // Isolation absolue : exclure les produits d'autres secteurs (Poissonnerie, etc.)
+        const sectorProds = filterItemsForSector(prodsData, currentSectorSlug)
+        setProducts(sectorProds.map((p: any) => ({
           ...p,
           selling_price: Number(p.selling_price) || 0,
           cost_price: Number(p.cost_price) || 0,
