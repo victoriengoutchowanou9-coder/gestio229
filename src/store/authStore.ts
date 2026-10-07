@@ -494,7 +494,7 @@ export const useAuthStore = create<AuthState>()(
           const { error: dbErr } = await supabase
             .from('user_profiles')
             .update({
-              password_hash: newPassword,
+              pos_pin_code: newPassword,
               updated_at: new Date().toISOString()
             })
             .eq('id', currentUser.id)

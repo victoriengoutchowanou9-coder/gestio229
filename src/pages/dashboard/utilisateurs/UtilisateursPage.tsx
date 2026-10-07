@@ -6,7 +6,6 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import { useParams, useLocation } from 'react-router-dom'
 import { supabase } from '../../../lib/supabase'
-import { createConfirmedUser } from '../../../lib/authAdminHelper'
 import { useAuthStore } from '../../../store/authStore'
 import { isSectorSubscribed } from '../../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
@@ -567,23 +566,6 @@ const UtilisateursPage: React.FC = () => {
         throw new Error(`L'identifiant "${cleanIdent}" est déjà utilisé dans votre entreprise.`)
       }
 
-      // Création du compte utilisateur avec email_confirm: true OBLIGATOIRE
-      const authResult = await createConfirmedUser({
-        email: internalEmail,
-        password: form.password,
-        company_id: company.id,
-        identifiant: cleanIdent,
-        role: form.role,
-        full_name: form.full_name.trim(),
-        phone: form.phone.trim(),
-        extra_metadata: {
-          is_internal: true,
-          company_name: company.name,
-        }
-      })
-
-      const authUserId: string | null = authResult.userId || null
-
       const assignedSectorSlug = (isSubSoftwareRoute ? currentSectorSlug : form.sector_id)
         .toLowerCase()
         .replace(/^sec-/, '')
@@ -621,14 +603,22 @@ const UtilisateursPage: React.FC = () => {
         created_by_admin_id: user?.id ?? null,
       }
 
+      // ─────────────────────────────────────────────────────────────────────────
+      // UTILISATEURS INTERNES :
+      // - NE PAS LES CRÉER DANS auth.users
+      // - Les créer UNIQUEMENT dans public.user_profiles
+      // - Connexion directe par identifiant (username) et PIN/mot de passe (pos_pin_code / password_hash)
+      // ─────────────────────────────────────────────────────────────────────────
+      const safeSyntheticEmail = `${cleanIdent}@${company.id.slice(0, 8)}.gestio229.local`
+
       const baseUserObj = {
         company_id: company.id,
-        auth_user_id: authUserId,
+        auth_user_id: null,
         full_name: form.full_name.trim(),
         username: cleanIdent,
-        password_hash: form.password,
-        email: authUserId ? internalEmail : `${cleanIdent}@${company.id}.internal`,
-        phone: form.phone.trim(),
+        email: safeSyntheticEmail,
+        pos_pin_code: form.password,
+        phone: form.phone.trim() || null,
         role: form.role,
         sector_id: assignedSectorSlug,
         is_active: true,
@@ -649,7 +639,7 @@ const UtilisateursPage: React.FC = () => {
 
       if (profileErr) throw new Error('Erreur création profil : ' + profileErr.message)
 
-      setSuccess(`Utilisateur "${form.full_name}" créé avec succès ! Identifiant : ${cleanIdent}`)
+      setSuccess(`Utilisateur interne "${form.full_name}" créé avec succès ! Identifiant : ${cleanIdent}`)
       setForm(emptyForm)
       setShowCreateForm(false)
       loadUsers()
@@ -673,7 +663,7 @@ const UtilisateursPage: React.FC = () => {
       const { error } = await supabase
         .from('user_profiles')
         .update({
-          password_hash: resetNewPassword,
+          pos_pin_code: resetNewPassword,
           updated_at: new Date().toISOString()
         })
         .eq('id', resetPasswordUser.id)

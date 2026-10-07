@@ -349,17 +349,24 @@ const LoginPage: React.FC = () => {
     setUrlError(null)
     setRateLimitError(null)
 
-    const limiterKey = `login:${identifier.trim().toLowerCase()}`
+    const rawInput = identifier.trim()
+    const limiterKey = `login:${rawInput.toLowerCase()}`
     const check = rateLimiter.checkRateLimit(limiterKey, 5, 60000, 15 * 60 * 1000)
     if (!check.allowed) {
       setRateLimitError(check.lockoutMessage || 'Trop de tentatives. Veuillez patienter avant de réessayer.')
       return
     }
 
-    const result = await login(identifier, password)
+    // ─────────────────────────────────────────────────────────────────────────
+    // SÉPARATION STRICTE DES TYPES DE COMPTES :
+    // 1. Email (contient '@') -> Supabase Auth (Admin / Propriétaire)
+    // 2. Identifiant (sans '@') -> Table interne user_profiles (Caissier, etc.)
+    // ─────────────────────────────────────────────────────────────────────────
+    const isEmail = rawInput.includes('@')
+    const result = await login(rawInput, password)
     if (result.success) {
       rateLimiter.resetLimit(limiterKey)
-      const target = result.redirectTo || '/hub'
+      const target = result.redirectTo || (isEmail ? '/hub' : '/app')
       navigate(target, { replace: true })
     } else {
       const failStatus = rateLimiter.recordFailure(limiterKey, 5, 60000, 15 * 60 * 1000)

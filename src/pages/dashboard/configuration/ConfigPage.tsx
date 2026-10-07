@@ -312,7 +312,7 @@ export const ConfigPage: React.FC = () => {
           full_name: newUser.full_name.trim(),
           username: trimmedUsername,
           email: safeEmail,
-          password_hash: newUser.initial_password,
+          pos_pin_code: newUser.initial_password,
           phone: newUser.phone.trim() || null,
           role: newUser.role,
           is_active: true,
@@ -387,7 +387,7 @@ export const ConfigPage: React.FC = () => {
       const { error } = await supabase
         .from('user_profiles')
         .update({
-          password_hash: resetPasswordVal,
+          pos_pin_code: resetPasswordVal,
           updated_at: new Date().toISOString()
         })
         .eq('id', resetModalUser.id)
