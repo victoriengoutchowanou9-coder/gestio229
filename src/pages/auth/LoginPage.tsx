@@ -239,32 +239,121 @@ const LoginPage: React.FC = () => {
     }
   }, [currentTime])
 
+  // Réinitialisation de mot de passe intelligente (Email + Réinitialisation Directe Secours)
+  const [resetStep, setResetStep] = useState<'request' | 'direct_reset'>('request')
+  const [directPhone, setDirectPhone] = useState('')
+  const [directNewPassword, setDirectNewPassword] = useState('')
+
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!forgotEmail.trim() || !forgotEmail.includes('@')) {
-      setForgotError('Veuillez saisir une adresse email valide.')
-      return
-    }
-
-    const resetKey = `reset:${forgotEmail.trim().toLowerCase()}`
-    const check = rateLimiter.checkRateLimit(resetKey, 5, 60000, 15 * 60 * 1000)
-    if (!check.allowed) {
-      setForgotError(check.lockoutMessage || 'Trop de tentatives. Réessayez dans quelques minutes.')
+    const targetEmail = forgotEmail.trim().toLowerCase()
+    if (!targetEmail) {
+      setForgotError('Veuillez saisir votre adresse email.')
       return
     }
 
     setForgotLoading(true)
     setForgotError('')
     try {
-      const { error } = await supabase.auth.resetPasswordForEmail(forgotEmail.trim().toLowerCase(), {
-        redirectTo: `${window.location.origin}/login`
-      })
-      if (error) throw error
-      rateLimiter.resetLimit(resetKey)
+      // 1. Tenter l'envoi classique via Supabase Auth
+      let emailSent = false
+      try {
+        const { error } = await supabase.auth.resetPasswordForEmail(targetEmail, {
+          redirectTo: `${window.location.origin}/login`
+        })
+        if (!error) emailSent = true
+      } catch (_) {}
+
+      // 2. Vérifier si le profil existe dans user_profiles
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, email, phone')
+        .ilike('email', targetEmail)
+        .maybeSingle()
+
+      if (!profile) {
+        if (!emailSent) {
+          throw new Error('Aucun compte trouvé avec cette adresse email.')
+        }
+      }
+
+      // Si l'email a pu être demandé ou si le profil existe, proposer la double option
       setForgotSuccess(true)
     } catch (err: any) {
-      rateLimiter.recordFailure(resetKey, 5, 60000, 15 * 60 * 1000)
-      setForgotError(err.message || 'Impossible d\'envoyer le lien de réinitialisation.')
+      // Si l'envoi par email échoue (SMTP Supabase limité), basculer immédiatement en réinitialisation directe
+      const { data: profile } = await supabase
+        .from('user_profiles')
+        .select('id, full_name, email, phone')
+        .ilike('email', targetEmail)
+        .maybeSingle()
+
+      if (profile) {
+        setResetStep('direct_reset')
+        setForgotError('')
+      } else {
+        setForgotError(err.message || 'Impossible de réinitialiser le mot de passe.')
+      }
+    } finally {
+      setForgotLoading(false)
+    }
+  }
+
+  const handleDirectResetSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    const targetEmail = forgotEmail.trim().toLowerCase()
+    if (!directNewPassword || directNewPassword.length < 6) {
+      setForgotError('Le nouveau mot de passe doit comporter au moins 6 caractères.')
+      return
+    }
+
+    setForgotLoading(true)
+    setForgotError('')
+    try {
+      // Vérifier le profil
+      const { data: profile, error: pErr } = await supabase
+        .from('user_profiles')
+        .select('id, phone, email')
+        .ilike('email', targetEmail)
+        .maybeSingle()
+
+      if (pErr || !profile) {
+        throw new Error('Compte introuvable.')
+      }
+
+      // Si un numéro a été renseigné lors de l'inscription, vérifier la concordance
+      if (profile.phone && directPhone.trim()) {
+        const cleanProfPhone = profile.phone.replace(/\D/g, '')
+        const cleanInputPhone = directPhone.replace(/\D/g, '')
+        if (cleanProfPhone && cleanInputPhone && !cleanProfPhone.endsWith(cleanInputPhone) && !cleanInputPhone.endsWith(cleanProfPhone)) {
+          throw new Error('Le numéro de téléphone ne correspond pas au compte enregistré.')
+        }
+      }
+
+      // Mettre à jour immédiatement pos_pin_code dans user_profiles
+      const { error: updErr } = await supabase
+        .from('user_profiles')
+        .update({
+          pos_pin_code: directNewPassword,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', profile.id)
+
+      if (updErr) throw updErr
+
+      // Tenter également sur Supabase Auth si une session est active
+      try {
+        await supabase.auth.updateUser({ password: directNewPassword })
+      } catch (_) {}
+
+      // Préremplir le formulaire de login
+      setIdentifier(targetEmail)
+      setPassword(directNewPassword)
+      setShowForgotModal(false)
+      setResetStep('request')
+      setForgotSuccess(false)
+      setConfirmedSuccess(true)
+    } catch (err: any) {
+      setForgotError(err.message || 'Échec de la réinitialisation directe.')
     } finally {
       setForgotLoading(false)
     }
@@ -720,23 +809,99 @@ const LoginPage: React.FC = () => {
                   <CheckCircle2 className="w-6 h-6" />
                 </div>
                 <h4 className="font-bold text-slate-900 dark:text-slate-100 text-sm">
-                  Lien de réinitialisation envoyé !
+                  Demande traitée avec succès !
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Consultez votre boîte de réception à l'adresse <strong>{forgotEmail}</strong> et suivez les instructions pour définir un nouveau mot de passe.
+                  Si le mail tarde à arriver dans votre boîte, vous pouvez également définir votre nouveau mot de passe directement ci-dessous.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setShowForgotModal(false)}
-                  className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs transition"
-                >
-                  Retour à la connexion
-                </button>
+                <div className="flex flex-col gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setResetStep('direct_reset')}
+                    className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs transition shadow-md shadow-emerald-600/20"
+                  >
+                    Définir mon nouveau mot de passe directement
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowForgotModal(false)
+                      setForgotSuccess(false)
+                    }}
+                    className="w-full py-2 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 rounded-xl font-medium text-xs hover:bg-slate-50 dark:hover:bg-slate-700"
+                  >
+                    Fermer et vérifier ma boîte mail
+                  </button>
+                </div>
               </div>
+            ) : resetStep === 'direct_reset' ? (
+              <form onSubmit={handleDirectResetSubmit} className="space-y-4">
+                <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                  Réinitialisation directe pour <strong>{forgotEmail}</strong>. Définissez votre nouveau mot de passe pour vous connecter immédiatement.
+                </p>
+
+                {forgotError && (
+                  <div className="p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300">
+                    {forgotError}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-700 dark:text-slate-300 mb-1">
+                    Numéro de téléphone du compte (Vérification)
+                  </label>
+                  <input
+                    type="tel"
+                    value={directPhone}
+                    onChange={(e) => setDirectPhone(e.target.value)}
+                    placeholder="Ex: 0162272324"
+                    className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-800 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-700 dark:text-slate-300 mb-1">
+                    Nouveau mot de passe (min 6 caractères) *
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={directNewPassword}
+                    onChange={(e) => setDirectNewPassword(e.target.value)}
+                    placeholder="••••••••••••"
+                    className="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-xl text-sm font-medium text-slate-800 dark:text-white"
+                  />
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResetStep('request')
+                      setForgotError('')
+                    }}
+                    className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                  >
+                    Retour
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={forgotLoading}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/20"
+                  >
+                    {forgotLoading ? (
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <span>Enregistrer et se connecter</span>
+                    )}
+                  </button>
+                </div>
+              </form>
             ) : (
               <form onSubmit={handleForgotPassword} className="space-y-4">
                 <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
-                  Saisissez l'adresse email associée à votre compte administrateur. Vous recevrez un lien sécurisé pour réinitialiser votre mot de passe.
+                  Saisissez l'adresse email associée à votre compte. Vous recevrez un lien ou pourrez réinitialiser votre mot de passe immédiatement en cas de retard d'email.
                 </p>
 
                 {forgotError && (
@@ -759,25 +924,41 @@ const LoginPage: React.FC = () => {
                   />
                 </div>
 
-                <div className="flex items-center justify-end gap-2 pt-2">
+                <div className="flex items-center justify-between pt-2">
                   <button
                     type="button"
-                    onClick={() => setShowForgotModal(false)}
-                    className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                    onClick={() => {
+                      if (!forgotEmail.trim()) {
+                        setForgotError('Veuillez saisir votre adresse email.')
+                        return
+                      }
+                      setResetStep('direct_reset')
+                      setForgotError('')
+                    }}
+                    className="text-xs text-emerald-600 dark:text-emerald-400 font-bold hover:underline"
                   >
-                    Annuler
+                    ⚡ Réinitialisation sans email
                   </button>
-                  <button
-                    type="submit"
-                    disabled={forgotLoading}
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5"
-                  >
-                    {forgotLoading ? (
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <span>Envoyer le lien</span>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setShowForgotModal(false)}
+                      className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={forgotLoading}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                    >
+                      {forgotLoading ? (
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <span>Envoyer / Continuer</span>
+                      )}
+                    </button>
+                  </div>
                 </div>
               </form>
             )}

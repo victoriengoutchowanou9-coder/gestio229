@@ -378,24 +378,22 @@ export const RegisterPage: React.FC = () => {
             </p>
           </div>
 
-          <div className="mt-4 p-4 rounded-2xl bg-amber-50 border border-amber-200 text-left">
-            <div className="flex items-center gap-2 text-amber-800 font-bold text-sm mb-1">
-              <Mail className="w-4 h-4 text-amber-600" />
-              <span>Confirmation obligatoire par email</span>
+          <div className="mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-left">
+            <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm mb-1">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+              <span>Compte activé immédiatement</span>
             </div>
-            <p className="text-xs text-amber-700 leading-relaxed">
-              Un email de confirmation a été envoyé automatiquement à l'adresse :<br />
-              <strong className="text-slate-900 font-semibold">{form.email}</strong>.<br />
-              Veuillez ouvrir votre boîte de réception et cliquer sur le lien reçu pour activer votre compte Administrateur.
+            <p className="text-xs text-emerald-700 leading-relaxed">
+              Votre compte Administrateur pour <strong>{form.email}</strong> est prêt. Vous pouvez vous connecter tout de suite avec le mot de passe que vous venez de définir.
             </p>
           </div>
 
           <div className="mt-6 flex flex-col gap-3">
             <Link
-              to={`/login?email=${encodeURIComponent(form.email.trim().toLowerCase())}&registered=1`}
+              to={`/login?email=${encodeURIComponent(form.email.trim().toLowerCase())}`}
               className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition"
             >
-              <span>Accéder à la page de Connexion</span>
+              <span>Se connecter maintenant</span>
               <ArrowRight className="w-4 h-4" />
             </Link>
             <Link
