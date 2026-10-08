@@ -1329,9 +1329,9 @@ export const POSPage: React.FC = () => {
 
       const salePayload: any = {
         company_id: company?.id ?? companyId ?? '',
-        customer_id: selectedCustomer?.id || null,
-        cash_session_id: activeCaisse?.id || null,
-        order_number: orderNum,
+        // cash_session_id doit être null car la FK PostgreSQL pointe vers l'ancienne table cash_sessions (inutilisée).
+        // La session active de sessions_caisse est tracée dans notes et caisse_mouvements.
+        cash_session_id: null,
         order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
         order_date: todayDate,
         subtotal_ht: cartFiscalSummary.ht,
