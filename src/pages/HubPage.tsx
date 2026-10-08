@@ -25,8 +25,13 @@ const HubPage: React.FC = () => {
     setActiveSector(sectorSlug, activityId, activityName)
     localStorage.setItem('gestio229_active_sector', sectorSlug)
     localStorage.setItem('gestio229_active_activity_id', activityId)
-    if (activityName) localStorage.setItem('gestio229_active_activity_name', activityName)
-    if (location)     localStorage.setItem('gestio229_active_activity_location', location)
+    localStorage.setItem('secteur_actif_id', activityId)
+    if (activityName) {
+      localStorage.setItem('gestio229_active_activity_name', activityName)
+      localStorage.setItem('secteur_actif_nom', activityName)
+    }
+    localStorage.setItem('secteur_actif_slug', sectorSlug)
+    if (location) localStorage.setItem('gestio229_active_activity_location', location)
 
     // Naviguer vers l'espace d'exploitation autonome du sous-logiciel
     navigate(`/app/${sectorSlug}/tableau-bord`)

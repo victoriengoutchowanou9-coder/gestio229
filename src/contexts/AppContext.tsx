@@ -42,11 +42,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const activeSlug = (tenantSectorSlug || getActiveSectorSlug() || 'boutique').toLowerCase().trim().replace(/^sec-/, '')
   const meta = getActiveSectorMeta()
 
-  const [secteurActif, setSecteurActif] = useState<{ id: string; nom: string; slug: string }>({
-    id: `00000000-0000-4000-8000-${activeSlug.slice(0, 12).padEnd(12, '0')}`,
-    nom: meta?.name || meta?.label || (activeSlug.charAt(0).toUpperCase() + activeSlug.slice(1)),
-    slug: activeSlug,
+  const [secteurActif, setSecteurActifState] = useState<{ id: string; nom: string; slug: string }>(() => {
+    const storedId = typeof window !== 'undefined' ? localStorage.getItem('secteur_actif_id') : null
+    const storedNom = typeof window !== 'undefined' ? localStorage.getItem('secteur_actif_nom') : null
+    const storedSlug = typeof window !== 'undefined' ? localStorage.getItem('secteur_actif_slug') : null
+    if (storedId && storedSlug === activeSlug) {
+      return { id: storedId, nom: storedNom || meta?.name || activeSlug, slug: activeSlug }
+    }
+    return {
+      id: `00000000-0000-4000-8000-${activeSlug.slice(0, 12).padEnd(12, '0')}`,
+      nom: meta?.name || meta?.label || (activeSlug.charAt(0).toUpperCase() + activeSlug.slice(1)),
+      slug: activeSlug,
+    }
   })
+
+  const setSecteurActif = (sec: { id: string; nom: string; slug: string }) => {
+    setSecteurActifState(sec)
+    try {
+      localStorage.setItem('secteur_actif_id', sec.id)
+      localStorage.setItem('secteur_actif_nom', sec.nom)
+      localStorage.setItem('secteur_actif_slug', sec.slug)
+    } catch (_) {}
+  }
 
   const [caisseActive, setCaisseActive] = useState<{ id: string; nom: string; code?: string; solde_actuel?: number }>({
     id: `00000000-0000-4000-9000-${activeSlug.slice(0, 12).padEnd(12, '0')}`,

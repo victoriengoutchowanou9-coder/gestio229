@@ -18,6 +18,7 @@ import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
+import { useAppContext } from '../../../contexts/AppContext'
 import { getActiveCaisse, getCurrentCashSession, ActiveCaisseSession } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal, TransfertStockModal } from '../../../components/modals'
@@ -133,7 +134,8 @@ export const POSPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
-  const currentSectorSlug = sectorSlug
+  const { secteurActif, caisseActive } = useAppContext()
+  const currentSectorSlug = (sectorSlug || secteurActif?.slug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
   const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
   const [restaurantTable, setRestaurantTable] = useState('')
@@ -328,15 +330,16 @@ export const POSPage: React.FC = () => {
       setCheckingCaisse(false)
     }
 
-    // 1. Récupération robuste des produits (isolée)
+    // 1. Récupération robuste des produits (isolation stricte par secteur d'activité)
     try {
       let rawProds: any[] = []
       const { data, error: prodsError } = await supabaseTenant('products')
         .select('*, category:product_categories(name)')
         .neq('is_active', false)
         .order('name')
-      if (!prodsError && data && data.length > 0) {
-        rawProds = data
+      if (!prodsError && data) {
+        // Isolation stricte : filtrer obligatoirement pour le secteur actif
+        rawProds = filterItemsForSector(data, currentSectorSlug)
       } else {
         const { data: fbData } = await supabase
           .from('products')
@@ -345,8 +348,9 @@ export const POSPage: React.FC = () => {
           .neq('is_active', false)
           .order('name')
         if (fbData && fbData.length > 0) {
-          const secProds = filterItemsForSector(fbData, currentSectorSlug)
-          rawProds = secProds.length > 0 ? secProds : fbData
+          // RÈGLE ABSOLUE : Si un secteur n'a aucun produit, rawProds RESTE VIDE [] !
+          // Ne JAMAIS basculer sur fbData brut qui mélange les secteurs
+          rawProds = filterItemsForSector(fbData, currentSectorSlug)
         }
       }
 
@@ -392,14 +396,14 @@ export const POSPage: React.FC = () => {
       setLoadError(`Erreur produits: ${prodErr.message || 'Impossible de charger le catalogue'}`)
     }
 
-    // 2. Récupération robuste des clients et de leurs dettes (isolée)
+    // 2. Récupération robuste des clients et de leurs dettes (isolation stricte par secteur)
     try {
       let rawCusts: any[] = []
       const { data, error: custsError } = await supabaseTenant('customers')
         .select('*')
         .order('name')
-      if (!custsError && data && data.length > 0) {
-        rawCusts = data
+      if (!custsError && data) {
+        rawCusts = filterItemsForSector(data, currentSectorSlug)
       } else {
         const { data: fbCusts } = await supabase
           .from('customers')
@@ -407,8 +411,8 @@ export const POSPage: React.FC = () => {
           .eq('company_id', companyId)
           .order('name')
         if (fbCusts && fbCusts.length > 0) {
-          const secCusts = filterItemsForSector(fbCusts, currentSectorSlug)
-          rawCusts = secCusts.length > 0 ? secCusts : fbCusts
+          // RÈGLE ABSOLUE : Si 0 client dans ce secteur, rawCusts RESTE VIDE [] !
+          rawCusts = filterItemsForSector(fbCusts, currentSectorSlug)
         }
       }
 
@@ -1351,6 +1355,7 @@ export const POSPage: React.FC = () => {
       const fullSalePayload: any = {
         ...baseSalePayload,
         sector_slug: currentSectorSlug,
+        secteur_id: secteurActif?.id || null,
         payment_method: primaryMethod,
         customer_name: custName,
         status: isDeferred ? 'pending_delivery' : 'COMPLET',
@@ -1457,6 +1462,19 @@ export const POSPage: React.FC = () => {
       for (const line of cart) {
         if (line.product?.id) {
           try {
+            // Déstockage BDD spécifique au secteur actif via la fonction RPC
+            try {
+              await supabase.rpc('fn_destockage_vente_secteur', {
+                p_company_id: company?.id ?? companyId ?? '',
+                p_secteur_id: secteurActif?.id || null,
+                p_caisse_id: activeCaisse?.id || caisseActive?.id || null,
+                p_produit_id: line.product.id,
+                p_qte: line.qty
+              })
+            } catch (rpcErr) {
+              // RPC non bloquante si la fonction n'est pas encore déployée
+            }
+
             const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
             const currentStockMagasin = Number(line.product.stock_magasin ?? line.product.sector_meta?.stock_magasin ?? 0)
             const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
@@ -2212,10 +2230,16 @@ export const POSPage: React.FC = () => {
       {/* ── En-tête & Onglets ───────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
-            <ShoppingCart className="w-5 h-5 text-emerald-600" />
-            Vente & POS
-          </h1>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              <ShoppingCart className="w-5 h-5 text-emerald-600" />
+              Vente & POS
+            </h1>
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-50 text-emerald-800 border border-emerald-200">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              Secteur actif : {secteurActif?.nom || currentSectorSlug} ({products.length} produit{products.length > 1 ? 's' : ''})
+            </span>
+          </div>
           <p className="text-xs text-slate-500 mt-0.5">
             Saisie TTC, Décomposition fiscale automatique HT & TVA, Multi-règlements et Facturation
           </p>
