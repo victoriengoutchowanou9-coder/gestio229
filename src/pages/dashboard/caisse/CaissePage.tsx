@@ -33,8 +33,27 @@ import {
   enregistrerMouvementCaisse
 } from '../../../services/caisseSectorService'
 import ClotureCaisse from './ClotureCaisse'
+import { useAppContext } from '../../../contexts/AppContext'
 
 const fmt = (n: number) => formatFCFA(n)
+
+const formatDate = (d?: string | null) => {
+  if (!d) return '--/--/----'
+  try {
+    const dateObj = new Date(d)
+    return isNaN(dateObj.getTime())
+      ? String(d)
+      : dateObj.toLocaleDateString('fr-FR', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+          hour: '2-digit',
+          minute: '2-digit'
+        })
+  } catch {
+    return String(d)
+  }
+}
 
 interface CashMovement {
   id: string
@@ -78,6 +97,15 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const currentSectorSlug = cleanSectorSlug(rawSector)
   const currentCompanyId = companyId || params.companyId || company?.id || ''
 
+  const appContext = useAppContext()
+  const secteurActif = appContext?.secteurActif || { id: '', nom: currentSectorSlug.toUpperCase(), slug: currentSectorSlug }
+  const caisseActive = appContext?.caisseActive || { id: '', nom: `Caisse ${currentSectorSlug.toUpperCase()}` }
+  const refreshFonds = appContext?.refreshFonds
+
+  // Sessions de caisse : Antérieure (hier ou avant) et Du Jour
+  const [sessionAnterieureOuverte, setSessionAnterieureOuverte] = useState<any>(null)
+  const [sessionDuJour, setSessionDuJour] = useState<any>(null)
+
   // État de la caisse : Ouverte ou Fermée
   const [caisseStatus, setCaisseStatus] = useState<'OUVERTE' | 'FERMEE'>('FERMEE')
   const [openedAt, setOpenedAt] = useState<string | null>(null)
@@ -116,13 +144,154 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [rolloverCash, setRolloverCash] = useState<number>(0)
   const [closingNotes, setClosingNotes] = useState<string>('')
 
+  // Chargement strict des sessions (détection session antérieure et session du jour)
+  const loadSessions = useCallback(async () => {
+    const compId = currentCompanyId || company?.id
+    if (!compId) return
+
+    const todayStr = new Date().toISOString().split('T')[0]
+    const targetCaisseId = cashRegisterId || caisseActive?.id
+    const targetSecteurId = secteurActif?.id
+
+    let anterieure: any = null
+
+    // 1. Chercher session antérieure OUVERTE (date_ouverture < aujourd'hui) dans sessions_caisse
+    try {
+      let q1 = supabase
+        .from('sessions_caisse')
+        .select('*')
+        .eq('company_id', compId)
+        .eq('statut', 'ouverte')
+        .lt('date_ouverture', todayStr)
+        .order('date_ouverture', { ascending: false })
+        .limit(1)
+
+      if (targetCaisseId) q1 = q1.eq('caisse_id', targetCaisseId)
+      if (targetSecteurId) q1 = q1.eq('secteur_id', targetSecteurId)
+
+      const { data: ant1 } = await q1.maybeSingle()
+      if (ant1) {
+        anterieure = ant1
+      }
+    } catch (_) {}
+
+    // Fallback dans caisse_sessions (recherche session < aujourd'hui encore ouverte)
+    if (!anterieure) {
+      try {
+        let q2 = supabase
+          .from('caisse_sessions')
+          .select('*')
+          .eq('company_id', compId)
+          .in('statut', ['ouverte', 'open'])
+          .is('date_fermeture', null)
+          .order('date_ouverture', { ascending: false })
+          .limit(10)
+
+        if (targetCaisseId) q2 = q2.eq('caisse_id', targetCaisseId)
+
+        const { data: csList } = await q2
+        if (csList && csList.length > 0) {
+          const found = csList.find((s: any) => {
+            const sDate = (s.date_ouverture || '').split('T')[0]
+            return sDate && sDate < todayStr
+          })
+          if (found) {
+            anterieure = found
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Fallback dans caisses (si statut encore 'ouverte' avec date_ouverture antérieure)
+    if (!anterieure && targetCaisseId) {
+      try {
+        const { data: cData } = await supabase
+          .from('caisses')
+          .select('*')
+          .eq('id', targetCaisseId)
+          .maybeSingle()
+
+        if (cData && (cData.statut === 'ouverte' || cData.statut === 'open') && !cData.date_fermeture) {
+          const cDate = (cData.date_ouverture || '').split('T')[0]
+          if (cDate && cDate < todayStr) {
+            anterieure = {
+              id: cData.id,
+              caisse_id: cData.id,
+              company_id: compId,
+              date_ouverture: cData.date_ouverture,
+              statut: 'ouverte',
+              ouvert_par_nom: cData.ouvert_par || 'Caissier'
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    setSessionAnterieureOuverte(anterieure || null)
+
+    // 2. Chercher session du jour (date_ouverture = aujourd'hui)
+    let duJour: any = null
+    try {
+      let qJ1 = supabase
+        .from('sessions_caisse')
+        .select('*')
+        .eq('company_id', compId)
+        .eq('date_ouverture', todayStr)
+
+      if (targetCaisseId) qJ1 = qJ1.eq('caisse_id', targetCaisseId)
+      if (targetSecteurId) qJ1 = qJ1.eq('secteur_id', targetSecteurId)
+
+      const { data: j1 } = await qJ1.maybeSingle()
+      if (j1) {
+        duJour = j1
+      }
+    } catch (_) {}
+
+    if (!duJour) {
+      try {
+        let qJ2 = supabase
+          .from('caisse_sessions')
+          .select('*')
+          .eq('company_id', compId)
+          .gte('date_ouverture', todayStr + 'T00:00:00')
+          .order('date_ouverture', { ascending: false })
+          .limit(1)
+
+        if (targetCaisseId) qJ2 = qJ2.eq('caisse_id', targetCaisseId)
+
+        const { data: j2 } = await qJ2.maybeSingle()
+        if (j2) {
+          duJour = j2
+        }
+      } catch (_) {}
+    }
+
+    if (!duJour && caisseStatus === 'OUVERTE' && openedAt) {
+      const opDateStr = openedAt.split('T')[0]
+      if (opDateStr === todayStr) {
+        duJour = {
+          id: activeSessionId || 'sess-today',
+          statut: 'ouverte',
+          date_ouverture: todayStr
+        }
+      }
+    }
+
+    setSessionDuJour(duJour || null)
+  }, [currentCompanyId, company?.id, cashRegisterId, caisseActive?.id, secteurActif?.id, caisseStatus, openedAt, activeSessionId])
+
+  useEffect(() => {
+    loadSessions()
+  }, [secteurActif, caisseActive, currentSectorSlug, loadSessions])
+
   // Vérifier si la session a été ouverte un jour précédent et jamais clôturée
   const isPreviousDaySession = useMemo(() => {
+    if (sessionAnterieureOuverte) return true
     if (caisseStatus !== 'OUVERTE' || !openedAt) return false
     const openD = new Date(openedAt).toDateString()
     const todayD = new Date().toDateString()
     return openD !== todayD
-  }, [caisseStatus, openedAt])
+  }, [sessionAnterieureOuverte, caisseStatus, openedAt])
 
   // Mettre à jour l'état de session caisse en mémoire
   const saveCaisseState = (status: 'OUVERTE' | 'FERMEE', opAt: string | null, opBy: string, initC: number, initM: number) => {
@@ -825,38 +994,185 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     toast.success('Fonds ajustés avec succès', `Motif : ${adj.reason}`)
   }
 
+  // ─── Action : Clôturer la caisse d'hier (CORRECTIF BUG CRITIQUE) ─────────────
+  const handleCloturerHier = async () => {
+    setLoading(true)
+    const compId = currentCompanyId || company?.id
+    const secId = secteurActif?.id
+    const cId = cashRegisterId || caisseActive?.id
+    const uId = user?.id
+    const todayStr = new Date().toISOString().split('T')[0]
+    const nowIso = new Date().toISOString()
+
+    try {
+      let rpcOk = false
+      let rpcResult: any = null
+
+      try {
+        const { data, error } = await supabase.rpc('fn_cloturer_caisse_hier', {
+          p_company_id: compId,
+          p_secteur_id: secId,
+          p_caisse_id: cId,
+          p_user_id: uId
+        })
+        if (!error && data && data.success) {
+          rpcOk = true
+          rpcResult = data
+        }
+      } catch (rpcEx) {
+        console.warn('RPC fn_cloturer_caisse_hier non disponible:', rpcEx)
+      }
+
+      if (!rpcOk) {
+        // Clôture robuste multi-tables en direct
+        try {
+          await supabase
+            .from('sessions_caisse')
+            .update({
+              statut: 'fermée',
+              date_cloture: todayStr,
+              heure_cloture: nowIso,
+              ferme_par: uId,
+              ferme_par_nom: user?.full_name || 'Caissier',
+              updated_at: nowIso
+            })
+            .eq('company_id', compId)
+            .eq('caisse_id', cId)
+            .eq('statut', 'ouverte')
+            .lt('date_ouverture', todayStr)
+        } catch (_) {}
+
+        try {
+          const { error: csErr } = await supabase
+            .from('caisse_sessions')
+            .update({
+              statut: 'fermée',
+              date_fermeture: nowIso,
+              ferme_par: uId,
+              cloture_par: user?.full_name || 'Caissier',
+              updated_at: nowIso
+            })
+            .eq('company_id', compId)
+            .eq('caisse_id', cId)
+            .in('statut', ['ouverte', 'open'])
+
+          if (csErr) {
+            await supabase
+              .from('caisse_sessions')
+              .update({
+                statut: 'fermee',
+                date_fermeture: nowIso,
+                updated_at: nowIso
+              })
+              .eq('company_id', compId)
+              .eq('caisse_id', cId)
+              .in('statut', ['ouverte', 'open'])
+          }
+        } catch (_) {}
+
+        try {
+          await supabase
+            .from('caisses')
+            .update({
+              statut: 'fermee',
+              date_fermeture: nowIso,
+              updated_at: nowIso
+            })
+            .eq('id', cId)
+        } catch (_) {}
+
+        try {
+          localStorage.removeItem(`gestio_caisse_active_${currentSectorSlug}_${compId}`)
+          localStorage.removeItem(`gestio_caisse_active_${currentSectorSlug}`)
+          localStorage.removeItem('active_caisse_session')
+        } catch (_) {}
+      }
+
+      const closedDate = rpcResult?.date_cloturee || sessionAnterieureOuverte?.date_ouverture || 'antérieure'
+      const soldeEsp = rpcResult?.solde_espece ?? fondActuelEspeces
+
+      toast.success(`Caisse du ${formatDate(closedDate)} clôturée avec succès - Espèces: ${fmt(soldeEsp)}`)
+
+      // CRITIQUE : Forcer la disparition instantanée du bandeau orange
+      setSessionAnterieureOuverte(null)
+      saveCaisseState('FERMEE', null, '', 0, 0)
+      setActiveSessionId(null)
+
+      // Rechargements
+      await loadSessions()
+      await loadCaisseData()
+      if (typeof refreshFonds === 'function') {
+        await refreshFonds()
+      }
+    } catch (err: any) {
+      toast.error('Erreur lors de la clôture', err.message || 'Impossible de clôturer la caisse antérieure')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // ─── Action : Ouvrir la Caisse du Jour ──────────────────────────────────────
+  const handleOuvrirCaisseJour = () => {
+    if (sessionAnterieureOuverte) {
+      toast.error('Session antérieure non clôturée', 'Vous devez d\'abord clôturer la session antérieure.')
+      return
+    }
+    setOpenInputCash(initialCash || 0)
+    setOpenInputMomo(initialMomo || 0)
+    setShowOpenModal(true)
+  }
+
   return (
     <div className="space-y-6 animate-fadeIn">
-      {/* ── ALERTE : SESSION DU JOUR PRÉCÉDENT NON CLÔTURÉE ────────────────── */}
-      {isPreviousDaySession && (
-        <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-amber-900 shadow-sm animate-in fade-in">
+      {/* ── ALERTE : SESSION DU JOUR PRÉCÉDENT NON CLÔTURÉE (BANDEAU ORANGE) ── */}
+      {sessionAnterieureOuverte ? (
+        <div className="p-4 bg-orange-50 border-2 border-orange-300 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-orange-900 shadow-sm animate-in fade-in">
           <div className="flex items-center gap-3">
-            <AlertCircle className="w-6 h-6 text-amber-600 flex-shrink-0" />
+            <AlertCircle className="w-6 h-6 text-orange-600 flex-shrink-0" />
             <div>
               <p className="font-black text-sm">Session de caisse antérieure toujours OUVERTE</p>
-              <p className="text-xs text-amber-700 mt-0.5">
-                La caisse est restée ouverte depuis le {new Date(openedAt!).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })} par <strong>{openedBy || 'un utilisateur'}</strong>. Conformément à la règle de gestion, elle n'a pas été fermée automatiquement. Vous devez clôturer cette session avant d'en ouvrir une nouvelle pour la journée en cours.
+              <p className="text-xs text-orange-700 mt-0.5">
+                La caisse est restée ouverte depuis le {formatDate(sessionAnterieureOuverte.date_ouverture || sessionAnterieureOuverte.heure_ouverture || openedAt)} par <strong>{sessionAnterieureOuverte.ouvert_par_nom || sessionAnterieureOuverte.ouvert_par || openedBy || 'un utilisateur'}</strong>. Conformément à la règle de gestion, elle n'a pas été fermée automatiquement. Vous devez clôturer cette session avant d'en ouvrir une nouvelle pour la journée en cours.
               </p>
             </div>
           </div>
           <button
-            onClick={() => { setClosingPhysicalCash(fondActuelEspeces); setShowCloseModal(true); }}
-            className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex-shrink-0 shadow-sm flex items-center gap-1.5"
+            onClick={handleCloturerHier}
+            disabled={loading}
+            className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold transition flex-shrink-0 shadow-sm flex items-center gap-1.5 disabled:opacity-50"
           >
             <Lock className="w-3.5 h-3.5" /> Clôturer la caisse d'hier
           </button>
         </div>
-      )}
-
-      {/* ── BANNER VERT : SESSION OUVERTE DU JOUR MÊME ─────────────────────── */}
-      {caisseStatus === 'OUVERTE' && !isPreviousDaySession && (
+      ) : (!sessionDuJour || sessionDuJour.statut === 'fermée' || sessionDuJour.statut === 'fermee' || caisseStatus === 'FERMEE') ? (
+        <div className="bg-white border-2 border-dashed border-emerald-300 rounded-3xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm bg-gradient-to-r from-emerald-50/50 to-white">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center font-black shadow-md shadow-emerald-200">
+              <Unlock className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="text-lg font-black text-slate-900">Caisse prête pour la journée</h3>
+              <p className="text-xs text-slate-600">
+                Aucune session active &bull; Clôture antérieure validée &bull; Secteur <strong>{secteurActif?.nom || currentSectorSlug.toUpperCase()}</strong>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={handleOuvrirCaisseJour}
+            className="bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-2xl text-base font-bold shadow-lg shadow-green-200 transition flex items-center gap-2 hover:scale-[1.02] active:scale-[0.98]"
+          >
+            <Unlock className="w-5 h-5" />
+            <span>Ouvrir la Caisse - {new Date().toLocaleDateString('fr-FR')} - Secteur {secteurActif?.nom || currentSectorSlug.toUpperCase()}</span>
+          </button>
+        </div>
+      ) : (
         <div className="bg-emerald-50 border border-emerald-200 rounded-3xl p-4 flex flex-wrap items-center justify-between gap-3 text-xs shadow-sm">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-emerald-500 text-white flex items-center justify-center flex-shrink-0 shadow-sm">
               <Check className="w-4 h-4" />
             </div>
             <div>
-              <p className="font-black text-emerald-900 text-sm">Caisse Ouverte</p>
+              <p className="font-black text-emerald-900 text-sm">Caisse du jour OUVERTE - Opérations possibles</p>
               <p className="text-emerald-700 text-xs">
                 N° {cashRegisterId ? `CS-${currentSectorSlug.slice(0, 4).toUpperCase()}` : 'CS-ACTIF'} &bull; Ouverte à {openedAt ? new Date(openedAt).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '--:--'} par <strong>{openedBy}</strong> {activeSessionId && `&bull; Depuis ID ${activeSessionId.slice(0, 8)}`}
               </p>
@@ -867,7 +1183,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               <p className="text-emerald-700 font-mono font-black">{fmt(initialCash)} Espèces</p>
               {initialMomo > 0 && <p className="text-emerald-600 font-mono text-[11px]">{fmt(initialMomo)} MoMo</p>}
             </div>
-            <button onClick={loadCaisseData} className="p-2 bg-white rounded-xl border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition shadow-sm">
+            <button onClick={() => { loadSessions(); loadCaisseData(); }} className="p-2 bg-white rounded-xl border border-emerald-200 text-emerald-700 hover:bg-emerald-100 transition shadow-sm">
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
           </div>

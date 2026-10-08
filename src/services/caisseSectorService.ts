@@ -358,6 +358,22 @@ export async function ouvrirSessionCaisse(
       } else if (insertedSess) {
         newSess = insertedSess
       }
+
+      // Synchronisation sur sessions_caisse
+      try {
+        await supabase.from('sessions_caisse').insert({
+          company_id: companyId,
+          secteur_id: (caisse as any).secteur_id || (caisse as any).sector_id || caisse.id,
+          caisse_id: caisse.id,
+          date_ouverture: nowIso.split('T')[0],
+          heure_ouverture: nowIso,
+          statut: 'ouverte',
+          ouvert_par: (userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) ? userId : null,
+          ouvert_par_nom: userName,
+          solde_ouverture_espece: fondEspeces,
+          solde_ouverture_momo: fondMomo,
+        })
+      } catch (_) {}
     } catch (insertEx) {
       console.warn('[CAISSE-SERVICE] Exception insertion caisse_sessions :', insertEx)
     }
@@ -498,12 +514,13 @@ export async function cloturerSessionCaisse(
 
     // 2. Clôturer la session dans caisse_sessions (tolérance RLS) :
     // Remise à zéro d'especes_du_jour et momo_du_jour après transfert dans fond_actuel
+    const dateJour = nowIso.split('T')[0]
     if (sessionId) {
       try {
-        await supabase
+        const { error: updErr1 } = await supabase
           .from('caisse_sessions')
           .update({
-            statut: 'fermee',
+            statut: 'fermée',
             date_fermeture: nowIso,
             fond_actuel_especes: nouveauFondEspeces,
             fond_actuel_momo: nouveauFondMomo,
@@ -517,10 +534,33 @@ export async function cloturerSessionCaisse(
             updated_at: nowIso,
           })
           .eq('id', sessionId)
+        if (updErr1) {
+          // Si contrainte alternative sans accent
+          await supabase.from('caisse_sessions').update({ statut: 'fermee', date_fermeture: nowIso }).eq('id', sessionId)
+        }
       } catch (sessUpErr) {
         console.warn('[CAISSE-SERVICE] Notice mise à jour caisse_sessions clôture:', sessUpErr)
       }
     }
+
+    // Clôturer également dans sessions_caisse si présent
+    try {
+      if (caisseId) {
+        await supabase
+          .from('sessions_caisse')
+          .update({
+            statut: 'fermée',
+            date_cloture: dateJour,
+            heure_cloture: nowIso,
+            solde_cloture_espece: nouveauFondEspeces,
+            solde_cloture_momo: nouveauFondMomo,
+            ferme_par_nom: userName,
+            updated_at: nowIso,
+          })
+          .eq('caisse_id', caisseId)
+          .eq('statut', 'ouverte')
+      }
+    } catch (_) {}
 
     try {
       localStorage.removeItem(`gestio_caisse_active_${clean}_${companyId}`)
