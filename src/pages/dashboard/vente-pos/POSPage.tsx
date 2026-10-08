@@ -1322,16 +1322,15 @@ export const POSPage: React.FC = () => {
         })) : undefined
       }
 
-      // 1. Insertion garantie en base de données Supabase dans sales_orders
+      // 1. Insertion garantie et rapide dans sales_orders (colonnes 100% valides)
       const custName = selectedCustomer ? selectedCustomer.name : 'Client Comptoir'
       const todayDate = new Date().toISOString().split('T')[0]
       const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferred ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
 
-      // Payload strictement conforme aux colonnes réelles de sales_orders dans Supabase
-      // NOTE: gross_margin est une colonne GENERATED dans Supabase → on ne l'insert PAS
-      const baseSalePayload: any = {
+      const salePayload: any = {
         company_id: company?.id ?? companyId ?? '',
         customer_id: selectedCustomer?.id || null,
+        cash_session_id: activeCaisse?.id || null,
         order_number: orderNum,
         order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
         order_date: todayDate,
@@ -1342,59 +1341,29 @@ export const POSPage: React.FC = () => {
         total_cost: totalCostHTRounded,
         paid_amount: totalNetTTC - creditAmount,
         credit_amount: creditAmount,
-        ancienne_dette_avant_facture: ancienneDette,
-        montant_credit_actuel: creditActuel,
-        montant_restant_du_global: montantRestantDuGlobal,
         payment_status: creditAmount >= totalNetTTC ? 'credit' : primaryMethod,
-        e_mecef_uid: encodedMeta,
-        created_by: user?.id || null
-      }
-
-      // Payload étendu si des colonnes optionnelles ont été ajoutées (ex: M014/M018)
-      // NOTE: gross_margin est GENERATED → pas inclus dans l'insert
-      const fullSalePayload: any = {
-        ...baseSalePayload,
-        sector_slug: currentSectorSlug,
-        secteur_id: secteurActif?.id || null,
         payment_method: primaryMethod,
         customer_name: custName,
         status: isDeferred ? 'pending_delivery' : 'COMPLET',
-        grille_appliquee: currentBrasserieGrid?.nom || null,
-        grille_id: currentBrasserieGrid?.id || null,
+        sector_slug: currentSectorSlug,
+        e_mecef_uid: encodedMeta,
+        created_by: user?.id || null,
         notes: JSON.stringify(notesPayload)
       }
 
-      let savedDbSale: any = null
-
-      // Tentative avec colonnes étendues d'abord
-      const { data: dbSale, error: salesDbError } = await supabaseTenant('sales_orders')
-        .insert(fullSalePayload)
+      const { data: savedDbSale, error: salesDbError } = await supabase
+        .from('sales_orders')
+        .insert(salePayload)
         .select()
         .single()
 
-      if (!salesDbError && dbSale) {
-        savedDbSale = dbSale
-      } else {
-        console.warn('Fallback insertion sales_orders:', salesDbError)
-        // Fallback garanti sur le schéma natif Supabase (sans sector_slug ni colonnes manquantes)
-        const { data: fbSale, error: fbErr } = await supabaseTenant('sales_orders')
-          .insert(baseSalePayload)
-          .select()
-          .single()
-
-        if (fbErr || !fbSale) {
-          console.error('Erreur critique insertion sales_orders:', fbErr, salesDbError)
-          const errDetail = fbErr?.message || (fbErr as any)?.details || salesDbError?.message || 'Erreur inconnue'
-          throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${errDetail}`)
-        }
-        savedDbSale = fbSale
+      if (salesDbError || !savedDbSale?.id) {
+        console.error('Erreur critique insertion sales_orders:', salesDbError)
+        const errDetail = salesDbError?.message || 'Erreur inconnue'
+        throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${errDetail}`)
       }
 
-      if (!savedDbSale?.id) {
-        throw new Error("L'identifiant de la vente n'a pas pu être validé par Supabase.")
-      }
-
-      // 2. Insertion des lignes réelles dans sales_order_items (source de vérité Supabase)
+      // 2. Insertion des lignes réelles dans sales_order_items (colonnes 100% valides)
       const lineItems = cart.map((line) => {
         const coef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
         const isTaxed = Boolean(
@@ -1408,7 +1377,7 @@ export const POSPage: React.FC = () => {
         const lineHt = isTaxed ? Math.round((lineTotal / (1 + itemVatRate / 100)) * 100) / 100 : lineTotal
         const uvCostTTC = (Number(line.product.cost_price) || 0) / coef
         const uvCostHT = isTaxed ? Math.round((uvCostTTC / (1 + itemVatRate / 100)) * 100) / 100 : Math.round(uvCostTTC * 100) / 100
-        const lineCostHT = Math.round(line.qty * uvCostHT * 100) / 100
+
         return {
           order_id: savedDbSale.id,
           product_id: line.product.id,
@@ -1416,115 +1385,74 @@ export const POSPage: React.FC = () => {
           quantity: line.qty,
           unit_price: line.unitPrice,
           unit_cost: uvCostHT,
-          total_cost: lineCostHT,
           tva_rate: itemVatRate,
           total_ht: lineHt,
           total_ttc: lineTotal,
-          type_tarification: line.pricingSource || 'STANDARD',
-          grille_utilisee: line.appliedGridName || null,
-          grille_id: line.appliedGridId || null,
-          prix_standard: line.standardPrice || line.product.selling_price,
-          prix_applique: line.unitPrice,
-          marge_unitaire: Math.round((line.unitPrice - uvCostTTC) * 100) / 100
+          company_id: company?.id ?? companyId ?? '',
+          sector_slug: currentSectorSlug
         }
       })
-      const { error: linesErr } = await supabase.from('sales_order_items').insert(lineItems)
-      if (linesErr) {
-        console.warn('Avertissement insertion sales_order_items:', linesErr.message)
-      }
+      await supabase.from('sales_order_items').insert(lineItems)
 
-      // 2b. Insertion obligatoire dans vente_lignes (Silo 19 secteurs - Coût d'achat HT unitaire figé)
-      try {
-        const vlRows = cart.map((line) => {
-          const coef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
-          const isTaxed = line.product.is_vat_subject && (line.product.vat_rate || 18) > 0
-          const lineTotal = line.qty * line.unitPrice
-          const lineHt = isTaxed ? Math.round((lineTotal / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : lineTotal
-          const unitHt = line.qty > 0 ? Math.round((lineHt / line.qty) * 100) / 100 : line.unitPrice
-          const uvCostTTC = (Number(line.product.cost_price) || 0) / coef
-          const uvCostHT = isTaxed ? Math.round((uvCostTTC / (1 + (line.product.vat_rate || 18) / 100)) * 100) / 100 : Math.round(uvCostTTC * 100) / 100
-          return {
+      // 3. Déstockage ultra-rapide en parallèle du Stock Vente et traçabilité mouvements
+      await Promise.all(cart.map(async (line) => {
+        if (!line.product?.id) return
+
+        const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
+        const currentStockMagasin = Number(line.product.stock_magasin ?? line.product.sector_meta?.stock_magasin ?? 0)
+        const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
+
+        const currentMeta = line.product.sector_meta || {}
+        const updatedMeta = {
+          ...currentMeta,
+          stock_vente: newStockVente,
+          stock_magasin: currentStockMagasin,
+          ucd: line.product.ucd || currentMeta.ucd || 'Carton',
+          uv: line.product.uv || currentMeta.uv || line.product.unit || 'Pièce',
+          coef: Number(line.product.coef || currentMeta.coef || 1)
+        }
+
+        const lineCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
+        const lineIsTaxed = Boolean(line.product.is_vat_subject ?? line.product.is_taxable ?? false)
+        const lineVatRate = lineIsTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
+        const lineUvCostTTC = (Number(line.product.cost_price) || 0) / lineCoef
+        const lineUvCostHT = lineIsTaxed ? Math.round((lineUvCostTTC / (1 + lineVatRate / 100)) * 100) / 100 : Math.round(lineUvCostTTC * 100) / 100
+        const movementTotalCostHT = Math.round(line.qty * lineUvCostHT * 100) / 100
+
+        await Promise.allSettled([
+          supabase.from('products').update({ sector_meta: updatedMeta }).eq('id', line.product.id),
+          supabase.from('stock_movements').insert({
             company_id: company?.id ?? companyId ?? '',
             sector_slug: currentSectorSlug,
-            vente_id: savedDbSale.id,
-            produit_id: line.product.id,
-            quantite: line.qty,
-            prix_vente_ht_unitaire: unitHt,
-            cout_achat_ht_unitaire: uvCostHT
+            product_id: line.product.id,
+            movement_type: 'VENTE_POS',
+            reference_type: 'sales_order',
+            reference_id: savedDbSale.id,
+            reference_number: orderNum,
+            quantity: -line.qty,
+            previous_stock: currentStockVente,
+            new_stock: newStockVente,
+            unit_cost: lineUvCostHT,
+            total_cost: movementTotalCostHT,
+            notes: `Vente POS ${orderNum} - Déstockage : ${line.qty} ${line.product.uv || line.product.unit || 'UV'}`
+          })
+        ])
+      }))
+
+      // Mise à jour instantanée du state React local des produits
+      setProducts((prev) =>
+        prev.map((p) => {
+          const item = cart.find((c) => c.product.id === p.id)
+          if (!item) return p
+          const curVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
+          const newVente = Math.max(0, Math.round((curVente - item.qty) * 1000) / 1000)
+          return {
+            ...p,
+            stock_vente: newVente,
+            sector_meta: { ...(p.sector_meta || {}), stock_vente: newVente }
           }
         })
-        await supabase.from('vente_lignes').insert(vlRows)
-      } catch (vlErr) {
-        console.warn('Avertissement insertion vente_lignes:', vlErr)
-      }
-
-      // 3. Déstockage strict dans le Stock Vente (en UV) sans altérer le Stock Magasin (en UCD)
-      for (const line of cart) {
-        if (line.product?.id) {
-          try {
-            // Déstockage BDD spécifique au secteur actif via la fonction RPC
-            try {
-              await supabase.rpc('fn_destockage_vente_secteur', {
-                p_company_id: company?.id ?? companyId ?? '',
-                p_secteur_id: secteurActif?.id || null,
-                p_caisse_id: activeCaisse?.id || caisseActive?.id || null,
-                p_produit_id: line.product.id,
-                p_qte: line.qty
-              })
-            } catch (rpcErr) {
-              // RPC non bloquante si la fonction n'est pas encore déployée
-            }
-
-            const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
-            const currentStockMagasin = Number(line.product.stock_magasin ?? line.product.sector_meta?.stock_magasin ?? 0)
-            const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
-
-            const currentMeta = line.product.sector_meta || {}
-            const updatedMeta = {
-              ...currentMeta,
-              stock_vente: newStockVente,
-              stock_magasin: currentStockMagasin, // Reste intact en UCD
-              ucd: line.product.ucd || currentMeta.ucd || 'Carton',
-              uv: line.product.uv || currentMeta.uv || line.product.unit || 'Pièce',
-              coef: Number(line.product.coef || currentMeta.coef || 1)
-            }
-
-            // Mise à jour de la table products
-            await supabaseTenant('products')
-              .update({ sector_meta: updatedMeta })
-              .eq('id', line.product.id)
-
-            // Traçabilité mouvement de stock dans stock_movements
-            const lineCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
-            const lineIsTaxed = Boolean(line.product.is_vat_subject ?? line.product.is_taxable ?? false)
-            const lineVatRate = lineIsTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
-            const lineUvCostTTC = (Number(line.product.cost_price) || 0) / lineCoef
-            const lineUvCostHT = lineIsTaxed ? Math.round((lineUvCostTTC / (1 + lineVatRate / 100)) * 100) / 100 : Math.round(lineUvCostTTC * 100) / 100
-            const movementTotalCostHT = Math.round(line.qty * lineUvCostHT * 100) / 100
-
-            await supabaseTenant('stock_movements').insert({
-              company_id: company?.id ?? companyId ?? '',
-              product_id: line.product.id,
-              movement_type: 'VENTE_POS',
-              reference_type: 'sales_order',
-              reference_id: savedDbSale.id,
-              reference_number: orderNum,
-              quantity: -line.qty,
-              previous_stock: currentStockVente,
-              new_stock: newStockVente,
-              unit_cost: lineUvCostHT,
-              total_cost: movementTotalCostHT,
-              notes: `Vente POS ${orderNum} - Déstockage Stock Vente : ${line.qty} ${line.product.uv || line.product.unit || 'UV'}`
-            })
-
-            setProducts((prev) =>
-              prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: newStockVente, sector_meta: updatedMeta } : p))
-            )
-          } catch (err: any) {
-            console.warn('Erreur déstockage ligne vente :', err?.message)
-          }
-        }
-      }
+      )
 
       // 4. Si client avec crédit, mise à jour stricte de la créance dans Supabase (Règle 1)
       if (selectedCustomer && creditAmount > 0) {
@@ -1558,22 +1486,6 @@ export const POSPage: React.FC = () => {
         } catch (crErr) {
           console.warn('[POSPage] Sauvegarde creances_clients non bloquante :', crErr)
         }
-
-        // Enregistrement dans factures si la table existe
-        try {
-          await supabase.from('factures').insert({
-            company_id: company?.id ?? companyId ?? '',
-            numero: orderNum,
-            client_id: selectedCustomer.id,
-            total_ttc: totalNetTTC,
-            montant_paye: totalNetTTC - creditAmount,
-            montant_credit: creditAmount,
-            montant_credit_actuel: creditAmount,
-            ancienne_dette_avant_facture: ancienneDette,
-            montant_restant_du_global: montantRestantDuGlobal,
-            statut: 'credit'
-          })
-        } catch (_) {}
 
         setCustomers((prev) =>
           prev.map((c) =>
@@ -1752,12 +1664,15 @@ export const POSPage: React.FC = () => {
         : (['momo_mtn', 'momo_moov'].includes(singleMethod) ? totalNetTTC : 0)
 
       if (paidCash > 0 || paidMomo > 0) {
-        // Enregistrement dans caisse_mouvements et mise à jour de la session de caisse
-        try {
-          await enregistrerMouvementCaisse({
-            company_id: company?.id ?? companyId ?? '',
+        const compId = company?.id ?? companyId ?? ''
+        const caisseId = activeCaisse?.caisse_id || activeCaisse?.id || null
+
+        // Exécution en parallèle des mises à jour de caisse
+        await Promise.allSettled([
+          enregistrerMouvementCaisse({
+            company_id: compId,
             sector_slug: currentSectorSlug,
-            caisse_id: activeCaisse?.caisse_id || activeCaisse?.id,
+            caisse_id: caisseId,
             caisse_session_id: activeCaisse?.id,
             type: 'vente',
             sens: 'entree',
@@ -1768,83 +1683,58 @@ export const POSPage: React.FC = () => {
             motif: `Vente POS ${orderNum} (Client: ${custName || 'Comptoir'})`,
             user_name: user?.full_name || 'Caissier',
             user_id: user?.id,
-          })
-        } catch (cmErr) {
-          console.warn('Avertissement caisse_mouvements:', cmErr)
-        }
-
-        try {
-          const { data: registers } = await supabaseTenant('cash_registers')
-            .select('*')
-            .limit(1)
-
-          if (registers && registers.length > 0) {
-            const reg = registers[0]
-            await supabaseTenant('cash_registers')
-              .update({
-                current_cash_balance: (Number(reg.current_cash_balance) || 0) + paidCash,
-                current_momo_balance: (Number(reg.current_momo_balance) || 0) + paidMomo
-              })
-              .eq('id', reg.id)
-          } else {
-            await supabaseTenant('cash_registers')
-              .insert({
-                company_id: company?.id ?? companyId ?? '',
-                name: 'Caisse Principale POS',
-                current_cash_balance: paidCash,
-                current_momo_balance: paidMomo,
-                is_active: true
-              })
-          }
-        } catch (e) {
-          console.warn('Avertissement cash_registers Supabase:', e)
-        }
-
-        // Réajustement automatique du fond de caisse (Règle métier officielle Caisse / Dépenses)
-        try {
-          const compId = company?.id ?? companyId ?? ''
-          if (paidCash > 0) {
-            await enregistrerEntreeCaisse({
-              company_id: compId,
-              secteur_id: currentSectorSlug,
-              caisse_id: activeCaisse?.caisse_id || activeCaisse?.id || null,
-              montant: paidCash,
-              mode_paiement: 'espece',
-              source: 'VENTE',
-              reference_id: savedDbSale?.id || null
-            })
-          }
-          if (paidMomo > 0) {
-            await enregistrerEntreeCaisse({
-              company_id: compId,
-              secteur_id: currentSectorSlug,
-              caisse_id: activeCaisse?.caisse_id || activeCaisse?.id || null,
-              montant: paidMomo,
-              mode_paiement: 'mtn_momo',
-              source: 'VENTE',
-              reference_id: savedDbSale?.id || null
-            })
-          }
-        } catch (faErr) {
-          console.warn('Avertissement fonds_actuels réajustement:', faErr)
-        }
+          }),
+          paidCash > 0 ? enregistrerEntreeCaisse({
+            company_id: compId,
+            secteur_id: currentSectorSlug,
+            caisse_id: caisseId,
+            montant: paidCash,
+            mode_paiement: 'espece',
+            source: 'VENTE',
+            reference_id: savedDbSale?.id || null
+          }) : Promise.resolve(),
+          paidMomo > 0 ? enregistrerEntreeCaisse({
+            company_id: compId,
+            secteur_id: currentSectorSlug,
+            caisse_id: caisseId,
+            montant: paidMomo,
+            mode_paiement: 'mtn_momo',
+            source: 'VENTE',
+            reference_id: savedDbSale?.id || null
+          }) : Promise.resolve(),
+          (async () => {
+            try {
+              const { data: registers } = await supabaseTenant('cash_registers').select('*').limit(1)
+              if (registers && registers.length > 0) {
+                const reg = registers[0]
+                await supabaseTenant('cash_registers')
+                  .update({
+                    current_cash_balance: (Number(reg.current_cash_balance) || 0) + paidCash,
+                    current_momo_balance: (Number(reg.current_momo_balance) || 0) + paidMomo
+                  })
+                  .eq('id', reg.id)
+              }
+            } catch (_) {}
+          })()
+        ])
       }
 
-      // 6. Traçabilité Journal d'Audit automatique dans Supabase
-      try {
-        const { logAuditEvent } = await import('../../../services/auditService')
-        await logAuditEvent({
-          companyId: company?.id ?? companyId ?? '',
-          userId: user?.id,
-          userName: user?.full_name || user?.username,
-          userRole: user?.role,
-          module: 'Vente-POS',
-          action: 'VENTE',
-          description: `Vente N° ${orderNum} enregistrée - Montant: ${fmt(totalNetTTC)} (${primaryMethod}) - Client: ${custName}`,
-          entityName: 'sales_orders',
-          entityId: savedDbSale.id
+      // 6. Traçabilité Journal d'Audit automatique dans Supabase (non bloquant)
+      import('../../../services/auditService')
+        .then(({ logAuditEvent }) => {
+          logAuditEvent({
+            companyId: company?.id ?? companyId ?? '',
+            userId: user?.id,
+            userName: user?.full_name || user?.username,
+            userRole: user?.role,
+            module: 'Vente-POS',
+            action: 'VENTE',
+            description: `Vente N° ${orderNum} enregistrée - Montant: ${fmt(totalNetTTC)} (${primaryMethod}) - Client: ${custName}`,
+            entityName: 'sales_orders',
+            entityId: savedDbSale.id
+          }).catch(() => {})
         })
-      } catch (e) {}
+        .catch(() => {})
 
       const newSale: SaleRecord = {
         id: savedDbSale.id,
