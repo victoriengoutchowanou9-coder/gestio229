@@ -23,6 +23,7 @@ import { getActiveCaisse, getCurrentCashSession, ActiveCaisseSession } from '../
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal, TransfertStockModal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
+import { decomposerTTC } from '../../../utils/calculPrix'
 import {
   BatchPricingConfig,
   calculateBatchLinePrice,
@@ -1021,18 +1022,21 @@ export const POSPage: React.FC = () => {
         detectedAibRate = itemAibRate
       }
 
-      const tax = calculateTaxFromTTC(
-        lineTtc,
-        isVat,
-        vatRate,
-        isAib,
-        itemAibRate
-      )
-      ht += tax.htPrice
-      tva += tax.vatAmount
-      aib += tax.aibAmount
-      if (!isVat) {
-        totalExonere += lineTtc
+      if (lineTtc > 0) {
+        const decomp = decomposerTTC(
+          lineTtc,
+          1,
+          isVat,
+          isAib,
+          vatRate,
+          itemAibRate
+        )
+        ht += decomp.ht
+        tva += decomp.tva
+        aib += decomp.aib
+        if (!isVat) {
+          totalExonere += lineTtc
+        }
       }
     })
 
@@ -1046,8 +1050,8 @@ export const POSPage: React.FC = () => {
     }
   }, [cart, applyAibCart, cartAibRate])
 
-  // Total Net TTC à payer : Sous-total TTC - Remises + AIB (si AIB calculé sur HT)
-  const totalNetTTC = Math.max(0, Math.round((subtotalTTC - totalDiscount + cartFiscalSummary.aib) * 100) / 100)
+  // Total Net TTC à payer : Sous-total TTC - Remises (RÈGLE ABSOLUE GESTIO 229 : L'AIB ne s'ajoute JAMAIS au prix TTC catalogue client)
+  const totalNetTTC = Math.max(0, Math.round((subtotalTTC - totalDiscount) * 100) / 100)
 
   // ─── Gestion des Modes de Paiement (Panier & Checkout Intégré) ──────────────
 

@@ -57,8 +57,8 @@ export function calculateTaxFromTTC(
     isVatSubject,
     aibRate: isAibSubject ? safeAibRate : 0,
     aibAmount,
-    isAibSubject,
-    totalLineWithAib: Math.round((safeTtc + aibAmount) * 100) / 100,
+    // Règle d'or GESTIO 229 : L'AIB ne doit jamais augmenter le prix TTC catalogue payé par le client
+    totalLineWithAib: safeTtc,
   }
 }
 
