@@ -1228,7 +1228,18 @@ export const POSPage: React.FC = () => {
 
     setPaying(true)
     try {
-      const orderNum = `VTE-${new Date().getFullYear()}-${String(Math.floor(1000 + Math.random() * 9000))}`
+      // Génération sécurisée numéro commande par secteur (ex: BRA-20261009-xxxx, QUI-20261009-xxxx)
+      const rawSector = (secteurActif?.slug || currentSectorSlug || 'GEN').replace(/^sec-/, '')
+      const secteurCode = rawSector.substring(0, 3).toUpperCase()
+      let dateStr = ''
+      try {
+        dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Porto-Novo' }).replace(/-/g, '')
+      } catch {
+        dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+      }
+      const randStr = Math.random().toString(36).substring(2, 6).toUpperCase()
+      const timeStr = Date.now().toString().slice(-4)
+      const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
 
       const paymentsList: PaymentLine[] = isMultiMode
         ? [
@@ -1329,6 +1340,7 @@ export const POSPage: React.FC = () => {
 
       const salePayload: any = {
         company_id: company?.id ?? companyId ?? '',
+        order_number: orderNum, // FIX CRITIQUE : TOUJOURS FOURNI (CONTRAINTE NOT NULL)
         // cash_session_id doit être null car la FK PostgreSQL pointe vers l'ancienne table cash_sessions (inutilisée).
         // La session active de sessions_caisse est tracée dans notes et caisse_mouvements.
         cash_session_id: null,
