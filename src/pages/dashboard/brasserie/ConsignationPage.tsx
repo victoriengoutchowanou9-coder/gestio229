@@ -18,7 +18,7 @@ import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
 import { logAuditEvent } from '../../../services/auditService'
 import { formatFCFA } from '../../../utils/tax'
-import { getSoldeClient, getSoldesClientTous, enregistrerRetourEmballage } from '../../../utils/emballages'
+import { getSoldeClient, getSoldesClientTous, enregistrerRetourEmballage, isVraiCodeEmballage } from '../../../utils/emballages'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -365,7 +365,9 @@ const BrasserieConsignationPage: React.FC = () => {
         return { ...e, stock_depot: curStock }
       })
 
-      setEmballages(merged)
+      // Éliminer strictement tout code fantôme UUID
+      const cleanEmballages = merged.filter((e: any) => isVraiCodeEmballage(e.code))
+      setEmballages(cleanEmballages)
     } catch (_) {}
   }, [companyId])
 
@@ -379,8 +381,9 @@ const BrasserieConsignationPage: React.FC = () => {
         .order('date', { ascending: false })
 
       if (!error && data && data.length > 0) {
-        setEmbMouvements(data)
-        setInitialesList(data.filter((m: any) => m.type_mouvement === 'INITIAL'))
+        const cleanData = data.filter((m: any) => isVraiCodeEmballage(m.emballage_code || m.code))
+        setEmbMouvements(cleanData)
+        setInitialesList(cleanData.filter((m: any) => m.type_mouvement === 'INITIAL'))
       } else {
         const { data: fbData } = await supabase
           .from('brasserie_mouvements_emballages')
@@ -388,19 +391,21 @@ const BrasserieConsignationPage: React.FC = () => {
           .eq('company_id', companyId)
           .eq('sector_slug', 'brasserie')
         if (fbData && fbData.length > 0) {
-          const mapped = fbData.map((f: any) => ({
-            client_id: f.client_id,
-            client_nom: f.client?.name || 'Client',
-            code: f.emballage?.code || 'C20T',
-            emballage_code: f.emballage?.code || 'C20T',
-            type_mouvement: f.type_mouvement,
-            quantite: f.quantite,
-            date: f.created_at
-          }))
+          const mapped = fbData
+            .filter((f: any) => isVraiCodeEmballage(f.emballage?.code))
+            .map((f: any) => ({
+              client_id: f.client_id,
+              client_nom: f.client?.name || 'Client',
+              code: f.emballage?.code || 'C20T',
+              emballage_code: f.emballage?.code || 'C20T',
+              type_mouvement: f.type_mouvement,
+              quantite: f.quantite,
+              date: f.created_at
+            }))
           setEmbMouvements(mapped)
           setInitialesList(mapped.filter((m: any) => m.type_mouvement === 'INITIAL'))
         } else {
-          setEmbMouvements(data || [])
+          setEmbMouvements([])
           setInitialesList([])
         }
       }
@@ -460,7 +465,8 @@ const BrasserieConsignationPage: React.FC = () => {
       const { data } = await q
 
       if (data && data.length > 0) {
-        const mapped = data.map((m: any) => ({
+        const cleanData = data.filter((m: any) => isVraiCodeEmballage(m.emballage_code || m.code))
+        const mapped = cleanData.map((m: any) => ({
           id: m.id,
           emballage_id: m.emballage_type_id || m.emballage_code || m.code,
           client_id: m.client_id,

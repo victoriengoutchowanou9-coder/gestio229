@@ -28,6 +28,18 @@ export interface EmballageMouvement {
 }
 
 /**
+ * Vérifie si un code d'emballage est un vrai code de casier (ex: C12T, C20T, C24T, C6T, C10T)
+ * et NON un UUID fantôme (ex: a298bafb-25f2-486c-9276-2c366f86311d)
+ */
+export function isVraiCodeEmballage(code?: string | null): boolean {
+  if (!code) return false
+  const clean = code.trim().toUpperCase()
+  if (clean.includes('-') && clean.length > 10) return false
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(clean)) return false
+  return /^C\d+T$/i.test(clean) || ['C12T', 'C20T', 'C24T', 'C6T', 'C10T', 'C30T'].includes(clean)
+}
+
+/**
  * Calcule le solde dû réel d'un client pour un code d'emballage donné (ex: 'C12T')
  * Règle : SUM(INITIAL, SORTIE, AJUSTEMENT_POSITIF, INVENTAIRE) - SUM(RETOUR, AJUSTEMENT_NEGATIF)
  */
@@ -38,8 +50,8 @@ export async function getSoldeClient(
   clientId: string,
   codeEmballage: string
 ): Promise<number> {
-  if (!companyId || !clientId || !codeEmballage) return 0
-  const targetCode = codeEmballage.toUpperCase()
+  if (!companyId || !clientId || !codeEmballage || !isVraiCodeEmballage(codeEmballage)) return 0
+  const targetCode = codeEmballage.trim().toUpperCase()
 
   const { data, error } = await supabase
     .from('brasserie_emballages_mouvements')
@@ -51,7 +63,7 @@ export async function getSoldeClient(
 
   let solde = 0
   data.forEach((m: any) => {
-    const c = (m.emballage_code || m.code || '').toUpperCase()
+    const c = (m.emballage_code || m.code || '').trim().toUpperCase()
     if (c === targetCode) {
       const q = Number(m.quantite) || 0
       const type = (m.type_mouvement || '').toUpperCase()
@@ -88,8 +100,8 @@ export async function getSoldesClientTous(
   if (error || !data) return map
 
   data.forEach((m: any) => {
-    const c = (m.emballage_code || m.code || '').toUpperCase()
-    if (!c) return
+    const c = (m.emballage_code || m.code || '').trim().toUpperCase()
+    if (!c || !isVraiCodeEmballage(c)) return
     const q = Number(m.quantite) || 0
     const type = (m.type_mouvement || '').toUpperCase()
     if (['RETOUR', 'AJUSTEMENT_NEGATIF', 'RETOUR_CLIENT', 'RETOUR_IMMEDIAT', 'AVOIR_RETOUR'].includes(type)) {
@@ -135,7 +147,10 @@ export async function enregistrerRetourEmballage(
     date, reference, observation, createdBy
   } = params
 
-  const upperCode = emballageCode.toUpperCase()
+  const upperCode = emballageCode.trim().toUpperCase()
+  if (!isVraiCodeEmballage(upperCode)) {
+    throw new Error(`Code emballage invalide (${upperCode}). Seuls les codes réels (C12T, C20T, C24T...) sont autorisés.`)
+  }
   const nowIso = date ? new Date(date).toISOString() : new Date().toISOString()
   const ref = reference || `RET-${Date.now().toString(36).toUpperCase()}`
 

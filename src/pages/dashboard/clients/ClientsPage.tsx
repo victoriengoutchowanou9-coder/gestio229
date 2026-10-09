@@ -178,13 +178,20 @@ const ClientsPage: React.FC = () => {
         .eq('client_id', activeDetailsCustomer.id)
         .then(({ data }) => {
           if (data) {
-            setCustomerConsignations(data.map((c: any) => ({
-              code: c.emballage?.code || 'EMB',
-              designation: c.emballage?.designation || 'Emballage',
-              total_sorti: c.total_sorti || 0,
-              total_retourne: c.total_retourne || 0,
-              solde_du: c.solde_du || 0,
-            })))
+            setCustomerConsignations(
+              data
+                .filter((c: any) => {
+                  const code = (c.emballage?.code || '').trim()
+                  return code && (!code.includes('-') || code.length <= 10) && /^C\d+T$/i.test(code)
+                })
+                .map((c: any) => ({
+                  code: c.emballage?.code || 'EMB',
+                  designation: c.emballage?.designation || 'Emballage',
+                  total_sorti: c.total_sorti || 0,
+                  total_retourne: c.total_retourne || 0,
+                  solde_du: c.solde_du || 0,
+                }))
+            )
           } else {
             setCustomerConsignations([])
           }

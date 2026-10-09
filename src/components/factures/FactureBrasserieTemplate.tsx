@@ -193,12 +193,18 @@ export function exportFactureBrasseriePDF(data: FactureBrasserieData) {
   const embX = margin
 
   // Table Situation des emballages
-  if (data.emballages && data.emballages.length > 0) {
+  const cleanEmballages = (data.emballages || []).filter(e => {
+    const code = (e.code || e.designation || '').trim()
+    if (code.includes('-') && code.length > 10) return false
+    return (e.precedent > 0 || e.facture > 0 || e.rendus > 0 || e.reste > 0)
+  })
+
+  if (cleanEmballages.length > 0) {
     doc.setFont('helvetica', 'bold')
     doc.setFontSize(8.5)
     doc.text('Situation des emballages', embX, afterTableY + 4)
 
-    const embRows = data.emballages.map(e => [
+    const embRows = cleanEmballages.map(e => [
       e.designation,
       String(e.precedent),
       String(e.facture),
@@ -446,23 +452,30 @@ export const FactureBrasserieTemplate: React.FC<FactureBrasserieTemplateProps> =
                   </tr>
                 </thead>
                 <tbody>
-                  {data.emballages && data.emballages.length > 0 ? (
-                    data.emballages.map((emb, idx) => (
-                      <tr key={idx} className="border-b border-slate-200">
-                        <td className="p-1 border-r border-slate-900 font-medium">{emb.designation}</td>
-                        <td className="p-1 border-r border-slate-900 text-center font-mono">{emb.precedent}</td>
-                        <td className="p-1 border-r border-slate-900 text-center font-mono font-bold">{emb.facture}</td>
-                        <td className="p-1 border-r border-slate-900 text-center font-mono">{emb.rendus}</td>
-                        <td className="p-1 text-center font-mono font-black text-slate-900 bg-slate-50">{emb.reste}</td>
+                  {(() => {
+                    const clean = (data.emballages || []).filter(e => {
+                      const code = (e.code || e.designation || '').trim()
+                      if (code.includes('-') && code.length > 10) return false
+                      return (e.precedent > 0 || e.facture > 0 || e.rendus > 0 || e.reste > 0)
+                    })
+                    return clean.length > 0 ? (
+                      clean.map((emb, idx) => (
+                        <tr key={idx} className="border-b border-slate-200">
+                          <td className="p-1 border-r border-slate-900 font-medium">{emb.designation}</td>
+                          <td className="p-1 border-r border-slate-900 text-center font-mono">{emb.precedent}</td>
+                          <td className="p-1 border-r border-slate-900 text-center font-mono font-bold">{emb.facture}</td>
+                          <td className="p-1 border-r border-slate-900 text-center font-mono">{emb.rendus}</td>
+                          <td className="p-1 text-center font-mono font-black text-slate-900 bg-slate-50">{emb.reste}</td>
+                        </tr>
+                      ))
+                    ) : (
+                      <tr>
+                        <td colSpan={5} className="p-2 text-center text-slate-400 italic">
+                          Aucun emballage consigné sur cette vente
+                        </td>
                       </tr>
-                    ))
-                  ) : (
-                    <tr>
-                      <td colSpan={5} className="p-2 text-center text-slate-400 italic">
-                        Aucun emballage consigné sur cette vente
-                      </td>
-                    </tr>
-                  )}
+                    )
+                  })()}
                 </tbody>
               </table>
             </div>

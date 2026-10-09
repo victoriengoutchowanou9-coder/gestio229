@@ -44,6 +44,7 @@ import { StationFuelDispenser } from '../station/StationFuelDispenser'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
+import { isVraiCodeEmballage } from '../../../utils/emballages'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -257,24 +258,21 @@ export const POSPage: React.FC = () => {
 
         if (!mvtsErr && mvtsData && mvtsData.length > 0) {
           mvtsData.forEach((m: any) => {
-            let rawCode = (m.emballage_code || m.code || '').toUpperCase()
+            let rawCode = (m.emballage_code || m.code || '').trim().toUpperCase()
             if (!rawCode && m.emballage_type_id) {
               const matched = brasserieEmballagesList.find(e => e.id === m.emballage_type_id)
-              if (matched) rawCode = matched.code.toUpperCase()
+              if (matched) rawCode = (matched.code || '').trim().toUpperCase()
             }
-            if (!rawCode) rawCode = 'C20T'
+            // IGNORER strictement tout code fantôme ou invalide
+            if (!rawCode || !isVraiCodeEmballage(rawCode)) return
 
             const qte = Number(m.quantite) || 0
             const type = (m.type_mouvement || '').toUpperCase()
 
-            if (['SORTIE', 'SORTIE_VENTE', 'INITIAL'].includes(type)) {
+            if (['SORTIE', 'SORTIE_VENTE', 'INITIAL', 'AJUSTEMENT_POSITIF', 'INVENTAIRE'].includes(type)) {
               map[rawCode] = (map[rawCode] || 0) + qte
-            } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR'].includes(type)) {
+            } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR', 'AJUSTEMENT_NEGATIF'].includes(type)) {
               map[rawCode] = Math.max(0, (map[rawCode] || 0) - qte)
-            }
-
-            if (m.emballage_type_id) {
-              map[m.emballage_type_id] = map[rawCode]
             }
           })
 
@@ -292,9 +290,10 @@ export const POSPage: React.FC = () => {
         if (!soldesErr && soldesData && soldesData.length > 0) {
           soldesData.forEach((s: any) => {
             const matched = brasserieEmballagesList.find(e => e.id === s.emballage_id)
-            const code = matched ? matched.code.toUpperCase() : s.emballage_id
-            map[code] = Number(s.du_actuel) || 0
-            map[s.emballage_id] = Number(s.du_actuel) || 0
+            const code = (matched ? matched.code : s.emballage_id || '').trim().toUpperCase()
+            if (isVraiCodeEmballage(code)) {
+              map[code] = Number(s.du_actuel) || 0
+            }
           })
           setClientEmballagesPrecedents(map)
           return
@@ -311,9 +310,10 @@ export const POSPage: React.FC = () => {
         if (consData && consData.length > 0) {
           consData.forEach((c: any) => {
             const matched = brasserieEmballagesList.find(e => e.id === c.emballage_id)
-            const code = matched ? matched.code.toUpperCase() : c.emballage_id
-            map[code] = Number(c.solde_du) || 0
-            map[c.emballage_id] = Number(c.solde_du) || 0
+            const code = (matched ? matched.code : c.emballage_id || '').trim().toUpperCase()
+            if (isVraiCodeEmballage(code)) {
+              map[code] = Number(c.solde_du) || 0
+            }
           })
           setClientEmballagesPrecedents(map)
         } else {
@@ -644,7 +644,12 @@ export const POSPage: React.FC = () => {
           .eq('sector_slug', 'brasserie')
           .eq('is_active', true)
         if (embData && embData.length > 0) {
-          setBrasserieEmballagesList(embData)
+          const cleanEmb = embData.filter((e: any) => isVraiCodeEmballage(e.code))
+          setBrasserieEmballagesList(cleanEmb.length > 0 ? cleanEmb : [
+            { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles', stock_depot: 0 },
+            { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles', stock_depot: 0 },
+            { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles', stock_depot: 0 },
+          ])
         } else {
           setBrasserieEmballagesList([
             { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles', stock_depot: 0 },
@@ -1316,14 +1321,14 @@ export const POSPage: React.FC = () => {
       let embName = ''
       let embId = p.sector_meta?.emballage_id || ''
 
-      const embCodeFromProduct = ((p as any).emballage_type_code || (p as any).emballage_code || p.sector_meta?.emballage_code || '').toUpperCase()
+      const embCodeFromProduct = ((p as any).emballage_type_code || (p as any).emballage_code || p.sector_meta?.emballage_code || '').trim().toUpperCase()
 
       const matchedEmb = brasserieEmballagesList.find(e => e.id === embId || (embCodeFromProduct && e.code === embCodeFromProduct) || e.code === p.sector_meta?.emballage_code)
-      if (matchedEmb) {
-        embCode = matchedEmb.code
+      if (matchedEmb && isVraiCodeEmballage(matchedEmb.code)) {
+        embCode = matchedEmb.code.trim().toUpperCase()
         embName = matchedEmb.designation
         embId = matchedEmb.id
-      } else if (embCodeFromProduct) {
+      } else if (embCodeFromProduct && isVraiCodeEmballage(embCodeFromProduct)) {
         embCode = embCodeFromProduct
         embName = `Casier ${embCodeFromProduct}`
       } else {
@@ -1340,7 +1345,7 @@ export const POSPage: React.FC = () => {
         }
       }
 
-      if (embCode) {
+      if (embCode && isVraiCodeEmballage(embCode)) {
         const coefEmb = Number(p.sector_meta?.qte_emballage) || 1
         const count = Math.round(item.qty * coefEmb)
         if (!map[embCode]) {
@@ -1365,23 +1370,27 @@ export const POSPage: React.FC = () => {
       C24T: { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles' },
     }
     brasserieEmballagesList.forEach(e => {
-      const c = (e.code || '').toUpperCase()
-      if (c) knownEmbs[c] = { id: e.id, code: c, designation: e.designation }
+      const c = (e.code || '').trim().toUpperCase()
+      if (c && isVraiCodeEmballage(c)) {
+        knownEmbs[c] = { id: e.id, code: c, designation: e.designation }
+      }
     })
 
     const codesSet = new Set<string>()
-    // 1. Ajouter tous les emballages sortis dans le panier
-    brasserieSorties.forEach(s => codesSet.add(s.code.toUpperCase()))
+    // 1. Ajouter tous les emballages sortis dans le panier (vrais codes uniquement)
+    brasserieSorties.forEach(s => {
+      const c = s.code.trim().toUpperCase()
+      if (isVraiCodeEmballage(c)) codesSet.add(c)
+    })
 
     // 2. Si client enregistré, ajouter tous les emballages pour lesquels il a une dette précédente > 0
     if (!isComptoir) {
       Object.entries(clientEmballagesPrecedents).forEach(([k, v]) => {
+        const upperK = k.trim().toUpperCase()
+        if (!isVraiCodeEmballage(upperK)) return
+
         if (Number(v) > 0) {
-          const upperK = k.toUpperCase()
-          const match = brasserieEmballagesList.find(e => e.id === k)
-          if (match) codesSet.add(match.code.toUpperCase())
-          else if (['C12T', 'C20T', 'C24T'].includes(upperK)) codesSet.add(upperK)
-          else codesSet.add(upperK)
+          codesSet.add(upperK)
         }
       })
     }
@@ -1394,11 +1403,7 @@ export const POSPage: React.FC = () => {
       const embId = sortieItem?.id || matchedMeta?.id
       const designation = sortieItem?.designation || matchedMeta?.designation || `Casier ${code}`
 
-      const prec = isComptoir ? 0 : (
-        clientEmballagesPrecedents[code] || 
-        (embId ? clientEmballagesPrecedents[embId] : 0) || 
-        0
-      )
+      const prec = isComptoir ? 0 : (Number(clientEmballagesPrecedents[code]) || 0)
       const facture = sortieItem ? Number(sortieItem.sortie) || 0 : 0
       const rendus = Number(brasserieRetours[code]) || 0
       const reste = isComptoir ? (facture - rendus) : (prec + facture - rendus)
@@ -1414,7 +1419,15 @@ export const POSPage: React.FC = () => {
       }
     })
 
-    return rows.sort((a, b) => a.code.localeCompare(b.code))
+    // FILTRAGE STRICT SÉCURITÉ & ERGONOMIE (PROMPT GHOST EMBALLAGES) :
+    // 1. Éliminer tout code fantôme (UUID contenant '-' avec length > 10)
+    // 2. Ne conserver que les vrais codes de casiers (C12T, C20T, C24T, etc.)
+    // 3. Masquer les lignes où Précédent = 0 ET Facture = 0 ET Rendus = 0 (lignes inutiles)
+    // 4. Trier dans l'ordre naturel (C12T, C20T, C24T)
+    return rows
+      .filter(r => isVraiCodeEmballage(r.code))
+      .filter(r => (r.precedent > 0 || r.facture > 0 || r.rendus > 0))
+      .sort((a, b) => a.code.localeCompare(b.code, undefined, { numeric: true }))
   }, [currentSectorSlug, selectedCustomer, clientEmballagesPrecedents, brasserieSorties, brasserieRetours, brasserieEmballagesList])
 
   // Calculs en temps réel multi-modes
@@ -1883,7 +1896,10 @@ export const POSPage: React.FC = () => {
           const clientId = selectedCustomer?.id || null
 
           for (const emb of brasserieEmballageRows) {
-            const codeEmb = (emb.code || 'C20T').toUpperCase()
+            const codeEmb = (emb.code || '').trim().toUpperCase()
+            // SÉCURITÉ ABSOLUE : Ignorer tout code fantôme UUID ou non conforme
+            if (!isVraiCodeEmballage(codeEmb)) continue
+
             const designationEmb = emb.designation || `Casier ${codeEmb}`
             const retour = Number(emb.rendus) || 0
             const sortie = Number(emb.facture) || 0
@@ -1938,7 +1954,7 @@ export const POSPage: React.FC = () => {
               .maybeSingle()
             if (dbType?.id) {
               embTypeId = dbType.id
-            } else {
+            } else if (isVraiCodeEmballage(codeEmb)) {
               const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
               const safeSecteurId = isValidUUID(company?.sector_id) ? company?.sector_id : null
               const { data: createdType } = await supabase
