@@ -209,7 +209,6 @@ const BrasserieConsignationPage: React.FC = () => {
   const [printingBonRetour, setPrintingBonRetour] = useState<{ mouvement: MouvementEmballage; avant: number; apres: number } | null>(null)
 
   // ── useMemo calculés immédiatement à partir des states (évite tout TDZ) ─────
-  // ── useMemo calculés immédiatement à partir des states (évite tout TDZ) ─────
   const clientSoldes = useMemo((): ClientSolde[] => {
     const map: Record<string, ClientSolde> = {}
 
@@ -218,7 +217,7 @@ const BrasserieConsignationPage: React.FC = () => {
       const cid = m.client_id || m.client_nom
       if (!cid) continue
       const clientName = m.client_nom || 'Client'
-      const code = (m.code || 'C20T').toUpperCase()
+      const code = (m.emballage_code || m.code || 'C20T').toUpperCase()
       const emb = emballages.find(e => e.code === code) || {
         id: m.emballage_type_id || code,
         company_id: companyId,
@@ -231,7 +230,6 @@ const BrasserieConsignationPage: React.FC = () => {
         stock_depot: 0,
         is_active: true
       }
-      const embKey = emb.id
 
       if (!map[cid]) {
         map[cid] = {
@@ -244,8 +242,8 @@ const BrasserieConsignationPage: React.FC = () => {
         }
       }
 
-      if (!map[cid].soldes[embKey]) {
-        map[cid].soldes[embKey] = {
+      if (!map[cid].soldes[code]) {
+        map[cid].soldes[code] = {
           emballage: emb,
           total_sorti: 0,
           total_retourne: 0,
@@ -256,11 +254,15 @@ const BrasserieConsignationPage: React.FC = () => {
       const qte = Number(m.quantite) || 0
       const type = (m.type_mouvement || '').toUpperCase()
       if (['SORTIE', 'SORTIE_VENTE', 'INITIAL'].includes(type)) {
-        map[cid].soldes[embKey].total_sorti += qte
-        map[cid].soldes[embKey].solde_du += qte
+        map[cid].soldes[code].total_sorti += qte
+        map[cid].soldes[code].solde_du += qte
       } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR'].includes(type)) {
-        map[cid].soldes[embKey].total_retourne += qte
-        map[cid].soldes[embKey].solde_du = Math.max(0, map[cid].soldes[embKey].solde_du - qte)
+        map[cid].soldes[code].total_retourne += qte
+        map[cid].soldes[code].solde_du = Math.max(0, map[cid].soldes[code].solde_du - qte)
+      }
+
+      if (emb.id && emb.id !== code) {
+        map[cid].soldes[emb.id] = map[cid].soldes[code]
       }
     }
 
@@ -271,7 +273,7 @@ const BrasserieConsignationPage: React.FC = () => {
       const clientName = c.client?.name || 'Client'
       const emb = c.emballage || emballages.find(e => e.id === c.emballage_id)
       if (!emb) continue
-      const embKey = emb.id
+      const code = (emb.code || 'C20T').toUpperCase()
 
       if (!map[cid]) {
         map[cid] = {
@@ -284,19 +286,23 @@ const BrasserieConsignationPage: React.FC = () => {
         }
       }
 
-      if (!map[cid].soldes[embKey]) {
-        map[cid].soldes[embKey] = {
+      if (!map[cid].soldes[code]) {
+        map[cid].soldes[code] = {
           emballage: emb,
           total_sorti: Number(c.total_sorti) || 0,
           total_retourne: Number(c.total_retourne) || 0,
           solde_du: Number(c.solde_du) || 0,
         }
+        if (emb.id && emb.id !== code) {
+          map[cid].soldes[emb.id] = map[cid].soldes[code]
+        }
       }
     }
 
-    // 3. Calcul du total dû par client
+    // 3. Calcul du total dû par client sans doublon
     for (const cs of Object.values(map)) {
-      cs.total_emballages_dus = Object.values(cs.soldes).reduce((sum, s) => sum + s.solde_du, 0)
+      const uniqueSoldes = new Set(Object.values(cs.soldes))
+      cs.total_emballages_dus = Array.from(uniqueSoldes).reduce((sum, s) => sum + s.solde_du, 0)
     }
 
     return Object.values(map)
@@ -317,16 +323,18 @@ const BrasserieConsignationPage: React.FC = () => {
   const totauxGlobaux = useMemo(() => {
     const t: Record<string, { emballage: Emballage; total_sorti: number; total_retourne: number; solde_du: number }> = {}
     for (const emb of emballages) {
-      t[emb.id] = { emballage: emb, total_sorti: 0, total_retourne: 0, solde_du: 0 }
+      t[emb.code] = { emballage: emb, total_sorti: 0, total_retourne: 0, solde_du: 0 }
     }
     for (const cs of clientSoldes) {
-      for (const [embId, s] of Object.entries(cs.soldes)) {
-        if (!t[embId]) {
-          t[embId] = { emballage: s.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
+      const uniqueSoldes = new Set(Object.values(cs.soldes))
+      for (const s of uniqueSoldes) {
+        const k = s.emballage.code || s.emballage.id
+        if (!t[k]) {
+          t[k] = { emballage: s.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
         }
-        t[embId].total_sorti += s.total_sorti
-        t[embId].total_retourne += s.total_retourne
-        t[embId].solde_du += s.solde_du
+        t[k].total_sorti += s.total_sorti
+        t[k].total_retourne += s.total_retourne
+        t[k].solde_du += s.solde_du
       }
     }
     return Object.values(t)
@@ -403,12 +411,16 @@ const BrasserieConsignationPage: React.FC = () => {
             client_id: f.client_id,
             client_nom: f.client?.name || 'Client',
             code: f.emballage?.code || 'C20T',
+            emballage_code: f.emballage?.code || 'C20T',
             type_mouvement: f.type_mouvement,
             quantite: f.quantite,
             date: f.created_at
           }))
           setEmbMouvements(mapped)
           setInitialesList(mapped.filter((m: any) => m.type_mouvement === 'INITIAL'))
+        } else {
+          setEmbMouvements(data || [])
+          setInitialesList([])
         }
       }
     } catch (_) {}
@@ -639,11 +651,11 @@ const BrasserieConsignationPage: React.FC = () => {
             const clientObj = initialeClientsList.find(c => c.id === initialeClientId)
             await supabase.from('brasserie_emballages_mouvements').insert({
               company_id: companyId,
-              secteur_id: companyId,
               client_id: initialeClientId,
               client_nom: clientObj?.name || 'Client',
               emballage_type_id: emb.id,
               code: emb.code,
+              emballage_code: emb.code,
               type_mouvement: 'INITIAL',
               quantite: prec,
               solde_avant: 0,
@@ -886,6 +898,27 @@ const BrasserieConsignationPage: React.FC = () => {
     }
     const { data: mData } = await supabase.from('brasserie_mouvements_emballages').insert(mouv).select().single()
 
+    // 4. Enregistrement direct dans brasserie_emballages_mouvements pour le suivi dynamique
+    try {
+      const clientObj = retourClients.find(c => c.id === fRetour.client_id)
+      await supabase.from('brasserie_emballages_mouvements').insert({
+        company_id: companyId,
+        client_id: fRetour.client_id,
+        client_nom: clientObj?.name || 'Client',
+        emballage_type_id: emb?.id || null,
+        code: emb?.code || 'C20T',
+        emballage_code: emb?.code || 'C20T',
+        type_mouvement: 'RETOUR',
+        quantite: qte,
+        date: fRetour.date ? new Date(fRetour.date).toISOString() : new Date().toISOString(),
+        solde_avant: soldeDuAvant,
+        solde_apres: soldeDuApres,
+        observation: fRetour.notes || `Retour emballage ${ref}`
+      })
+    } catch (mvtErr) {
+      console.warn('[ConsignationPage] Erreur insert brasserie_emballages_mouvements retour:', mvtErr)
+    }
+
     toast('success', `Retour enregistré — ${qte} ${emb?.designation || 'emballage(s)'} — Réf: ${ref}`)
 
     // Impression bon de retour
@@ -894,7 +927,7 @@ const BrasserieConsignationPage: React.FC = () => {
     setModalRetour(false)
     setFRetour({ client_id: '', emballage_id: '', quantite: '', date: new Date().toISOString().slice(0, 10), reference: '', notes: '' })
     setRetourSituationAvant([])
-    await Promise.all([loadEmballages(), loadConsignations(), loadMouvements()])
+    await Promise.all([loadEmballages(), loadConsignations(), loadMouvements(), loadEmbMouvements()])
   }
 
   // ── Ajustement ────────────────────────────────────────────────────────────
@@ -1439,7 +1472,7 @@ const BrasserieConsignationPage: React.FC = () => {
                 </thead>
                 <tbody className="divide-y divide-slate-50">
                   {emballages.map(emb => {
-                    const t = totauxGlobaux.find(tg => tg.emballage.id === emb.id)
+                    const t = totauxGlobaux.find(tg => tg.emballage.code === emb.code || tg.emballage.id === emb.id)
                     return (
                       <tr key={emb.id} className="hover:bg-slate-50 transition">
                         <td className="px-4 py-3">
@@ -1636,7 +1669,7 @@ const BrasserieConsignationPage: React.FC = () => {
                         {cs.client_phone && <p className="text-xs text-slate-400">{cs.client_phone}</p>}
                       </td>
                       {emballages.map(emb => {
-                        const s = cs.soldes[emb.id] || cs.soldes[emb.code]
+                        const s = cs.soldes[emb.code] || cs.soldes[emb.id]
                         return (
                           <td key={emb.id} className="px-4 py-3 text-center">
                             <span className={clsx('font-bold', (s?.solde_du || 0) > 0 ? 'text-amber-700' : 'text-slate-300')}>
@@ -1658,7 +1691,7 @@ const BrasserieConsignationPage: React.FC = () => {
                     <tr className="bg-amber-50 font-black text-amber-900 border-t-2 border-amber-200">
                       <td className="px-4 py-3">TOTAL GÉNÉRAL</td>
                       {emballages.map(emb => {
-                        const total = filteredClientSoldes.reduce((s, cs) => s + (cs.soldes[emb.id]?.solde_du || cs.soldes[emb.code]?.solde_du || 0), 0)
+                        const total = filteredClientSoldes.reduce((s, cs) => s + (cs.soldes[emb.code]?.solde_du || cs.soldes[emb.id]?.solde_du || 0), 0)
                         return <td key={emb.id} className="px-4 py-3 text-center">{total.toLocaleString('fr-FR')}</td>
                       })}
                       <td className="px-4 py-3 text-right">{filteredClientSoldes.reduce((s, cs) => s + cs.total_emballages_dus, 0).toLocaleString('fr-FR')}</td>

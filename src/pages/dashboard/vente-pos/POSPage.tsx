@@ -47,6 +47,25 @@ import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService
 
 const fmt = (n: number) => formatFCFA(n)
 
+export const formatBeninDateTime = (dStr?: string) => {
+  if (!dStr) return ''
+  try {
+    const d = new Date(dStr)
+    if (isNaN(d.getTime())) return dStr
+    return d.toLocaleString('fr-BJ', {
+      timeZone: 'Africa/Porto-Novo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit'
+    })
+  } catch {
+    return dStr
+  }
+}
+
 // ─── Interfaces ──────────────────────────────────────────────────────────────
 
 interface Product {
@@ -672,7 +691,7 @@ export const POSPage: React.FC = () => {
           return {
             id: s.id,
             order_number: s.order_number || `VTE-${s.id.slice(0, 6)}`,
-            date: s.order_date || s.created_at || new Date().toISOString(),
+            date: s.created_at || s.order_date || new Date().toISOString(),
             customer_name: clientName,
             customer_id: s.customer_id,
             customer_ifu: clientIfu,
@@ -1231,7 +1250,7 @@ export const POSPage: React.FC = () => {
 
   // Calcul automatique des emballages sortis pour le secteur Brasserie
   const brasserieSorties = useMemo(() => {
-    if (currentSectorSlug !== 'brasserie') return []
+    if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') return []
     const map: Record<string, { id?: string; code: string; designation: string; sortie: number }> = {}
 
     cart.forEach((item) => {
@@ -1240,20 +1259,25 @@ export const POSPage: React.FC = () => {
       let embName = ''
       let embId = p.sector_meta?.emballage_id || ''
 
-      const matchedEmb = brasserieEmballagesList.find(e => e.id === embId || e.code === p.sector_meta?.emballage_code)
+      const embCodeFromProduct = ((p as any).emballage_type_code || (p as any).emballage_code || p.sector_meta?.emballage_code || '').toUpperCase()
+
+      const matchedEmb = brasserieEmballagesList.find(e => e.id === embId || (embCodeFromProduct && e.code === embCodeFromProduct) || e.code === p.sector_meta?.emballage_code)
       if (matchedEmb) {
         embCode = matchedEmb.code
         embName = matchedEmb.designation
         embId = matchedEmb.id
+      } else if (embCodeFromProduct) {
+        embCode = embCodeFromProduct
+        embName = `Casier ${embCodeFromProduct}`
       } else {
         const nameUpper = (p.name || '').toUpperCase()
-        if (nameUpper.includes('12T') || nameUpper.includes('12 BOUT') || nameUpper.includes('12B')) {
+        if (nameUpper.includes('12T') || nameUpper.includes('12 BOUT') || nameUpper.includes('12B') || nameUpper.includes('FLAG 12')) {
           embCode = 'C12T'
           embName = 'Casier 12 Bouteilles'
-        } else if (nameUpper.includes('20T') || nameUpper.includes('20 BOUT') || nameUpper.includes('20B')) {
+        } else if (nameUpper.includes('20T') || nameUpper.includes('20 BOUT') || nameUpper.includes('20B') || nameUpper.includes('CASTEL 20')) {
           embCode = 'C20T'
           embName = 'Casier 20 Bouteilles'
-        } else if (nameUpper.includes('24T') || nameUpper.includes('24 BOUT') || nameUpper.includes('24B')) {
+        } else if (nameUpper.includes('24T') || nameUpper.includes('24 BOUT') || nameUpper.includes('24B') || nameUpper.includes('BEAUFORT 24')) {
           embCode = 'C24T'
           embName = 'Casier 24 Bouteilles'
         }
@@ -1787,19 +1811,24 @@ export const POSPage: React.FC = () => {
             if (dbType?.id) {
               embTypeId = dbType.id
             } else {
+              const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+              const safeSecteurId = isValidUUID(company?.sector_id) ? company?.sector_id : null
               const { data: createdType } = await supabase
                 .from('brasserie_emballages_types')
                 .insert({
                   company_id: compId,
-                  secteur_id: company?.sector_id || compId,
+                  secteur_id: safeSecteurId,
                   code: codeEmb,
                   nom: designationEmb,
                   stock_depot: 0
                 })
                 .select('id')
-                .single()
+                .maybeSingle()
               if (createdType?.id) embTypeId = createdType.id
             }
+
+            const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+            const safeSecteurId = isValidUUID(company?.sector_id) ? company?.sector_id : null
 
             // 3. Calculer solde précédent réel
             const prec = isComptoir ? 0 : (clientEmballagesPrecedents[realEmbId || ''] || clientEmballagesPrecedents[codeEmb] || 0)
@@ -1807,44 +1836,52 @@ export const POSPage: React.FC = () => {
             const duFinal = isComptoir ? 0 : (soldeApresSortie - retour)
 
             // 4. Enregistrement AUTOMATIQUE dans brasserie_emballages_mouvements (PARTIE 2 DU PROMPT)
-            if (sortie > 0 && !isComptoir && clientId) {
+            if (sortie > 0 && !isComptoir) {
               try {
                 await supabase.from('brasserie_emballages_mouvements').insert({
                   company_id: compId,
-                  secteur_id: company?.sector_id || compId,
-                  client_id: clientId,
+                  secteur_id: safeSecteurId,
+                  client_id: isValidUUID(clientId) ? clientId : null,
                   client_nom: clientNom,
-                  emballage_type_id: embTypeId || realEmbId || null,
+                  emballage_type_id: isValidUUID(embTypeId) ? embTypeId : (isValidUUID(realEmbId) ? realEmbId : null),
                   code: codeEmb,
+                  emballage_code: codeEmb,
                   type_mouvement: 'SORTIE',
                   quantite: sortie,
                   vente_id: savedDbSale.id,
                   vente_numero: orderNum,
                   date: new Date().toISOString(),
                   solde_avant: prec,
-                  solde_apres: soldeApresSortie
+                  solde_apres: soldeApresSortie,
+                  observation: `Vente N° ${orderNum}`
                 })
-              } catch (_) {}
+              } catch (errSortie) {
+                console.error('[POSPage] Erreur insert SORTIE:', errSortie)
+              }
             }
 
-            if (retour > 0 && !isComptoir && clientId) {
+            if (retour > 0 && !isComptoir) {
               try {
                 await supabase.from('brasserie_emballages_mouvements').insert({
                   company_id: compId,
-                  secteur_id: company?.sector_id || compId,
-                  client_id: clientId,
+                  secteur_id: safeSecteurId,
+                  client_id: isValidUUID(clientId) ? clientId : null,
                   client_nom: clientNom,
-                  emballage_type_id: embTypeId || realEmbId || null,
+                  emballage_type_id: isValidUUID(embTypeId) ? embTypeId : (isValidUUID(realEmbId) ? realEmbId : null),
                   code: codeEmb,
+                  emballage_code: codeEmb,
                   type_mouvement: 'RETOUR',
                   quantite: retour,
                   vente_id: savedDbSale.id,
                   vente_numero: orderNum,
                   date: new Date().toISOString(),
                   solde_avant: soldeApresSortie,
-                  solde_apres: duFinal
+                  solde_apres: duFinal,
+                  observation: `Retour immédiat vente N° ${orderNum}`
                 })
-              } catch (_) {}
+              } catch (errRetour) {
+                console.error('[POSPage] Erreur insert RETOUR:', errRetour)
+              }
             }
 
             // 5. Enregistrement M046 dans mouvements_emballages
@@ -2085,7 +2122,7 @@ export const POSPage: React.FC = () => {
         is_deferred: isDeferred,
         status: isDeferred ? 'A_LIVRER' : 'COMPLET',
         lines: [...cart],
-        emballages_consignes: currentSectorSlug === 'brasserie' ? brasserieSorties.map(e => ({
+        emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieSorties.map(e => ({
           code: e.code,
           designation: e.designation,
           sortie: e.sortie,
@@ -2095,11 +2132,7 @@ export const POSPage: React.FC = () => {
       }
 
       setCurrentSale(newSale)
-      if (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') {
-        setPrintFormat('brasserie' as any)
-      } else {
-        setPrintFormat('factureA4')
-      }
+      setPrintFormat('factureA4')
       setShowInvoiceModal(true)
       clearCart()
       setBrasserieRetours({})
@@ -2288,7 +2321,7 @@ export const POSPage: React.FC = () => {
       doc.setFontSize(9)
       doc.setFont('helvetica', 'normal')
       doc.text(`N° : ${sale.order_number}`, 135, 26)
-      doc.text(`Date : ${new Date(sale.date).toLocaleString('fr-BJ')}`, 135, 31)
+      doc.text(`Date : ${formatBeninDateTime(sale.date)}`, 135, 31)
       doc.text(`Caisse : Caisse Principale POS`, 135, 36)
 
       doc.setDrawColor(226, 232, 240)
@@ -3700,7 +3733,7 @@ export const POSPage: React.FC = () => {
                     {currentSale?.status === 'AVOIR' ? 'FACTURE D\'AVOIR' : 'FACTURE DE VENTE'}
                   </span>
                   <p className="font-mono font-bold text-sm mt-1.5">{currentSale?.order_number}</p>
-                  <p className="text-slate-500">Date : {new Date(currentSale?.date || '').toLocaleString('fr-BJ')}</p>
+                  <p className="text-slate-500">Date : {formatBeninDateTime(currentSale?.date)}</p>
                   <p className="text-slate-500 text-[11px] font-medium">Caisse : Caisse Principale POS</p>
                 </div>
               </div>
@@ -3815,7 +3848,7 @@ export const POSPage: React.FC = () => {
               </div>
 
               {/* SECTION EMBALLAGES CONSIGNÉS (BRASSERIE UNIQUEMENT) */}
-              {currentSectorSlug === 'brasserie' && currentSale?.emballages_consignes && currentSale.emballages_consignes.length > 0 && (
+              {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && currentSale?.emballages_consignes && currentSale.emballages_consignes.length > 0 && (
                 <div className="pt-3 border-t border-slate-200">
                   <div className="bg-amber-50/70 p-3 rounded-xl border border-amber-200">
                     <p className="font-black text-[11px] uppercase tracking-wider text-amber-900 mb-2">
@@ -3870,7 +3903,7 @@ export const POSPage: React.FC = () => {
                 {company?.address && <p className="text-[10px] text-slate-500">{company.address}, {company.city || 'Bénin'}</p>}
                 <p className="text-[10px] text-slate-500">IFU : {company?.ifu_number || 'Non renseigné'}</p>
                 {company?.phone && <p className="text-[10px] text-slate-500">Tél : {company.phone}</p>}
-                <p className="text-[10px] text-slate-500">{new Date(currentSale?.date || '').toLocaleString('fr-BJ')}</p>
+                <p className="text-[10px] text-slate-500">{formatBeninDateTime(currentSale?.date)}</p>
               </div>
 
               <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-0.5 text-[11px]">
