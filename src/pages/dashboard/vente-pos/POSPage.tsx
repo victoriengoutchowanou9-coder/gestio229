@@ -52,6 +52,15 @@ export const formatBeninDateTime = (dStr?: string) => {
   try {
     const d = new Date(dStr)
     if (isNaN(d.getTime())) return dStr
+    const isZeroTime = dStr.includes('00:00:00') || dStr.length <= 10
+    if (isZeroTime) {
+      return d.toLocaleDateString('fr-BJ', {
+        timeZone: 'Africa/Porto-Novo',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      })
+    }
     return d.toLocaleString('fr-BJ', {
       timeZone: 'Africa/Porto-Novo',
       year: 'numeric',
@@ -229,7 +238,51 @@ export const POSPage: React.FC = () => {
     const loadClientPrecedents = async () => {
       try {
         const compId = company?.id ?? companyId ?? ''
-        // 1. Chercher dans clients_emballages_soldes (M046)
+        const clientName = selectedCustomer?.name || ''
+        const map: Record<string, number> = { C12T: 0, C20T: 0, C24T: 0 }
+
+        // 1. Calcul prioritaire en temps réel depuis brasserie_emballages_mouvements (INITIAL + SORTIE - RETOUR)
+        let query = supabase
+          .from('brasserie_emballages_mouvements')
+          .select('emballage_code, code, emballage_type_id, type_mouvement, quantite, client_id, client_nom')
+          .eq('company_id', compId)
+
+        if (clientName) {
+          query = query.or(`client_id.eq.${selectedCustomerId},client_nom.ilike.%${clientName}%`)
+        } else {
+          query = query.eq('client_id', selectedCustomerId)
+        }
+
+        const { data: mvtsData, error: mvtsErr } = await query
+
+        if (!mvtsErr && mvtsData && mvtsData.length > 0) {
+          mvtsData.forEach((m: any) => {
+            let rawCode = (m.emballage_code || m.code || '').toUpperCase()
+            if (!rawCode && m.emballage_type_id) {
+              const matched = brasserieEmballagesList.find(e => e.id === m.emballage_type_id)
+              if (matched) rawCode = matched.code.toUpperCase()
+            }
+            if (!rawCode) rawCode = 'C20T'
+
+            const qte = Number(m.quantite) || 0
+            const type = (m.type_mouvement || '').toUpperCase()
+
+            if (['SORTIE', 'SORTIE_VENTE', 'INITIAL'].includes(type)) {
+              map[rawCode] = (map[rawCode] || 0) + qte
+            } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR'].includes(type)) {
+              map[rawCode] = Math.max(0, (map[rawCode] || 0) - qte)
+            }
+
+            if (m.emballage_type_id) {
+              map[m.emballage_type_id] = map[rawCode]
+            }
+          })
+
+          setClientEmballagesPrecedents(map)
+          return
+        }
+
+        // 2. Fallback clients_emballages_soldes (M046)
         const { data: soldesData, error: soldesErr } = await supabase
           .from('clients_emballages_soldes')
           .select('emballage_id, du_actuel')
@@ -237,15 +290,17 @@ export const POSPage: React.FC = () => {
           .eq('client_id', selectedCustomerId)
 
         if (!soldesErr && soldesData && soldesData.length > 0) {
-          const map: Record<string, number> = {}
           soldesData.forEach((s: any) => {
+            const matched = brasserieEmballagesList.find(e => e.id === s.emballage_id)
+            const code = matched ? matched.code.toUpperCase() : s.emballage_id
+            map[code] = Number(s.du_actuel) || 0
             map[s.emballage_id] = Number(s.du_actuel) || 0
           })
           setClientEmballagesPrecedents(map)
           return
         }
 
-        // 2. Fallback dans brasserie_consignations
+        // 3. Fallback brasserie_consignations
         const { data: consData } = await supabase
           .from('brasserie_consignations')
           .select('emballage_id, solde_du')
@@ -254,13 +309,15 @@ export const POSPage: React.FC = () => {
           .eq('client_id', selectedCustomerId)
 
         if (consData && consData.length > 0) {
-          const map: Record<string, number> = {}
           consData.forEach((c: any) => {
+            const matched = brasserieEmballagesList.find(e => e.id === c.emballage_id)
+            const code = matched ? matched.code.toUpperCase() : c.emballage_id
+            map[code] = Number(c.solde_du) || 0
             map[c.emballage_id] = Number(c.solde_du) || 0
           })
           setClientEmballagesPrecedents(map)
         } else {
-          setClientEmballagesPrecedents({})
+          setClientEmballagesPrecedents(map)
         }
       } catch (err) {
         console.warn('[POSPage] Erreur chargement précédents emballages:', err)
@@ -268,7 +325,7 @@ export const POSPage: React.FC = () => {
       }
     }
     loadClientPrecedents()
-  }, [selectedCustomerId, currentSectorSlug, company, companyId])
+  }, [selectedCustomerId, selectedCustomer?.name, currentSectorSlug, company, companyId, brasserieEmballagesList])
 
   // Cumul commercial total du panier pour le secteur Brasserie
   const totalBrasserieQuantity = useMemo(() => {
@@ -1296,6 +1353,70 @@ export const POSPage: React.FC = () => {
     return Object.values(map)
   }, [cart, currentSectorSlug, brasserieEmballagesList])
 
+  // Lignes complètes d'emballages pour la vente en cours (Panier + Dettes Précédentes)
+  // Règle Métier : Précédent + Facture - Rendus = Reste (Dû final)
+  const brasserieEmballageRows = useMemo(() => {
+    if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') return []
+    const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
+
+    const knownEmbs: Record<string, { id?: string; code: string; designation: string }> = {
+      C12T: { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles' },
+      C20T: { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles' },
+      C24T: { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles' },
+    }
+    brasserieEmballagesList.forEach(e => {
+      const c = (e.code || '').toUpperCase()
+      if (c) knownEmbs[c] = { id: e.id, code: c, designation: e.designation }
+    })
+
+    const codesSet = new Set<string>()
+    // 1. Ajouter tous les emballages sortis dans le panier
+    brasserieSorties.forEach(s => codesSet.add(s.code.toUpperCase()))
+
+    // 2. Si client enregistré, ajouter tous les emballages pour lesquels il a une dette précédente > 0
+    if (!isComptoir) {
+      Object.entries(clientEmballagesPrecedents).forEach(([k, v]) => {
+        if (Number(v) > 0) {
+          const upperK = k.toUpperCase()
+          const match = brasserieEmballagesList.find(e => e.id === k)
+          if (match) codesSet.add(match.code.toUpperCase())
+          else if (['C12T', 'C20T', 'C24T'].includes(upperK)) codesSet.add(upperK)
+          else codesSet.add(upperK)
+        }
+      })
+    }
+
+    if (codesSet.size === 0) return []
+
+    const rows = Array.from(codesSet).map(code => {
+      const sortieItem = brasserieSorties.find(s => s.code.toUpperCase() === code)
+      const matchedMeta = knownEmbs[code]
+      const embId = sortieItem?.id || matchedMeta?.id
+      const designation = sortieItem?.designation || matchedMeta?.designation || `Casier ${code}`
+
+      const prec = isComptoir ? 0 : (
+        clientEmballagesPrecedents[code] || 
+        (embId ? clientEmballagesPrecedents[embId] : 0) || 
+        0
+      )
+      const facture = sortieItem ? Number(sortieItem.sortie) || 0 : 0
+      const rendus = Number(brasserieRetours[code]) || 0
+      const reste = isComptoir ? (facture - rendus) : (prec + facture - rendus)
+
+      return {
+        id: embId,
+        code,
+        designation,
+        precedent: prec,
+        facture,
+        rendus,
+        reste
+      }
+    })
+
+    return rows.sort((a, b) => a.code.localeCompare(b.code))
+  }, [currentSectorSlug, selectedCustomer, clientEmballagesPrecedents, brasserieSorties, brasserieRetours, brasserieEmballagesList])
+
   // Calculs en temps réel multi-modes
   const multiSum = Math.round((multiMode1Amount + multiMode2Amount) * 100) / 100
   const multiDiff = Math.round((totalNetTTC - multiSum) * 100) / 100
@@ -1342,26 +1463,24 @@ export const POSPage: React.FC = () => {
   }, [checkingCaisse, activeCaisse, cart.length, paying, isMultiMode, multiDiff, totalNetTTC, isCashInsufficient, cashGiven])
 
   // RÈGLE MÉTIER OBLIGATOIRE BRASSERIE :
-  // - Client Comptoir : Le Dû doit donner 0 (Retour = Facture)
-  // - Client Enregistré : Retour libre, calcul du Dû/Reste
+  // - Client Comptoir : Le Dû/Reste doit donner 0 (Rendus = Facture)
+  // - Client Enregistré : Précédent + Facture - Rendus = Reste (Dû final)
   const validerConditionsEmballage = (): { ok: boolean; message?: string } => {
     if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') {
       return { ok: true }
     }
-    if (brasserieSorties.length === 0) {
+    if (brasserieEmballageRows.length === 0) {
       return { ok: true }
     }
 
     const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
 
     if (isComptoir) {
-      for (const emb of brasserieSorties) {
-        const retour = Number(brasserieRetours[emb.code]) || 0
-        const du = emb.sortie - retour
-        if (du !== 0) {
+      for (const row of brasserieEmballageRows) {
+        if (row.reste !== 0) {
           return {
             ok: false,
-            message: `Client Comptoir : Pour ${emb.code}, Facture=${emb.sortie}, Retour=${retour}, Dû=${du}. Le Dû doit donner 0. Remplissez Retour = Facture avant validation.`
+            message: `Client Comptoir : Pour ${row.code}, Facture=${row.facture}, Rendus=${row.rendus}, Reste=${row.reste}. Le Reste doit donner 0. Saisissez Rendus = Facture avant validation.`
           }
         }
       }
@@ -1519,12 +1638,16 @@ export const POSPage: React.FC = () => {
           unitPrice: c.unitPrice,
           discount: c.discount
         })),
-        emballages_consignes: currentSectorSlug === 'brasserie' ? brasserieSorties.map(e => ({
+        emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieEmballageRows.map(e => ({
           code: e.code,
           designation: e.designation,
-          sortie: e.sortie,
-          retour: Number(brasserieRetours[e.code]) || 0,
-          net_du: e.sortie - (Number(brasserieRetours[e.code]) || 0)
+          precedent: e.precedent,
+          facture: e.facture,
+          sortie: e.facture,
+          rendus: e.rendus,
+          retour: e.rendus,
+          reste: e.reste,
+          net_du: e.reste
         })) : undefined
       }
 
@@ -1752,18 +1875,23 @@ export const POSPage: React.FC = () => {
       }
 
       // 4-BIS. Brasserie & Dépôt de Boissons : Gestion Automatique des Emballages et Consignations
-      if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieSorties.length > 0) {
+      if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieEmballageRows.length > 0) {
         try {
           const compId = company?.id ?? companyId ?? ''
           const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
           const clientNom = selectedCustomer?.name || (isComptoir ? 'Client Comptoir' : 'Client')
           const clientId = selectedCustomer?.id || null
 
-          for (const emb of brasserieSorties) {
+          for (const emb of brasserieEmballageRows) {
             const codeEmb = (emb.code || 'C20T').toUpperCase()
             const designationEmb = emb.designation || `Casier ${codeEmb}`
-            const retour = Number(brasserieRetours[codeEmb]) || 0
-            const sortie = Number(emb.sortie) || 0
+            const retour = Number(emb.rendus) || 0
+            const sortie = Number(emb.facture) || 0
+            const prec = Number(emb.precedent) || 0
+            const duFinal = Number(emb.reste) || 0
+            const soldeApresSortie = prec + sortie
+
+            if (sortie === 0 && retour === 0) continue
 
             // 1. Récupérer ou auto-créer l'ID dans brasserie_emballages
             let realEmbId = emb.id
@@ -1829,11 +1957,6 @@ export const POSPage: React.FC = () => {
 
             const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
             const safeSecteurId = isValidUUID(company?.sector_id) ? company?.sector_id : null
-
-            // 3. Calculer solde précédent réel
-            const prec = isComptoir ? 0 : (clientEmballagesPrecedents[realEmbId || ''] || clientEmballagesPrecedents[codeEmb] || 0)
-            const soldeApresSortie = prec + sortie
-            const duFinal = isComptoir ? 0 : (soldeApresSortie - retour)
 
             // 4. Enregistrement AUTOMATIQUE dans brasserie_emballages_mouvements (PARTIE 2 DU PROMPT)
             if (sortie > 0 && !isComptoir) {
@@ -2122,12 +2245,16 @@ export const POSPage: React.FC = () => {
         is_deferred: isDeferred,
         status: isDeferred ? 'A_LIVRER' : 'COMPLET',
         lines: [...cart],
-        emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieSorties.map(e => ({
+        emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieEmballageRows.map(e => ({
           code: e.code,
           designation: e.designation,
-          sortie: e.sortie,
-          retour: Number(brasserieRetours[e.code]) || 0,
-          net_du: e.sortie - (Number(brasserieRetours[e.code]) || 0)
+          precedent: e.precedent,
+          facture: e.facture,
+          sortie: e.facture,
+          rendus: e.rendus,
+          retour: e.rendus,
+          reste: e.reste,
+          net_du: e.reste
         })) : undefined
       }
 
@@ -3258,7 +3385,7 @@ export const POSPage: React.FC = () => {
               </div>
 
               {/* SECTION SITUATION DES EMBALLAGES (BRASSERIE) */}
-              {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieSorties.length > 0 && (() => {
+              {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieEmballageRows.length > 0 && (() => {
                 const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
                 return (
                   <div className="mx-3 my-2 p-2.5 bg-amber-50/90 rounded-2xl border border-amber-200 space-y-2">
@@ -3285,11 +3412,8 @@ export const POSPage: React.FC = () => {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-amber-100">
-                          {brasserieSorties.map((emb) => {
-                            const prec = isComptoir ? 0 : (clientEmballagesPrecedents[emb.id || ''] || clientEmballagesPrecedents[emb.code] || 0)
-                            const retour = Number(brasserieRetours[emb.code]) || 0
-                            const reste = isComptoir ? (emb.sortie - retour) : (prec + emb.sortie - retour)
-                            const hasError = isComptoir && reste !== 0
+                          {brasserieEmballageRows.map((emb) => {
+                            const hasError = isComptoir && emb.reste !== 0
 
                             return (
                               <tr key={emb.code} className={clsx("bg-white transition", hasError && "bg-rose-50/80")}>
@@ -3297,10 +3421,10 @@ export const POSPage: React.FC = () => {
                                   [{emb.code}] {emb.designation}
                                 </td>
                                 <td className="p-1.5 text-center font-mono font-semibold text-slate-600">
-                                  {prec}
+                                  {emb.precedent}
                                 </td>
                                 <td className="p-1.5 text-center font-mono font-black text-rose-600">
-                                  {emb.sortie}
+                                  {emb.facture}
                                 </td>
                                 <td className="p-1.5 text-center">
                                   <input
@@ -3317,9 +3441,9 @@ export const POSPage: React.FC = () => {
                                 </td>
                                 <td className="p-1.5 text-right font-mono font-black">
                                   <span className={clsx(
-                                    hasError ? "text-rose-600 font-black animate-pulse" : reste > 0 ? "text-amber-800" : "text-emerald-700"
+                                    hasError ? "text-rose-600 font-black animate-pulse" : emb.reste > 0 ? "text-amber-800" : "text-emerald-700"
                                   )}>
-                                    {reste}
+                                    {emb.reste}
                                   </span>
                                 </td>
                               </tr>
@@ -3329,7 +3453,7 @@ export const POSPage: React.FC = () => {
                       </table>
                     </div>
 
-                    {isComptoir && brasserieSorties.some(e => (e.sortie - (Number(brasserieRetours[e.code]) || 0)) !== 0) && (
+                    {isComptoir && brasserieEmballageRows.some(e => e.reste !== 0) && (
                       <p className="text-[10px] text-rose-700 font-bold bg-rose-100/70 p-1.5 rounded-lg border border-rose-200">
                         ⚠️ Pour le Client Comptoir, saisissez Rendus = Facture afin que le Reste soit égal à 0.
                       </p>
@@ -3858,25 +3982,27 @@ export const POSPage: React.FC = () => {
                       <thead>
                         <tr className="border-b border-amber-200 text-[10px] text-amber-800 font-bold uppercase">
                           <th className="text-left py-1">Emballage</th>
-                          <th className="text-center py-1">Sortie</th>
-                          <th className="text-center py-1">Retour Immédiat</th>
-                          <th className="text-right py-1">Net Dû</th>
+                          <th className="text-center py-1">Précédent</th>
+                          <th className="text-center py-1">Facture</th>
+                          <th className="text-center py-1">Rendus</th>
+                          <th className="text-right py-1">Reste Dû</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-amber-100">
                         {currentSale.emballages_consignes.map((emb: any) => (
                           <tr key={emb.code}>
                             <td className="py-1 font-semibold text-slate-800">{emb.designation || emb.code}</td>
-                            <td className="py-1 text-center font-bold text-red-600">{emb.sortie}</td>
-                            <td className="py-1 text-center font-bold text-emerald-600">{emb.retour || 0}</td>
-                            <td className="py-1 text-right font-black text-amber-900">{emb.net_du}</td>
+                            <td className="py-1 text-center font-mono text-slate-600">{emb.precedent ?? 0}</td>
+                            <td className="py-1 text-center font-bold text-red-600">{emb.facture ?? emb.sortie ?? 0}</td>
+                            <td className="py-1 text-center font-bold text-emerald-600">{emb.rendus ?? emb.retour ?? 0}</td>
+                            <td className="py-1 text-right font-black text-amber-900">{emb.reste ?? emb.net_du ?? 0}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                     <div className="mt-2 pt-2 border-t border-amber-200 text-xs font-black text-amber-900 flex justify-between">
-                      <span>TOTAL DÛ EMBALLAGES :</span>
-                      <span>{currentSale.emballages_consignes.map((e: any) => `${e.net_du} ${e.code}`).join(' | ')}</span>
+                      <span>TOTAL RESTE DÛ EMBALLAGES :</span>
+                      <span>{currentSale.emballages_consignes.map((e: any) => `${e.reste ?? e.net_du ?? 0} ${e.code}`).join(' | ')}</span>
                     </div>
                   </div>
                 </div>
@@ -3931,13 +4057,13 @@ export const POSPage: React.FC = () => {
               </table>
 
               {/* SECTION EMBALLAGES TICKET 80 (BRASSERIE UNIQUEMENT) */}
-              {currentSectorSlug === 'brasserie' && currentSale?.emballages_consignes && currentSale.emballages_consignes.length > 0 && (
+              {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && currentSale?.emballages_consignes && currentSale.emballages_consignes.length > 0 && (
                 <div className="border-t border-dashed border-slate-300 py-1.5 space-y-1 text-[11px]">
-                  <p className="font-bold uppercase text-slate-700">📦 Emballages Consignés :</p>
+                  <p className="font-bold uppercase text-slate-700">📦 Situation Emballages :</p>
                   {currentSale.emballages_consignes.map((emb: any) => (
                     <div key={emb.code} className="flex justify-between text-[10px]">
-                      <span>{emb.code} (S:{emb.sortie} | R:{emb.retour || 0})</span>
-                      <span className="font-black text-amber-900">Dû : {emb.net_du}</span>
+                      <span>{emb.code} (P:{emb.precedent ?? 0} | F:{emb.facture ?? emb.sortie ?? 0} | R:{emb.rendus ?? emb.retour ?? 0})</span>
+                      <span className="font-black text-amber-900">Reste : {emb.reste ?? emb.net_du ?? 0}</span>
                     </div>
                   ))}
                 </div>
