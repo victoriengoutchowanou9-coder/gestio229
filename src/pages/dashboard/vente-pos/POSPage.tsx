@@ -24,6 +24,7 @@ import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../..
 import { ModalPortal, TransfertStockModal } from '../../../components/modals'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
 import { decomposerTTC } from '../../../utils/calculPrix'
+import { FactureBrasserieTemplate, FactureBrasserieData } from '../../../components/factures/FactureBrasserieTemplate'
 import {
   BatchPricingConfig,
   calculateBatchLinePrice,
@@ -134,7 +135,12 @@ interface SaleRecord {
 export const POSPage: React.FC = () => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
-  const { companyId, sectorSlug, supabaseTenant } = useTenant()
+  const { companyId, sectorSlug, supabaseTenant, isAdmin } = useTenant()
+  const userRole = ((user?.role || '') as string).toLowerCase()
+  // RÈGLE OBLIGATOIRE : Bouton Transfert bloqué pour Caissière (réservé Administrateur et Gestionnaire)
+  const canTransferStock = Boolean(
+    isAdmin || ['admin', 'administrateur', 'gestionnaire', 'gerant', 'super_admin'].includes(userRole)
+  )
   const { secteurActif, caisseActive } = useAppContext()
   const currentSectorSlug = (sectorSlug || secteurActif?.slug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
@@ -158,6 +164,7 @@ export const POSPage: React.FC = () => {
   // Emballages & Consignations (Brasserie & Dépôt de Boissons)
   const [brasserieEmballagesList, setBrasserieEmballagesList] = useState<{ id: string; code: string; designation: string; stock_depot?: number }[]>([])
   const [brasserieRetours, setBrasserieRetours] = useState<Record<string, number>>({})
+  const [clientEmballagesPrecedents, setClientEmballagesPrecedents] = useState<Record<string, number>>({})
 
   // Client sélectionné (défaut = vide = Client Comptoir)
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>('')
@@ -193,6 +200,56 @@ export const POSPage: React.FC = () => {
       }
     }
   }, [selectedCustomerId, currentSectorSlug, companyId])
+
+  // Chargement en temps réel de la situation d'emballages précédente du client sélectionné
+  useEffect(() => {
+    if (!selectedCustomerId || (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons')) {
+      setClientEmballagesPrecedents({})
+      return
+    }
+    const loadClientPrecedents = async () => {
+      try {
+        const compId = company?.id ?? companyId ?? ''
+        // 1. Chercher dans clients_emballages_soldes (M046)
+        const { data: soldesData, error: soldesErr } = await supabase
+          .from('clients_emballages_soldes')
+          .select('emballage_id, du_actuel')
+          .eq('company_id', compId)
+          .eq('client_id', selectedCustomerId)
+
+        if (!soldesErr && soldesData && soldesData.length > 0) {
+          const map: Record<string, number> = {}
+          soldesData.forEach((s: any) => {
+            map[s.emballage_id] = Number(s.du_actuel) || 0
+          })
+          setClientEmballagesPrecedents(map)
+          return
+        }
+
+        // 2. Fallback dans brasserie_consignations
+        const { data: consData } = await supabase
+          .from('brasserie_consignations')
+          .select('emballage_id, solde_du')
+          .eq('company_id', compId)
+          .eq('sector_slug', 'brasserie')
+          .eq('client_id', selectedCustomerId)
+
+        if (consData && consData.length > 0) {
+          const map: Record<string, number> = {}
+          consData.forEach((c: any) => {
+            map[c.emballage_id] = Number(c.solde_du) || 0
+          })
+          setClientEmballagesPrecedents(map)
+        } else {
+          setClientEmballagesPrecedents({})
+        }
+      } catch (err) {
+        console.warn('[POSPage] Erreur chargement précédents emballages:', err)
+        setClientEmballagesPrecedents({})
+      }
+    }
+    loadClientPrecedents()
+  }, [selectedCustomerId, currentSectorSlug, company, companyId])
 
   // Cumul commercial total du panier pour le secteur Brasserie
   const totalBrasserieQuantity = useMemo(() => {
@@ -279,8 +336,69 @@ export const POSPage: React.FC = () => {
 
   // Facture et Impression
   const [showInvoiceModal, setShowInvoiceModal] = useState(false)
-  const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4'>('factureA4')
+  const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4' | 'brasserie'>('factureA4')
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
+
+  // Modèle de données pour la facture Brasserie avec situation des emballages
+  const factureBrasserieData: FactureBrasserieData | null = useMemo(() => {
+    if (!currentSale) return null
+
+    const embs = (currentSale.emballages_consignes || []).map((e: any) => {
+      const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
+      const prec = isComptoir ? 0 : (clientEmballagesPrecedents[e.code] || clientEmballagesPrecedents[e.id] || 0)
+      const sortie = Number(e.sortie) || 0
+      const retour = Number(e.retour) || 0
+      const reste = isComptoir ? 0 : (prec + sortie - retour)
+      return {
+        designation: e.designation || `Casier ${e.code}`,
+        code: e.code,
+        precedent: prec,
+        facture: sortie,
+        rendus: retour,
+        reste: reste
+      }
+    })
+
+    return {
+      company: {
+        name: company?.name || 'STE GESTIO SARL',
+        address: company?.address,
+        phone: company?.phone,
+        ifu: company?.ifu,
+      },
+      agence: 'PRINCIPALE',
+      magasin: 'MAGASIN 1',
+      reference: currentSale.order_number || 'FAC',
+      dateFacture: currentSale.created_at || new Date().toISOString(),
+      modePaiement: (currentSale.payment_method || 'Espèces').toUpperCase(),
+      client: {
+        nom: currentSale.customer_name || 'Client Comptoir',
+        tel: selectedCustomer?.phone,
+        ifu: selectedCustomer?.ifu_number,
+        type: selectedCustomer?.code === 'COMPTOIR' ? 'COMPTOIR' : 'ENREGISTRE'
+      },
+      vendeur: {
+        code: user?.id?.slice(0, 4) || 'V01',
+        nom: user?.full_name || 'Caissier'
+      },
+      gestionnaire: {
+        nom: 'GENERAL'
+      },
+      lignes: (currentSale.lines || currentSale.items || []).map((item: any) => ({
+        designation: item.product_name || item.name || item.product?.name || 'Produit',
+        qte: Number(item.quantity || item.qty) || 1,
+        pvu: Number(item.unit_price || item.unitPrice) || 0,
+        montant: Number(item.total_ttc || (Number(item.quantity || item.qty || 1) * Number(item.unit_price || item.unitPrice || 0))) || 0,
+        ts: 0
+      })),
+      totalHT: Number(currentSale.total_ht ?? currentSale.subtotal_ht) || 0,
+      totalTVA: Number(currentSale.total_tva ?? currentSale.tva_amount) || 0,
+      totalAIB: Number(currentSale.total_aib ?? currentSale.aib_amount) || 0,
+      totalTTC: Number(currentSale.total_amount) || 0,
+      emballages: embs,
+      observation: currentSale.is_deferred ? 'Vente avec livraison différée' : 'Facture acquittée'
+    }
+  }, [currentSale, company, selectedCustomer, clientEmballagesPrecedents, user])
 
   // Caisse active (statut='ouverte' isolée par secteur)
   const [activeCaisse, setActiveCaisse] = useState<ActiveCaisseSession | null>(null)
@@ -621,11 +739,18 @@ export const POSPage: React.FC = () => {
     const unitMagasin = product.ucd || product.sector_meta?.ucd || 'Carton'
 
     if (stockVente <= 0) {
-      toast.error(
-        `Stock vente épuisé : ${product.name}`,
-        `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
-      )
-      setTransfertProduct(product)
+      if (canTransferStock) {
+        toast.error(
+          `Stock vente épuisé : ${product.name}`,
+          `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
+        )
+        setTransfertProduct(product)
+      } else {
+        toast.error(
+          `Stock vente épuisé : ${product.name}`,
+          `Cet article est en rupture en vente. Veuillez demander un transfert au Gestionnaire.`
+        )
+      }
       return
     }
 
@@ -781,11 +906,18 @@ export const POSPage: React.FC = () => {
     const unitVente = item.product.uv || item.product.sector_meta?.uv || item.product.unit || 'Pièce'
 
     if (stockVente <= 0) {
-      toast.error(
-        `Stock vente épuisé : ${item.product.name}`,
-        `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
-      )
-      setTransfertProduct(item.product)
+      if (canTransferStock) {
+        toast.error(
+          `Stock vente épuisé : ${item.product.name}`,
+          `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
+        )
+        setTransfertProduct(item.product)
+      } else {
+        toast.error(
+          `Stock vente épuisé : ${item.product.name}`,
+          `Cet article est en rupture en vente. Veuillez demander un transfert au Gestionnaire.`
+        )
+      }
       return
     }
 
@@ -1185,10 +1317,45 @@ export const POSPage: React.FC = () => {
     }
   }, [checkingCaisse, activeCaisse, cart.length, paying, isMultiMode, multiDiff, totalNetTTC, isCashInsufficient, cashGiven])
 
+  // RÈGLE MÉTIER OBLIGATOIRE BRASSERIE :
+  // - Client Comptoir : Le Dû doit donner 0 (Retour = Facture)
+  // - Client Enregistré : Retour libre, calcul du Dû/Reste
+  const validerConditionsEmballage = (): { ok: boolean; message?: string } => {
+    if (currentSectorSlug !== 'brasserie' && currentSectorSlug !== 'brasserie-depot-boissons') {
+      return { ok: true }
+    }
+    if (brasserieSorties.length === 0) {
+      return { ok: true }
+    }
+
+    const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
+
+    if (isComptoir) {
+      for (const emb of brasserieSorties) {
+        const retour = Number(brasserieRetours[emb.code]) || 0
+        const du = emb.sortie - retour
+        if (du !== 0) {
+          return {
+            ok: false,
+            message: `Client Comptoir : Pour ${emb.code}, Facture=${emb.sortie}, Retour=${retour}, Dû=${du}. Le Dû doit donner 0. Remplissez Retour = Facture avant validation.`
+          }
+        }
+      }
+    }
+    return { ok: true }
+  }
+
   // ─── Validation de la Vente ────────────────────────────────────────────────
 
   const handleValidateSale = async () => {
-    // 0. Contrôle caisse ouverte obligatoire pour ce secteur
+    // 0. Contrôle emballages brasserie obligatoire (Client comptoir => Reste = 0)
+    const embCheck = validerConditionsEmballage()
+    if (!embCheck.ok) {
+      toast.error('Validation emballages requise', embCheck.message || '')
+      return
+    }
+
+    // 0-BIS. Contrôle caisse ouverte obligatoire pour ce secteur
     if (!activeCaisse) {
       toast.error('Caisse fermée', 'Veuillez ouvrir la caisse avant d\'encaisser une vente.')
       return
@@ -1574,6 +1741,41 @@ export const POSPage: React.FC = () => {
             }
 
             if (realEmbId) {
+              const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
+              const prec = isComptoir ? 0 : (clientEmballagesPrecedents[realEmbId || ''] || clientEmballagesPrecedents[emb.code] || 0)
+              const duFinal = isComptoir ? 0 : (prec + emb.sortie - retour)
+
+              // 1. Enregistrement officiel M046 dans mouvements_emballages
+              try {
+                await supabase.from('mouvements_emballages').insert({
+                  company_id: compId,
+                  secteur_id: company?.sector_id || compId,
+                  client_id: isComptoir ? null : selectedCustomer?.id,
+                  vente_id: savedDbSale.id,
+                  facture_id: savedDbSale.id,
+                  emballage_id: realEmbId,
+                  precedent: prec,
+                  facture_qte: emb.sortie,
+                  retour_qte: retour,
+                  du_final: duFinal,
+                  date_mouvement: todayDate
+                })
+              } catch (_) {}
+
+              // 2. Si client enregistré : mise à jour solde actuel dans clients_emballages_soldes
+              if (!isComptoir && selectedCustomer?.id) {
+                try {
+                  await supabase.from('clients_emballages_soldes').upsert({
+                    company_id: compId,
+                    secteur_id: company?.sector_id || compId,
+                    client_id: selectedCustomer.id,
+                    emballage_id: realEmbId,
+                    du_actuel: duFinal,
+                    updated_at: new Date().toISOString()
+                  })
+                } catch (_) {}
+              }
+
               // A. Mouvement SORTIE_VENTE
               if (emb.sortie > 0) {
                 await supabase.from('brasserie_mouvements_emballages').insert({
@@ -1782,8 +1984,12 @@ export const POSPage: React.FC = () => {
         })) : undefined
       }
 
-      setSalesHistory([newSale, ...salesHistory.filter(s => s.id !== newSale.id)])
       setCurrentSale(newSale)
+      if (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') {
+        setPrintFormat('brasserie' as any)
+      } else {
+        setPrintFormat('factureA4')
+      }
       setShowInvoiceModal(true)
       clearCart()
       setBrasserieRetours({})
@@ -2435,16 +2641,25 @@ export const POSPage: React.FC = () => {
                         {/* Overlay / Action si Rupture Stock Vente */}
                         {stockVente <= 0 && (
                           <div className="pt-2">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setTransfertProduct(p)
-                              }}
-                              className="w-full py-1.5 px-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-[10px] font-black flex items-center justify-center gap-1 transition"
-                            >
-                              <ArrowRightLeft className="w-3 h-3" /> RUPTURE VENTE — Transférer ({stockMagasin} {unitMagasin})
-                            </button>
+                            {canTransferStock ? (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setTransfertProduct(p)
+                                }}
+                                className="w-full py-1.5 px-2 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-300 rounded-xl text-[10px] font-black flex items-center justify-center gap-1 transition"
+                              >
+                                <ArrowRightLeft className="w-3 h-3" /> RUPTURE VENTE — Transférer ({stockMagasin} {unitMagasin})
+                              </button>
+                            ) : (
+                              <div
+                                className="w-full py-1.5 px-2 bg-slate-100 text-slate-500 border border-slate-200 rounded-xl text-[10px] font-bold text-center select-none"
+                                title="Réservé Administrateur et Gestionnaire"
+                              >
+                                Rupture en vente (Transfert réservé Gestionnaire)
+                              </div>
+                            )}
                           </div>
                         )}
                       </div>
@@ -2899,54 +3114,86 @@ export const POSPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* SECTION EMBALLAGES BRASSERIE DANS LE PANIER */}
-              {currentSectorSlug === 'brasserie' && brasserieSorties.length > 0 && (
-                <div className="mx-3 my-2 p-2.5 bg-amber-50/90 rounded-2xl border border-amber-200 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-black text-amber-900 flex items-center gap-1.5">
-                      <span className="text-sm">📦</span> Emballages & Casiers Consignés
-                    </span>
-                    <span className="text-[10px] text-amber-700 font-bold">Sortie vs Retour</span>
+              {/* SECTION SITUATION DES EMBALLAGES (BRASSERIE) */}
+              {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieSorties.length > 0 && (() => {
+                const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
+                return (
+                  <div className="mx-3 my-2 p-2.5 bg-amber-50/90 rounded-2xl border border-amber-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-black text-amber-900 flex items-center gap-1.5">
+                        <span className="text-sm">📦</span> Situation des Emballages ({isComptoir ? 'Client Comptoir' : selectedCustomer?.name})
+                      </span>
+                      {isComptoir && (
+                        <span className="text-[9px] bg-amber-200 text-amber-950 px-2 py-0.5 rounded-full font-bold">
+                          Dû = 0 Obligatoire
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left border-collapse text-[10px]">
+                        <thead>
+                          <tr className="border-b border-amber-200 text-amber-900 font-bold bg-amber-100/60">
+                            <th className="p-1">Désignation</th>
+                            <th className="p-1 text-center">Précédent</th>
+                            <th className="p-1 text-center">Facture</th>
+                            <th className="p-1 text-center">Rendus</th>
+                            <th className="p-1 text-right">Reste</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-amber-100">
+                          {brasserieSorties.map((emb) => {
+                            const prec = isComptoir ? 0 : (clientEmballagesPrecedents[emb.id || ''] || clientEmballagesPrecedents[emb.code] || 0)
+                            const retour = Number(brasserieRetours[emb.code]) || 0
+                            const reste = isComptoir ? (emb.sortie - retour) : (prec + emb.sortie - retour)
+                            const hasError = isComptoir && reste !== 0
+
+                            return (
+                              <tr key={emb.code} className={clsx("bg-white transition", hasError && "bg-rose-50/80")}>
+                                <td className="p-1.5 font-bold text-slate-800">
+                                  [{emb.code}] {emb.designation}
+                                </td>
+                                <td className="p-1.5 text-center font-mono font-semibold text-slate-600">
+                                  {prec}
+                                </td>
+                                <td className="p-1.5 text-center font-mono font-black text-rose-600">
+                                  {emb.sortie}
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  <input
+                                    type="number"
+                                    min="0"
+                                    value={brasserieRetours[emb.code] ?? ''}
+                                    placeholder="0"
+                                    onChange={(e) => {
+                                      const val = Math.max(0, parseInt(e.target.value) || 0)
+                                      setBrasserieRetours((prev) => ({ ...prev, [emb.code]: val }))
+                                    }}
+                                    className="w-12 text-center p-0.5 font-black text-xs border border-amber-300 rounded font-mono bg-amber-50/50 focus:ring-1 focus:ring-amber-500"
+                                  />
+                                </td>
+                                <td className="p-1.5 text-right font-mono font-black">
+                                  <span className={clsx(
+                                    hasError ? "text-rose-600 font-black animate-pulse" : reste > 0 ? "text-amber-800" : "text-emerald-700"
+                                  )}>
+                                    {reste}
+                                  </span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+
+                    {isComptoir && brasserieSorties.some(e => (e.sortie - (Number(brasserieRetours[e.code]) || 0)) !== 0) && (
+                      <p className="text-[10px] text-rose-700 font-bold bg-rose-100/70 p-1.5 rounded-lg border border-rose-200">
+                        ⚠️ Pour le Client Comptoir, saisissez Rendus = Facture afin que le Reste soit égal à 0.
+                      </p>
+                    )}
                   </div>
-                  <div className="space-y-1.5 text-xs">
-                    {brasserieSorties.map((emb) => {
-                      const retour = Number(brasserieRetours[emb.code]) || 0
-                      const netDu = emb.sortie - retour
-                      return (
-                        <div key={emb.code} className="flex items-center justify-between gap-2 bg-white p-2 rounded-xl border border-amber-100 shadow-2xs">
-                          <div className="min-w-0 flex-1">
-                            <p className="font-bold text-[11px] text-slate-800 truncate">[{emb.code}] {emb.designation}</p>
-                            <p className="text-[10px] text-slate-500">
-                              Sortie : <span className="font-black text-red-600">{emb.sortie}</span>
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <span className="text-[10px] font-bold text-slate-600">Retour :</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max={emb.sortie}
-                              value={brasserieRetours[emb.code] ?? ''}
-                              placeholder="0"
-                              onChange={(e) => {
-                                const val = Math.max(0, parseInt(e.target.value) || 0)
-                                setBrasserieRetours(prev => ({ ...prev, [emb.code]: val }))
-                              }}
-                              className="w-12 text-center p-1 font-black text-xs border border-amber-300 rounded-lg font-mono bg-amber-50/50 focus:ring-1 focus:ring-amber-500"
-                            />
-                          </div>
-                          <div className="text-right pl-1 shrink-0">
-                            <span className="text-[10px] text-slate-400 block leading-tight">Net dû</span>
-                            <span className={clsx("font-black text-xs font-mono", netDu > 0 ? "text-amber-800" : "text-emerald-700")}>
-                              {netDu}
-                            </span>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
+                )
+              })()}
 
               {/* Pied du Panier : Bouton Valider la Vente en 1 clic */}
               <div className="p-3 bg-slate-50 border-t border-slate-200 shrink-0">
@@ -3265,8 +3512,19 @@ export const POSPage: React.FC = () => {
       {/* ── MODAL 3 : FACTURE COMMERCIALE STANDARD GESTIO 229 (AUCUN FAUX E-MECEF) */}
       <ModalPortal isOpen={showInvoiceModal && !!currentSale} onClose={() => setShowInvoiceModal(false)} id="modal-invoice-standard">
         <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-2xl w-full border border-slate-200 max-h-[92vh] overflow-y-auto">
-          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
-            <div className="flex items-center gap-2">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4 flex-wrap gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              {(currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && (
+                <button
+                  onClick={() => setPrintFormat('brasserie')}
+                  className={clsx(
+                    'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm',
+                    printFormat === 'brasserie' ? 'bg-amber-600 text-white' : 'bg-amber-50 text-amber-900 border border-amber-200 hover:bg-amber-100'
+                  )}
+                >
+                  <span>📦</span> Facture Brasserie & Emballages
+                </button>
+              )}
               <button
                 onClick={() => setPrintFormat('factureA4')}
                 className={clsx(
@@ -3305,7 +3563,9 @@ export const POSPage: React.FC = () => {
             </div>
           </div>
 
-          {printFormat === 'factureA4' ? (
+          {printFormat === 'brasserie' && factureBrasserieData ? (
+            <FactureBrasserieTemplate data={factureBrasserieData} onClose={() => setShowInvoiceModal(false)} />
+          ) : printFormat === 'factureA4' ? (
             /* ── FACTURE COMMERCIALE A4 STANDARD (CONFORME RÈGLES 24 & 25) ── */
             <div id="invoice-a4-standard" className="p-6 bg-white border border-slate-200 rounded-2xl space-y-5 text-xs font-sans text-slate-800">
               {/* Entête Entreprise & Numéro */}

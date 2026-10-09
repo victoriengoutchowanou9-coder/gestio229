@@ -100,12 +100,14 @@ interface ClientSolde {
 
 // ─── Tabs ─────────────────────────────────────────────────────────────────────
 
-type TabId = 'dashboard' | 'emballages' | 'clients' | 'retours' | 'historique' | 'inventaire' | 'ajustements'
+type TabId = 'initiale' | 'fournisseur' | 'clients' | 'dashboard' | 'emballages' | 'retours' | 'historique' | 'inventaire' | 'ajustements'
 
 const TABS: { id: TabId; label: string; icon: React.FC<any> }[] = [
+  { id: 'initiale', label: '1. Situation Initiale', icon: Layers },
+  { id: 'fournisseur', label: '2. Stock Fournisseur', icon: Box },
+  { id: 'clients', label: '3. Situation Actuelle', icon: Users },
   { id: 'dashboard', label: 'Tableau de Bord', icon: BarChart3 },
-  { id: 'emballages', label: 'Emballages', icon: Box },
-  { id: 'clients', label: 'Situation Clients', icon: Users },
+  { id: 'emballages', label: 'Emballages Types', icon: Box },
   { id: 'retours', label: 'Retours', icon: ArrowDownLeft },
   { id: 'historique', label: 'Historique', icon: History },
   { id: 'inventaire', label: 'Inventaire', icon: ClipboardCheck },
@@ -149,12 +151,29 @@ const BrasserieConsignationPage: React.FC = () => {
   }
 
   // ── State ─────────────────────────────────────────────────────────────────
-  const [activeTab, setActiveTab] = useState<TabId>('dashboard')
+  const [activeTab, setActiveTab] = useState<TabId>('initiale')
   const [loading, setLoading] = useState(true)
   const [emballages, setEmballages] = useState<Emballage[]>([])
   const [consignations, setConsignations] = useState<Consignation[]>([])
   const [mouvements, setMouvements] = useState<MouvementEmballage[]>([])
   const [inventaires, setInventaires] = useState<InventaireSession[]>([])
+
+  // Situation Initiale Clients (M046 - Rubrique demandée)
+  const [initialeClientsList, setInitialeClientsList] = useState<{ id: string; name: string; phone?: string; code?: string }[]>([])
+  const [initialeClientId, setInitialeClientId] = useState('')
+  const [initialePrecedents, setInitialePrecedents] = useState<Record<string, number>>({})
+  const [initialeObservation, setInitialeObservation] = useState('')
+  const [savingInitiale, setSavingInitiale] = useState(false)
+
+  // Stock Fournisseur (M046 - Plein / Vide)
+  const [stockFournisseurs, setStockFournisseurs] = useState<{ id?: string; fournisseur: string; emballage_id: string; type_stock: 'plein' | 'vide'; quantite: number; date_initiale?: string; emballage?: Emballage }[]>([])
+  const [fFournisseur, setFFournisseur] = useState({
+    fournisseur: 'SOBEBRA',
+    emballage_id: '',
+    type_stock: 'plein' as 'plein' | 'vide',
+    quantite: '',
+  })
+  const [savingFournisseur, setSavingFournisseur] = useState(false)
 
   // Filtres
   const [searchClient, setSearchClient] = useState('')
@@ -263,14 +282,196 @@ const BrasserieConsignationPage: React.FC = () => {
     setInventaires(data || [])
   }, [companyId])
 
+  const loadStockFournisseur = useCallback(async () => {
+    if (!companyId) return
+    try {
+      const { data, error } = await supabase
+        .from('stock_emballages_fournisseur')
+        .select('*')
+        .eq('company_id', companyId)
+      if (!error && data) {
+        setStockFournisseurs(data.map((d: any) => ({
+          ...d,
+          emballage: emballages.find(e => e.id === d.emballage_id)
+        })))
+      }
+    } catch (_) {}
+  }, [companyId, emballages])
+
+  const loadClientsList = useCallback(async () => {
+    if (!companyId) return
+    try {
+      const { data } = await supabase
+        .from('clients')
+        .select('id, name, phone, code')
+        .eq('company_id', companyId)
+        .order('name')
+      if (data && data.length > 0) {
+        setInitialeClientsList(data)
+      } else {
+        const { data: custData } = await supabaseTenant('customers').select('id, name, phone, code').order('name')
+        if (custData) setInitialeClientsList(custData)
+      }
+    } catch (_) {}
+  }, [companyId, supabaseTenant])
+
   const loadAll = useCallback(async () => {
     setLoading(true)
     try {
-      await Promise.all([loadEmballages(), loadConsignations(), loadMouvements(), loadInventaires()])
+      await Promise.all([
+        loadEmballages(),
+        loadConsignations(),
+        loadMouvements(),
+        loadInventaires(),
+        loadStockFournisseur(),
+        loadClientsList()
+      ])
     } finally {
       setLoading(false)
     }
-  }, [loadEmballages, loadConsignations, loadMouvements, loadInventaires])
+  }, [loadEmballages, loadConsignations, loadMouvements, loadInventaires, loadStockFournisseur, loadClientsList])
+
+  useEffect(() => {
+    if (!initialeClientId) {
+      setInitialePrecedents({})
+      return
+    }
+    const prefill = async () => {
+      try {
+        const { data: initData } = await supabase
+          .from('clients_emballages_initiaux')
+          .select('emballage_id, precedent_du')
+          .eq('company_id', companyId)
+          .eq('client_id', initialeClientId)
+
+        const map: Record<string, number> = {}
+        if (initData && initData.length > 0) {
+          initData.forEach((row: any) => {
+            map[row.emballage_id] = Number(row.precedent_du) || 0
+          })
+        } else {
+          const found = clientSoldes.find((c) => c.client_id === initialeClientId)
+          if (found) {
+            Object.entries(found.soldes).forEach(([embId, s]) => {
+              map[embId] = s.solde_du
+            })
+          }
+        }
+        setInitialePrecedents(map)
+      } catch (_) {}
+    }
+    prefill()
+  }, [initialeClientId, companyId, clientSoldes])
+
+  const handleSaveSituationInitiale = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!initialeClientId) {
+      toast.error('Client requis', 'Veuillez sélectionner un client pour enregistrer sa situation initiale.')
+      return
+    }
+
+    setSavingInitiale(true)
+    try {
+      let count = 0
+      for (const emb of emballages) {
+        const prec = Number(initialePrecedents[emb.id]) || 0
+        try {
+          await supabase.from('clients_emballages_initiaux').upsert({
+            company_id: companyId,
+            secteur_id: companyId,
+            client_id: initialeClientId,
+            emballage_id: emb.id,
+            precedent_du: prec,
+            date_saisie: new Date().toISOString().split('T')[0],
+            observation: initialeObservation || 'Situation initiale clients avant utilisation logiciel'
+          })
+          await supabase.from('clients_emballages_soldes').upsert({
+            company_id: companyId,
+            secteur_id: companyId,
+            client_id: initialeClientId,
+            emballage_id: emb.id,
+            du_actuel: prec,
+            updated_at: new Date().toISOString()
+          })
+        } catch (_) {}
+
+        // Synchroniser également brasserie_consignations
+        const { data: existingCons } = await supabase
+          .from('brasserie_consignations')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('sector_slug', 'brasserie')
+          .eq('client_id', initialeClientId)
+          .eq('emballage_id', emb.id)
+          .maybeSingle()
+
+        if (existingCons) {
+          await supabase
+            .from('brasserie_consignations')
+            .update({
+              total_sorti: prec,
+              total_retourne: 0,
+              solde_du: prec,
+              derniere_sortie: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existingCons.id)
+        } else {
+          await supabase
+            .from('brasserie_consignations')
+            .insert({
+              company_id: companyId,
+              sector_slug: 'brasserie',
+              client_id: initialeClientId,
+              emballage_id: emb.id,
+              total_sorti: prec,
+              total_retourne: 0,
+              solde_du: prec,
+              derniere_sortie: new Date().toISOString(),
+            })
+        }
+        count++
+      }
+
+      toast.success('Situation initiale enregistrée avec succès !', `${count} emballages mis à jour.`)
+      await loadConsignations()
+      setActiveTab('clients')
+    } catch (err: any) {
+      toast.error('Erreur', err.message)
+    } finally {
+      setSavingInitiale(false)
+    }
+  }
+
+  const handleSaveStockFournisseur = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!fFournisseur.emballage_id || !fFournisseur.quantite) {
+      toast.error('Champs obligatoires', 'Veuillez choisir un emballage et saisir une quantité.')
+      return
+    }
+
+    setSavingFournisseur(true)
+    try {
+      const qte = Number(fFournisseur.quantite) || 0
+      await supabase.from('stock_emballages_fournisseur').upsert({
+        company_id: companyId,
+        secteur_id: companyId,
+        emballage_id: fFournisseur.emballage_id,
+        fournisseur: fFournisseur.fournisseur,
+        type_stock: fFournisseur.type_stock,
+        quantite: qte,
+        date_initiale: new Date().toISOString().split('T')[0]
+      })
+
+      toast.success('Stock fournisseur enregistré avec succès !')
+      setFFournisseur(prev => ({ ...prev, quantite: '' }))
+      await loadStockFournisseur()
+    } catch (err: any) {
+      toast.error('Erreur enregistrement stock', err.message)
+    } finally {
+      setSavingFournisseur(false)
+    }
+  }
 
   useEffect(() => {
     loadAll()
@@ -617,6 +818,275 @@ const BrasserieConsignationPage: React.FC = () => {
           )
         })}
       </div>
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 1: SITUATION INITIALE (RUBRIQUE DEMANDÉE)                         */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'initiale' && (
+        <div className="space-y-5">
+          <div className="bg-white rounded-3xl border border-amber-200 p-6 shadow-sm">
+            <div className="flex items-center gap-2 mb-2">
+              <span className="p-2 rounded-2xl bg-amber-100 text-amber-800">
+                <Layers className="w-5 h-5" />
+              </span>
+              <div>
+                <h3 className="text-lg font-black text-slate-800">Situation Initiale des Emballages par Client</h3>
+                <p className="text-xs text-slate-500">
+                  Saisissez les soldes d'emballages dus par les clients avant le démarrage du logiciel (historique papier).
+                </p>
+              </div>
+            </div>
+
+            <form onSubmit={handleSaveSituationInitiale} className="space-y-6 mt-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Sélectionner le Client <span className="text-rose-500">*</span>
+                  </label>
+                  <select
+                    value={initialeClientId}
+                    onChange={(e) => setInitialeClientId(e.target.value)}
+                    required
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-amber-500"
+                  >
+                    <option value="">-- Choisir un client --</option>
+                    {initialeClientsList.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} {c.phone ? `(${c.phone})` : ''} {c.code ? `[${c.code}]` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Observation / Note de départ
+                  </label>
+                  <input
+                    type="text"
+                    value={initialeObservation}
+                    onChange={(e) => setInitialeObservation(e.target.value)}
+                    placeholder="Ex : Report inventaire initial au 01/01/2026"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-amber-500"
+                  />
+                </div>
+              </div>
+
+              {/* Tableau des emballages types */}
+              <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 flex justify-between items-center">
+                  <span className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                    Emballages & Casiers — Soldes Dûs
+                  </span>
+                  <span className="text-xs text-slate-500 font-medium">
+                    {emballages.length} types d'emballages configurés
+                  </span>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-200 bg-slate-100/50 text-slate-600 font-bold">
+                        <th className="p-3 text-left">Code</th>
+                        <th className="p-3 text-left">Désignation de l'emballage</th>
+                        <th className="p-3 text-center">Unité</th>
+                        <th className="p-3 text-right w-44">Précédent Dû (Avant Logiciel)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {emballages.map((emb) => (
+                        <tr key={emb.id} className="hover:bg-slate-50/80 transition">
+                          <td className="p-3 font-mono font-bold text-amber-800">
+                            <span className="px-2 py-0.5 rounded-lg bg-amber-100 border border-amber-200">
+                              {emb.code}
+                            </span>
+                          </td>
+                          <td className="p-3 font-semibold text-slate-800">
+                            {emb.designation}
+                          </td>
+                          <td className="p-3 text-center text-slate-500">
+                            {emb.unite || 'Unité'}
+                          </td>
+                          <td className="p-3 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              value={initialePrecedents[emb.id] ?? ''}
+                              onChange={(e) => {
+                                const val = Math.max(0, parseInt(e.target.value) || 0)
+                                setInitialePrecedents((prev) => ({ ...prev, [emb.id]: val }))
+                              }}
+                              placeholder="0"
+                              className="w-32 p-1.5 text-right font-mono font-bold border border-slate-300 rounded-xl bg-white focus:ring-2 focus:ring-amber-500"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                      {emballages.length === 0 && (
+                        <tr>
+                          <td colSpan={4} className="p-6 text-center text-slate-400 italic">
+                            Aucun type d'emballage configuré. Ajoutez vos types d'emballages dans l'onglet "Emballages Types".
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={savingInitiale || !initialeClientId}
+                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md transition disabled:opacity-50"
+                >
+                  <Check className="w-4 h-4" />
+                  {savingInitiale ? 'Enregistrement en cours...' : 'Enregistrer la Situation Initiale'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* TAB 2: STOCK FOURNISSEUR (GESTION EMBALLAGES PLEIN / VIDE)            */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {activeTab === 'fournisseur' && (
+        <div className="space-y-5">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
+            {/* Formulaire ajout / mise à jour stock fournisseur */}
+            <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                <Box className="w-5 h-5 text-amber-600" />
+                <h3 className="font-bold text-slate-800 text-sm">Ajouter Stock Fournisseur</h3>
+              </div>
+
+              <form onSubmit={handleSaveStockFournisseur} className="space-y-3 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Fournisseur</label>
+                  <input
+                    type="text"
+                    value={fFournisseur.fournisseur}
+                    onChange={(e) => setFFournisseur({ ...fFournisseur, fournisseur: e.target.value })}
+                    placeholder="SOBEBRA, BB, etc."
+                    required
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Emballage</label>
+                  <select
+                    value={fFournisseur.emballage_id}
+                    onChange={(e) => setFFournisseur({ ...fFournisseur, emballage_id: e.target.value })}
+                    required
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl font-semibold"
+                  >
+                    <option value="">-- Choisir un emballage --</option>
+                    {emballages.map((emb) => (
+                      <option key={emb.id} value={emb.id}>
+                        [{emb.code}] {emb.designation}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Type de Stock</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setFFournisseur({ ...fFournisseur, type_stock: 'plein' })}
+                      className={clsx(
+                        'py-2 px-3 rounded-xl font-bold transition text-center',
+                        fFournisseur.type_stock === 'plein'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      )}
+                    >
+                      Plein
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFFournisseur({ ...fFournisseur, type_stock: 'vide' })}
+                      className={clsx(
+                        'py-2 px-3 rounded-xl font-bold transition text-center',
+                        fFournisseur.type_stock === 'vide'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                      )}
+                    >
+                      Vide
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Quantité</label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={fFournisseur.quantite}
+                    onChange={(e) => setFFournisseur({ ...fFournisseur, quantite: e.target.value })}
+                    placeholder="0"
+                    required
+                    className="w-full p-2 bg-slate-50 border border-slate-300 rounded-xl font-mono font-bold"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={savingFournisseur}
+                  className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl transition shadow-sm"
+                >
+                  {savingFournisseur ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </form>
+            </div>
+
+            {/* Tableau récapitulatif stock fournisseur */}
+            <div className="lg:col-span-2 bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
+              <h3 className="font-bold text-slate-800 text-sm">Stocks Fournisseurs Enregistrés</h3>
+              <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600">
+                      <th className="p-3 text-left">Fournisseur</th>
+                      <th className="p-3 text-left">Emballage</th>
+                      <th className="p-3 text-center">Type</th>
+                      <th className="p-3 text-right">Quantité</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {stockFournisseurs.map((sf, idx) => (
+                      <tr key={sf.id || idx} className="hover:bg-slate-50">
+                        <td className="p-3 font-bold text-slate-800">{sf.fournisseur}</td>
+                        <td className="p-3 font-medium text-slate-700">{sf.emballage?.designation || sf.emballage_id}</td>
+                        <td className="p-3 text-center">
+                          <span className={clsx(
+                            'px-2 py-0.5 rounded-full text-[10px] font-bold uppercase',
+                            sf.type_stock === 'plein' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                          )}>
+                            {sf.type_stock}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono font-bold">{sf.quantite}</td>
+                      </tr>
+                    ))}
+                    {stockFournisseurs.length === 0 && (
+                      <tr>
+                        <td colSpan={4} className="p-6 text-center text-slate-400 italic">
+                          Aucun stock fournisseur saisi pour l'instant.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ══════════════════════════════════════════════════════════════════════ */}
       {/* TAB: DASHBOARD */}
