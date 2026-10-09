@@ -1727,140 +1727,250 @@ export const POSPage: React.FC = () => {
         }
       }
 
-      // 4-BIS. Brasserie & Dépôt de Boissons : Gestion des Emballages et Consignations
-      if (currentSectorSlug === 'brasserie' && brasserieSorties.length > 0) {
+      // 4-BIS. Brasserie & Dépôt de Boissons : Gestion Automatique des Emballages et Consignations
+      if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieSorties.length > 0) {
         try {
           const compId = company?.id ?? companyId ?? ''
-          for (const emb of brasserieSorties) {
-            const retour = Number(brasserieRetours[emb.code]) || 0
+          const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
+          const clientNom = selectedCustomer?.name || (isComptoir ? 'Client Comptoir' : 'Client')
+          const clientId = selectedCustomer?.id || null
 
+          for (const emb of brasserieSorties) {
+            const codeEmb = (emb.code || 'C20T').toUpperCase()
+            const designationEmb = emb.designation || `Casier ${codeEmb}`
+            const retour = Number(brasserieRetours[codeEmb]) || 0
+            const sortie = Number(emb.sortie) || 0
+
+            // 1. Récupérer ou auto-créer l'ID dans brasserie_emballages
             let realEmbId = emb.id
             if (!realEmbId) {
-              const matched = brasserieEmballagesList.find(e => e.code === emb.code)
+              const matched = brasserieEmballagesList.find(e => e.code === codeEmb)
               realEmbId = matched?.id
             }
+            if (!realEmbId) {
+              const { data: dbEmb } = await supabase
+                .from('brasserie_emballages')
+                .select('id')
+                .eq('company_id', compId)
+                .eq('code', codeEmb)
+                .maybeSingle()
+              if (dbEmb?.id) {
+                realEmbId = dbEmb.id
+              } else {
+                const { data: createdEmb } = await supabase
+                  .from('brasserie_emballages')
+                  .insert({
+                    company_id: compId,
+                    sector_slug: 'brasserie',
+                    code: codeEmb,
+                    designation: designationEmb,
+                    type: 'casier',
+                    unite: 'unité',
+                    valeur_consignation: 0,
+                    stock_depot: 0,
+                    is_active: true
+                  })
+                  .select('id')
+                  .single()
+                if (createdEmb?.id) realEmbId = createdEmb.id
+              }
+            }
 
-            if (realEmbId) {
-              const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
-              const prec = isComptoir ? 0 : (clientEmballagesPrecedents[realEmbId || ''] || clientEmballagesPrecedents[emb.code] || 0)
-              const duFinal = isComptoir ? 0 : (prec + emb.sortie - retour)
-
-              // 1. Enregistrement officiel M046 dans mouvements_emballages
-              try {
-                await supabase.from('mouvements_emballages').insert({
+            // 2. Récupérer ou auto-créer dans brasserie_emballages_types
+            let embTypeId: string | null = null
+            const { data: dbType } = await supabase
+              .from('brasserie_emballages_types')
+              .select('id')
+              .eq('company_id', compId)
+              .eq('code', codeEmb)
+              .maybeSingle()
+            if (dbType?.id) {
+              embTypeId = dbType.id
+            } else {
+              const { data: createdType } = await supabase
+                .from('brasserie_emballages_types')
+                .insert({
                   company_id: compId,
                   secteur_id: company?.sector_id || compId,
-                  client_id: isComptoir ? null : selectedCustomer?.id,
+                  code: codeEmb,
+                  nom: designationEmb,
+                  stock_depot: 0
+                })
+                .select('id')
+                .single()
+              if (createdType?.id) embTypeId = createdType.id
+            }
+
+            // 3. Calculer solde précédent réel
+            const prec = isComptoir ? 0 : (clientEmballagesPrecedents[realEmbId || ''] || clientEmballagesPrecedents[codeEmb] || 0)
+            const soldeApresSortie = prec + sortie
+            const duFinal = isComptoir ? 0 : (soldeApresSortie - retour)
+
+            // 4. Enregistrement AUTOMATIQUE dans brasserie_emballages_mouvements (PARTIE 2 DU PROMPT)
+            if (sortie > 0 && !isComptoir && clientId) {
+              try {
+                await supabase.from('brasserie_emballages_mouvements').insert({
+                  company_id: compId,
+                  secteur_id: company?.sector_id || compId,
+                  client_id: clientId,
+                  client_nom: clientNom,
+                  emballage_type_id: embTypeId || realEmbId || null,
+                  code: codeEmb,
+                  type_mouvement: 'SORTIE',
+                  quantite: sortie,
                   vente_id: savedDbSale.id,
-                  facture_id: savedDbSale.id,
-                  emballage_id: realEmbId,
-                  precedent: prec,
-                  facture_qte: emb.sortie,
-                  retour_qte: retour,
-                  du_final: duFinal,
-                  date_mouvement: todayDate
+                  vente_numero: orderNum,
+                  date: new Date().toISOString(),
+                  solde_avant: prec,
+                  solde_apres: soldeApresSortie
                 })
               } catch (_) {}
+            }
 
-              // 2. Si client enregistré : mise à jour solde actuel dans clients_emballages_soldes
-              if (!isComptoir && selectedCustomer?.id) {
+            if (retour > 0 && !isComptoir && clientId) {
+              try {
+                await supabase.from('brasserie_emballages_mouvements').insert({
+                  company_id: compId,
+                  secteur_id: company?.sector_id || compId,
+                  client_id: clientId,
+                  client_nom: clientNom,
+                  emballage_type_id: embTypeId || realEmbId || null,
+                  code: codeEmb,
+                  type_mouvement: 'RETOUR',
+                  quantite: retour,
+                  vente_id: savedDbSale.id,
+                  vente_numero: orderNum,
+                  date: new Date().toISOString(),
+                  solde_avant: soldeApresSortie,
+                  solde_apres: duFinal
+                })
+              } catch (_) {}
+            }
+
+            // 5. Enregistrement M046 dans mouvements_emballages
+            try {
+              await supabase.from('mouvements_emballages').insert({
+                company_id: compId,
+                secteur_id: company?.sector_id || compId,
+                client_id: isComptoir ? null : clientId,
+                vente_id: savedDbSale.id,
+                facture_id: savedDbSale.id,
+                emballage_id: realEmbId,
+                precedent: prec,
+                facture_qte: sortie,
+                retour_qte: retour,
+                du_final: duFinal,
+                date_mouvement: todayDate
+              })
+            } catch (_) {}
+
+            // 6. Mise à jour solde actuel dans clients_emballages_soldes
+            if (!isComptoir && clientId && realEmbId) {
+              try {
+                await supabase.from('clients_emballages_soldes').upsert({
+                  company_id: compId,
+                  secteur_id: company?.sector_id || compId,
+                  client_id: clientId,
+                  emballage_id: realEmbId,
+                  du_actuel: duFinal,
+                  updated_at: new Date().toISOString()
+                })
+              } catch (_) {}
+            }
+
+            // 7. Mouvement brasserie_mouvements_emballages SORTIE_VENTE & RETOUR_IMMEDIAT
+            if (realEmbId) {
+              if (sortie > 0) {
                 try {
-                  await supabase.from('clients_emballages_soldes').upsert({
+                  await supabase.from('brasserie_mouvements_emballages').insert({
                     company_id: compId,
-                    secteur_id: company?.sector_id || compId,
-                    client_id: selectedCustomer.id,
+                    sector_slug: 'brasserie',
                     emballage_id: realEmbId,
-                    du_actuel: duFinal,
-                    updated_at: new Date().toISOString()
+                    client_id: clientId,
+                    type_mouvement: 'SORTIE_VENTE',
+                    quantite: sortie,
+                    reference: orderNum,
+                    vente_id: savedDbSale.id,
+                    created_by_name: user?.full_name || 'Vendeur',
                   })
                 } catch (_) {}
               }
 
-              // A. Mouvement SORTIE_VENTE
-              if (emb.sortie > 0) {
-                await supabase.from('brasserie_mouvements_emballages').insert({
-                  company_id: compId,
-                  sector_slug: 'brasserie',
-                  emballage_id: realEmbId,
-                  client_id: selectedCustomer?.id || null,
-                  type_mouvement: 'SORTIE_VENTE',
-                  quantite: emb.sortie,
-                  reference: orderNum,
-                  vente_id: savedDbSale.id,
-                  created_by_name: user?.full_name || 'Vendeur',
-                })
-              }
-
-              // B. Mouvement RETOUR_IMMEDIAT
               if (retour > 0) {
-                await supabase.from('brasserie_mouvements_emballages').insert({
-                  company_id: compId,
-                  sector_slug: 'brasserie',
-                  emballage_id: realEmbId,
-                  client_id: selectedCustomer?.id || null,
-                  type_mouvement: 'RETOUR_IMMEDIAT',
-                  quantite: retour,
-                  reference: orderNum,
-                  vente_id: savedDbSale.id,
-                  created_by_name: user?.full_name || 'Vendeur',
-                })
+                try {
+                  await supabase.from('brasserie_mouvements_emballages').insert({
+                    company_id: compId,
+                    sector_slug: 'brasserie',
+                    emballage_id: realEmbId,
+                    client_id: clientId,
+                    type_mouvement: 'RETOUR_IMMEDIAT',
+                    quantite: retour,
+                    reference: orderNum,
+                    vente_id: savedDbSale.id,
+                    created_by_name: user?.full_name || 'Vendeur',
+                  })
+                } catch (_) {}
               }
 
-              // C. Mise à jour stock dépôt : - sortie + retour
-              const { data: embRow } = await supabase
-                .from('brasserie_emballages')
-                .select('stock_depot')
-                .eq('id', realEmbId)
-                .maybeSingle()
-              if (embRow) {
-                const currentStockDepot = Number(embRow.stock_depot) || 0
-                const updatedStockDepot = Math.max(0, currentStockDepot - emb.sortie + retour)
-                await supabase
+              // 8. Décrémentation / incrémentation stock dépôt
+              try {
+                const { data: embRow } = await supabase
                   .from('brasserie_emballages')
-                  .update({ stock_depot: updatedStockDepot, updated_at: new Date().toISOString() })
+                  .select('stock_depot')
                   .eq('id', realEmbId)
-              }
-
-              // D. Mise à jour de la consignation client
-              if (selectedCustomer?.id) {
-                const { data: exCons } = await supabase
-                  .from('brasserie_consignations')
-                  .select('*')
-                  .eq('company_id', compId)
-                  .eq('sector_slug', 'brasserie')
-                  .eq('client_id', selectedCustomer.id)
-                  .eq('emballage_id', realEmbId)
                   .maybeSingle()
-
-                if (exCons) {
-                  const newSorti = (Number(exCons.total_sorti) || 0) + emb.sortie
-                  const newRetour = (Number(exCons.total_retourne) || 0) + retour
+                if (embRow) {
+                  const currentStockDepot = Number(embRow.stock_depot) || 0
+                  const updatedStockDepot = Math.max(0, currentStockDepot - sortie + retour)
                   await supabase
-                    .from('brasserie_consignations')
-                    .update({
-                      total_sorti: newSorti,
-                      total_retourne: newRetour,
-                      solde_du: Math.max(0, newSorti - newRetour),
-                      derniere_sortie: new Date().toISOString(),
-                      dernier_retour: retour > 0 ? new Date().toISOString() : exCons.dernier_retour,
-                      updated_at: new Date().toISOString(),
-                    })
-                    .eq('id', exCons.id)
-                } else {
-                  await supabase
-                    .from('brasserie_consignations')
-                    .insert({
-                      company_id: compId,
-                      sector_slug: 'brasserie',
-                      client_id: selectedCustomer.id,
-                      emballage_id: realEmbId,
-                      total_sorti: emb.sortie,
-                      total_retourne: retour,
-                      solde_du: Math.max(0, emb.sortie - retour),
-                      derniere_sortie: new Date().toISOString(),
-                      dernier_retour: retour > 0 ? new Date().toISOString() : null,
-                    })
+                    .from('brasserie_emballages')
+                    .update({ stock_depot: updatedStockDepot, updated_at: new Date().toISOString() })
+                    .eq('id', realEmbId)
                 }
+              } catch (_) {}
+
+              // 9. Mise à jour de brasserie_consignations
+              if (!isComptoir && clientId) {
+                try {
+                  const { data: exCons } = await supabase
+                    .from('brasserie_consignations')
+                    .select('*')
+                    .eq('company_id', compId)
+                    .eq('sector_slug', 'brasserie')
+                    .eq('client_id', clientId)
+                    .eq('emballage_id', realEmbId)
+                    .maybeSingle()
+
+                  if (exCons) {
+                    const newSorti = (Number(exCons.total_sorti) || 0) + sortie
+                    const newRetour = (Number(exCons.total_retourne) || 0) + retour
+                    await supabase
+                      .from('brasserie_consignations')
+                      .update({
+                        total_sorti: newSorti,
+                        total_retourne: newRetour,
+                        solde_du: Math.max(0, newSorti - newRetour),
+                        derniere_sortie: new Date().toISOString(),
+                        dernier_retour: retour > 0 ? new Date().toISOString() : exCons.dernier_retour,
+                        updated_at: new Date().toISOString(),
+                      })
+                      .eq('id', exCons.id)
+                  } else {
+                    await supabase
+                      .from('brasserie_consignations')
+                      .insert({
+                        company_id: compId,
+                        sector_slug: 'brasserie',
+                        client_id: clientId,
+                        emballage_id: realEmbId,
+                        total_sorti: sortie,
+                        total_retourne: retour,
+                        solde_du: Math.max(0, sortie - retour),
+                        derniere_sortie: new Date().toISOString(),
+                        dernier_retour: retour > 0 ? new Date().toISOString() : null,
+                      })
+                  }
+                } catch (_) {}
               }
             }
           }

@@ -144,6 +144,8 @@ const BrasserieConsignationPage: React.FC = () => {
   const [consignations, setConsignations] = useState<Consignation[]>([])
   const [mouvements, setMouvements] = useState<MouvementEmballage[]>([])
   const [inventaires, setInventaires] = useState<InventaireSession[]>([])
+  const [embMouvements, setEmbMouvements] = useState<any[]>([])
+  const [initialesList, setInitialesList] = useState<any[]>([])
 
   // Situation Initiale Clients (M046 - Rubrique demandée)
   const [initialeClientsList, setInitialeClientsList] = useState<{ id: string; name: string; phone?: string; code?: string }[]>([])
@@ -207,33 +209,100 @@ const BrasserieConsignationPage: React.FC = () => {
   const [printingBonRetour, setPrintingBonRetour] = useState<{ mouvement: MouvementEmballage; avant: number; apres: number } | null>(null)
 
   // ── useMemo calculés immédiatement à partir des states (évite tout TDZ) ─────
+  // ── useMemo calculés immédiatement à partir des states (évite tout TDZ) ─────
   const clientSoldes = useMemo((): ClientSolde[] => {
     const map: Record<string, ClientSolde> = {}
-    for (const c of consignations) {
-      if (!c.client || !c.emballage) continue
-      const cid = c.client_id
+
+    // 1. Calcul prioritaire à la volée depuis brasserie_emballages_mouvements (PARTIE 3 DU PROMPT)
+    for (const m of embMouvements) {
+      const cid = m.client_id || m.client_nom
+      if (!cid) continue
+      const clientName = m.client_nom || 'Client'
+      const code = (m.code || 'C20T').toUpperCase()
+      const emb = emballages.find(e => e.code === code) || {
+        id: m.emballage_type_id || code,
+        company_id: companyId,
+        sector_slug: 'brasserie',
+        code: code,
+        designation: `Casier ${code}`,
+        type: 'casier',
+        unite: 'unité',
+        valeur_consignation: 0,
+        stock_depot: 0,
+        is_active: true
+      }
+      const embKey = emb.id
+
       if (!map[cid]) {
         map[cid] = {
-          client_id: cid,
-          client_name: c.client.name,
-          client_phone: c.client.phone,
-          client_code: c.client.code,
+          client_id: m.client_id || cid,
+          client_name: clientName,
+          client_phone: '',
+          client_code: '',
           soldes: {},
           total_emballages_dus: 0,
         }
       }
-      map[cid].soldes[c.emballage_id] = {
-        emballage: c.emballage,
-        total_sorti: c.total_sorti,
-        total_retourne: c.total_retourne,
-        solde_du: c.solde_du,
+
+      if (!map[cid].soldes[embKey]) {
+        map[cid].soldes[embKey] = {
+          emballage: emb,
+          total_sorti: 0,
+          total_retourne: 0,
+          solde_du: 0,
+        }
       }
-      map[cid].total_emballages_dus += c.solde_du
+
+      const qte = Number(m.quantite) || 0
+      const type = (m.type_mouvement || '').toUpperCase()
+      if (['SORTIE', 'SORTIE_VENTE', 'INITIAL'].includes(type)) {
+        map[cid].soldes[embKey].total_sorti += qte
+        map[cid].soldes[embKey].solde_du += qte
+      } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR'].includes(type)) {
+        map[cid].soldes[embKey].total_retourne += qte
+        map[cid].soldes[embKey].solde_du = Math.max(0, map[cid].soldes[embKey].solde_du - qte)
+      }
     }
+
+    // 2. Fusion / Fallback avec brasserie_consignations (pour données de secours)
+    for (const c of consignations) {
+      const cid = c.client_id
+      if (!cid) continue
+      const clientName = c.client?.name || 'Client'
+      const emb = c.emballage || emballages.find(e => e.id === c.emballage_id)
+      if (!emb) continue
+      const embKey = emb.id
+
+      if (!map[cid]) {
+        map[cid] = {
+          client_id: cid,
+          client_name: clientName,
+          client_phone: c.client?.phone || '',
+          client_code: c.client?.code || '',
+          soldes: {},
+          total_emballages_dus: 0,
+        }
+      }
+
+      if (!map[cid].soldes[embKey]) {
+        map[cid].soldes[embKey] = {
+          emballage: emb,
+          total_sorti: Number(c.total_sorti) || 0,
+          total_retourne: Number(c.total_retourne) || 0,
+          solde_du: Number(c.solde_du) || 0,
+        }
+      }
+    }
+
+    // 3. Calcul du total dû par client
+    for (const cs of Object.values(map)) {
+      cs.total_emballages_dus = Object.values(cs.soldes).reduce((sum, s) => sum + s.solde_du, 0)
+    }
+
     return Object.values(map)
       .filter((cs) => cs.total_emballages_dus > 0 || Object.values(cs.soldes).some((s) => s.total_sorti > 0))
       .sort((a, b) => b.total_emballages_dus - a.total_emballages_dus)
-  }, [consignations])
+  }, [embMouvements, consignations, emballages, companyId])
 
   const filteredClientSoldes = useMemo(() => {
     if (!searchClient) return clientSoldes
@@ -247,16 +316,21 @@ const BrasserieConsignationPage: React.FC = () => {
 
   const totauxGlobaux = useMemo(() => {
     const t: Record<string, { emballage: Emballage; total_sorti: number; total_retourne: number; solde_du: number }> = {}
-    for (const c of consignations) {
-      if (!c.emballage) continue
-      const eid = c.emballage_id
-      if (!t[eid]) t[eid] = { emballage: c.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
-      t[eid].total_sorti += c.total_sorti
-      t[eid].total_retourne += c.total_retourne
-      t[eid].solde_du += c.solde_du
+    for (const emb of emballages) {
+      t[emb.id] = { emballage: emb, total_sorti: 0, total_retourne: 0, solde_du: 0 }
+    }
+    for (const cs of clientSoldes) {
+      for (const [embId, s] of Object.entries(cs.soldes)) {
+        if (!t[embId]) {
+          t[embId] = { emballage: s.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
+        }
+        t[embId].total_sorti += s.total_sorti
+        t[embId].total_retourne += s.total_retourne
+        t[embId].solde_du += s.solde_du
+      }
     }
     return Object.values(t)
-  }, [consignations])
+  }, [clientSoldes, emballages])
 
   const totalEmbConsDepose = useMemo(() => emballages.reduce((s, e) => s + (e.stock_depot || 0), 0), [emballages])
   const totalEmbChezClients = useMemo(() => totauxGlobaux.reduce((s, t) => s + t.solde_du, 0), [totauxGlobaux])
@@ -273,23 +347,69 @@ const BrasserieConsignationPage: React.FC = () => {
   const loadEmballages = useCallback(async () => {
     if (!companyId) return
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('brasserie_emballages')
         .select('*')
         .eq('company_id', companyId)
         .eq('sector_slug', 'brasserie')
         .eq('is_active', true)
         .order('code')
-      if (!error && data && data.length > 0) {
-        setEmballages(data)
-      } else {
+
+      if (!data || data.length === 0) {
         const { data: fb } = await supabase
           .from('brasserie_emballages')
           .select('*')
           .eq('company_id', companyId)
           .eq('is_active', true)
           .order('code')
-        if (fb) setEmballages(fb)
+        if (fb && fb.length > 0) data = fb
+      }
+
+      // Si toujours vide, initialiser automatiquement les 3 types standards
+      if (!data || data.length === 0) {
+        const defaults = [
+          { company_id: companyId, sector_slug: 'brasserie', code: 'C12T', designation: 'Casier 12 Bouteilles', type: 'casier', unite: 'unité', valeur_consignation: 0, stock_depot: 0, is_active: true },
+          { company_id: companyId, sector_slug: 'brasserie', code: 'C20T', designation: 'Casier 20 Bouteilles', type: 'casier', unite: 'unité', valeur_consignation: 0, stock_depot: 0, is_active: true },
+          { company_id: companyId, sector_slug: 'brasserie', code: 'C24T', designation: 'Casier 24 Bouteilles', type: 'casier', unite: 'unité', valeur_consignation: 0, stock_depot: 0, is_active: true },
+        ]
+        const { data: seeded } = await supabase.from('brasserie_emballages').insert(defaults).select()
+        if (seeded && seeded.length > 0) data = seeded
+      }
+
+      setEmballages(data || [])
+    } catch (_) {}
+  }, [companyId])
+
+  const loadEmbMouvements = useCallback(async () => {
+    if (!companyId) return
+    try {
+      const { data, error } = await supabase
+        .from('brasserie_emballages_mouvements')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('date', { ascending: false })
+
+      if (!error && data && data.length > 0) {
+        setEmbMouvements(data)
+        setInitialesList(data.filter((m: any) => m.type_mouvement === 'INITIAL'))
+      } else {
+        const { data: fbData } = await supabase
+          .from('brasserie_mouvements_emballages')
+          .select('*, client:customers(name), emballage:brasserie_emballages(code, designation)')
+          .eq('company_id', companyId)
+          .eq('sector_slug', 'brasserie')
+        if (fbData && fbData.length > 0) {
+          const mapped = fbData.map((f: any) => ({
+            client_id: f.client_id,
+            client_nom: f.client?.name || 'Client',
+            code: f.emballage?.code || 'C20T',
+            type_mouvement: f.type_mouvement,
+            quantite: f.quantite,
+            date: f.created_at
+          }))
+          setEmbMouvements(mapped)
+          setInitialesList(mapped.filter((m: any) => m.type_mouvement === 'INITIAL'))
+        }
       }
     } catch (_) {}
   }, [companyId])
@@ -413,6 +533,7 @@ const BrasserieConsignationPage: React.FC = () => {
     try {
       await Promise.allSettled([
         loadEmballages(),
+        loadEmbMouvements(),
         loadConsignations(),
         loadMouvements(),
         loadInventaires(),
@@ -424,7 +545,7 @@ const BrasserieConsignationPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [companyId, loadEmballages, loadConsignations, loadMouvements, loadInventaires, loadStockFournisseur, loadClientsList])
+  }, [companyId, loadEmballages, loadEmbMouvements, loadConsignations, loadMouvements, loadInventaires, loadStockFournisseur, loadClientsList])
 
   useEffect(() => {
     if (!initialeClientId) {
@@ -512,6 +633,27 @@ const BrasserieConsignationPage: React.FC = () => {
           })
         } catch (_) {}
 
+        // Enregistrer également dans brasserie_emballages_mouvements avec type INITIAL
+        if (prec > 0) {
+          try {
+            const clientObj = initialeClientsList.find(c => c.id === initialeClientId)
+            await supabase.from('brasserie_emballages_mouvements').insert({
+              company_id: companyId,
+              secteur_id: companyId,
+              client_id: initialeClientId,
+              client_nom: clientObj?.name || 'Client',
+              emballage_type_id: emb.id,
+              code: emb.code,
+              type_mouvement: 'INITIAL',
+              quantite: prec,
+              solde_avant: 0,
+              solde_apres: prec,
+              observation: initialeObservation || 'Situation initiale clients avant utilisation logiciel',
+              date: new Date().toISOString()
+            })
+          } catch (_) {}
+        }
+
         // Synchroniser également brasserie_consignations
         const { data: existingCons } = await supabase
           .from('brasserie_consignations')
@@ -551,7 +693,7 @@ const BrasserieConsignationPage: React.FC = () => {
       }
 
       toast.success('Situation initiale enregistrée avec succès !', `${count} emballages mis à jour.`)
-      await loadConsignations()
+      await loadAll()
       setActiveTab('clients')
     } catch (err: any) {
       toast.error('Erreur', err.message)
@@ -1057,6 +1199,55 @@ const BrasserieConsignationPage: React.FC = () => {
               </div>
             </form>
           </div>
+
+          {/* Tableau récapitulatif des situations initiales enregistrées */}
+          <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                <History className="w-4 h-4 text-amber-600" />
+                Situations Initiales Enregistrées ({initialesList.length})
+              </h4>
+            </div>
+
+            {initialesList.length > 0 ? (
+              <div className="overflow-x-auto border border-slate-100 rounded-2xl">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-slate-50 text-slate-500 font-bold border-b border-slate-200">
+                      <th className="p-3 text-left">Client</th>
+                      <th className="p-3 text-center">Emballage</th>
+                      <th className="p-3 text-right">Quantité Initiale</th>
+                      <th className="p-3 text-left">Observation</th>
+                      <th className="p-3 text-right">Date Saisie</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {initialesList.map((init, idx) => (
+                      <tr key={init.id || idx} className="hover:bg-slate-50 transition">
+                        <td className="p-3 font-semibold text-slate-800">{init.client_nom}</td>
+                        <td className="p-3 text-center">
+                          <span className="px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800 font-bold">
+                            {init.code}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-black text-amber-900">{init.quantite}</td>
+                        <td className="p-3 text-slate-500">{init.observation || 'Situation de départ'}</td>
+                        <td className="p-3 text-right text-slate-400">{fmtDate(init.date || init.created_at)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                <p className="text-slate-600 font-semibold text-sm">Aucune situation initiale</p>
+                <p className="text-slate-400 text-xs mt-1">
+                  Utilisez ce tableau pour saisir les dettes de départ des clients avant GESTIO 229.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1445,7 +1636,7 @@ const BrasserieConsignationPage: React.FC = () => {
                         {cs.client_phone && <p className="text-xs text-slate-400">{cs.client_phone}</p>}
                       </td>
                       {emballages.map(emb => {
-                        const s = cs.soldes[emb.id]
+                        const s = cs.soldes[emb.id] || cs.soldes[emb.code]
                         return (
                           <td key={emb.id} className="px-4 py-3 text-center">
                             <span className={clsx('font-bold', (s?.solde_du || 0) > 0 ? 'text-amber-700' : 'text-slate-300')}>
@@ -1467,7 +1658,7 @@ const BrasserieConsignationPage: React.FC = () => {
                     <tr className="bg-amber-50 font-black text-amber-900 border-t-2 border-amber-200">
                       <td className="px-4 py-3">TOTAL GÉNÉRAL</td>
                       {emballages.map(emb => {
-                        const total = filteredClientSoldes.reduce((s, cs) => s + (cs.soldes[emb.id]?.solde_du || 0), 0)
+                        const total = filteredClientSoldes.reduce((s, cs) => s + (cs.soldes[emb.id]?.solde_du || cs.soldes[emb.code]?.solde_du || 0), 0)
                         return <td key={emb.id} className="px-4 py-3 text-center">{total.toLocaleString('fr-FR')}</td>
                       })}
                       <td className="px-4 py-3 text-right">{filteredClientSoldes.reduce((s, cs) => s + cs.total_emballages_dus, 0).toLocaleString('fr-FR')}</td>
