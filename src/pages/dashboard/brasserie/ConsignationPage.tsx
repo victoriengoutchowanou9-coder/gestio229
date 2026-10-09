@@ -10,7 +10,7 @@ import {
   AlertTriangle, ChevronRight, ArrowDownLeft, ArrowUpRight,
   ClipboardCheck, BarChart3, Users, Layers, History,
   Settings, Edit2, Trash2, FileText, Download, Eye,
-  TrendingUp, TrendingDown, ArrowRightLeft, Box
+  TrendingUp, TrendingDown, ArrowRightLeft, Box, AlertCircle
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -153,7 +153,7 @@ const BrasserieConsignationPage: React.FC = () => {
   const [savingInitiale, setSavingInitiale] = useState(false)
 
   // Stock Fournisseur (M046 - Plein / Vide)
-  const [stockFournisseurs, setStockFournisseurs] = useState<{ id?: string; fournisseur: string; emballage_id: string; type_stock: 'plein' | 'vide'; quantite: number; date_initiale?: string; emballage?: Emballage }[]>([])
+  const [stockFournisseursRaw, setStockFournisseursRaw] = useState<any[]>([])
   const [fFournisseur, setFFournisseur] = useState({
     fournisseur: 'SOBEBRA',
     emballage_id: '',
@@ -261,67 +261,106 @@ const BrasserieConsignationPage: React.FC = () => {
   const totalEmbConsDepose = useMemo(() => emballages.reduce((s, e) => s + (e.stock_depot || 0), 0), [emballages])
   const totalEmbChezClients = useMemo(() => totauxGlobaux.reduce((s, t) => s + t.solde_du, 0), [totauxGlobaux])
 
+  const stockFournisseurs = useMemo((): { id?: string; fournisseur: string; emballage_id: string; type_stock: 'plein' | 'vide'; quantite: number; date_initiale?: string; emballage?: Emballage }[] => {
+    return stockFournisseursRaw.map((d: any) => ({
+      ...d,
+      emballage: emballages.find(e => e.id === d.emballage_id)
+    }))
+  }, [stockFournisseursRaw, emballages])
+
   // ── Chargement data ────────────────────────────────────────────────────────
 
   const loadEmballages = useCallback(async () => {
     if (!companyId) return
-    const { data } = await supabase
-      .from('brasserie_emballages')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
-      .eq('is_active', true)
-      .order('code')
-    setEmballages(data || [])
+    try {
+      const { data, error } = await supabase
+        .from('brasserie_emballages')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('sector_slug', 'brasserie')
+        .eq('is_active', true)
+        .order('code')
+      if (!error && data && data.length > 0) {
+        setEmballages(data)
+      } else {
+        const { data: fb } = await supabase
+          .from('brasserie_emballages')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('is_active', true)
+          .order('code')
+        if (fb) setEmballages(fb)
+      }
+    } catch (_) {}
   }, [companyId])
 
   const loadConsignations = useCallback(async () => {
     if (!companyId) return
-    const { data } = await supabase
-      .from('brasserie_consignations')
-      .select(`
-        *,
-        client:customers(id, name, phone, code),
-        emballage:brasserie_emballages(*)
-      `)
-      .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
-      .gt('total_sorti', 0)
-      .order('updated_at', { ascending: false })
-    setConsignations(data || [])
+    try {
+      const { data, error } = await supabase
+        .from('brasserie_consignations')
+        .select(`
+          *,
+          client:customers(id, name, phone, code),
+          emballage:brasserie_emballages(*)
+        `)
+        .eq('company_id', companyId)
+        .eq('sector_slug', 'brasserie')
+        .gt('total_sorti', 0)
+        .order('updated_at', { ascending: false })
+      if (!error && data) {
+        setConsignations(data)
+      } else {
+        const { data: fb } = await supabase
+          .from('brasserie_consignations')
+          .select(`
+            *,
+            client:customers(id, name, phone, code),
+            emballage:brasserie_emballages(*)
+          `)
+          .eq('company_id', companyId)
+          .gt('total_sorti', 0)
+          .order('updated_at', { ascending: false })
+        if (fb) setConsignations(fb)
+      }
+    } catch (_) {}
   }, [companyId])
 
   const loadMouvements = useCallback(async () => {
     if (!companyId) return
-    let q = supabase
-      .from('brasserie_mouvements_emballages')
-      .select(`
-        *,
-        emballage:brasserie_emballages(code, designation),
-        client:customers(name)
-      `)
-      .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
-      .order('created_at', { ascending: false })
-      .limit(200)
-    if (filterDateDebut) q = q.gte('created_at', filterDateDebut + 'T00:00:00')
-    if (filterDateFin) q = q.lte('created_at', filterDateFin + 'T23:59:59')
-    if (filterEmballage !== 'all') q = q.eq('emballage_id', filterEmballage)
-    if (filterType !== 'all') q = q.eq('type_mouvement', filterType)
-    const { data } = await q
-    setMouvements(data || [])
+    try {
+      let q = supabase
+        .from('brasserie_mouvements_emballages')
+        .select(`
+          *,
+          emballage:brasserie_emballages(code, designation),
+          client:customers(name)
+        `)
+        .eq('company_id', companyId)
+        .eq('sector_slug', 'brasserie')
+        .order('created_at', { ascending: false })
+        .limit(200)
+      if (filterDateDebut) q = q.gte('created_at', filterDateDebut + 'T00:00:00')
+      if (filterDateFin) q = q.lte('created_at', filterDateFin + 'T23:59:59')
+      if (filterEmballage !== 'all') q = q.eq('emballage_id', filterEmballage)
+      if (filterType !== 'all') q = q.eq('type_mouvement', filterType)
+      const { data } = await q
+      setMouvements(data || [])
+    } catch (_) {}
   }, [companyId, filterDateDebut, filterDateFin, filterEmballage, filterType])
 
   const loadInventaires = useCallback(async () => {
     if (!companyId) return
-    const { data } = await supabase
-      .from('brasserie_inventaires_emballages')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
-      .order('created_at', { ascending: false })
-      .limit(20)
-    setInventaires(data || [])
+    try {
+      const { data } = await supabase
+        .from('brasserie_inventaires_emballages')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('sector_slug', 'brasserie')
+        .order('created_at', { ascending: false })
+        .limit(20)
+      setInventaires(data || [])
+    } catch (_) {}
   }, [companyId])
 
   const loadStockFournisseur = useCallback(async () => {
@@ -332,35 +371,47 @@ const BrasserieConsignationPage: React.FC = () => {
         .select('*')
         .eq('company_id', companyId)
       if (!error && data) {
-        setStockFournisseurs(data.map((d: any) => ({
-          ...d,
-          emballage: emballages.find(e => e.id === d.emballage_id)
-        })))
+        setStockFournisseursRaw(data)
       }
     } catch (_) {}
-  }, [companyId, emballages])
+  }, [companyId])
 
   const loadClientsList = useCallback(async () => {
     if (!companyId) return
     try {
-      const { data } = await supabase
+      const { data: custData, error: custErr } = await supabase
+        .from('customers')
+        .select('id, name, phone, code')
+        .eq('company_id', companyId)
+        .order('name')
+      if (!custErr && custData && custData.length > 0) {
+        setInitialeClientsList(custData)
+        return
+      }
+      const { data: cliData, error: cliErr } = await supabase
         .from('clients')
         .select('id, name, phone, code')
         .eq('company_id', companyId)
         .order('name')
-      if (data && data.length > 0) {
-        setInitialeClientsList(data)
-      } else {
-        const { data: custData } = await supabaseTenant('customers').select('id, name, phone, code').order('name')
-        if (custData) setInitialeClientsList(custData)
+      if (!cliErr && cliData && cliData.length > 0) {
+        setInitialeClientsList(cliData)
+        return
+      }
+      const { data: tenantCust } = await supabaseTenant('customers').select('id, name, phone, code').order('name')
+      if (tenantCust && tenantCust.length > 0) {
+        setInitialeClientsList(tenantCust)
       }
     } catch (_) {}
   }, [companyId, supabaseTenant])
 
   const loadAll = useCallback(async () => {
+    if (!companyId) {
+      setLoading(false)
+      return
+    }
     setLoading(true)
     try {
-      await Promise.all([
+      await Promise.allSettled([
         loadEmballages(),
         loadConsignations(),
         loadMouvements(),
@@ -368,10 +419,12 @@ const BrasserieConsignationPage: React.FC = () => {
         loadStockFournisseur(),
         loadClientsList()
       ])
+    } catch (err) {
+      console.warn('Erreur chargement consignations:', err)
     } finally {
       setLoading(false)
     }
-  }, [loadEmballages, loadConsignations, loadMouvements, loadInventaires, loadStockFournisseur, loadClientsList])
+  }, [companyId, loadEmballages, loadConsignations, loadMouvements, loadInventaires, loadStockFournisseur, loadClientsList])
 
   useEffect(() => {
     if (!initialeClientId) {
@@ -392,11 +445,24 @@ const BrasserieConsignationPage: React.FC = () => {
             map[row.emballage_id] = Number(row.precedent_du) || 0
           })
         } else {
-          const found = clientSoldes.find((c) => c.client_id === initialeClientId)
-          if (found) {
-            Object.entries(found.soldes).forEach(([embId, s]) => {
-              map[embId] = s.solde_du
+          // Essayer la table consignations_initiales
+          const { data: cInit } = await supabase
+            .from('consignations_initiales')
+            .select('emballage_id, precedent_du')
+            .eq('company_id', companyId)
+            .eq('client_id', initialeClientId)
+
+          if (cInit && cInit.length > 0) {
+            cInit.forEach((row: any) => {
+              map[row.emballage_id] = Number(row.precedent_du) || 0
             })
+          } else {
+            const found = clientSoldes.find((c) => c.client_id === initialeClientId)
+            if (found) {
+              Object.entries(found.soldes).forEach(([embId, s]) => {
+                map[embId] = s.solde_du
+              })
+            }
           }
         }
         setInitialePrecedents(map)
@@ -419,6 +485,15 @@ const BrasserieConsignationPage: React.FC = () => {
         const prec = Number(initialePrecedents[emb.id]) || 0
         try {
           await supabase.from('clients_emballages_initiaux').upsert({
+            company_id: companyId,
+            secteur_id: companyId,
+            client_id: initialeClientId,
+            emballage_id: emb.id,
+            precedent_du: prec,
+            date_saisie: new Date().toISOString().split('T')[0],
+            observation: initialeObservation || 'Situation initiale clients avant utilisation logiciel'
+          })
+          await supabase.from('consignations_initiales').upsert({
             company_id: companyId,
             secteur_id: companyId,
             client_id: initialeClientId,
@@ -516,8 +591,28 @@ const BrasserieConsignationPage: React.FC = () => {
   }
 
   useEffect(() => {
-    loadAll()
-  }, [loadAll])
+    let mounted = true
+    // Failsafe : garantit que le spinner ne tourne JAMAIS indéfiniment
+    const timer = setTimeout(() => {
+      if (mounted) setLoading(false)
+    }, 4000)
+
+    if (companyId) {
+      loadAll().finally(() => {
+        if (mounted) {
+          clearTimeout(timer)
+          setLoading(false)
+        }
+      })
+    } else {
+      setLoading(false)
+    }
+
+    return () => {
+      mounted = false
+      clearTimeout(timer)
+    }
+  }, [companyId])
 
   useEffect(() => {
     if (activeTab === 'historique') loadMouvements()
@@ -852,7 +947,16 @@ const BrasserieConsignationPage: React.FC = () => {
                         {c.name} {c.phone ? `(${c.phone})` : ''} {c.code ? `[${c.code}]` : ''}
                       </option>
                     ))}
+                    {initialeClientsList.length === 0 && (
+                      <option value="" disabled>Aucun client trouvé</option>
+                    )}
                   </select>
+                  {initialeClientsList.length === 0 && (
+                    <p className="text-[11px] text-amber-600 mt-1.5 flex items-center gap-1 font-medium">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0 inline" />
+                      Aucun client trouvé. Créez vos clients dans le menu Clients pour commencer.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -920,8 +1024,19 @@ const BrasserieConsignationPage: React.FC = () => {
                       ))}
                       {emballages.length === 0 && (
                         <tr>
-                          <td colSpan={4} className="p-6 text-center text-slate-400 italic">
-                            Aucun type d'emballage configuré. Ajoutez vos types d'emballages dans l'onglet "Emballages Types".
+                          <td colSpan={4} className="p-8 text-center">
+                            <Package className="w-8 h-8 text-slate-300 mx-auto mb-2" />
+                            <p className="font-bold text-slate-700">Aucun type d'emballage configuré</p>
+                            <p className="text-slate-400 text-xs mt-1">
+                              Ajoutez vos types d'emballages (casiers SOBEBRA, bouteilles, etc.) dans l'onglet "Emballages Types".
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => setActiveTab('emballages')}
+                              className="mt-3 px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition shadow-sm"
+                            >
+                              + Configurer les emballages types
+                            </button>
                           </td>
                         </tr>
                       )}
