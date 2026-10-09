@@ -9,7 +9,8 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   Lock, RefreshCw, CheckCircle2, AlertTriangle, AlertCircle, ShieldAlert,
-  Calendar, Building2, Wallet, ArrowDownRight, ArrowUpRight, Check, Printer, Clock
+  Calendar, Building2, Wallet, ArrowDownRight, ArrowUpRight, Check, Printer, Clock,
+  FileText, Download, Mail, Send
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -19,6 +20,7 @@ import { useAppContext } from '../../../contexts/AppContext'
 import { formatFCFA } from '../../../utils/formatters'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import { getOrCreateSecteurBDD, getSoldeFondActuel } from '../../../services/caisseDepensesService'
+import { genererRapportCaissePDF, blobToBase64, envoyerRapportCaisseMail, RapportCaisseData } from '../../../utils/rapportCaissePdf'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -49,6 +51,7 @@ export const ClotureCaisse: React.FC = () => {
   const [cloturant, setCloturant] = useState<boolean>(false)
   const [showConfirmModal, setShowConfirmModal] = useState<boolean>(false)
   const [clotureSuccess, setClotureSuccess] = useState<boolean>(false)
+  const [isSendingMail, setIsSendingMail] = useState<boolean>(false)
 
   // Charger la synthèse de clôture pour tous les secteurs ou le secteur actif
   const loadSynthese = useCallback(async () => {
@@ -239,8 +242,8 @@ export const ClotureCaisse: React.FC = () => {
             fond_theorique: ligne.soldeActuel,
             fond_reel: ligne.soldeActuel,
             ecart: 0,
-            total_entrees: ligne.entrees,
-            total_sorties: ligne.sorties,
+            total_entrees: ligne.totalEntrees,
+            total_sorties: ligne.totalSorties,
             commentaire: `Clôture multi-secteurs (${ligne.secteurNom} - ${ligne.caisseNom})`,
           })
         } catch (_) {}
@@ -275,6 +278,149 @@ export const ClotureCaisse: React.FC = () => {
       toast.error('Erreur lors de la clôture', err.message)
     } finally {
       setCloturant(false)
+    }
+  }
+
+  // Construction des données du rapport PDF
+  const construireDonneesRapport = useCallback((): RapportCaisseData => {
+    const totalEntrees = lignes.reduce((s, l) => s + (l.totalEntrees || 0), 0)
+    const totalSorties = lignes.reduce((s, l) => s + (l.totalSorties || 0), 0)
+    const totalSoldeDebut = lignes.reduce((s, l) => s + (l.soldeDebut || 0), 0)
+    const totalSoldeActuel = lignes.reduce((s, l) => s + (l.soldeActuel || 0), 0)
+
+    const lignesEspeces = lignes.filter(l => l.mode === 'espece')
+    const lignesMomo = lignes.filter(l => l.mode === 'mtn_momo')
+
+    const fondInitialEspeces = lignesEspeces.reduce((s, l) => s + (l.soldeDebut || 0), 0)
+    const fondInitialMomo = lignesMomo.reduce((s, l) => s + (l.soldeDebut || 0), 0)
+    const encaissementsEspeces = lignesEspeces.reduce((s, l) => s + (l.totalEntrees || 0), 0)
+    const encaissementsMomo = lignesMomo.reduce((s, l) => s + (l.totalEntrees || 0), 0)
+    const depensesEspeces = lignesEspeces.reduce((s, l) => s + (l.totalSorties || 0), 0)
+    const depensesMomo = lignesMomo.reduce((s, l) => s + (l.totalSorties || 0), 0)
+    const fondTheoriqueEspeces = fondInitialEspeces + encaissementsEspeces - depensesEspeces
+    const fondTheoriqueMomo = fondInitialMomo + encaissementsMomo - depensesMomo
+
+    // Convertir les lignes de synthèse en mouvements pour le PDF
+    const mouvementsPdf = lignes.map(l => ({
+      heure: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+      type: l.mode === 'espece' ? 'ESPÈCES' : 'MOMO',
+      montant: l.soldeActuel,
+      mode: l.modeLabel,
+      motif: `Solde ${l.secteurNom} (${l.caisseNom})`,
+      reference: `CLOT-${l.secteurSlug.toUpperCase()}`,
+      client: l.statut === 'DECOUVERT' ? '⚠️ DÉCOUVERT' : 'OK'
+    }))
+
+    return {
+      company: {
+        name: user?.user_metadata?.company_name || 'GESTIO 229',
+        phone: user?.phone || user?.user_metadata?.phone || '+229 01 00 00 00',
+        email: user?.email || 'contact@gestio229.com',
+      },
+      secteur: {
+        nom: currentSectorSlug ? `Secteur ${currentSectorSlug.toUpperCase()}` : 'SYNTHÈSE MULTI-SECTEURS',
+        slug: currentSectorSlug || 'multi-secteurs'
+      },
+      caisse: {
+        nom: 'Toutes les Caisses d\'Exploitation',
+      },
+      session: {
+        id: `CLOTURE-${dateCloture}`,
+        dateCloture,
+        fermePar: user?.user_metadata?.full_name || user?.email || 'Administrateur'
+      },
+      user: {
+        nom: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse'
+      },
+      date: dateCloture,
+      synthese: {
+        fondInitialEspeces,
+        fondInitialMomo,
+        encaissementsEspeces,
+        encaissementsMomo,
+        depensesEspeces,
+        depensesMomo,
+        fondTheoriqueEspeces,
+        fondTheoriqueMomo,
+        fondReelEspeces: fondTheoriqueEspeces,
+        fondReelMomo: fondTheoriqueMomo,
+        ecartEspeces: 0,
+        ecartMomo: 0,
+        caDuJour: totalEntrees,
+        especesDuJour: encaissementsEspeces,
+        momoDuJour: encaissementsMomo
+      },
+      mouvements: mouvementsPdf,
+      notes: `Clôture consolidée du ${dateCloture} pour ${lignes.length} flux caisses. Total solde actuel consolidé : ${fmt(totalSoldeActuel)}.`
+    }
+  }, [lignes, user, dateCloture, currentSectorSlug])
+
+  // Télécharger le rapport de clôture en PDF
+  const handleTelechargerPDF = () => {
+    try {
+      if (lignes.length === 0) {
+        toast.error('Aucune donnée à exporter', 'Veuillez patienter pendant le chargement des flux.')
+        return
+      }
+      const data = construireDonneesRapport()
+      genererRapportCaissePDF(data, { save: true })
+      toast.success('Rapport PDF généré', 'Le téléchargement du rapport officiel a débuté.')
+    } catch (err: any) {
+      console.error('Erreur PDF :', err)
+      toast.error('Erreur génération PDF', err.message || 'Impossible de générer le PDF')
+    }
+  }
+
+  // Envoyer le rapport par email
+  const handleEnvoyerMail = async () => {
+    if (!companyId) return
+    if (lignes.length === 0) {
+      toast.error('Aucune donnée', 'Les flux ne sont pas encore chargés.')
+      return
+    }
+
+    setIsSendingMail(true)
+    try {
+      const data = construireDonneesRapport()
+      const { blob } = genererRapportCaissePDF(data, { save: false })
+      const pdfBase64 = await blobToBase64(blob)
+
+      // Récupérer les adresses emails de destination
+      const destEmails: string[] = []
+      if (user?.email) destEmails.push(user.email)
+
+      try {
+        const { data: comp } = await supabase.from('companies').select('email').eq('id', companyId).maybeSingle()
+        if (comp?.email && !destEmails.includes(comp.email)) {
+          destEmails.push(comp.email)
+        }
+      } catch (_) {}
+
+      if (destEmails.length === 0) {
+        destEmails.push('direction@gestio229.com')
+      }
+
+      const totalSoldeActuel = lignes.reduce((s, l) => s + (l.soldeActuel || 0), 0)
+      const res = await envoyerRapportCaisseMail({
+        companyId,
+        secteurId: currentSectorSlug || 'multi-secteurs',
+        date: dateCloture,
+        pdfBase64,
+        emails: destEmails,
+        metadata: {
+          secteurNom: 'Synthèse Multi-Secteurs',
+          totalReel: totalSoldeActuel,
+          caDuJour: data.synthese.caDuJour,
+          operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire'
+        }
+      })
+
+      toast.success('Rapport transmis par email !', res.message)
+    } catch (err: any) {
+      console.error('Erreur envoi mail :', err)
+      toast.error('Échec envoi mail', err.message || 'Impossible d\'envoyer le rapport.')
+    } finally {
+      setIsSendingMail(false)
     }
   }
 
@@ -323,8 +469,32 @@ export const ClotureCaisse: React.FC = () => {
           </button>
 
           <button
+            onClick={handleTelechargerPDF}
+            disabled={loading || lignes.length === 0}
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold shadow-sm transition disabled:opacity-50 text-sm"
+            title="Générer et télécharger le rapport officiel PDF"
+          >
+            <Download className="w-4 h-4" />
+            <span className="hidden md:inline">Rapport</span> PDF
+          </button>
+
+          <button
+            onClick={handleEnvoyerMail}
+            disabled={loading || lignes.length === 0 || isSendingMail}
+            className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold shadow-sm transition disabled:opacity-50 text-sm"
+            title="Envoyer le rapport de caisse aux emails associés"
+          >
+            {isSendingMail ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
+            <span className="hidden md:inline">Envoyer</span> Email
+          </button>
+
+          <button
             onClick={() => setShowConfirmModal(true)}
-            className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold shadow-sm transition"
+            className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-semibold shadow-sm transition text-sm"
           >
             <Lock className="w-4 h-4" />
             Clôturer Journée
