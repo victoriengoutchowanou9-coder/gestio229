@@ -18,6 +18,7 @@ import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
 import { logAuditEvent } from '../../../services/auditService'
 import { formatFCFA } from '../../../utils/tax'
+import { getSoldeClient, getSoldesClientTous, enregistrerRetourEmballage } from '../../../utils/emballages'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -122,11 +123,16 @@ const Minus: React.FC<any> = ({ className }) => (
 // ─── Type mouvement label ──────────────────────────────────────────────────────
 
 const MOUVEMENT_LABELS: Record<string, { label: string; color: string; bg: string; icon: React.FC<any> }> = {
+  INITIAL:            { label: 'Dette Initiale',     color: 'text-amber-700',  bg: 'bg-amber-50',  icon: Layers },
+  SORTIE:             { label: 'Sortie',             color: 'text-red-700',    bg: 'bg-red-50',    icon: ArrowUpRight },
   SORTIE_VENTE:       { label: 'Sortie Vente',       color: 'text-red-700',    bg: 'bg-red-50',    icon: ArrowUpRight },
+  RETOUR:             { label: 'Retour Emballages',  color: 'text-emerald-700',bg: 'bg-emerald-50',icon: ArrowDownLeft },
   RETOUR_IMMEDIAT:    { label: 'Retour Immédiat',    color: 'text-blue-700',   bg: 'bg-blue-50',   icon: ArrowDownLeft },
   RETOUR_CLIENT:      { label: 'Retour Client',      color: 'text-emerald-700',bg: 'bg-emerald-50',icon: ArrowDownLeft },
   AJUSTEMENT_ENTREE:  { label: 'Ajust. Entrée',      color: 'text-violet-700', bg: 'bg-violet-50', icon: Plus },
   AJUSTEMENT_SORTIE:  { label: 'Ajust. Sortie',      color: 'text-orange-700', bg: 'bg-orange-50', icon: Minus },
+  AJUSTEMENT_POSITIF: { label: 'Ajust. Positif',     color: 'text-violet-700', bg: 'bg-violet-50', icon: Plus },
+  AJUSTEMENT_NEGATIF: { label: 'Ajust. Négatif',     color: 'text-orange-700', bg: 'bg-orange-50', icon: Minus },
   INVENTAIRE:         { label: 'Inventaire',          color: 'text-slate-700',  bg: 'bg-slate-50',  icon: ClipboardCheck },
   AVOIR_RETOUR:       { label: 'Avoir/Retour',        color: 'text-teal-700',   bg: 'bg-teal-50',   icon: ArrowRightLeft },
 }
@@ -192,7 +198,9 @@ const BrasserieConsignationPage: React.FC = () => {
     notes: '',
   })
   const [retourClients, setRetourClients] = useState<{ id: string; name: string; phone?: string }[]>([])
-  const [retourSituationAvant, setRetourSituationAvant] = useState<Consignation[]>([])
+  const [retourSituationAvant, setRetourSituationAvant] = useState<any[]>([])
+  const [soldeAvantRetour, setSoldeAvantRetour] = useState<number>(0)
+  const [clientMouvements, setClientMouvements] = useState<any[]>([])
 
   // Form ajustement
   const [fAjust, setFAjust] = useState({
@@ -212,7 +220,7 @@ const BrasserieConsignationPage: React.FC = () => {
   const clientSoldes = useMemo((): ClientSolde[] => {
     const map: Record<string, ClientSolde> = {}
 
-    // 1. Calcul prioritaire à la volée depuis brasserie_emballages_mouvements (PARTIE 3 DU PROMPT)
+    // 1. Calcul exclusif depuis la source unique brasserie_emballages_mouvements
     for (const m of embMouvements) {
       const cid = m.client_id || m.client_nom
       if (!cid) continue
@@ -235,7 +243,7 @@ const BrasserieConsignationPage: React.FC = () => {
         map[cid] = {
           client_id: m.client_id || cid,
           client_name: clientName,
-          client_phone: '',
+          client_phone: m.client_telephone || '',
           client_code: '',
           soldes: {},
           total_emballages_dus: 0,
@@ -253,62 +261,25 @@ const BrasserieConsignationPage: React.FC = () => {
 
       const qte = Number(m.quantite) || 0
       const type = (m.type_mouvement || '').toUpperCase()
-      if (['SORTIE', 'SORTIE_VENTE', 'INITIAL'].includes(type)) {
+
+      if (['SORTIE', 'SORTIE_VENTE', 'INITIAL', 'AJUSTEMENT_POSITIF', 'INVENTAIRE'].includes(type)) {
         map[cid].soldes[code].total_sorti += qte
         map[cid].soldes[code].solde_du += qte
-      } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR'].includes(type)) {
+      } else if (['RETOUR', 'RETOUR_IMMEDIAT', 'RETOUR_CLIENT', 'AVOIR_RETOUR', 'AJUSTEMENT_NEGATIF'].includes(type)) {
         map[cid].soldes[code].total_retourne += qte
         map[cid].soldes[code].solde_du = Math.max(0, map[cid].soldes[code].solde_du - qte)
       }
-
-      if (emb.id && emb.id !== code) {
-        map[cid].soldes[emb.id] = map[cid].soldes[code]
-      }
     }
 
-    // 2. Fusion / Fallback avec brasserie_consignations (pour données de secours)
-    for (const c of consignations) {
-      const cid = c.client_id
-      if (!cid) continue
-      const clientName = c.client?.name || 'Client'
-      const emb = c.emballage || emballages.find(e => e.id === c.emballage_id)
-      if (!emb) continue
-      const code = (emb.code || 'C20T').toUpperCase()
-
-      if (!map[cid]) {
-        map[cid] = {
-          client_id: cid,
-          client_name: clientName,
-          client_phone: c.client?.phone || '',
-          client_code: c.client?.code || '',
-          soldes: {},
-          total_emballages_dus: 0,
-        }
-      }
-
-      if (!map[cid].soldes[code]) {
-        map[cid].soldes[code] = {
-          emballage: emb,
-          total_sorti: Number(c.total_sorti) || 0,
-          total_retourne: Number(c.total_retourne) || 0,
-          solde_du: Number(c.solde_du) || 0,
-        }
-        if (emb.id && emb.id !== code) {
-          map[cid].soldes[emb.id] = map[cid].soldes[code]
-        }
-      }
-    }
-
-    // 3. Calcul du total dû par client sans doublon
+    // 2. Calcul du total dû par client (SANS DOUBLON, uniquement les codes uniques)
     for (const cs of Object.values(map)) {
-      const uniqueSoldes = new Set(Object.values(cs.soldes))
-      cs.total_emballages_dus = Array.from(uniqueSoldes).reduce((sum, s) => sum + s.solde_du, 0)
+      cs.total_emballages_dus = Object.values(cs.soldes).reduce((sum, s) => sum + s.solde_du, 0)
     }
 
     return Object.values(map)
       .filter((cs) => cs.total_emballages_dus > 0 || Object.values(cs.soldes).some((s) => s.total_sorti > 0))
       .sort((a, b) => b.total_emballages_dus - a.total_emballages_dus)
-  }, [embMouvements, consignations, emballages, companyId])
+  }, [embMouvements, emballages, companyId])
 
   const filteredClientSoldes = useMemo(() => {
     if (!searchClient) return clientSoldes
@@ -326,15 +297,13 @@ const BrasserieConsignationPage: React.FC = () => {
       t[emb.code] = { emballage: emb, total_sorti: 0, total_retourne: 0, solde_du: 0 }
     }
     for (const cs of clientSoldes) {
-      const uniqueSoldes = new Set(Object.values(cs.soldes))
-      for (const s of uniqueSoldes) {
-        const k = s.emballage.code || s.emballage.id
-        if (!t[k]) {
-          t[k] = { emballage: s.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
+      for (const [code, s] of Object.entries(cs.soldes)) {
+        if (!t[code]) {
+          t[code] = { emballage: s.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
         }
-        t[k].total_sorti += s.total_sorti
-        t[k].total_retourne += s.total_retourne
-        t[k].solde_du += s.solde_du
+        t[code].total_sorti += s.total_sorti
+        t[code].total_retourne += s.total_retourne
+        t[code].solde_du += s.solde_du
       }
     }
     return Object.values(t)
@@ -384,7 +353,19 @@ const BrasserieConsignationPage: React.FC = () => {
         if (seeded && seeded.length > 0) data = seeded
       }
 
-      setEmballages(data || [])
+      // Synchroniser avec brasserie_emballages_types pour stock_depot
+      const { data: typesData } = await supabase
+        .from('brasserie_emballages_types')
+        .select('code, stock_depot')
+        .eq('company_id', companyId)
+
+      const merged = (data || []).map((e: any) => {
+        const matchedType = (typesData || []).find((t: any) => t.code === e.code)
+        const curStock = Math.max(Number(e.stock_depot) || 0, Number(matchedType?.stock_depot) || 0)
+        return { ...e, stock_depot: curStock }
+      })
+
+      setEmballages(merged)
     } catch (_) {}
   }, [companyId])
 
@@ -462,24 +443,47 @@ const BrasserieConsignationPage: React.FC = () => {
     if (!companyId) return
     try {
       let q = supabase
-        .from('brasserie_mouvements_emballages')
-        .select(`
-          *,
-          emballage:brasserie_emballages(code, designation),
-          client:customers(name)
-        `)
+        .from('brasserie_emballages_mouvements')
+        .select('*')
         .eq('company_id', companyId)
-        .eq('sector_slug', 'brasserie')
-        .order('created_at', { ascending: false })
+        .order('date', { ascending: false })
         .limit(200)
-      if (filterDateDebut) q = q.gte('created_at', filterDateDebut + 'T00:00:00')
-      if (filterDateFin) q = q.lte('created_at', filterDateFin + 'T23:59:59')
-      if (filterEmballage !== 'all') q = q.eq('emballage_id', filterEmballage)
+
+      if (filterDateDebut) q = q.gte('date', filterDateDebut + 'T00:00:00')
+      if (filterDateFin) q = q.lte('date', filterDateFin + 'T23:59:59')
+      if (filterEmballage !== 'all') {
+        const emb = emballages.find(e => e.id === filterEmballage)
+        const c = emb ? emb.code : filterEmballage
+        q = q.or(`emballage_code.eq.${c},code.eq.${c}`)
+      }
       if (filterType !== 'all') q = q.eq('type_mouvement', filterType)
       const { data } = await q
-      setMouvements(data || [])
+
+      if (data && data.length > 0) {
+        const mapped = data.map((m: any) => ({
+          id: m.id,
+          emballage_id: m.emballage_type_id || m.emballage_code || m.code,
+          client_id: m.client_id,
+          type_mouvement: m.type_mouvement,
+          quantite: Number(m.quantite) || 0,
+          reference: m.reference || m.vente_numero || '—',
+          solde_client_avant: m.solde_avant,
+          solde_client_apres: m.solde_apres,
+          notes: m.observation,
+          created_by_name: m.created_by || 'Vendeur',
+          created_at: m.date || m.created_at,
+          emballage: emballages.find(e => e.code === (m.emballage_code || m.code)) || {
+            code: m.emballage_code || m.code || 'C20T',
+            designation: `Casier ${m.emballage_code || m.code || 'C20T'}`
+          },
+          client: { name: m.client_nom || 'Client' }
+        }))
+        setMouvements(mapped)
+      } else {
+        setMouvements([])
+      }
     } catch (_) {}
-  }, [companyId, filterDateDebut, filterDateFin, filterEmballage, filterType])
+  }, [companyId, filterDateDebut, filterDateFin, filterEmballage, filterType, emballages])
 
   const loadInventaires = useCallback(async () => {
     if (!companyId) return
@@ -807,31 +811,88 @@ const BrasserieConsignationPage: React.FC = () => {
   // ── Charger situation client pour retour ──────────────────────────────────
 
   const loadSituationClientPourRetour = useCallback(async (clientId: string) => {
-    if (!clientId || !companyId) return
-    const { data } = await supabase
-      .from('brasserie_consignations')
-      .select('*, emballage:brasserie_emballages(*)')
-      .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
-      .eq('client_id', clientId)
-      .gt('solde_du', 0)
-    setRetourSituationAvant(data || [])
-  }, [companyId])
+    if (!clientId || !companyId) {
+      setRetourSituationAvant([])
+      return
+    }
+    const soldesMap = await getSoldesClientTous(supabase, companyId, sectorSlug, clientId)
+    const list: any[] = []
+    emballages.forEach(emb => {
+      const du = soldesMap[emb.code] || 0
+      if (du > 0) {
+        list.push({
+          id: emb.id,
+          emballage_id: emb.id,
+          emballage_code: emb.code,
+          solde_du: du,
+          emballage: emb
+        })
+      }
+    })
+    setRetourSituationAvant(list)
+  }, [companyId, sectorSlug, emballages])
 
   useEffect(() => {
-    if (fRetour.client_id) loadSituationClientPourRetour(fRetour.client_id)
-    else setRetourSituationAvant([])
-  }, [fRetour.client_id])
+    if (fRetour.client_id) {
+      loadSituationClientPourRetour(fRetour.client_id)
+    } else {
+      setRetourSituationAvant([])
+      setSoldeAvantRetour(0)
+    }
+  }, [fRetour.client_id, loadSituationClientPourRetour])
+
+  useEffect(() => {
+    if (!fRetour.client_id || !fRetour.emballage_id) {
+      setSoldeAvantRetour(0)
+      return
+    }
+    const emb = emballages.find(e => e.id === fRetour.emballage_id)
+    const code = emb?.code || 'C20T'
+    getSoldeClient(supabase, companyId, sectorSlug, fRetour.client_id, code).then(solde => {
+      setSoldeAvantRetour(solde)
+    })
+  }, [fRetour.client_id, fRetour.emballage_id, companyId, sectorSlug, emballages])
 
   useEffect(() => {
     if (!modalRetour || !companyId) return
     supabase.from('customers')
       .select('id, name, phone')
       .eq('company_id', companyId)
-      .eq('sector_slug', 'brasserie')
       .order('name')
       .then(({ data }) => setRetourClients(data || []))
   }, [modalRetour, companyId])
+
+  // Charger les mouvements du client quand detailClient est ouvert
+  useEffect(() => {
+    if (!detailClient || !companyId) {
+      setClientMouvements([])
+      return
+    }
+    const cid = detailClient.client_id
+    const cname = detailClient.client_name
+    let q = supabase
+      .from('brasserie_emballages_mouvements')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('date', { ascending: false })
+      .limit(50)
+
+    if (cid && cid !== cname) {
+      q = q.or(`client_id.eq.${cid},client_nom.ilike.%${cname}%`)
+    } else {
+      q = q.eq('client_nom', cname)
+    }
+
+    q.then(({ data }) => {
+      const seen = new Set()
+      const list = (data || []).filter((m: any) => {
+        if (!m.id || seen.has(m.id)) return false
+        seen.add(m.id)
+        return true
+      })
+      setClientMouvements(list)
+    })
+  }, [detailClient, companyId])
 
   // ── Valider retour ────────────────────────────────────────────────────────
 
@@ -841,93 +902,85 @@ const BrasserieConsignationPage: React.FC = () => {
     const qte = parseInt(fRetour.quantite)
     if (!qte || qte <= 0) { toast('error', 'Quantité invalide'); return }
 
-    const emb = emballages.find(em => em.id === fRetour.emballage_id)
-    const situationClient = retourSituationAvant.find(s => s.emballage_id === fRetour.emballage_id)
-    const soldeDuAvant = situationClient?.solde_du || 0
-
-    if (qte > soldeDuAvant) {
-      toast('error', `Quantité retournée (${qte}) supérieure au solde dû (${soldeDuAvant})`)
+    if (qte > soldeAvantRetour) {
+      toast('error', `Quantité retournée (${qte}) supérieure au solde dû (${soldeAvantRetour})`)
       return
     }
 
-    const stockDepotAvant = emb?.stock_depot || 0
-    const stockDepotApres = stockDepotAvant + qte
-    const soldeDuApres = soldeDuAvant - qte
+    const emb = emballages.find(em => em.id === fRetour.emballage_id)
+    const codeEmb = (emb?.code || 'C20T').toUpperCase()
+    const clientObj = retourClients.find(c => c.id === fRetour.client_id)
+    const clientNom = clientObj?.name || 'Client'
+    const soldeApres = soldeAvantRetour - qte
     const ref = fRetour.reference || `RET-${Date.now().toString(36).toUpperCase()}`
 
-    // 1. Mise à jour consignation client
-    if (situationClient) {
-      await supabase.from('brasserie_consignations').update({
-        total_retourne: (situationClient.total_retourne || 0) + qte,
-        solde_du: soldeDuApres,
-        dernier_retour: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      }).eq('id', situationClient.id)
-    } else {
-      // Créer une ligne consignation
-      await supabase.from('brasserie_consignations').insert({
-        company_id: companyId, sector_slug: 'brasserie',
-        client_id: fRetour.client_id, emballage_id: fRetour.emballage_id,
-        total_sorti: 0, total_retourne: qte, solde_du: 0,
-        dernier_retour: new Date().toISOString(),
-      })
-    }
-
-    // 2. Mise à jour stock dépôt
-    if (emb) {
-      await supabase.from('brasserie_emballages').update({
-        stock_depot: stockDepotApres, updated_at: new Date().toISOString(),
-      }).eq('id', emb.id)
-    }
-
-    // 3. Mouvement historique
-    const mouv: any = {
-      company_id: companyId, sector_slug: 'brasserie',
-      emballage_id: fRetour.emballage_id,
-      client_id: fRetour.client_id,
-      type_mouvement: 'RETOUR_CLIENT',
-      quantite: qte,
-      reference: ref,
-      stock_depot_avant: stockDepotAvant,
-      stock_depot_apres: stockDepotApres,
-      solde_client_avant: soldeDuAvant,
-      solde_client_apres: soldeDuApres,
-      notes: fRetour.notes,
-      created_by_name: user?.full_name || 'Utilisateur',
-      created_at: fRetour.date ? fRetour.date + 'T' + new Date().toISOString().slice(11) : new Date().toISOString(),
-    }
-    const { data: mData } = await supabase.from('brasserie_mouvements_emballages').insert(mouv).select().single()
-
-    // 4. Enregistrement direct dans brasserie_emballages_mouvements pour le suivi dynamique
     try {
-      const clientObj = retourClients.find(c => c.id === fRetour.client_id)
-      await supabase.from('brasserie_emballages_mouvements').insert({
-        company_id: companyId,
-        client_id: fRetour.client_id,
-        client_nom: clientObj?.name || 'Client',
-        emballage_type_id: emb?.id || null,
-        code: emb?.code || 'C20T',
-        emballage_code: emb?.code || 'C20T',
-        type_mouvement: 'RETOUR',
+      await enregistrerRetourEmballage(supabase, {
+        companyId,
+        secteurId: sectorSlug,
+        clientId: fRetour.client_id,
+        clientNom: clientNom,
+        clientTelephone: clientObj?.phone,
+        emballageCode: codeEmb,
+        emballageTypeId: emb?.id,
         quantite: qte,
-        date: fRetour.date ? new Date(fRetour.date).toISOString() : new Date().toISOString(),
-        solde_avant: soldeDuAvant,
-        solde_apres: soldeDuApres,
-        observation: fRetour.notes || `Retour emballage ${ref}`
+        soldeAvant: soldeAvantRetour,
+        soldeApres: soldeApres,
+        date: fRetour.date,
+        reference: ref,
+        observation: fRetour.notes || `Retour ${qte} ${codeEmb} - ${clientNom}`,
+        createdBy: user?.id
       })
-    } catch (mvtErr) {
-      console.warn('[ConsignationPage] Erreur insert brasserie_emballages_mouvements retour:', mvtErr)
+
+      // Synchroniser également brasserie_consignations
+      try {
+        const { data: exCons } = await supabase
+          .from('brasserie_consignations')
+          .select('id, total_retourne')
+          .eq('company_id', companyId)
+          .eq('client_id', fRetour.client_id)
+          .eq('emballage_id', fRetour.emballage_id)
+          .maybeSingle()
+
+        if (exCons) {
+          await supabase.from('brasserie_consignations').update({
+            total_retourne: (Number(exCons.total_retourne) || 0) + qte,
+            solde_du: soldeApres,
+            dernier_retour: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          }).eq('id', exCons.id)
+        }
+      } catch (_) {}
+
+      // Impression bon de retour
+      setPrintingBonRetour({
+        mouvement: {
+          id: ref,
+          emballage_id: emb?.id || '',
+          client_id: fRetour.client_id,
+          type_mouvement: 'RETOUR',
+          quantite: qte,
+          reference: ref,
+          solde_client_avant: soldeAvantRetour,
+          solde_client_apres: soldeApres,
+          notes: fRetour.notes,
+          created_at: new Date().toISOString(),
+          emballage: emb,
+          client: clientObj as any
+        },
+        avant: soldeAvantRetour,
+        apres: soldeApres
+      })
+
+      toast('success', `Retour enregistré — ${qte} ${emb?.designation || codeEmb} — Réf: ${ref}`)
+      setModalRetour(false)
+      setFRetour({ client_id: '', emballage_id: '', quantite: '', date: new Date().toISOString().slice(0, 10), reference: '', notes: '' })
+      setRetourSituationAvant([])
+      setSoldeAvantRetour(0)
+      await loadAll()
+    } catch (err: any) {
+      toast('error', 'Erreur lors du retour: ' + err.message)
     }
-
-    toast('success', `Retour enregistré — ${qte} ${emb?.designation || 'emballage(s)'} — Réf: ${ref}`)
-
-    // Impression bon de retour
-    if (mData) setPrintingBonRetour({ mouvement: { ...mData, emballage: emb, client: retourClients.find(c => c.id === fRetour.client_id) as any }, avant: soldeDuAvant, apres: soldeDuApres })
-
-    setModalRetour(false)
-    setFRetour({ client_id: '', emballage_id: '', quantite: '', date: new Date().toISOString().slice(0, 10), reference: '', notes: '' })
-    setRetourSituationAvant([])
-    await Promise.all([loadEmballages(), loadConsignations(), loadMouvements(), loadEmbMouvements()])
   }
 
   // ── Ajustement ────────────────────────────────────────────────────────────
@@ -941,23 +994,53 @@ const BrasserieConsignationPage: React.FC = () => {
     const emb = emballages.find(em => em.id === fAjust.emballage_id)
     const depotAvant = emb?.stock_depot || 0
     const depotApres = fAjust.type === 'AJUSTEMENT_ENTREE' ? depotAvant + qte : Math.max(0, depotAvant - qte)
+    const codeEmb = emb?.code || 'C20T'
+    const adjRef = `ADJ-${Date.now().toString(36).toUpperCase()}`
 
-    await supabase.from('brasserie_emballages').update({ stock_depot: depotApres, updated_at: new Date().toISOString() }).eq('id', fAjust.emballage_id)
-    await supabase.from('brasserie_mouvements_emballages').insert({
-      company_id: companyId, sector_slug: 'brasserie',
-      emballage_id: fAjust.emballage_id,
-      type_mouvement: fAjust.type,
-      quantite: qte,
-      reference: `ADJ-${Date.now().toString(36).toUpperCase()}`,
-      ajustement_motif: fAjust.motif,
-      stock_depot_avant: depotAvant,
-      stock_depot_apres: depotApres,
-      created_by_name: user?.full_name || 'Admin',
-    })
-    toast('success', 'Ajustement enregistré')
-    setModalAjustement(false)
-    setFAjust({ emballage_id: '', type: 'AJUSTEMENT_ENTREE', quantite: '', motif: '' })
-    await Promise.all([loadEmballages(), loadMouvements()])
+    try {
+      await supabase.from('brasserie_emballages').update({ stock_depot: depotApres, updated_at: new Date().toISOString() }).eq('id', fAjust.emballage_id)
+      try {
+        await supabase.from('brasserie_emballages_types').update({ stock_depot: depotApres }).eq('company_id', companyId).eq('code', codeEmb)
+      } catch (_) {}
+
+      const typeMvt = fAjust.type === 'AJUSTEMENT_ENTREE' ? 'AJUSTEMENT_POSITIF' : 'AJUSTEMENT_NEGATIF'
+      try {
+        await supabase.from('brasserie_emballages_mouvements').insert({
+          company_id: companyId,
+          secteur_id: sectorSlug || companyId,
+          emballage_code: codeEmb,
+          code: codeEmb,
+          emballage_type_id: emb?.id,
+          type_mouvement: typeMvt,
+          quantite: qte,
+          reference: adjRef,
+          observation: fAjust.motif,
+          date: new Date().toISOString(),
+          created_by: user?.id
+        })
+      } catch (_) {}
+
+      try {
+        await supabase.from('brasserie_mouvements_emballages').insert({
+          company_id: companyId, sector_slug: 'brasserie',
+          emballage_id: fAjust.emballage_id,
+          type_mouvement: fAjust.type,
+          quantite: qte,
+          reference: adjRef,
+          ajustement_motif: fAjust.motif,
+          stock_depot_avant: depotAvant,
+          stock_depot_apres: depotApres,
+          created_by_name: user?.full_name || 'Admin',
+        })
+      } catch (_) {}
+
+      toast('success', 'Ajustement enregistré')
+      setModalAjustement(false)
+      setFAjust({ emballage_id: '', type: 'AJUSTEMENT_ENTREE', quantite: '', motif: '' })
+      await loadAll()
+    } catch (err: any) {
+      toast('error', 'Erreur ajustement: ' + err.message)
+    }
   }
 
   // ── Inventaire ────────────────────────────────────────────────────────────
@@ -990,25 +1073,49 @@ const BrasserieConsignationPage: React.FC = () => {
         })
         if (physique !== ligne.stock_theorique) {
           const emb = emballages.find(em => em.id === ligne.emballage_id)
+          const codeEmb = emb?.code || 'C20T'
           await supabase.from('brasserie_emballages').update({ stock_depot: physique, updated_at: new Date().toISOString() }).eq('id', ligne.emballage_id)
-          await supabase.from('brasserie_mouvements_emballages').insert({
-            company_id: companyId, sector_slug: 'brasserie',
-            emballage_id: ligne.emballage_id,
-            type_mouvement: 'INVENTAIRE',
-            quantite: Math.abs(physique - ligne.stock_theorique),
-            reference: ref, inventaire_id: inv.id,
-            ajustement_motif: `Inventaire physique — écart: ${physique - ligne.stock_theorique > 0 ? '+' : ''}${physique - ligne.stock_theorique}`,
-            stock_depot_avant: ligne.stock_theorique,
-            stock_depot_apres: physique,
-            notes: ligne.observation,
-            created_by_name: user?.full_name || 'Admin',
-          })
+          try {
+            await supabase.from('brasserie_emballages_types').update({ stock_depot: physique }).eq('company_id', companyId).eq('code', codeEmb)
+          } catch (_) {}
+
+          try {
+            await supabase.from('brasserie_emballages_mouvements').insert({
+              company_id: companyId,
+              secteur_id: sectorSlug || companyId,
+              emballage_code: codeEmb,
+              code: codeEmb,
+              emballage_type_id: emb?.id,
+              type_mouvement: 'INVENTAIRE',
+              quantite: Math.abs(physique - ligne.stock_theorique),
+              reference: ref,
+              inventaire_id: inv.id,
+              observation: `Inventaire physique — écart: ${physique - ligne.stock_theorique > 0 ? '+' : ''}${physique - ligne.stock_theorique}`,
+              date: new Date().toISOString(),
+              created_by: user?.id
+            })
+          } catch (_) {}
+
+          try {
+            await supabase.from('brasserie_mouvements_emballages').insert({
+              company_id: companyId, sector_slug: 'brasserie',
+              emballage_id: ligne.emballage_id,
+              type_mouvement: 'INVENTAIRE',
+              quantite: Math.abs(physique - ligne.stock_theorique),
+              reference: ref, inventaire_id: inv.id,
+              ajustement_motif: `Inventaire physique — écart: ${physique - ligne.stock_theorique > 0 ? '+' : ''}${physique - ligne.stock_theorique}`,
+              stock_depot_avant: ligne.stock_theorique,
+              stock_depot_apres: physique,
+              notes: ligne.observation,
+              created_by_name: user?.full_name || 'Admin',
+            })
+          } catch (_) {}
         }
       }
     }
     toast('success', `Inventaire ${ref} validé`)
     setModalInventaire(false)
-    await Promise.all([loadEmballages(), loadMouvements(), loadInventaires()])
+    await loadAll()
   }
 
   // ── Impression bon de retour ─────────────────────────────────────────────
@@ -1611,39 +1718,110 @@ const BrasserieConsignationPage: React.FC = () => {
 
           {/* Vue détail client si sélectionné */}
           {detailClient && (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-4">
               <div className="flex items-center justify-between">
-                <h4 className="font-bold text-amber-800 flex items-center gap-2">
-                  <Users className="w-4 h-4" /> {detailClient.client_name}
-                </h4>
-                <button onClick={() => setDetailClient(null)} className="p-1 rounded-lg text-amber-400 hover:text-amber-700 hover:bg-amber-100">
-                  <X className="w-4 h-4" />
-                </button>
+                <div>
+                  <h4 className="font-bold text-amber-900 flex items-center gap-2 text-base">
+                    <Users className="w-5 h-5 text-amber-700" /> {detailClient.client_name}
+                  </h4>
+                  {detailClient.client_phone && <p className="text-xs text-amber-700 mt-0.5">📞 {detailClient.client_phone}</p>}
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      setFRetour(p => ({ ...p, client_id: detailClient.client_id }))
+                      setModalRetour(true)
+                    }}
+                    className="px-3 py-1.5 rounded-xl bg-emerald-600 text-white text-xs font-bold hover:bg-emerald-700 transition flex items-center gap-1 shadow-sm"
+                  >
+                    <ArrowDownLeft className="w-4 h-4" /> Enregistrer un retour
+                  </button>
+                  <button onClick={() => setDetailClient(null)} className="p-1.5 rounded-lg text-amber-600 hover:text-amber-900 hover:bg-amber-100">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
               </div>
-              {detailClient.client_phone && <p className="text-sm text-amber-600">📞 {detailClient.client_phone}</p>}
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="text-xs font-bold text-amber-700 uppercase">
-                      <th className="text-left pb-2">Emballage</th>
-                      <th className="text-right pb-2">Total Sorti</th>
-                      <th className="text-right pb-2">Total Retourné</th>
-                      <th className="text-right pb-2">Solde Dû</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Object.values(detailClient.soldes).map(s => (
-                      <tr key={s.emballage.id} className="border-t border-amber-200">
-                        <td className="py-2 font-semibold text-amber-900">{s.emballage.designation}</td>
-                        <td className="py-2 text-right text-red-600 font-semibold">{s.total_sorti.toLocaleString('fr-FR')}</td>
-                        <td className="py-2 text-right text-emerald-600 font-semibold">{s.total_retourne.toLocaleString('fr-FR')}</td>
-                        <td className="py-2 text-right font-black text-amber-800">{s.solde_du.toLocaleString('fr-FR')}</td>
+
+              {/* Tableau des dettes par emballage */}
+              <div className="bg-white rounded-xl border border-amber-200 overflow-hidden shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-amber-100/60 text-xs font-bold text-amber-800 uppercase">
+                        <th className="text-left px-4 py-2.5">Emballage</th>
+                        <th className="text-right px-4 py-2.5">Total Sorti</th>
+                        <th className="text-right px-4 py-2.5">Total Retourné</th>
+                        <th className="text-right px-4 py-2.5">Solde Dû</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody className="divide-y divide-amber-100">
+                      {Object.values(detailClient.soldes).map(s => (
+                        <tr key={s.emballage.code || s.emballage.id} className="hover:bg-amber-50/40">
+                          <td className="px-4 py-2.5 font-bold text-slate-800 flex items-center gap-2">
+                            <span className="px-2 py-0.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-black">{s.emballage.code}</span>
+                            <span>{s.emballage.designation}</span>
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-red-600 font-semibold">{s.total_sorti.toLocaleString('fr-FR')}</td>
+                          <td className="px-4 py-2.5 text-right text-emerald-600 font-semibold">{s.total_retourne.toLocaleString('fr-FR')}</td>
+                          <td className="px-4 py-2.5 text-right font-black text-amber-900 text-base">{s.solde_du.toLocaleString('fr-FR')}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="p-3 bg-amber-50/80 border-t border-amber-200 text-right">
+                  <span className="text-xs font-medium text-amber-700 mr-2">Total dû par ce client :</span>
+                  <span className="text-base font-black text-amber-900">{detailClient.total_emballages_dus.toLocaleString('fr-FR')} emballages</span>
+                </div>
               </div>
-              <p className="text-right text-sm font-black text-amber-900">Total dû : {detailClient.total_emballages_dus.toLocaleString('fr-FR')} emballages</p>
+
+              {/* Historique des mouvements récents de ce client */}
+              {clientMouvements.length > 0 && (
+                <div className="bg-white rounded-xl border border-amber-200 p-3 shadow-sm space-y-2">
+                  <h5 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                    <History className="w-3.5 h-3.5 text-slate-400" /> Historique récent des mouvements
+                  </h5>
+                  <div className="max-h-56 overflow-y-auto overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-slate-50 text-slate-500 font-bold border-b">
+                          <th className="px-3 py-1.5 text-left">Date</th>
+                          <th className="px-3 py-1.5 text-left">Type</th>
+                          <th className="px-3 py-1.5 text-left">Emballage</th>
+                          <th className="px-3 py-1.5 text-right">Quantité</th>
+                          <th className="px-3 py-1.5 text-left">Réf</th>
+                          <th className="px-3 py-1.5 text-left">Observation</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {clientMouvements.map(m => {
+                          const isSortie = ['SORTIE', 'SORTIE_VENTE'].includes(m.type_mouvement)
+                          const isRet = ['RETOUR', 'RETOUR_CLIENT', 'RETOUR_IMMEDIAT'].includes(m.type_mouvement)
+                          return (
+                            <tr key={m.id} className="hover:bg-slate-50">
+                              <td className="px-3 py-1.5 text-slate-400">{fmtDateTime(m.date || m.created_at)}</td>
+                              <td className="px-3 py-1.5">
+                                <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-bold',
+                                  isRet ? 'bg-emerald-100 text-emerald-700' :
+                                  isSortie ? 'bg-red-100 text-red-700' :
+                                  'bg-amber-100 text-amber-800')}>
+                                  {m.type_mouvement}
+                                </span>
+                              </td>
+                              <td className="px-3 py-1.5 font-bold text-slate-700">{m.emballage_code || m.code}</td>
+                              <td className={clsx('px-3 py-1.5 text-right font-bold', isRet ? 'text-emerald-600' : isSortie ? 'text-red-600' : 'text-slate-700')}>
+                                {isRet ? '+' : isSortie ? '-' : ''}{m.quantite}
+                              </td>
+                              <td className="px-3 py-1.5 text-slate-400 font-mono">{m.reference || '—'}</td>
+                              <td className="px-3 py-1.5 text-slate-500 truncate max-w-xs">{m.observation || '—'}</td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -1734,7 +1912,7 @@ const BrasserieConsignationPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {mouvements.filter(m => m.type_mouvement === 'RETOUR_CLIENT' || m.type_mouvement === 'RETOUR_IMMEDIAT').map(m => (
+                  {mouvements.filter(m => ['RETOUR', 'RETOUR_CLIENT', 'RETOUR_IMMEDIAT'].includes(m.type_mouvement)).map(m => (
                     <tr key={m.id} className="hover:bg-slate-50">
                       <td className="px-4 py-3 text-slate-500 text-xs">{fmtDateTime(m.created_at)}</td>
                       <td className="px-4 py-3 font-medium text-slate-700">{m.client?.name || '—'}</td>
@@ -1747,7 +1925,7 @@ const BrasserieConsignationPage: React.FC = () => {
                       <td className="px-4 py-3 text-xs text-emerald-600 font-semibold">{m.solde_client_apres ?? '—'}</td>
                     </tr>
                   ))}
-                  {mouvements.filter(m => m.type_mouvement === 'RETOUR_CLIENT' || m.type_mouvement === 'RETOUR_IMMEDIAT').length === 0 && (
+                  {mouvements.filter(m => ['RETOUR', 'RETOUR_CLIENT', 'RETOUR_IMMEDIAT'].includes(m.type_mouvement)).length === 0 && (
                     <tr><td colSpan={7} className="px-4 py-10 text-center text-slate-400">Aucun retour enregistré</td></tr>
                   )}
                 </tbody>
@@ -1800,7 +1978,7 @@ const BrasserieConsignationPage: React.FC = () => {
                   {mouvements.map(m => {
                     const mt = MOUVEMENT_LABELS[m.type_mouvement] || { label: m.type_mouvement, color: 'text-slate-600', bg: 'bg-slate-50', icon: FileText }
                     const Icon = mt.icon
-                    const isEntree = ['RETOUR_CLIENT', 'RETOUR_IMMEDIAT', 'AJUSTEMENT_ENTREE', 'AVOIR_RETOUR'].includes(m.type_mouvement)
+                    const isEntree = ['RETOUR', 'RETOUR_CLIENT', 'RETOUR_IMMEDIAT', 'AJUSTEMENT_ENTREE', 'AJUSTEMENT_POSITIF', 'AVOIR_RETOUR'].includes(m.type_mouvement)
                     return (
                       <tr key={m.id} className="hover:bg-slate-50">
                         <td className="px-4 py-3 text-xs text-slate-400">{fmtDateTime(m.created_at)}</td>
@@ -2018,17 +2196,34 @@ const BrasserieConsignationPage: React.FC = () => {
               </div>
 
               {/* Situation du client */}
-              {retourSituationAvant.length > 0 && (
+              {fRetour.client_id && (
                 <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  <p className="text-xs font-bold text-amber-700 mb-2">📊 Situation actuelle du client</p>
-                  <div className="space-y-1">
-                    {retourSituationAvant.map(s => (
-                      <div key={s.id} className="flex justify-between text-xs text-amber-800">
-                        <span>{s.emballage?.designation}</span>
-                        <span className="font-bold">{s.solde_du} dû</span>
-                      </div>
-                    ))}
-                  </div>
+                  <p className="text-xs font-bold text-amber-800 mb-2">📊 Situation actuelle du client (emballages dus)</p>
+                  {retourSituationAvant.length > 0 ? (
+                    <div className="space-y-1.5">
+                      {retourSituationAvant.map(s => (
+                        <div
+                          key={s.id}
+                          onClick={() => setFRetour(p => ({ ...p, emballage_id: s.emballage_id }))}
+                          className={clsx(
+                            'flex justify-between items-center text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition',
+                            fRetour.emballage_id === s.emballage_id
+                              ? 'bg-amber-200/90 font-bold text-amber-950 border border-amber-400 shadow-sm'
+                              : 'bg-amber-100/60 text-amber-800 hover:bg-amber-100'
+                          )}
+                          title="Cliquez pour sélectionner cet emballage"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <span className="px-1.5 py-0.5 rounded bg-amber-200 text-[10px] font-black">{s.emballage?.code}</span>
+                            <span>{s.emballage?.designation}</span>
+                          </span>
+                          <span className="font-black text-amber-900">{s.solde_du} dû</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-amber-700 italic">Ce client n'a aucun emballage dû enregistré.</p>
+                  )}
                 </div>
               )}
 
@@ -2037,7 +2232,7 @@ const BrasserieConsignationPage: React.FC = () => {
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Emballage *</label>
                   <select value={fRetour.emballage_id} onChange={e => setFRetour(p => ({ ...p, emballage_id: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" required>
                     <option value="">— Type —</option>
-                    {emballages.map(e => <option key={e.id} value={e.id}>{e.designation}</option>)}
+                    {emballages.map(e => <option key={e.id} value={e.id}>{e.designation} ({e.code})</option>)}
                   </select>
                 </div>
                 <div>
@@ -2049,7 +2244,7 @@ const BrasserieConsignationPage: React.FC = () => {
               {/* Aperçu du nouveau solde */}
               {fRetour.emballage_id && fRetour.quantite && fRetour.client_id && (() => {
                 const sit = retourSituationAvant.find(s => s.emballage_id === fRetour.emballage_id)
-                const soldeDuAvant = sit?.solde_du || 0
+                const soldeDuAvant = sit?.solde_du !== undefined ? sit.solde_du : soldeAvantRetour
                 const qte = parseInt(fRetour.quantite) || 0
                 const nouveauSolde = soldeDuAvant - qte
                 return (
@@ -2066,7 +2261,7 @@ const BrasserieConsignationPage: React.FC = () => {
                       <span className="font-bold text-slate-700">Nouveau solde</span>
                       <span className={clsx('font-black text-base', nouveauSolde < 0 ? 'text-red-600' : 'text-emerald-700')}>{nouveauSolde}</span>
                     </div>
-                    {nouveauSolde < 0 && <p className="text-red-600 text-xs mt-1">⚠️ Quantité supérieure au solde dû</p>}
+                    {nouveauSolde < 0 && <p className="text-red-600 text-xs mt-1">⚠️ Quantité retournée ({qte}) supérieure au solde dû ({soldeDuAvant})</p>}
                   </div>
                 )
               })()}
