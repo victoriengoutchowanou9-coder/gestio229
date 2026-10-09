@@ -188,7 +188,7 @@ const BrasserieConsignationPage: React.FC = () => {
   // Form emballage
   const [fEmb, setFEmb] = useState({ code: '', designation: '', type: 'casier', unite: 'unité', valeur_consignation: '0', stock_depot: '0', notes: '' })
 
-  // Form retour
+  // Form retour multi-emballages
   const [fRetour, setFRetour] = useState({
     client_id: '',
     emballage_id: '',
@@ -197,6 +197,17 @@ const BrasserieConsignationPage: React.FC = () => {
     reference: '',
     notes: '',
   })
+  const [retoursMulti, setRetoursMulti] = useState<Record<string, number>>({
+    C12T: 0,
+    C20T: 0,
+    C24T: 0,
+  })
+  const [soldesClientRetour, setSoldesClientRetour] = useState<Record<string, number>>({
+    C12T: 0,
+    C20T: 0,
+    C24T: 0,
+  })
+  const [isSubmittingRetour, setIsSubmittingRetour] = useState(false)
   const [retourClients, setRetourClients] = useState<{ id: string; name: string; phone?: string }[]>([])
   const [retourSituationAvant, setRetourSituationAvant] = useState<any[]>([])
   const [soldeAvantRetour, setSoldeAvantRetour] = useState<number>(0)
@@ -213,8 +224,16 @@ const BrasserieConsignationPage: React.FC = () => {
   // Form inventaire
   const [invLignes, setInvLignes] = useState<{ emballage_id: string; stock_theorique: number; stock_physique: string; observation: string }[]>([])
 
-  // Impression
-  const [printingBonRetour, setPrintingBonRetour] = useState<{ mouvement: MouvementEmballage; avant: number; apres: number } | null>(null)
+  // Impression bon de retour
+  const [printingBonRetour, setPrintingBonRetour] = useState<{
+    reference: string
+    date: string
+    clientNom: string
+    clientPhone?: string
+    notes?: string
+    lignes: { code: string; designation: string; avant: number; quantite: number; apres: number }[]
+    totalRetour: number
+  } | null>(null)
 
   // ── useMemo calculés immédiatement à partir des states (évite tout TDZ) ─────
   const clientSoldes = useMemo((): ClientSolde[] => {
@@ -819,9 +838,14 @@ const BrasserieConsignationPage: React.FC = () => {
   const loadSituationClientPourRetour = useCallback(async (clientId: string) => {
     if (!clientId || !companyId) {
       setRetourSituationAvant([])
+      setSoldesClientRetour({ C12T: 0, C20T: 0, C24T: 0 })
+      setRetoursMulti({ C12T: 0, C20T: 0, C24T: 0 })
       return
     }
     const soldesMap = await getSoldesClientTous(supabase, companyId, sectorSlug, clientId)
+    setSoldesClientRetour(soldesMap)
+    setRetoursMulti({ C12T: 0, C20T: 0, C24T: 0 })
+
     const list: any[] = []
     emballages.forEach(emb => {
       const du = soldesMap[emb.code] || 0
@@ -843,21 +867,31 @@ const BrasserieConsignationPage: React.FC = () => {
       loadSituationClientPourRetour(fRetour.client_id)
     } else {
       setRetourSituationAvant([])
+      setSoldesClientRetour({ C12T: 0, C20T: 0, C24T: 0 })
+      setRetoursMulti({ C12T: 0, C20T: 0, C24T: 0 })
       setSoldeAvantRetour(0)
     }
   }, [fRetour.client_id, loadSituationClientPourRetour])
 
-  useEffect(() => {
-    if (!fRetour.client_id || !fRetour.emballage_id) {
-      setSoldeAvantRetour(0)
-      return
-    }
-    const emb = emballages.find(e => e.id === fRetour.emballage_id)
-    const code = emb?.code || 'C20T'
-    getSoldeClient(supabase, companyId, sectorSlug, fRetour.client_id, code).then(solde => {
-      setSoldeAvantRetour(solde)
-    })
-  }, [fRetour.client_id, fRetour.emballage_id, companyId, sectorSlug, emballages])
+  const EMB_LABELS_STANDARD: Record<string, string> = {
+    C12T: 'Casier 12 Bouteilles',
+    C20T: 'Casier 20 Bouteilles',
+    C24T: 'Casier 24 Bouteilles',
+    C6T: 'Casier 6 Bouteilles',
+    C10T: 'Casier 10 Bouteilles',
+  }
+
+  const codesRetour = useMemo(() => {
+    const base = ['C12T', 'C20T', 'C24T']
+    const extra = Object.keys(soldesClientRetour).filter(
+      c => isVraiCodeEmballage(c) && !base.includes(c) && (soldesClientRetour[c] || 0) > 0
+    )
+    return [...base, ...extra]
+  }, [soldesClientRetour])
+
+  const totalRetour = useMemo(() => {
+    return Object.values(retoursMulti).reduce((sum, q) => sum + (Number(q) || 0), 0)
+  }, [retoursMulti])
 
   useEffect(() => {
     if (!modalRetour || !companyId) return
@@ -900,92 +934,109 @@ const BrasserieConsignationPage: React.FC = () => {
     })
   }, [detailClient, companyId])
 
-  // ── Valider retour ────────────────────────────────────────────────────────
+  // ── Valider retour (multi-emballages simultané) ───────────────────────────
 
   const handleValiderRetour = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!companyId || !fRetour.client_id || !fRetour.emballage_id || !fRetour.quantite) return
-    const qte = parseInt(fRetour.quantite)
-    if (!qte || qte <= 0) { toast('error', 'Quantité invalide'); return }
-
-    if (qte > soldeAvantRetour) {
-      toast('error', `Quantité retournée (${qte}) supérieure au solde dû (${soldeAvantRetour})`)
+    if (!companyId || !fRetour.client_id) {
+      toast('error', 'Veuillez sélectionner un client')
+      return
+    }
+    if (totalRetour <= 0) {
+      toast('error', 'Veuillez renseigner au moins une quantité à retourner')
       return
     }
 
-    const emb = emballages.find(em => em.id === fRetour.emballage_id)
-    const codeEmb = (emb?.code || 'C20T').toUpperCase()
+    setIsSubmittingRetour(true)
     const clientObj = retourClients.find(c => c.id === fRetour.client_id)
     const clientNom = clientObj?.name || 'Client'
-    const soldeApres = soldeAvantRetour - qte
-    const ref = fRetour.reference || `RET-${Date.now().toString(36).toUpperCase()}`
+    const clientPhone = clientObj?.phone
+    const ref = fRetour.reference?.trim() || `RET-${Date.now().toString(36).toUpperCase()}`
 
     try {
-      await enregistrerRetourEmballage(supabase, {
-        companyId,
-        secteurId: sectorSlug,
-        clientId: fRetour.client_id,
-        clientNom: clientNom,
-        clientTelephone: clientObj?.phone,
-        emballageCode: codeEmb,
-        emballageTypeId: emb?.id,
-        quantite: qte,
-        soldeAvant: soldeAvantRetour,
-        soldeApres: soldeApres,
-        date: fRetour.date,
-        reference: ref,
-        observation: fRetour.notes || `Retour ${qte} ${codeEmb} - ${clientNom}`,
-        createdBy: user?.id
-      })
+      const lignesPrint: { code: string; designation: string; avant: number; quantite: number; apres: number }[] = []
 
-      // Synchroniser également brasserie_consignations
-      try {
-        const { data: exCons } = await supabase
-          .from('brasserie_consignations')
-          .select('id, total_retourne')
-          .eq('company_id', companyId)
-          .eq('client_id', fRetour.client_id)
-          .eq('emballage_id', fRetour.emballage_id)
-          .maybeSingle()
+      // Traiter chaque type d'emballage retourné
+      for (const [codeRaw, qteVal] of Object.entries(retoursMulti)) {
+        const qte = Number(qteVal) || 0
+        if (qte <= 0) continue
 
-        if (exCons) {
-          await supabase.from('brasserie_consignations').update({
-            total_retourne: (Number(exCons.total_retourne) || 0) + qte,
-            solde_du: soldeApres,
-            dernier_retour: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          }).eq('id', exCons.id)
-        }
-      } catch (_) {}
+        const codeEmb = codeRaw.trim().toUpperCase()
+        if (!isVraiCodeEmballage(codeEmb)) continue
+
+        const soldeAvant = soldesClientRetour[codeEmb] || 0
+        const soldeApres = Math.max(0, soldeAvant - qte)
+        const emb = emballages.find(em => em.code === codeEmb)
+
+        await enregistrerRetourEmballage(supabase, {
+          companyId,
+          secteurId: sectorSlug,
+          clientId: fRetour.client_id,
+          clientNom,
+          clientTelephone: clientPhone,
+          emballageCode: codeEmb,
+          emballageTypeId: emb?.id,
+          quantite: qte,
+          soldeAvant,
+          soldeApres,
+          date: fRetour.date,
+          reference: ref,
+          observation: fRetour.notes?.trim() || `Retour ${qte} ${codeEmb} - ${clientNom}`,
+          createdBy: user?.id
+        })
+
+        // Synchroniser également brasserie_consignations si présent
+        try {
+          const { data: exCons } = await supabase
+            .from('brasserie_consignations')
+            .select('id, total_retourne')
+            .eq('company_id', companyId)
+            .eq('client_id', fRetour.client_id)
+            .eq('emballage_id', emb?.id || codeEmb)
+            .maybeSingle()
+
+          if (exCons) {
+            await supabase.from('brasserie_consignations').update({
+              total_retourne: (Number(exCons.total_retourne) || 0) + qte,
+              solde_du: soldeApres,
+              dernier_retour: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+            }).eq('id', exCons.id)
+          }
+        } catch (_) {}
+
+        lignesPrint.push({
+          code: codeEmb,
+          designation: emb?.designation || EMB_LABELS_STANDARD[codeEmb] || `Casier ${codeEmb}`,
+          avant: soldeAvant,
+          quantite: qte,
+          apres: soldeApres
+        })
+      }
 
       // Impression bon de retour
       setPrintingBonRetour({
-        mouvement: {
-          id: ref,
-          emballage_id: emb?.id || '',
-          client_id: fRetour.client_id,
-          type_mouvement: 'RETOUR',
-          quantite: qte,
-          reference: ref,
-          solde_client_avant: soldeAvantRetour,
-          solde_client_apres: soldeApres,
-          notes: fRetour.notes,
-          created_at: new Date().toISOString(),
-          emballage: emb,
-          client: clientObj as any
-        },
-        avant: soldeAvantRetour,
-        apres: soldeApres
+        reference: ref,
+        date: fRetour.date ? new Date(fRetour.date).toISOString() : new Date().toISOString(),
+        clientNom,
+        clientPhone,
+        notes: fRetour.notes,
+        lignes: lignesPrint,
+        totalRetour
       })
 
-      toast('success', `Retour enregistré — ${qte} ${emb?.designation || codeEmb} — Réf: ${ref}`)
+      toast('success', `Retour enregistré avec succès (${totalRetour} casiers) — Réf: ${ref}`)
       setModalRetour(false)
       setFRetour({ client_id: '', emballage_id: '', quantite: '', date: new Date().toISOString().slice(0, 10), reference: '', notes: '' })
+      setRetoursMulti({ C12T: 0, C20T: 0, C24T: 0 })
+      setSoldesClientRetour({ C12T: 0, C20T: 0, C24T: 0 })
       setRetourSituationAvant([])
-      setSoldeAvantRetour(0)
       await loadAll()
     } catch (err: any) {
-      toast('error', 'Erreur lors du retour: ' + err.message)
+      console.error('Erreur retour emballages:', err)
+      toast('error', 'Erreur lors du retour: ' + (err.message || 'Erreur inconnue'))
+    } finally {
+      setIsSubmittingRetour(false)
     }
   }
 
@@ -2184,112 +2235,207 @@ const BrasserieConsignationPage: React.FC = () => {
         </div>
       )}
 
-      {/* Modal: Retour d'emballages */}
+      {/* Modal: Retour d'emballages multi-types */}
       {modalRetour && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg my-4">
-            <div className="flex items-center justify-between p-5 border-b">
-              <h3 className="font-bold text-slate-800 flex items-center gap-2"><ArrowDownLeft className="w-5 h-5 text-emerald-600" /> Retour d'emballages</h3>
-              <button onClick={() => setModalRetour(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"><X className="w-5 h-5" /></button>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg my-4 overflow-hidden">
+            <div className="flex items-center justify-between p-5 border-b bg-slate-50/50">
+              <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                <ArrowDownLeft className="w-5 h-5 text-emerald-600" /> Retour d'emballages
+              </h3>
+              <button
+                onClick={() => setModalRetour(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
             </div>
             <form onSubmit={handleValiderRetour} className="p-5 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Client *</label>
-                <select value={fRetour.client_id} onChange={e => setFRetour(p => ({ ...p, client_id: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" required>
+                <select
+                  value={fRetour.client_id}
+                  onChange={e => setFRetour(p => ({ ...p, client_id: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none"
+                  required
+                >
                   <option value="">— Sélectionner un client —</option>
-                  {retourClients.map(c => <option key={c.id} value={c.id}>{c.name} {c.phone ? `(${c.phone})` : ''}</option>)}
+                  {retourClients.map(c => (
+                    <option key={c.id} value={c.id}>
+                      {c.name} {c.phone ? `(${c.phone})` : ''}
+                    </option>
+                  ))}
                 </select>
               </div>
 
-              {/* Situation du client */}
-              {fRetour.client_id && (
-                <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
-                  <p className="text-xs font-bold text-amber-800 mb-2">📊 Situation actuelle du client (emballages dus)</p>
-                  {retourSituationAvant.length > 0 ? (
-                    <div className="space-y-1.5">
-                      {retourSituationAvant.map(s => (
-                        <div
-                          key={s.id}
-                          onClick={() => setFRetour(p => ({ ...p, emballage_id: s.emballage_id }))}
-                          className={clsx(
-                            'flex justify-between items-center text-xs px-2.5 py-1.5 rounded-lg cursor-pointer transition',
-                            fRetour.emballage_id === s.emballage_id
-                              ? 'bg-amber-200/90 font-bold text-amber-950 border border-amber-400 shadow-sm'
-                              : 'bg-amber-100/60 text-amber-800 hover:bg-amber-100'
-                          )}
-                          title="Cliquez pour sélectionner cet emballage"
-                        >
-                          <span className="flex items-center gap-1.5">
-                            <span className="px-1.5 py-0.5 rounded bg-amber-200 text-[10px] font-black">{s.emballage?.code}</span>
-                            <span>{s.emballage?.designation}</span>
-                          </span>
-                          <span className="font-black text-amber-900">{s.solde_du} dû</span>
-                        </div>
-                      ))}
+              {/* Tableau Multi-Emballages Retournés */}
+              {fRetour.client_id ? (
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-xs font-bold text-slate-700">
+                      📦 Situation & Quantités retournées
+                    </label>
+                    <span className="text-[11px] text-slate-400">
+                      Saisissez les casiers rendus pour chaque type
+                    </span>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-sm">
+                    <div className="bg-slate-50 px-3 py-2 border-b border-slate-200 grid grid-cols-12 gap-2 text-xs font-bold text-slate-600">
+                      <div className="col-span-5">Emballage</div>
+                      <div className="col-span-2 text-center">Dû</div>
+                      <div className="col-span-3 text-center">Qté retournée *</div>
+                      <div className="col-span-2 text-center">Reste après</div>
                     </div>
-                  ) : (
-                    <p className="text-xs text-amber-700 italic">Ce client n'a aucun emballage dû enregistré.</p>
-                  )}
+                    <div className="divide-y divide-slate-100">
+                      {codesRetour.map(code => {
+                        const du = soldesClientRetour[code] || 0
+                        const qte = retoursMulti[code] || 0
+                        const reste = Math.max(0, du - qte)
+                        const emb = emballages.find(e => e.code === code)
+                        const label = emb?.designation || EMB_LABELS_STANDARD[code] || `Casier ${code}`
+
+                        return (
+                          <div
+                            key={code}
+                            className={clsx(
+                              "grid grid-cols-12 gap-2 items-center px-3 py-2 text-xs transition",
+                              qte > 0 ? "bg-emerald-50/60" : du > 0 ? "hover:bg-slate-50/80" : "bg-slate-50/30 text-slate-400"
+                            )}
+                          >
+                            <div className="col-span-5 flex items-center gap-1.5 min-w-0">
+                              <span
+                                className={clsx(
+                                  "px-1.5 py-0.5 rounded text-[10px] font-black shrink-0",
+                                  du > 0 ? "bg-amber-100 text-amber-900 border border-amber-300" : "bg-slate-200 text-slate-600"
+                                )}
+                              >
+                                {code}
+                              </span>
+                              <span className="font-semibold text-slate-800 truncate" title={label}>
+                                {label}
+                              </span>
+                            </div>
+                            <div className="col-span-2 text-center">
+                              <span
+                                className={clsx(
+                                  "font-bold px-2 py-0.5 rounded-full text-xs inline-block",
+                                  du > 0 ? "bg-amber-100 text-amber-900" : "text-slate-400"
+                                )}
+                              >
+                                {du} dû
+                              </span>
+                            </div>
+                            <div className="col-span-3 text-center">
+                              <input
+                                type="number"
+                                min="0"
+                                max={du}
+                                value={qte === 0 ? '' : qte}
+                                onChange={e => {
+                                  const val = Math.min(Math.max(0, parseInt(e.target.value) || 0), du)
+                                  setRetoursMulti(prev => ({ ...prev, [code]: val }))
+                                }}
+                                disabled={du <= 0}
+                                placeholder="0"
+                                className={clsx(
+                                  "w-full text-center border rounded-lg py-1 px-2 text-xs font-bold outline-none transition",
+                                  du <= 0
+                                    ? "bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200"
+                                    : qte > 0
+                                    ? "bg-emerald-50 text-emerald-900 border-emerald-400 ring-1 ring-emerald-400"
+                                    : "border-slate-300 focus:border-emerald-500 focus:ring-1 focus:ring-emerald-400"
+                                )}
+                              />
+                            </div>
+                            <div className="col-span-2 text-center">
+                              <span
+                                className={clsx(
+                                  "text-xs font-black",
+                                  qte > 0 ? "text-emerald-700" : du > 0 ? "text-slate-700" : "text-slate-400"
+                                )}
+                              >
+                                {reste}
+                              </span>
+                            </div>
+                          </div>
+                        )
+                      })}
+                    </div>
+                    {/* Total bar */}
+                    <div className="bg-slate-50 border-t border-slate-200 px-3 py-2 flex justify-between items-center text-xs">
+                      <span className="font-semibold text-slate-600">Total casiers retournés :</span>
+                      <span
+                        className={clsx(
+                          "font-black text-sm px-2.5 py-0.5 rounded-full transition",
+                          totalRetour > 0 ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-600"
+                        )}
+                      >
+                        {totalRetour} casier{totalRetour > 1 ? 's' : ''}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="text-center py-6 text-slate-400 bg-slate-50 rounded-xl border border-dashed border-slate-200 text-xs">
+                  Veuillez sélectionner un client pour afficher ses emballages dus
                 </div>
               )}
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Emballage *</label>
-                  <select value={fRetour.emballage_id} onChange={e => setFRetour(p => ({ ...p, emballage_id: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" required>
-                    <option value="">— Type —</option>
-                    {emballages.map(e => <option key={e.id} value={e.id}>{e.designation} ({e.code})</option>)}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-600 mb-1">Quantité retournée *</label>
-                  <input type="number" min="1" value={fRetour.quantite} onChange={e => setFRetour(p => ({ ...p, quantite: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" required placeholder="0" />
-                </div>
-              </div>
-
-              {/* Aperçu du nouveau solde */}
-              {fRetour.emballage_id && fRetour.quantite && fRetour.client_id && (() => {
-                const sit = retourSituationAvant.find(s => s.emballage_id === fRetour.emballage_id)
-                const soldeDuAvant = sit?.solde_du !== undefined ? sit.solde_du : soldeAvantRetour
-                const qte = parseInt(fRetour.quantite) || 0
-                const nouveauSolde = soldeDuAvant - qte
-                return (
-                  <div className={clsx('rounded-xl p-3 text-sm border', nouveauSolde < 0 ? 'bg-red-50 border-red-200' : 'bg-emerald-50 border-emerald-200')}>
-                    <div className="flex justify-between items-center text-xs mb-1">
-                      <span className="text-slate-600">Solde avant retour</span>
-                      <span className="font-bold text-slate-700">{soldeDuAvant}</span>
-                    </div>
-                    <div className="flex justify-between items-center text-xs mb-1">
-                      <span className="text-slate-600">Retour</span>
-                      <span className="font-bold text-emerald-600">- {qte}</span>
-                    </div>
-                    <div className="flex justify-between items-center border-t border-slate-200 pt-1 mt-1">
-                      <span className="font-bold text-slate-700">Nouveau solde</span>
-                      <span className={clsx('font-black text-base', nouveauSolde < 0 ? 'text-red-600' : 'text-emerald-700')}>{nouveauSolde}</span>
-                    </div>
-                    {nouveauSolde < 0 && <p className="text-red-600 text-xs mt-1">⚠️ Quantité retournée ({qte}) supérieure au solde dû ({soldeDuAvant})</p>}
-                  </div>
-                )
-              })()}
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
-                  <input type="date" value={fRetour.date} onChange={e => setFRetour(p => ({ ...p, date: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" />
+                  <input
+                    type="date"
+                    value={fRetour.date}
+                    onChange={e => setFRetour(p => ({ ...p, date: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none"
+                  />
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-600 mb-1">Référence</label>
-                  <input value={fRetour.reference} onChange={e => setFRetour(p => ({ ...p, reference: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none" placeholder="Auto si vide" />
+                  <input
+                    value={fRetour.reference}
+                    onChange={e => setFRetour(p => ({ ...p, reference: e.target.value }))}
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none"
+                    placeholder="Auto si vide"
+                  />
                 </div>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Observation</label>
-                <textarea value={fRetour.notes} onChange={e => setFRetour(p => ({ ...p, notes: e.target.value }))} className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none resize-none" rows={2} />
+                <textarea
+                  value={fRetour.notes}
+                  onChange={e => setFRetour(p => ({ ...p, notes: e.target.value }))}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-emerald-300 outline-none resize-none"
+                  rows={2}
+                  placeholder="Notes ou observation éventuelle..."
+                />
               </div>
               <div className="flex gap-2 pt-2">
-                <button type="button" onClick={() => setModalRetour(false)} className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50">Annuler</button>
-                <button type="submit" className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white text-sm font-bold hover:bg-emerald-700">
-                  <Check className="w-4 h-4 inline mr-1" /> Valider le retour
+                <button
+                  type="button"
+                  onClick={() => setModalRetour(false)}
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={totalRetour === 0 || isSubmittingRetour}
+                  className={clsx(
+                    "flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 transition shadow-sm",
+                    totalRetour > 0 && !isSubmittingRetour
+                      ? "bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer"
+                      : "bg-slate-200 text-slate-400 cursor-not-allowed"
+                  )}
+                >
+                  <Check className="w-4 h-4" />
+                  {isSubmittingRetour
+                    ? 'Validation en cours...'
+                    : totalRetour > 0
+                    ? `✓ Valider le retour (${totalRetour} casier${totalRetour > 1 ? 's' : ''})`
+                    : 'Valider le retour'}
                 </button>
               </div>
             </form>
@@ -2416,9 +2562,12 @@ const BrasserieConsignationPage: React.FC = () => {
                 <p className="text-xs text-slate-400 mt-1">Brasserie & Dépôt de Boissons</p>
               </div>
               <div className="space-y-2 text-sm mb-4">
-                <div className="flex justify-between"><span className="text-slate-500">Réf. :</span><span className="font-bold">{printingBonRetour.mouvement.reference}</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">Date :</span><span>{fmtDate(printingBonRetour.mouvement.created_at)}</span></div>
-                <div className="flex justify-between"><span className="text-slate-500">Client :</span><span className="font-bold">{printingBonRetour.mouvement.client?.name}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Réf. :</span><span className="font-bold">{printingBonRetour.reference}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Date :</span><span>{fmtDate(printingBonRetour.date)}</span></div>
+                <div className="flex justify-between"><span className="text-slate-500">Client :</span><span className="font-bold">{printingBonRetour.clientNom} {printingBonRetour.clientPhone ? `(${printingBonRetour.clientPhone})` : ''}</span></div>
+                {printingBonRetour.notes && (
+                  <div className="flex justify-between"><span className="text-slate-500">Observation :</span><span className="italic text-xs text-slate-700">{printingBonRetour.notes}</span></div>
+                )}
               </div>
               <table className="w-full text-sm mb-4 border-collapse">
                 <thead>
@@ -2430,13 +2579,25 @@ const BrasserieConsignationPage: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-t border-slate-200">
-                    <td className="p-2 font-semibold">{printingBonRetour.mouvement.emballage?.designation}</td>
-                    <td className="p-2 text-center">{printingBonRetour.avant}</td>
-                    <td className="p-2 text-center font-bold text-emerald-600">-{printingBonRetour.mouvement.quantite}</td>
-                    <td className="p-2 text-center font-bold">{printingBonRetour.apres}</td>
-                  </tr>
+                  {printingBonRetour.lignes.map(l => (
+                    <tr key={l.code} className="border-t border-slate-200">
+                      <td className="p-2 font-semibold">
+                        <span className="font-bold text-xs mr-1 text-slate-900">[{l.code}]</span> {l.designation}
+                      </td>
+                      <td className="p-2 text-center text-slate-600">{l.avant}</td>
+                      <td className="p-2 text-center font-bold text-emerald-600">-{l.quantite}</td>
+                      <td className="p-2 text-center font-bold text-slate-800">{l.apres}</td>
+                    </tr>
+                  ))}
                 </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-slate-300 bg-slate-50 font-bold">
+                    <td className="p-2 text-xs">Total casiers retournés</td>
+                    <td className="p-2"></td>
+                    <td className="p-2 text-center text-emerald-700">-{printingBonRetour.totalRetour}</td>
+                    <td className="p-2"></td>
+                  </tr>
+                </tfoot>
               </table>
               <div className="grid grid-cols-2 gap-8 mt-6 text-xs text-center text-slate-500">
                 <div className="border-t border-slate-300 pt-2">Signature Client</div>
