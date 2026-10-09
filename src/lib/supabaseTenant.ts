@@ -587,8 +587,9 @@ export async function fetchResumeActivite(
   try {
     const { data: salesList } = await supabase
       .from('sales_orders')
-      .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, notes, e_mecef_uid')
+      .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, notes, e_mecef_uid, status')
       .eq('company_id', companyId)
+      .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
 
     const sales = salesList || []
 

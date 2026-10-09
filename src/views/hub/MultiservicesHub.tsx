@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { supabase } from '../../lib/supabase';
-import { fetchResumeActivite } from '../../lib/supabaseTenant';
+import { fetchHubFinancialMetrics, HubFinancialTotals } from '../../services/hubFinancialService';
 import { useUIStore } from '../../store/uiStore';
 import { formatNumber, formatFCFA } from '../../utils/formatters';
 
@@ -185,11 +185,32 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const [form, setForm] = useState(EMPTY_FORM);
   const [formError, setFormError] = useState('');
 
-  // Mois en cours automatique (PARTIE 4)
+  // Totaux financiers réels consolidés
+  const [hubTotals, setHubTotals] = useState<HubFinancialTotals | null>(null);
+
+  // Date du jour formatée en heure locale Cotonou (Africa/Porto-Novo)
+  const todayDateDisplay = useMemo(() => {
+    try {
+      return new Intl.DateTimeFormat('fr-FR', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        timeZone: 'Africa/Porto-Novo',
+      }).format(new Date());
+    } catch {
+      return "Aujourd'hui";
+    }
+  }, []);
+
+  // Mois en cours automatique selon le fuseau Africa/Porto-Novo (PARTIE 4)
   const currentMonthLabel = useMemo(() => {
     try {
       const now = new Date();
-      const monthName = new Intl.DateTimeFormat('fr-FR', { month: 'long', year: 'numeric' }).format(now);
+      const monthName = new Intl.DateTimeFormat('fr-FR', {
+        month: 'long',
+        year: 'numeric',
+        timeZone: 'Africa/Porto-Novo',
+      }).format(now);
       return monthName.charAt(0).toUpperCase() + monthName.slice(1);
     } catch {
       return 'Mois en cours';
@@ -436,41 +457,39 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     };
   }, [companyId, loadActivitiesFromSupabase]);
 
-  // ── Métriques financières réelles consolidées depuis v_resume_activite (Règle d'or Hub) ──
+  // ── Métriques financières réelles consolidées (Règle d'or Hub : Fuseau Africa/Porto-Novo) ──
   const loadFinancialMetrics = useCallback(async () => {
     if (!companyId) return;
     try {
-      // Le HUB ne calcule rien lui-même ligne par ligne : il lit directement les cartes résumés via v_resume_activite
-      const resumes = (await fetchResumeActivite(companyId)) as any[];
-      const resumeMap: Record<string, { ca_ht: number; marge_brute: number }> = {};
-      if (Array.isArray(resumes)) {
-        resumes.forEach((r) => {
-          if (r && r.sector_slug) {
-            resumeMap[r.sector_slug] = {
-              ca_ht: Number(r.ca_ht) || 0,
-              marge_brute: Number(r.marge_brute) || 0,
-            };
-          }
-        });
-      }
+      const result = await fetchHubFinancialMetrics(companyId);
+      setHubTotals(result.totals);
 
       setActivities((prev) =>
         prev.map((act) => {
-          const card = resumeMap[act.sectorSlug] || { ca_ht: 0, marge_brute: 0 };
+          const normSlug = (act.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+          const card = result.sectors[normSlug] || result.sectors[act.sectorSlug] || {
+            sector_slug: normSlug,
+            dayRevenue: 0,
+            dayExpenses: 0,
+            dayNetMargin: 0,
+            monthRevenue: 0,
+            monthExpenses: 0,
+            monthNetMargin: 0,
+          };
           return {
             ...act,
-            // Carte individuelle de l'activité (0 si aucune vente, ne casse pas la somme)
-            revenue: card.ca_ht,
-            netMargin: card.marge_brute,
-            monthRevenue: card.ca_ht,
-            monthNetMargin: card.marge_brute,
-            expenses: 0,
-            monthExpenses: 0,
+            // Métriques isolées strictement du jour et du mois pour ce secteur
+            revenue: card.dayRevenue,
+            expenses: card.dayExpenses,
+            netMargin: card.dayNetMargin,
+            monthRevenue: card.monthRevenue,
+            monthExpenses: card.monthExpenses,
+            monthNetMargin: card.monthNetMargin,
           };
         })
       );
     } catch (e) {
-      console.warn('[Hub] Erreur métriques financières v_resume_activite:', e);
+      console.warn('[Hub] Erreur métriques financières consolidées:', e);
     }
   }, [companyId]);
 
@@ -513,20 +532,40 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // ── CALCULS CONSOLIDÉS DU JOUR (PARTIE 3) & DU MOIS (PARTIE 4) ─────────────
   const dayTotals = useMemo(() => {
-    const totalRevenue = activeActivities.reduce((a, s) => a + (s.revenue || 0), 0);
-    const totalExpenses = activeActivities.reduce((a, s) => a + (s.expenses || 0), 0);
-    const totalNetMargin = activeActivities.reduce((a, s) => a + (s.netMargin || 0), 0);
+    const sumRevenue = activeActivities.reduce((a, s) => a + (s.revenue || 0), 0);
+    const sumExpenses = activeActivities.reduce((a, s) => a + (s.expenses || 0), 0);
+    const sumNetMargin = activeActivities.reduce((a, s) => a + (s.netMargin || 0), 0);
+
+    const totalRevenue = hubTotals && typeof hubTotals.ca_jour === 'number'
+      ? hubTotals.ca_jour
+      : sumRevenue;
+    const totalExpenses = hubTotals && typeof hubTotals.depenses_jour === 'number'
+      ? hubTotals.depenses_jour
+      : sumExpenses;
+    const totalNetMargin = hubTotals && typeof hubTotals.marge_jour === 'number'
+      ? hubTotals.marge_jour
+      : sumNetMargin;
     const netMarginRate = totalRevenue > 0 ? (totalNetMargin / totalRevenue) * 100 : 0;
     return { totalRevenue, totalExpenses, totalNetMargin, netMarginRate };
-  }, [activeActivities]);
+  }, [activeActivities, hubTotals]);
 
   const monthTotals = useMemo(() => {
-    const totalRevenue = activeActivities.reduce((a, s) => a + (s.monthRevenue || 0), 0);
-    const totalExpenses = activeActivities.reduce((a, s) => a + (s.monthExpenses || 0), 0);
-    const totalNetMargin = activeActivities.reduce((a, s) => a + (s.monthNetMargin || 0), 0);
+    const sumRevenue = activeActivities.reduce((a, s) => a + (s.monthRevenue || 0), 0);
+    const sumExpenses = activeActivities.reduce((a, s) => a + (s.monthExpenses || 0), 0);
+    const sumNetMargin = activeActivities.reduce((a, s) => a + (s.monthNetMargin || 0), 0);
+
+    const totalRevenue = hubTotals && typeof hubTotals.ca_mois === 'number'
+      ? hubTotals.ca_mois
+      : sumRevenue;
+    const totalExpenses = hubTotals && typeof hubTotals.depenses_mois === 'number'
+      ? hubTotals.depenses_mois
+      : sumExpenses;
+    const totalNetMargin = hubTotals && typeof hubTotals.marge_mois === 'number'
+      ? hubTotals.marge_mois
+      : sumNetMargin;
     const netMarginRate = totalRevenue > 0 ? (totalNetMargin / totalRevenue) * 100 : 0;
     return { totalRevenue, totalExpenses, totalNetMargin, netMarginRate };
-  }, [activeActivities]);
+  }, [activeActivities, hubTotals]);
 
   // ── Actions : Ajout d'activité (PARTIE 6) ──────────────────────────────────
   const handleAddSubmit = async () => {
@@ -922,12 +961,12 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                 darkMode ? 'text-slate-300' : 'text-slate-800'
               }`}>
                 <Calendar size={16} className="text-blue-500" />
-                TABLEAU DE BORD DU JOUR
+                TABLEAU DE BORD DU JOUR — {todayDateDisplay}
               </h2>
-              <span className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Toutes activités confondues — Données du jour</span>
+              <span className={`text-[11px] ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>Toutes activités confondues — Données du {todayDateDisplay} (Cotonou)</span>
             </div>
             <span className="text-xs px-2.5 py-0.5 rounded-full bg-blue-500/10 text-blue-500 border border-blue-500/20 font-semibold">
-              Aujourd'hui
+              {todayDateDisplay}
             </span>
           </div>
 
@@ -991,11 +1030,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                 darkMode ? 'text-indigo-300' : 'text-indigo-900'
               }`}>
                 <TrendingUp size={16} className="text-indigo-500" />
-                SYNTHÈSE DU MOIS
+                SYNTHÈSE DU MOIS — {currentMonthLabel}
               </h2>
-              <span className={`text-[11px] ${darkMode ? 'text-indigo-400/80' : 'text-indigo-600'}`}>Toutes activités confondues — {currentMonthLabel}</span>
+              <span className={`text-[11px] ${darkMode ? 'text-indigo-400/80' : 'text-indigo-600'}`}>Toutes activités confondues — Cumul du mois ({currentMonthLabel})</span>
             </div>
-            <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 font-bold">
+            <span className="text-xs px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-400 border border-indigo-500/40 font-bold capitalize">
               {currentMonthLabel}
             </span>
           </div>

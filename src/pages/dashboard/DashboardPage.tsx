@@ -18,6 +18,7 @@ import { useUIStore } from '../../store/uiStore'
 import { useTenant } from '../../hooks/useTenant'
 import { fetchResumeActivite } from '../../lib/supabaseTenant'
 import { getActiveSectorSlug, getActiveSectorMeta, filterItemsForSector } from '../../lib/sectorClient'
+import { getCotonouDates, extractCotonouDate } from '../../services/hubFinancialService'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -54,19 +55,24 @@ export const DashboardPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      // Début et fin de la journée actuelle en heure locale
-      const now = new Date()
-      const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+      // 1. Ventes du jour réelles (isolées strictement par company_id et sector_slug, heure Cotonou)
+      const { todayStr } = getCotonouDates()
 
-      // 1. Ventes du jour réelles (isolées strictement par company_id et sector_slug)
       const { data: salesData, error: salesErr } = await supabaseTenant('sales_orders')
         .select('*, customer:customers(id, name, ifu_number)')
-        .gte('created_at', startOfDay)
+        .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
         .order('created_at', { ascending: false })
+        .limit(1000)
 
       if (salesErr) throw salesErr
 
-      const mappedSales: TodaySale[] = (salesData || []).map((s: any) => {
+      // Filtrer strictement les ventes enregistrées à la date du jour (Cotonou)
+      const filteredToday = (salesData || []).filter((s: any) => {
+        const sDate = extractCotonouDate(s.order_date, s.created_at)
+        return sDate === todayStr
+      })
+
+      const mappedSales: TodaySale[] = filteredToday.map((s: any) => {
         let meta: any = {}
         if (s.notes) {
           try {
