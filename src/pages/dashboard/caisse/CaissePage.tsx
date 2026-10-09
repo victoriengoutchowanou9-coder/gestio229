@@ -996,7 +996,19 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
       // Transfert officiel M048 : du jour -> fond actuel, remise à 0 du jour
       const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id) ? user.id : null
-      await cloturerCaisseOfficielle(currentCompanyId, secteurActif.id, cashRegisterId || caisseActive.id, validUserId).catch(() => {})
+      try {
+        await cloturerCaisseOfficielle(currentCompanyId, secteurActif.id, cashRegisterId || caisseActive.id, validUserId, {
+          fond_initial: fondInitialEspeces,
+          total_entrees: especesDuJour,
+          total_sorties: sumDepensesEspeces,
+          fond_theorique: fondTheoriqueEsp,
+          fond_reel: Number(closingPhysicalCash),
+          ecart: ecart,
+          commentaire: closingNotes || 'Clôture de session validée',
+        })
+      } catch (clotErr) {
+        console.warn('Erreur cloturerCaisseOfficielle:', clotErr)
+      }
 
       // Fermeture locale de la caisse
       saveCaisseState('FERMEE', null, '', 0, 0)
@@ -1066,7 +1078,15 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     const cId = cashRegisterId || caisseActive?.id
 
     try {
-      const res = await cloturerCaisseOfficielle(currentCompanyId, secId, cId, validUserId)
+      const res = await cloturerCaisseOfficielle(currentCompanyId, secId, cId, validUserId, {
+        fond_initial: fondInitialEspeces,
+        total_entrees: especesDuJour,
+        total_sorties: sumDepensesEspeces,
+        fond_theorique: fondActuelEspeces,
+        fond_reel: fondActuelEspeces + especesDuJour,
+        ecart: 0,
+        commentaire: 'Clôture de caisse directe validée',
+      })
       if (res.success) {
         toast.success(
           'Caisse clôturée, Fond actuel mis à jour',
@@ -1468,7 +1488,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           {/* Bouton CLÔTURER CAISSE (Règle M048) : Visible si du jour > 0 ou session ouverte */}
           {(especesDuJour + momoDuJour > 0 || caisseStatus === 'OUVERTE') && (
             <button
-              onClick={handleCloturerCaisseDirect}
+              onClick={() => {
+                setClosingPhysicalCash(fondActuelEspeces + especesDuJour)
+                setRolloverCash(fondActuelEspeces + especesDuJour)
+                setShowCloseModal(true)
+              }}
               disabled={isOperatingCaisse}
               className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md shadow-rose-200 transition flex items-center gap-1.5 disabled:opacity-50"
               title="Clôturer la caisse et transférer les espèces et momo du jour dans le fond actuel"

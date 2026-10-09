@@ -206,7 +206,7 @@ export const ClotureCaisse: React.FC = () => {
 
       // Pour chaque ligne, enregistrer la clôture et reporter le solde final pour le lendemain (même si négatif !)
       for (const ligne of lignes) {
-        // Enregistrer clôture dans caisse_clotures ou mouvements_tresorerie
+        // Enregistrer clôture dans mouvements_tresorerie
         try {
           await supabase.from('mouvements_tresorerie').insert({
             company_id: companyId,
@@ -219,6 +219,29 @@ export const ClotureCaisse: React.FC = () => {
             fond_avant: ligne.soldeActuel,
             fond_apres: ligne.soldeActuel,
             description: `Clôture journalière ${dateCloture} - Solde: ${ligne.soldeActuel} FCFA`,
+          })
+        } catch (_) {}
+
+        // Enregistrer également dans clotures_caisse pour traçabilité complète
+        try {
+          const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+          await supabase.from('clotures_caisse').insert({
+            company_id: companyId,
+            secteur_id: isValidUUID(ligne.secteurId) ? ligne.secteurId : null,
+            caisse_id: isValidUUID(ligne.caisseId) ? ligne.caisseId : null,
+            date_cloture: dateCloture,
+            especes_cloture: ligne.mode === 'espece' ? Math.max(0, ligne.soldeActuel) : 0,
+            momo_cloture: ligne.mode === 'mtn_momo' ? Math.max(0, ligne.soldeActuel) : 0,
+            fond_especes_avant: ligne.mode === 'espece' ? ligne.soldeActuel : 0,
+            fond_momo_avant: ligne.mode === 'mtn_momo' ? ligne.soldeActuel : 0,
+            fond_especes_apres: ligne.mode === 'espece' ? ligne.soldeActuel : 0,
+            fond_momo_apres: ligne.mode === 'mtn_momo' ? ligne.soldeActuel : 0,
+            fond_theorique: ligne.soldeActuel,
+            fond_reel: ligne.soldeActuel,
+            ecart: 0,
+            total_entrees: ligne.entrees,
+            total_sorties: ligne.sorties,
+            commentaire: `Clôture multi-secteurs (${ligne.secteurNom} - ${ligne.caisseNom})`,
           })
         } catch (_) {}
 

@@ -994,19 +994,35 @@ export async function cloturerCaisseOfficielle(
   companyId: string,
   secteurId: string,
   caisseId: string | null,
-  userId: string | null
+  userId: string | null,
+  details?: {
+    fond_initial?: number
+    total_entrees?: number
+    total_sorties?: number
+    fond_theorique?: number
+    fond_reel?: number
+    ecart?: number
+    commentaire?: string
+  }
 ): Promise<{ success: boolean; especes?: number; momo?: number; error?: string }> {
-  if (!companyId || !secteurId) {
-    return { success: false, error: 'Paramètres company_id et secteur_id obligatoires.' }
+  if (!companyId) {
+    return { success: false, error: 'Paramètre company_id obligatoire.' }
   }
 
-  // 1. Tenter RPC PostgreSQL
+  const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+  const validSecteurId = isValidUUID(secteurId) ? secteurId : null
+  const validCaisseId = isValidUUID(caisseId) ? caisseId : null
+  const validUserId = isValidUUID(userId) ? userId : null
+
+  // 1. Tenter RPC PostgreSQL si disponible
   try {
     const { data, error } = await supabase.rpc('fn_cloturer_caisse', {
       p_company_id: companyId,
-      p_secteur_id: secteurId,
-      p_caisse_id: caisseId || null,
-      p_user_id: userId || null,
+      p_secteur_id: validSecteurId,
+      p_caisse_id: validCaisseId,
+      p_user_id: validUserId,
+      p_fond_reel: details?.fond_reel ?? null,
+      p_commentaire: details?.commentaire ?? null,
     })
 
     if (!error && data && data.success) {
@@ -1016,68 +1032,106 @@ export async function cloturerCaisseOfficielle(
     console.warn('[CAISSE-SERVICE] RPC fn_cloturer_caisse fallback:', rpcErr)
   }
 
-  // 2. Fallback direct en BDD si RPC non encore exécutée dans SQL Editor
+  // 2. Fallback direct en BDD avec syntaxe sécurisée sans .catch() sur query builder
   try {
     const today = new Date().toISOString().split('T')[0]
     const curJour = await getCaisseJournaliereBySector(companyId, secteurId, caisseId, today)
     const curFond = await getFondsActuelsBySector(companyId, secteurId, caisseId)
 
-    const espTransf = curJour.especes_du_jour
-    const momoTransf = curJour.momo_du_jour
-    const newEsp = curFond.fond_actuel_especes + espTransf
-    const newMomo = curFond.fond_actuel_momo + momoTransf
+    const espTransf = curJour.especes_du_jour || 0
+    const momoTransf = curJour.momo_du_jour || 0
+    const newEsp = (curFond.fond_actuel_especes || 0) + espTransf
+    const newMomo = (curFond.fond_actuel_momo || 0) + momoTransf
 
-    // Mettre à jour fonds_actuels
-    const { error: updFondErr } = await supabase
-      .from('fonds_actuels')
-      .upsert({
-        company_id: companyId,
-        secteur_id: secteurId,
-        caisse_id: caisseId || null,
-        fond_actuel_especes: newEsp,
-        fond_actuel_momo: newMomo,
-        updated_at: new Date().toISOString(),
-      })
+    const fondTheorique = details?.fond_theorique ?? curFond.fond_actuel_especes ?? 0
+    const fondReel = details?.fond_reel ?? newEsp
+    const ecart = details?.ecart ?? (fondReel - (fondTheorique + espTransf))
 
-    if (updFondErr) {
-      console.warn('[CAISSE-SERVICE] Upsert fonds_actuels fallback warning:', updFondErr)
+    // Mettre à jour fonds_actuels si secteur valide
+    if (validSecteurId) {
+      try {
+        const { error: updFondErr } = await supabase
+          .from('fonds_actuels')
+          .upsert({
+            company_id: companyId,
+            secteur_id: validSecteurId,
+            caisse_id: validCaisseId,
+            fond_actuel_especes: newEsp,
+            fond_actuel_momo: newMomo,
+            updated_at: new Date().toISOString(),
+          })
+
+        if (updFondErr) {
+          console.warn('[CAISSE-SERVICE] Upsert fonds_actuels fallback warning:', updFondErr)
+        }
+      } catch (fErr) {
+        console.warn('[CAISSE-SERVICE] Exception upsert fonds_actuels:', fErr)
+      }
     }
 
-    // Historiser clôture
-    await supabase.from('clotures_caisse').insert({
-      company_id: companyId,
-      secteur_id: secteurId,
-      caisse_id: caisseId || null,
-      date_cloture: today,
-      especes_cloture: espTransf,
-      momo_cloture: momoTransf,
-      fond_especes_avant: curFond.fond_actuel_especes,
-      fond_momo_avant: curFond.fond_actuel_momo,
-      fond_especes_apres: newEsp,
-      fond_momo_apres: newMomo,
-      cloture_par: userId || null,
-    }).catch(() => {})
+    // Historiser clôture dans clotures_caisse
+    try {
+      const { error: insertErr } = await supabase.from('clotures_caisse').insert({
+        company_id: companyId,
+        secteur_id: validSecteurId,
+        caisse_id: validCaisseId,
+        date_cloture: today,
+        especes_cloture: espTransf,
+        momo_cloture: momoTransf,
+        fond_especes_avant: curFond.fond_actuel_especes || 0,
+        fond_momo_avant: curFond.fond_actuel_momo || 0,
+        fond_especes_apres: newEsp,
+        fond_momo_apres: newMomo,
+        fond_initial: details?.fond_initial ?? curFond.fond_initial_especes ?? 0,
+        total_entrees: details?.total_entrees ?? espTransf,
+        total_sorties: details?.total_sorties ?? 0,
+        fond_theorique: fondTheorique,
+        fond_reel: fondReel,
+        ecart: ecart,
+        commentaire: details?.commentaire || 'Clôture de caisse effectuée',
+        created_by: validUserId,
+        cloture_par: validUserId,
+      })
+
+      if (insertErr) {
+        console.warn('[CAISSE-SERVICE] Insert clotures_caisse warning:', insertErr)
+      }
+    } catch (cErr) {
+      console.warn('[CAISSE-SERVICE] Exception insert clotures_caisse:', cErr)
+    }
 
     // Réinitialiser caisse journalière à 0
-    await supabase
-      .from('caisse_journaliere')
-      .update({
-        especes_du_jour: 0,
-        momo_du_jour: 0,
-        ventes_especes_du_jour: 0,
-        ventes_momo_du_jour: 0,
-        remboursements_especes_du_jour: 0,
-        remboursements_momo_du_jour: 0,
-        nb_ventes: 0,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('company_id', companyId)
-      .eq('secteur_id', secteurId)
-      .eq('date_jour', today)
-      .catch(() => {})
+    try {
+      let query = supabase
+        .from('caisse_journaliere')
+        .update({
+          especes_du_jour: 0,
+          momo_du_jour: 0,
+          ventes_especes_du_jour: 0,
+          ventes_momo_du_jour: 0,
+          remboursements_especes_du_jour: 0,
+          remboursements_momo_du_jour: 0,
+          nb_ventes: 0,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('company_id', companyId)
+        .eq('date_jour', today)
+
+      if (validSecteurId) {
+        query = query.eq('secteur_id', validSecteurId)
+      }
+
+      const { error: updJourErr } = await query
+      if (updJourErr) {
+        console.warn('[CAISSE-SERVICE] Update caisse_journaliere warning:', updJourErr)
+      }
+    } catch (jErr) {
+      console.warn('[CAISSE-SERVICE] Exception update caisse_journaliere:', jErr)
+    }
 
     return { success: true, especes: espTransf, momo: momoTransf }
   } catch (fallbackErr: any) {
+    console.error('[CAISSE-SERVICE] Erreur globale fallback clôture:', fallbackErr)
     return { success: false, error: fallbackErr?.message || 'Erreur lors de la clôture.' }
   }
 }
