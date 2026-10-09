@@ -936,14 +936,34 @@ const BrasserieConsignationPage: React.FC = () => {
 
   // ── Valider retour (multi-emballages simultané) ───────────────────────────
 
-  const handleValiderRetour = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!companyId || !fRetour.client_id) {
-      toast('error', 'Veuillez sélectionner un client')
+  const handleValiderRetour = async (e?: React.FormEvent) => {
+    if (e && typeof e.preventDefault === 'function') {
+      e.preventDefault()
+    }
+    console.log('[handleValiderRetour] CLIC VALIDER', {
+      retoursMulti,
+      totalRetour,
+      soldesClientRetour,
+      clientId: fRetour.client_id,
+      companyId,
+      sectorSlug
+    })
+
+    if (!companyId) {
+      alert('Erreur: Identifiant entreprise (company_id) manquant')
+      toast.error('Erreur', 'Identifiant entreprise manquant')
       return
     }
+
+    if (!fRetour.client_id) {
+      alert('Veuillez sélectionner un client')
+      toast.error('Client requis', 'Veuillez sélectionner un client')
+      return
+    }
+
     if (totalRetour <= 0) {
-      toast('error', 'Veuillez renseigner au moins une quantité à retourner')
+      alert('Saisissez au moins une quantité à retourner')
+      toast.error('Quantité requise', 'Veuillez renseigner au moins une quantité à retourner')
       return
     }
 
@@ -955,6 +975,7 @@ const BrasserieConsignationPage: React.FC = () => {
 
     try {
       const lignesPrint: { code: string; designation: string; avant: number; quantite: number; apres: number }[] = []
+      let successCount = 0
 
       // Traiter chaque type d'emballage retourné
       for (const [codeRaw, qteVal] of Object.entries(retoursMulti)) {
@@ -967,6 +988,8 @@ const BrasserieConsignationPage: React.FC = () => {
         const soldeAvant = soldesClientRetour[codeEmb] || 0
         const soldeApres = Math.max(0, soldeAvant - qte)
         const emb = emballages.find(em => em.code === codeEmb)
+
+        console.log(`[handleValiderRetour] Enregistrement pour ${codeEmb}:`, { qte, soldeAvant, soldeApres })
 
         await enregistrerRetourEmballage(supabase, {
           companyId,
@@ -984,6 +1007,8 @@ const BrasserieConsignationPage: React.FC = () => {
           observation: fRetour.notes?.trim() || `Retour ${qte} ${codeEmb} - ${clientNom}`,
           createdBy: user?.id
         })
+
+        successCount += qte
 
         // Synchroniser également brasserie_consignations si présent
         try {
@@ -1014,6 +1039,8 @@ const BrasserieConsignationPage: React.FC = () => {
         })
       }
 
+      console.log('[handleValiderRetour] Succès complet:', { successCount, lignesPrint })
+
       // Impression bon de retour
       setPrintingBonRetour({
         reference: ref,
@@ -1025,7 +1052,7 @@ const BrasserieConsignationPage: React.FC = () => {
         totalRetour
       })
 
-      toast('success', `Retour enregistré avec succès (${totalRetour} casiers) — Réf: ${ref}`)
+      toast.success('Retour validé', `${totalRetour} casiers enregistrés avec succès (Réf: ${ref})`)
       setModalRetour(false)
       setFRetour({ client_id: '', emballage_id: '', quantite: '', date: new Date().toISOString().slice(0, 10), reference: '', notes: '' })
       setRetoursMulti({ C12T: 0, C20T: 0, C24T: 0 })
@@ -1033,8 +1060,10 @@ const BrasserieConsignationPage: React.FC = () => {
       setRetourSituationAvant([])
       await loadAll()
     } catch (err: any) {
-      console.error('Erreur retour emballages:', err)
-      toast('error', 'Erreur lors du retour: ' + (err.message || 'Erreur inconnue'))
+      console.error('[handleValiderRetour] Erreur retour emballages:', err)
+      const msg = err.message || 'Erreur inconnue lors de l\'enregistrement'
+      alert(`Erreur Supabase: ${msg}\n\nOuvrez F12 Console pour inspecter les détails`)
+      toast.error('Erreur enregistrement', msg)
     } finally {
       setIsSubmittingRetour(false)
     }
@@ -2261,7 +2290,7 @@ const BrasserieConsignationPage: React.FC = () => {
                 <X className="w-5 h-5" />
               </button>
             </div>
-            <form onSubmit={handleValiderRetour} className="p-5 space-y-4">
+            <form onSubmit={handleValiderRetour} noValidate className="p-5 space-y-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-600 mb-1">Client *</label>
                 <select
@@ -2423,16 +2452,24 @@ const BrasserieConsignationPage: React.FC = () => {
                   placeholder="Notes ou observation éventuelle..."
                 />
               </div>
+
+              {/* Barre d'état technique discrète */}
+              <div className="text-[11px] px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200 text-slate-500 flex items-center justify-between">
+                <span>Client : <b>{retourClients.find(c => c.id === fRetour.client_id)?.name || 'Non sélectionné'}</b></span>
+                <span>Total à valider : <b className="text-emerald-700">{totalRetour} casier{totalRetour > 1 ? 's' : ''}</b></span>
+              </div>
+
               <div className="flex gap-2 pt-2">
                 <button
                   type="button"
                   onClick={() => setModalRetour(false)}
-                  className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50"
+                  className="flex-1 py-2.5 rounded-xl border border-slate-200 text-sm font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
                 >
                   Annuler
                 </button>
                 <button
-                  type="submit"
+                  type="button"
+                  onClick={() => handleValiderRetour()}
                   disabled={totalRetour === 0 || isSubmittingRetour}
                   className={clsx(
                     "flex-1 py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-1.5 transition shadow-sm",

@@ -154,34 +154,57 @@ export async function enregistrerRetourEmballage(
   const nowIso = date ? new Date(date).toISOString() : new Date().toISOString()
   const ref = reference || `RET-${Date.now().toString(36).toUpperCase()}`
 
-  // 1. Insertion du mouvement RETOUR
-  const { data, error } = await supabase
+  // 1. Insertion du mouvement RETOUR avec fallback robuste
+  const fullPayload: any = {
+    company_id: companyId,
+    secteur_id: secteurId || null,
+    client_id: clientId,
+    client_nom: clientNom,
+    emballage_code: upperCode,
+    code: upperCode,
+    emballage_type_id: emballageTypeId || null,
+    type_mouvement: 'RETOUR',
+    quantite: quantite,
+    solde_avant: soldeAvant,
+    solde_apres: soldeApres,
+    date: nowIso,
+    observation: observation || `Retour ${quantite} ${upperCode} - ${ref}`,
+  }
+
+  // Tenter l'insertion avec sélection
+  let res = await supabase
     .from('brasserie_emballages_mouvements')
-    .insert({
+    .insert(fullPayload)
+    .select()
+
+  // Si échec sur une colonne ou select, fallback sur les colonnes minimales certifiées
+  if (res.error) {
+    console.warn('[enregistrerRetourEmballage] Première tentative échouée, essai avec payload simplifié:', res.error)
+    const simplePayload = {
       company_id: companyId,
-      secteur_id: secteurId || null,
       client_id: clientId,
       client_nom: clientNom,
-      client_telephone: clientTelephone || null,
-      emballage_code: upperCode,
       code: upperCode,
-      emballage_type_id: emballageTypeId || null,
+      emballage_code: upperCode,
       type_mouvement: 'RETOUR',
       quantite: quantite,
+      date: nowIso,
       solde_avant: soldeAvant,
       solde_apres: soldeApres,
-      date: nowIso,
-      reference: ref,
-      observation: observation || `Retour de ${quantite} ${upperCode}`,
-      created_by: createdBy || null
-    })
-    .select()
-    .single()
-
-  if (error) {
-    console.error('[enregistrerRetourEmballage] Erreur insert:', error)
-    throw error
+      observation: observation || `Retour ${quantite} ${upperCode}`
+    }
+    res = await supabase
+      .from('brasserie_emballages_mouvements')
+      .insert(simplePayload)
+      .select()
   }
+
+  if (res.error) {
+    console.error('[enregistrerRetourEmballage] Erreur insert finale:', res.error)
+    throw new Error(res.error.message || `Erreur d'insertion du retour (${res.error.code || 'Inconnu'})`)
+  }
+
+  const insertedData = res.data && res.data.length > 0 ? res.data[0] : null
 
   // 2. Incrémenter le stock au dépôt dans brasserie_emballages_types
   try {
@@ -219,5 +242,5 @@ export async function enregistrerRetourEmballage(
     console.warn('[enregistrerRetourEmballage] Mise à jour stock dépôt:', err)
   }
 
-  return { movement: data, reference: ref }
+  return { movement: insertedData, reference: ref }
 }
