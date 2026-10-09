@@ -137,20 +137,7 @@ const BrasserieConsignationPage: React.FC = () => {
   const { companyId, sectorSlug, user, isAdmin, supabaseTenant } = useTenant()
   const toast = useUIStore((s) => s.toast)
 
-  // ── Guards ────────────────────────────────────────────────────────────────
-  if (sectorSlug !== 'brasserie') {
-    return (
-      <div className="flex items-center justify-center min-h-[60vh]">
-        <div className="text-center p-8 bg-amber-50 rounded-2xl border border-amber-200 max-w-md">
-          <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
-          <h2 className="text-lg font-bold text-slate-800 mb-2">Module réservé à la Brasserie</h2>
-          <p className="text-sm text-slate-500">Ce module est exclusif au secteur "Brasserie & Dépôt de Boissons".</p>
-        </div>
-      </div>
-    )
-  }
-
-  // ── State ─────────────────────────────────────────────────────────────────
+  // ── State (tous déclarés en premier) ────────────────────────────────────
   const [activeTab, setActiveTab] = useState<TabId>('initiale')
   const [loading, setLoading] = useState(true)
   const [emballages, setEmballages] = useState<Emballage[]>([])
@@ -218,6 +205,61 @@ const BrasserieConsignationPage: React.FC = () => {
 
   // Impression
   const [printingBonRetour, setPrintingBonRetour] = useState<{ mouvement: MouvementEmballage; avant: number; apres: number } | null>(null)
+
+  // ── useMemo calculés immédiatement à partir des states (évite tout TDZ) ─────
+  const clientSoldes = useMemo((): ClientSolde[] => {
+    const map: Record<string, ClientSolde> = {}
+    for (const c of consignations) {
+      if (!c.client || !c.emballage) continue
+      const cid = c.client_id
+      if (!map[cid]) {
+        map[cid] = {
+          client_id: cid,
+          client_name: c.client.name,
+          client_phone: c.client.phone,
+          client_code: c.client.code,
+          soldes: {},
+          total_emballages_dus: 0,
+        }
+      }
+      map[cid].soldes[c.emballage_id] = {
+        emballage: c.emballage,
+        total_sorti: c.total_sorti,
+        total_retourne: c.total_retourne,
+        solde_du: c.solde_du,
+      }
+      map[cid].total_emballages_dus += c.solde_du
+    }
+    return Object.values(map)
+      .filter((cs) => cs.total_emballages_dus > 0 || Object.values(cs.soldes).some((s) => s.total_sorti > 0))
+      .sort((a, b) => b.total_emballages_dus - a.total_emballages_dus)
+  }, [consignations])
+
+  const filteredClientSoldes = useMemo(() => {
+    if (!searchClient) return clientSoldes
+    const q = searchClient.toLowerCase()
+    return clientSoldes.filter(cs =>
+      cs.client_name.toLowerCase().includes(q) ||
+      (cs.client_phone || '').includes(q) ||
+      (cs.client_code || '').toLowerCase().includes(q)
+    )
+  }, [clientSoldes, searchClient])
+
+  const totauxGlobaux = useMemo(() => {
+    const t: Record<string, { emballage: Emballage; total_sorti: number; total_retourne: number; solde_du: number }> = {}
+    for (const c of consignations) {
+      if (!c.emballage) continue
+      const eid = c.emballage_id
+      if (!t[eid]) t[eid] = { emballage: c.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
+      t[eid].total_sorti += c.total_sorti
+      t[eid].total_retourne += c.total_retourne
+      t[eid].solde_du += c.solde_du
+    }
+    return Object.values(t)
+  }, [consignations])
+
+  const totalEmbConsDepose = useMemo(() => emballages.reduce((s, e) => s + (e.stock_depot || 0), 0), [emballages])
+  const totalEmbChezClients = useMemo(() => totauxGlobaux.reduce((s, t) => s + t.solde_du, 0), [totauxGlobaux])
 
   // ── Chargement data ────────────────────────────────────────────────────────
 
@@ -481,64 +523,6 @@ const BrasserieConsignationPage: React.FC = () => {
     if (activeTab === 'historique') loadMouvements()
   }, [activeTab, filterDateDebut, filterDateFin, filterEmballage, filterType])
 
-  // ── Groupement par client ────────────────────────────────────────────────────
-
-  const clientSoldes = useMemo((): ClientSolde[] => {
-    const map: Record<string, ClientSolde> = {}
-    for (const c of consignations) {
-      if (!c.client || !c.emballage) continue
-      const cid = c.client_id
-      if (!map[cid]) {
-        map[cid] = {
-          client_id: cid,
-          client_name: c.client.name,
-          client_phone: c.client.phone,
-          client_code: c.client.code,
-          soldes: {},
-          total_emballages_dus: 0,
-        }
-      }
-      map[cid].soldes[c.emballage_id] = {
-        emballage: c.emballage,
-        total_sorti: c.total_sorti,
-        total_retourne: c.total_retourne,
-        solde_du: c.solde_du,
-      }
-      map[cid].total_emballages_dus += c.solde_du
-    }
-    return Object.values(map)
-      .filter((cs) => cs.total_emballages_dus > 0 || Object.values(cs.soldes).some((s) => s.total_sorti > 0))
-      .sort((a, b) => b.total_emballages_dus - a.total_emballages_dus)
-  }, [consignations])
-
-  const filteredClientSoldes = useMemo(() => {
-    if (!searchClient) return clientSoldes
-    const q = searchClient.toLowerCase()
-    return clientSoldes.filter(cs =>
-      cs.client_name.toLowerCase().includes(q) ||
-      (cs.client_phone || '').includes(q) ||
-      (cs.client_code || '').toLowerCase().includes(q)
-    )
-  }, [clientSoldes, searchClient])
-
-  // ── Totaux globaux ────────────────────────────────────────────────────────────
-
-  const totauxGlobaux = useMemo(() => {
-    const t: Record<string, { emballage: Emballage; total_sorti: number; total_retourne: number; solde_du: number }> = {}
-    for (const c of consignations) {
-      if (!c.emballage) continue
-      const eid = c.emballage_id
-      if (!t[eid]) t[eid] = { emballage: c.emballage, total_sorti: 0, total_retourne: 0, solde_du: 0 }
-      t[eid].total_sorti += c.total_sorti
-      t[eid].total_retourne += c.total_retourne
-      t[eid].solde_du += c.solde_du
-    }
-    return Object.values(t)
-  }, [consignations])
-
-  const totalEmbConsDepose = useMemo(() => emballages.reduce((s, e) => s + (e.stock_depot || 0), 0), [emballages])
-  const totalEmbChezClients = useMemo(() => totauxGlobaux.reduce((s, t) => s + t.solde_du, 0), [totauxGlobaux])
-
   // ── Enregistrer emballage ──────────────────────────────────────────────────
 
   const handleSaveEmballage = async (e: React.FormEvent) => {
@@ -762,6 +746,19 @@ const BrasserieConsignationPage: React.FC = () => {
   const handlePrintBonRetour = () => {
     if (!printingBonRetour) return
     window.print()
+  }
+
+  // ── Guard conditionnel (placé après TOUS les hooks React) ────────────────
+  if (sectorSlug && sectorSlug !== 'brasserie') {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="text-center p-8 bg-amber-50 rounded-2xl border border-amber-200 max-w-md">
+          <AlertTriangle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
+          <h2 className="text-lg font-bold text-slate-800 mb-2">Module réservé à la Brasserie</h2>
+          <p className="text-sm text-slate-500">Ce module est exclusif au secteur "Brasserie & Dépôt de Boissons".</p>
+        </div>
+      </div>
+    )
   }
 
   // ── Render ─────────────────────────────────────────────────────────────────

@@ -24,6 +24,9 @@ export default defineConfig({
     port: 3000,
     host: true
   },
+  esbuild: {
+    keepNames: true,
+  },
   define: {
     // Identifiant unique de chaque build — change à chaque déploiement Vercel
     // Utilisé pour détecter un nouveau déploiement et forcer un rechargement propre
