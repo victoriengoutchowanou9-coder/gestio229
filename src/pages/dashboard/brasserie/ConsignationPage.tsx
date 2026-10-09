@@ -134,7 +134,7 @@ const MOUVEMENT_LABELS: Record<string, { label: string; color: string; bg: strin
 // ─── Composant principal ───────────────────────────────────────────────────────
 
 const BrasserieConsignationPage: React.FC = () => {
-  const { companyId, sectorSlug, user, isAdmin } = useTenant()
+  const { companyId, sectorSlug, user, isAdmin, supabaseTenant } = useTenant()
   const toast = useUIStore((s) => s.toast)
 
   // ── Guards ────────────────────────────────────────────────────────────────
