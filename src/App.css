@@ -1,0 +1,35 @@
+body {
+  padding-top: 40px !important;
+}
+
+html, body {
+  margin-top: 35px !important;
+  height: calc(100% - 35px) !important;
+}
+
+#root, .app-container {
+  padding-top: 0px !important;
+  height: 100% !important;
+}
+
+/* S'assurer que la titlebar est en drag mais ne bloque pas */
+.titlebar, [data-tauri-drag-region] {
+  height: 32px;
+  position: fixed;
+  top: 0; left: 0; right: 0;
+  z-index: 99999;
+  -webkit-app-region: drag;
+}
+
+/* Boutons et éléments interactifs */
+header,
+.no-drag,
+[data-tauri-no-drag],
+button,
+a,
+input,
+select,
+textarea,
+[role="button"] {
+  -webkit-app-region: no-drag !important;
+}

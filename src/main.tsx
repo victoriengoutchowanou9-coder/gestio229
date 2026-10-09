@@ -2,6 +2,7 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
+import './App.css'
 
 // =============================================================================
 // GESTIO 229 — Initialisation globale (thème, PWA, version check, chunk guard)

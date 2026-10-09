@@ -354,7 +354,10 @@ export const BrasserieGrillesPage: React.FC = () => {
   return (
     <div className="space-y-6 p-4 md:p-6 max-w-7xl mx-auto">
       {/* ─── En-tête de Page ──────────────────────────────────────────────── */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200/80 shadow-sm">
+      <div 
+        className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200/80 shadow-sm no-drag"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
         <div className="flex items-start gap-4">
           <div className="p-3 bg-gradient-to-br from-amber-500 to-amber-600 text-white rounded-2xl shadow-md shadow-amber-500/20">
             <Tag className="w-8 h-8" />
@@ -372,11 +375,12 @@ export const BrasserieGrillesPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <button
             onClick={loadData}
             disabled={loading}
-            className="p-2.5 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition"
+            className="p-2.5 text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-xl transition no-drag"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             title="Actualiser les données"
           >
             <RefreshCw className={clsx('w-5 h-5', loading && 'animate-spin')} />

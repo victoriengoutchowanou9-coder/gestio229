@@ -225,7 +225,10 @@ export const DashboardPage: React.FC = () => {
   return (
     <div className="space-y-6 animate-fadeIn">
       {/* ── En-tête du Tableau de Bord du Secteur ────────────────────────────── */}
-      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div 
+        className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-4 no-drag"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className="px-3 py-1 bg-emerald-100 text-emerald-800 font-bold text-xs rounded-full flex items-center gap-1.5">
@@ -244,7 +247,7 @@ export const DashboardPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <button
             onClick={loadDashboardData}
             disabled={loading}

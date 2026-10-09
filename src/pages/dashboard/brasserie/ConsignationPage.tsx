@@ -1209,7 +1209,10 @@ const BrasserieConsignationPage: React.FC = () => {
   return (
     <div className="space-y-4">
       {/* ── En-tête ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      <div 
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 sm:pt-6 no-drag"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
         <div>
           <h1 className="text-2xl font-black text-slate-800 flex items-center gap-2">
             <span className="text-3xl">📦</span>
@@ -1217,11 +1220,19 @@ const BrasserieConsignationPage: React.FC = () => {
           </h1>
           <p className="text-sm text-slate-500 mt-0.5">Brasserie & Dépôt de Boissons — Emballages casiers</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => setModalRetour(true)} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition shadow-sm">
+        <div className="flex flex-wrap gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
+          <button 
+            onClick={() => setModalRetour(true)} 
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold hover:bg-emerald-700 transition shadow-sm no-drag"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
             <ArrowDownLeft className="w-4 h-4" /> Enregistrer un retour
           </button>
-          <button onClick={() => loadAll()} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 transition">
+          <button 
+            onClick={() => loadAll()} 
+            className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 text-slate-600 text-sm hover:bg-slate-50 transition no-drag"
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
             <RefreshCw className="w-4 h-4" />
           </button>
         </div>

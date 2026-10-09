@@ -1397,7 +1397,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       )}
 
       {/* ── En-tête du Module Caisse ─────────────────────────────────────────── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+      <div 
+        className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-sm no-drag"
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+      >
         <div>
           <div className="flex items-center gap-2 mb-1">
             <span className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold flex items-center gap-1 ${
@@ -1439,7 +1442,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         </div>
 
         {/* Boutons d'actions principaux */}
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {/* Ajustement (Admin / Gérant) */}
           <button
             onClick={() => setShowAdjustModal(true)}
