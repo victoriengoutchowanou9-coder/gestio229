@@ -1,14 +1,16 @@
 // =============================================================================
-// GESTIO 229 SaaS — Header : Barre supérieure du dashboard
+// GESTIO 229 SaaS — Header : Barre supérieure compacte & présentable
+// Conforme CDC : h-14, thème sombre #0B1220, 3 actions alignées sur même ligne
 // =============================================================================
 
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { useLocation, Link } from 'react-router-dom'
-import { Menu, Bell, ChevronRight, ArrowLeft, Sun, Moon } from 'lucide-react'
+import { Menu, Bell, ArrowLeft } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
 import { getActiveSectorMeta } from '../../lib/sectorClient'
-import clsx from 'clsx'
+import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
+import { supabase } from '../../lib/supabase'
 
 // Mapping route → titre de page
 const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
@@ -37,109 +39,155 @@ const Header: React.FC = () => {
   const { darkMode, toggleDarkMode } = useUIStore()
   const sectorMeta = getActiveSectorMeta()
 
+  // Calcul jours d'essai restants
+  const [joursRestants, setJoursRestants] = useState<number | null>(null)
+  const [isTrial, setIsTrial] = useState<boolean>(true)
+
+  useEffect(() => {
+    let isMounted = true
+    const fetchSubscription = async () => {
+      const companyId = company?.id
+      if (companyId) {
+        try {
+          const { data: sub } = await supabase
+            .from('subscriptions')
+            .select('fin_essai, status')
+            .eq('company_id', companyId)
+            .maybeSingle()
+          
+          if (!isMounted) return
+
+          if (sub?.fin_essai) {
+            const diff = Math.ceil((new Date(sub.fin_essai).getTime() - Date.now()) / 86400000)
+            setJoursRestants(Math.max(0, diff))
+            setIsTrial(sub.status !== 'active')
+            return
+          }
+        } catch (_) {}
+      }
+
+      if (isMounted) {
+        const info = getCompanySubscriptionInfo(company)
+        setJoursRestants(info.daysRemaining ?? 14)
+        setIsTrial(!info.isActive)
+      }
+    }
+
+    fetchSubscription()
+    return () => { isMounted = false }
+  }, [company?.id, company?.subscription_status, company?.created_at])
+
   // Extraire le module actif depuis la route
   const parts = location.pathname.split('/')
   const activeRoute = parts[parts.length - 1] || 'tableau-bord'
   const pageInfo = PAGE_TITLES[activeRoute] ?? { title: 'Tableau de bord' }
 
-  return (
-    <header 
-      className="flex-shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 py-3 flex items-center gap-3 transition-colors no-drag select-none"
-      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-    >
-      {/* Burger mobile */}
-      <button
-        onClick={toggleMobileSidebar}
-        className="lg:hidden p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition no-drag"
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-      >
-        <Menu className="w-5 h-5" />
-      </button>
-
-      {/* Bouton Retour au HUB Exigé par le CDC (visible PC, tablette et mobile pour les Administrateurs uniquement) */}
-      {(!user || user.role === 'administrateur' || user.role === 'super_admin') && (
-        <Link
-          to="/hub"
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-800 dark:bg-emerald-700 dark:hover:bg-emerald-600 text-white rounded-xl text-xs font-bold transition shadow-sm shrink-0 no-drag"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          title="Revenir au HUB multi-secteurs de GESTIO 229"
-        >
-          <ArrowLeft className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">← Retour au HUB</span>
-          <span className="sm:hidden">HUB</span>
-        </Link>
-      )}
-
-      {/* Breadcrumb */}
-      <div className="flex-1 min-w-0" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        <div className="flex items-center gap-1.5 text-xs text-slate-400 dark:text-slate-500 mb-0.5">
-          <span className="truncate max-w-[120px] font-semibold text-slate-600 dark:text-slate-300">{company?.name ?? 'Entreprise'}</span>
-          <ChevronRight className="w-3 h-3 flex-shrink-0" />
-          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-800">
-            <span>{sectorMeta.emoji || '🏢'}</span>
-            <span className="truncate max-w-[140px]">{sectorMeta.name}</span>
-          </span>
-          <ChevronRight className="w-3 h-3 flex-shrink-0" />
-          <span className="text-slate-800 dark:text-slate-100 font-bold truncate">{pageInfo.title}</span>
+  // Rendu badge essai avec couleurs d'alerte conformes
+  const renderTrialBadge = () => {
+    if (!isTrial) {
+      return (
+        <div className="flex items-center gap-1.5 text-xs text-emerald-400 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20 shrink-0 font-medium">
+          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full"></span>
+          <span>Actif</span>
         </div>
-        {pageInfo.subtitle && (
-          <p className="text-xs text-slate-400 dark:text-slate-500 hidden md:block">{pageInfo.subtitle}</p>
+      )
+    }
+
+    const j = joursRestants !== null ? joursRestants : 14
+    let colorClasses = 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20'
+    let dotClasses = 'bg-emerald-400'
+
+    if (j <= 3) {
+      colorClasses = 'text-red-400 bg-red-500/15 border-red-500/30 animate-pulse'
+      dotClasses = 'bg-red-400 animate-ping'
+    } else if (j <= 7) {
+      colorClasses = 'text-orange-400 bg-orange-500/10 border-orange-500/20'
+      dotClasses = 'bg-orange-400 animate-pulse'
+    }
+
+    return (
+      <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border shrink-0 font-medium ${colorClasses}`}>
+        <span className={`w-1.5 h-1.5 rounded-full ${dotClasses}`}></span>
+        <span>Essai • J-{j}</span>
+      </div>
+    )
+  }
+
+  return (
+    <header className="flex items-center justify-between px-3 sm:px-4 py-2 bg-[#0B1220] border-b border-white/10 h-14 sticky top-0 z-50 shrink-0 w-full select-none">
+      {/* ── GAUCHE : Burger mobile + Retour HUB + Breadcrumb bande verte ── */}
+      <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
+        {/* Burger mobile */}
+        <button
+          onClick={toggleMobileSidebar}
+          className="lg:hidden p-1.5 rounded-lg text-white/70 hover:bg-white/10 transition shrink-0"
+          title="Menu latéral"
+        >
+          <Menu className="w-4 h-4" />
+        </button>
+
+        {/* Bouton Retour au HUB */}
+        {(!user || user.role === 'administrateur' || user.role === 'super_admin') && (
+          <Link
+            to="/hub"
+            className="bg-green-600 hover:bg-green-500 text-white px-3 py-1 rounded-full text-xs sm:text-sm font-semibold flex items-center gap-1 transition shadow-sm shrink-0"
+            title="Revenir au HUB multi-secteurs de GESTIO 229"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">← Retour au HUB</span>
+            <span className="sm:hidden">HUB</span>
+          </Link>
         )}
+
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm text-white/70 truncate">
+          <span className="font-semibold text-white/90 truncate max-w-[120px] sm:max-w-[180px]">
+            {company?.name || 'STE GESTIO SARL'}
+          </span>
+          <span className="text-white/40">›</span>
+          <span className="bg-green-500/20 text-green-400 px-2 py-0.5 rounded-full border border-green-500/30 text-xs font-semibold whitespace-nowrap flex items-center gap-1 shrink-0">
+            <span>{sectorMeta.emoji || '🏢'}</span>
+            <span className="truncate max-w-[140px] sm:max-w-[200px]">{sectorMeta.name || 'Quincaillerie & Matériaux'}</span>
+          </span>
+          <span className="text-white/40 hidden md:inline">›</span>
+          <span className="text-white font-medium truncate hidden md:inline">
+            {pageInfo.title}
+          </span>
+        </div>
       </div>
 
-      {/* Actions droite */}
-      <div className="flex items-center gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-        {/* Sélecteur Thème Clair / Sombre */}
+      {/* ── DROITE : LES 3 SUR MÊME LIGNE OBLIGATOIRE (pr-36 sur desktop pour réserver coin bande verte) ── */}
+      <div className="flex items-center gap-2 sm:gap-3 flex-nowrap shrink-0 lg:pr-36">
+        {/* 1. Theme */}
         <button
           onClick={toggleDarkMode}
-          className="p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800 transition flex items-center gap-1.5 text-xs font-bold no-drag"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          title={darkMode ? 'Basculer en Thème Clair' : 'Basculer en Thème Sombre'}
+          className="flex items-center gap-1 text-xs text-orange-300 hover:text-orange-200 bg-white/5 hover:bg-white/10 px-2.5 py-1.5 rounded-full border border-white/10 transition font-medium shrink-0"
+          title={darkMode ? 'Basculer en mode Clair' : 'Basculer en mode Sombre'}
         >
           {darkMode ? (
             <>
-              <Sun className="w-4 h-4 text-amber-400" />
-              <span className="hidden lg:inline text-slate-200">Clair</span>
+              <span>☀️</span>
+              <span className="hidden xs:inline">Clair</span>
             </>
           ) : (
             <>
-              <Moon className="w-4 h-4 text-slate-600" />
-              <span className="hidden lg:inline text-slate-700">Sombre</span>
+              <span>🌙</span>
+              <span className="hidden xs:inline">Sombre</span>
             </>
           )}
         </button>
 
-        {/* Statut abonnement */}
-        {company?.subscription_status && (
-          <span 
-            className={clsx(
-              'hidden md:inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold no-drag',
-              company.subscription_status === 'active'
-                ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950/80 dark:text-emerald-300'
-                : company.subscription_status === 'trial'
-                ? 'bg-amber-100 text-amber-700 dark:bg-amber-950/80 dark:text-amber-300'
-                : 'bg-red-100 text-red-700 dark:bg-red-950/80 dark:text-red-300'
-            )}
-            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-          >
-            <span className={clsx(
-              'w-1.5 h-1.5 rounded-full',
-              company.subscription_status === 'active' ? 'bg-emerald-500' :
-              company.subscription_status === 'trial' ? 'bg-amber-500' : 'bg-red-500'
-            )} />
-            {company.subscription_status === 'active' ? 'Actif' :
-             company.subscription_status === 'trial' ? 'Essai' : 'Expiré'}
-          </span>
-        )}
+        {/* 2. Essai + jours restants */}
+        {renderTrialBadge()}
 
-        {/* Notifications */}
-        <button 
-          className="relative p-2 rounded-xl text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800 transition no-drag"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        {/* 3. Cloche */}
+        <button
+          className="relative p-2 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 text-white/80 transition shrink-0"
+          title="Notifications"
         >
-          <Bell className="w-5 h-5" />
+          <Bell className="w-3.5 h-3.5" />
           {notifications.length > 0 && (
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
+            <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
           )}
         </button>
       </div>

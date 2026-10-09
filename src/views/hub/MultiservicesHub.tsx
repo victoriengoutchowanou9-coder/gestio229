@@ -876,8 +876,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             </p>
           </div>
 
-          {/* Actions globales */}
-          <div className="flex items-center gap-2 flex-wrap self-start">
+          {/* Actions globales (réservation espace coin vert PWA via lg:pr-36) */}
+          <div className="flex items-center gap-2 flex-wrap self-start lg:pr-36">
             {/* Toggle Mode Sombre / Clair */}
             <button
               type="button"

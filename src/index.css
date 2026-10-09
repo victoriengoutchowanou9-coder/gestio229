@@ -20,8 +20,10 @@
 }
 
 html, body {
-  margin-top: 35px !important;
-  height: calc(100% - 35px) !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  height: 100%;
+  background-color: #0F172A !important;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -29,15 +31,7 @@ html, body {
 
 #root, .app-container {
   height: 100% !important;
-}
-
-/* S'assurer que la titlebar est en drag mais ne bloque pas */
-.titlebar, [data-tauri-drag-region] {
-  height: 32px;
-  position: fixed;
-  top: 0; left: 0; right: 0;
-  z-index: 99999;
-  -webkit-app-region: drag;
+  background-color: #0F172A;
 }
 
 /* Header & éléments interactifs cliquables (no-drag) */
