@@ -1,6 +1,6 @@
 -- =============================================================================
 -- M052 : NETTOYAGE DÉFINITIF DES EMBALLAGES FANTÔMES (UUID) — GESTIO 229 ERP
--- SECTEUR BRASSERIE & DÉPÔT DE BOISSONS (100% INFAILLIBLE / AUCUNE ERREUR RELATION)
+-- SECTEUR BRASSERIE & DÉPÔT DE BOISSONS (100% SÉCURISÉ & SANS ERREUR DE COLONNE)
 -- =============================================================================
 
 DO $$
@@ -31,22 +31,22 @@ BEGIN
 END $$;
 
 -- 5. S'assurer que les vrais types standards existent dans brasserie_emballages_types
-INSERT INTO brasserie_emballages_types (company_id, secteur_id, code, nom, stock_depot)
-SELECT c.id, c.sector_id, 'C12T', 'Casier 12 Bouteilles', 0 
+INSERT INTO brasserie_emballages_types (company_id, code, nom, stock_depot)
+SELECT c.id, 'C12T', 'Casier 12 Bouteilles', 0 
 FROM companies c
 WHERE NOT EXISTS (
   SELECT 1 FROM brasserie_emballages_types bet WHERE bet.company_id = c.id AND bet.code = 'C12T'
 );
 
-INSERT INTO brasserie_emballages_types (company_id, secteur_id, code, nom, stock_depot)
-SELECT c.id, c.sector_id, 'C20T', 'Casier 20 Bouteilles', 0 
+INSERT INTO brasserie_emballages_types (company_id, code, nom, stock_depot)
+SELECT c.id, 'C20T', 'Casier 20 Bouteilles', 0 
 FROM companies c
 WHERE NOT EXISTS (
   SELECT 1 FROM brasserie_emballages_types bet WHERE bet.company_id = c.id AND bet.code = 'C20T'
 );
 
-INSERT INTO brasserie_emballages_types (company_id, secteur_id, code, nom, stock_depot)
-SELECT c.id, c.sector_id, 'C24T', 'Casier 24 Bouteilles', 0 
+INSERT INTO brasserie_emballages_types (company_id, code, nom, stock_depot)
+SELECT c.id, 'C24T', 'Casier 24 Bouteilles', 0 
 FROM companies c
 WHERE NOT EXISTS (
   SELECT 1 FROM brasserie_emballages_types bet WHERE bet.company_id = c.id AND bet.code = 'C24T'
