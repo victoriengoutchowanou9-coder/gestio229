@@ -13,6 +13,33 @@
   --brand-700: #047857;
   --brand-800: #065f46;
   --brand-900: #064e3b;
+  --bleu-nuit: #0B1E3C;
+  --bleu-nuit-light: #132A4D;
+  --blanc: #FFFFFF;
+}
+
+[data-theme="clair"], :root:not(.dark):not([data-theme="sombre"]) {
+  --bg-main: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-sidebar: #F8FAFC;
+  --bg-header: #FFFFFF;
+  --text-main: #0B1E3C;
+  --text-secondary: #334155;
+  --text-muted: #64748B;
+  --border: #E2E8F0;
+  --card-shadow: 0 1px 3px rgba(11, 30, 60, 0.08);
+}
+
+[data-theme="sombre"], .dark, :root[data-theme="sombre"] {
+  --bg-main: #0B1220;
+  --bg-card: #121E35;
+  --bg-sidebar: #0B1E3C;
+  --bg-header: #0B1220;
+  --text-main: #FFFFFF;
+  --text-secondary: #CBD5E1;
+  --text-muted: #94A3B8;
+  --border: rgba(255, 255, 255, 0.1);
+  --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
 }
 
 * {
@@ -23,7 +50,10 @@ html, body {
   margin: 0 !important;
   padding: 0 !important;
   height: 100%;
-  background-color: #0F172A !important;
+  min-height: 100%;
+  background: var(--bg-main) !important;
+  color: var(--text-main) !important;
+  transition: background-color 0.25s ease, color 0.25s ease;
   font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -31,7 +61,132 @@ html, body {
 
 #root, .app-container {
   height: 100% !important;
-  background-color: #0F172A;
+  background: var(--bg-main) !important;
+  color: var(--text-main) !important;
+}
+
+/* Thème Clair : Cartes blanches, texte bleu nuit, bordures douces */
+[data-theme="clair"] .bg-white,
+[data-theme="clair"] [class*="bg-white"] {
+  background-color: #FFFFFF !important;
+  color: #0B1E3C !important;
+  border-color: #E2E8F0 !important;
+}
+
+[data-theme="clair"] .text-slate-900,
+[data-theme="clair"] .text-slate-800,
+[data-theme="clair"] .text-slate-700 {
+  color: #0B1E3C !important;
+}
+
+[data-theme="clair"] .text-slate-600,
+[data-theme="clair"] .text-slate-500 {
+  color: #334155 !important;
+}
+
+[data-theme="clair"] .text-slate-400,
+[data-theme="clair"] .text-slate-300 {
+  color: #64748B !important;
+}
+
+/* Thème Sombre : Cartes bleu nuit clair #121E35, fond #0B1220, texte blanc */
+[data-theme="sombre"] .bg-white {
+  background-color: #121E35 !important;
+  color: #FFFFFF !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+[data-theme="sombre"] .text-slate-900,
+[data-theme="sombre"] .text-slate-800,
+[data-theme="sombre"] .text-slate-700 {
+  color: #FFFFFF !important;
+}
+
+[data-theme="sombre"] .text-slate-600,
+[data-theme="sombre"] .text-slate-500,
+[data-theme="sombre"] .text-slate-400 {
+  color: #CBD5E1 !important;
+}
+
+[data-theme="sombre"] .text-slate-300,
+[data-theme="sombre"] .text-slate-200 {
+  color: #F1F5F9 !important;
+}
+
+[data-theme="sombre"] .border-slate-200,
+[data-theme="sombre"] .border-slate-100 {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Inputs & Form controls */
+[data-theme="clair"] input,
+[data-theme="clair"] select,
+[data-theme="clair"] textarea {
+  background-color: #FFFFFF !important;
+  color: #0B1E3C !important;
+  border-color: #CBD5E1 !important;
+}
+
+[data-theme="sombre"] input,
+[data-theme="sombre"] select,
+[data-theme="sombre"] textarea {
+  background-color: #0B1E3C !important;
+  color: #FFFFFF !important;
+  border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Boutons secondaires & conteneurs neutres */
+[data-theme="sombre"] .bg-slate-100 {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  color: #CBD5E1 !important;
+}
+
+[data-theme="sombre"] .bg-slate-100:hover {
+  background-color: rgba(255, 255, 255, 0.14) !important;
+  color: #FFFFFF !important;
+}
+
+[data-theme="clair"] .bg-slate-100 {
+  background-color: #F1F5F9 !important;
+  color: #0B1E3C !important;
+}
+
+[data-theme="clair"] .bg-slate-100:hover {
+  background-color: #E2E8F0 !important;
+  color: #0B1E3C !important;
+}
+
+[data-theme="sombre"] .bg-slate-50 {
+  background-color: #0B1220 !important;
+  color: #CBD5E1 !important;
+}
+
+[data-theme="clair"] .bg-slate-50 {
+  background-color: #F8FAFC !important;
+  color: #0B1E3C !important;
+}
+
+/* Tableaux */
+[data-theme="clair"] th {
+  background-color: #F8FAFC !important;
+  color: #0B1E3C !important;
+  border-color: #E2E8F0 !important;
+}
+
+[data-theme="sombre"] th {
+  background-color: #0B1E3C !important;
+  color: #FFFFFF !important;
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+[data-theme="clair"] td {
+  border-color: #E2E8F0 !important;
+  color: #0B1E3C !important;
+}
+
+[data-theme="sombre"] td {
+  border-color: rgba(255, 255, 255, 0.08) !important;
+  color: #E2E8F0 !important;
 }
 
 /* Header & éléments interactifs cliquables (no-drag) */

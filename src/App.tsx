@@ -12,6 +12,7 @@ import SectorErrorBoundary from './components/common/SectorErrorBoundary'
 import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
 import { safeLazy } from './lib/safeLazy'
 import { useTenant } from './hooks/useTenant'
+import { ThemeProvider } from './context/ThemeContext'
 
 // ─── Lazy Loading des pages (safeLazy = auto-reload si chunk introuvable) ────
 
@@ -605,14 +606,16 @@ const AppRoutes: React.FC = () => {
 
 const App: React.FC = () => {
   return (
-    <BrowserRouter>
-      <AppInitializer />
-      <SectorErrorBoundary>
-        <Suspense fallback={<FullPageLoader />}>
-          <AppRoutes />
-        </Suspense>
-      </SectorErrorBoundary>
-    </BrowserRouter>
+    <ThemeProvider>
+      <BrowserRouter>
+        <AppInitializer />
+        <SectorErrorBoundary>
+          <Suspense fallback={<FullPageLoader />}>
+            <AppRoutes />
+          </Suspense>
+        </SectorErrorBoundary>
+      </BrowserRouter>
+    </ThemeProvider>
   )
 }
 

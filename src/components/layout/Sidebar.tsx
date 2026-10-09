@@ -64,9 +64,12 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
           'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group',
           isActive
             ? 'bg-emerald-600 text-white shadow-sm'
-            : 'text-slate-600 dark:text-slate-300 hover:bg-emerald-50 dark:hover:bg-slate-800 hover:text-emerald-700 dark:hover:text-emerald-400'
+            : 'hover:bg-emerald-500/10 hover:text-emerald-500'
         )
       }
+      style={({ isActive }) => ({
+        color: isActive ? '#FFFFFF' : 'var(--text-secondary)'
+      })}
       title={collapsed ? label : undefined}
     >
       {({ isActive }) => (
@@ -74,7 +77,7 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
           <span className="flex-shrink-0">
             <DynamicIcon
               name={icon}
-              className={clsx('w-5 h-5', isActive ? 'text-white' : 'text-slate-500 dark:text-slate-400 group-hover:text-emerald-600 dark:group-hover:text-emerald-400')}
+              className={clsx('w-5 h-5', isActive ? 'text-white' : 'opacity-80 group-hover:text-emerald-500')}
             />
           </span>
           {!collapsed && (
@@ -109,8 +112,13 @@ const Sidebar: React.FC = () => {
   return (
     <>
       <aside
+        style={{
+          background: 'var(--bg-sidebar)',
+          borderColor: 'var(--border)',
+          color: 'var(--text-main)'
+        }}
         className={clsx(
-          'flex flex-col bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 transition-all duration-300 z-30',
+          'flex flex-col border-r transition-all duration-300 z-30',
           // Desktop
           sidebarCollapsed ? 'w-16' : 'w-64',
           // Mobile

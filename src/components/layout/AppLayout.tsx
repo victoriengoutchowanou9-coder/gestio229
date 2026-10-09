@@ -27,7 +27,10 @@ const AppLayout: React.FC = () => {
   }, [location.pathname])
 
   return (
-    <div className="flex h-screen w-full bg-[#0F172A] text-slate-100 overflow-hidden app-container">
+    <div 
+      className="flex h-screen w-full overflow-hidden app-container transition-colors duration-200"
+      style={{ background: 'var(--bg-main)', color: 'var(--text-main)' }}
+    >
       {/* Overlay mobile */}
       {sidebarMobileOpen && (
         <div
@@ -40,9 +43,15 @@ const AppLayout: React.FC = () => {
       <Sidebar />
 
       {/* Main content direct sans spacer blanc */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0F172A]">
+      <div 
+        className="flex-1 flex flex-col min-w-0 overflow-hidden transition-colors duration-200"
+        style={{ background: 'var(--bg-main)' }}
+      >
         <Header />
-        <main className="flex-1 overflow-y-auto pt-4">
+        <main 
+          className="flex-1 overflow-y-auto pt-4 transition-colors duration-200"
+          style={{ background: 'var(--bg-main)' }}
+        >
           <div className="px-4 pb-6 md:px-6 md:pb-8 animate-fade-in max-w-7xl w-full mx-auto">
             <SectorErrorBoundary>
               <AppProvider>

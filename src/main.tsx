@@ -12,12 +12,17 @@ declare const __APP_VERSION__: string
 
 if (typeof window !== 'undefined') {
 
-  // ── 1. Thème clair/sombre (sans saut visuel) ─────────────────────────────
-  const savedTheme = localStorage.getItem('gestio_theme')
-  if (savedTheme === 'dark') {
-    document.documentElement.classList.add('dark')
-  } else {
+  // ── 1. Thème clair/sombre (sans saut visuel, synchronisé data-theme) ────
+  const savedTheme = localStorage.getItem('gestio-theme') || localStorage.getItem('gestio_theme')
+  const isClair = savedTheme === 'clair' || savedTheme === 'light'
+  const themeVal = isClair ? 'clair' : 'sombre'
+  document.documentElement.setAttribute('data-theme', themeVal)
+  if (isClair) {
     document.documentElement.classList.remove('dark')
+    document.documentElement.classList.add('light')
+  } else {
+    document.documentElement.classList.remove('light')
+    document.documentElement.classList.add('dark')
   }
 
   // ── 2. Version check : détection de nouveau déploiement Vercel ───────────

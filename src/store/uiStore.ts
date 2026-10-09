@@ -100,8 +100,17 @@ export const useUIStore = create<UIState>()((set, get) => ({
     set((s) => {
       const next = !s.darkMode
       if (typeof window !== 'undefined') {
+        const themeVal = next ? 'sombre' : 'clair'
         localStorage.setItem('gestio_theme', next ? 'dark' : 'light')
-        document.documentElement.classList.toggle('dark', next)
+        localStorage.setItem('gestio-theme', themeVal)
+        document.documentElement.setAttribute('data-theme', themeVal)
+        if (next) {
+          document.documentElement.classList.remove('light')
+          document.documentElement.classList.add('dark')
+        } else {
+          document.documentElement.classList.remove('dark')
+          document.documentElement.classList.add('light')
+        }
       }
       return { darkMode: next }
     })
