@@ -162,6 +162,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     nb_ventes: 0,
   })
 
+  const [lastClosure, setLastClosure] = useState<{ fond_reel_especes: number; fond_reel_momo: number }>({ fond_reel_especes: 0, fond_reel_momo: 0 })
   const [allCloturesTotals, setAllCloturesTotals] = useState<{ especes: number; momo: number }>({ especes: 0, momo: 0 })
   const [allDepensesTotals, setAllDepensesTotals] = useState<{ especes: number; momo: number }>({ especes: 0, momo: 0 })
   const [allRetraitsTotals, setAllRetraitsTotals] = useState<{ especes: number; momo: number }>({ especes: 0, momo: 0 })
@@ -664,6 +665,23 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           const jourRes = await getCaisseJournaliereBySector(currentCompanyId, secId, cId, todayDate)
           setCaisseJourData(jourRes)
 
+          // Récupérer DERNIÈRE clôture sans filtre date
+          const { data: lastZ } = await supabase
+            .from('clotures_caisse')
+            .select('fond_reel_especes, fond_reel_momo, fond_reel, fond_especes_apres, fond_momo_apres, especes_cloture, momo_cloture')
+            .eq('company_id', currentCompanyId)
+            .eq('secteur_id', secId)
+            .order('date_cloture', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          const repEsp = Number(lastZ?.fond_reel_especes ?? lastZ?.fond_reel ?? lastZ?.fond_especes_apres ?? lastZ?.especes_cloture ?? 0)
+          const repMo = Number(lastZ?.fond_reel_momo ?? lastZ?.fond_momo_apres ?? lastZ?.momo_cloture ?? 0)
+          setLastClosure({
+            fond_reel_especes: repEsp,
+            fond_reel_momo: repMo,
+          })
+
           // Clôtures archivées pour le sous-texte
           const { data: clList } = await supabase
             .from('clotures_caisse')
@@ -846,29 +864,24 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     ? caisseJourData.nb_ventes
     : salesToday.length
 
-  // 2. Fond Initial
-  const fondInitialEspeces = Number(fondsActuelsData.fond_initial_especes) || initialCash
-  const fondInitialMomo = Number(fondsActuelsData.fond_initial_momo) || initialMomo
+  // 2. Fond Initial / Report de la dernière clôture
+  const reportEspeces = Number(lastClosure.fond_reel_especes) || Number(fondsActuelsData.fond_initial_especes) || initialCash
+  const reportMomo = Number(lastClosure.fond_reel_momo) || Number(fondsActuelsData.fond_initial_momo) || initialMomo
 
-  // 3. Totaux cumulés pour affichage et calcul
-  const sumCloturesEspeces = allCloturesTotals.especes
-  const sumCloturesMomo = allCloturesTotals.momo
-  const sumDepensesEspeces = allDepensesTotals.especes > 0 ? allDepensesTotals.especes : depensesEspeces
-  const sumDepensesMomo = allDepensesTotals.momo > 0 ? allDepensesTotals.momo : depensesMomo
-  const sumRetraitsEspeces = allRetraitsTotals.especes > 0 ? allRetraitsTotals.especes : totalRetraitsEspeces
-  const sumRetraitsMomo = allRetraitsTotals.momo > 0 ? allRetraitsTotals.momo : totalRetraitsMomo
+  const fondInitialEspeces = reportEspeces
+  const fondInitialMomo = reportMomo
 
-  // 4. Fond Actuel (Coffre-fort cumulé) : PEUT ÊTRE NÉGATIF (DÉCOUVERT AUTORISÉ)
-  // RÈGLE CLIENT STRICTE :
-  // Les ventes ne rentrent dans le FOND ACTUEL qu'après CLÔTURE.
-  // Les dépenses et retraits sont déduits du FOND ACTUEL (pas du jour).
-  const fondActuelEspeces = (fondsActuelsData.id || fondsActuelsData.fond_actuel_especes !== 0)
-    ? fondsActuelsData.fond_actuel_especes
-    : (fondInitialEspeces + sumCloturesEspeces - sumDepensesEspeces - sumRetraitsEspeces)
+  // 3. Totaux du jour (dépenses et retraits)
+  const depensesEspecesJour = depensesEspeces
+  const depensesMomoJour = depensesMomo
+  const retraitsEspecesJour = totalRetraitsEspeces
+  const retraitsMomoJour = totalRetraitsMomo
 
-  const fondActuelMomo = (fondsActuelsData.id || fondsActuelsData.fond_actuel_momo !== 0)
-    ? fondsActuelsData.fond_actuel_momo
-    : (fondInitialMomo + sumCloturesMomo - sumDepensesMomo - sumRetraitsMomo)
+  // 4. FORMULE FINALE CORRIGÉE DEMANDÉE :
+  // Fond Actuel Espèces = Dernier Fond (dernière clôture) + Espèces du Jour (aujourd'hui) - Dépenses du Jour - Retraits du Jour
+  // Fond Actuel MoMo = Dernier Fond MoMo (dernière clôture) + MoMo du Jour (aujourd'hui) - Dépenses MoMo du Jour - Retraits MoMo du Jour
+  const fondActuelEspeces = reportEspeces + especesDuJour - depensesEspecesJour - retraitsEspecesJour
+  const fondActuelMomo = reportMomo + momoDuJour - depensesMomoJour - retraitsMomoJour
 
   // Fond théorique espèces à la clôture (pour vérification écarts physiques si besoin)
   const fondTheoriqueEsp = fondActuelEspeces + especesDuJour
@@ -1634,8 +1647,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                   toast.error("Session antérieure non clôturée", "Vous devez clôturer la session de la veille avant d'ouvrir la caisse aujourd'hui.")
                   return
                 }
-                setOpenInputCash(initialCash)
-                setOpenInputMomo(initialMomo)
+                setOpenInputCash(reportEspeces)
+                setOpenInputMomo(reportMomo)
                 setShowOpenModal(true)
               }}
               disabled={isPreviousDaySession}
@@ -1757,8 +1770,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </span>
             )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Initial ({fmt(fondInitialEspeces)}) + Clôtures ({fmt(sumCloturesEspeces)}) - Dépenses ({fmt(sumDepensesEspeces)}) - Retraits ({fmt(sumRetraitsEspeces)})
+          <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5 font-medium">
+            Report {fmt(reportEspeces)} + Jour {fmt(especesDuJour)} - Dépenses {fmt(depensesEspecesJour)}{retraitsEspecesJour > 0 ? ` - Retraits ${fmt(retraitsEspecesJour)}` : ''}
           </p>
         </div>
 
@@ -1784,8 +1797,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </span>
             )}
           </div>
-          <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5">
-            Initial ({fmt(fondInitialMomo)}) + MoMo ({fmt(sumCloturesMomo)}) - Dépenses ({fmt(sumDepensesMomo)}) - Retraits ({fmt(sumRetraitsMomo)})
+          <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5 font-medium">
+            Report {fmt(reportMomo)} + Jour {fmt(momoDuJour)} - Dépenses {fmt(depensesMomoJour)}{retraitsMomoJour > 0 ? ` - Retraits ${fmt(retraitsMomoJour)}` : ''}
           </p>
         </div>
 

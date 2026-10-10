@@ -241,6 +241,8 @@ export const ClotureCaisse: React.FC = () => {
             fond_momo_apres: ligne.mode === 'mtn_momo' ? ligne.soldeActuel : 0,
             fond_theorique: ligne.soldeActuel,
             fond_reel: ligne.soldeActuel,
+            fond_reel_especes: ligne.mode === 'espece' ? ligne.soldeActuel : 0,
+            fond_reel_momo: ligne.mode === 'mtn_momo' ? ligne.soldeActuel : 0,
             ecart: 0,
             total_entrees: ligne.totalEntrees,
             total_sorties: ligne.totalSorties,

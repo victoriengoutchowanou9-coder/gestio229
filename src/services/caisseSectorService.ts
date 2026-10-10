@@ -1087,6 +1087,8 @@ export async function cloturerCaisseOfficielle(
         total_sorties: details?.total_sorties ?? 0,
         fond_theorique: fondTheorique,
         fond_reel: fondReel,
+        fond_reel_especes: fondReel,
+        fond_reel_momo: newMomo,
         ecart: ecart,
         commentaire: details?.commentaire || 'Clôture de caisse effectuée',
         created_by: validUserId,
