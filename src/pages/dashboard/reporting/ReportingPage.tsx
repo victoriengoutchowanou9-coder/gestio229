@@ -88,6 +88,7 @@ export const ReportingPage: React.FC = () => {
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([])
   const [customers, setCustomers] = useState<CustomerRecord[]>([])
   const [products, setProducts] = useState<ProductRecord[]>([])
+  const [avoirs, setAvoirs] = useState<FactureAvoirRecord[]>([])
 
   // Charger toutes les données métier réelles du tenant
   const loadData = useCallback(async () => {
@@ -176,8 +177,14 @@ export const ReportingPage: React.FC = () => {
       setExpenses((sectorExpenses as any) || [])
       setCustomers((sectorCustomers as any) || [])
       setProducts((sectorProducts as any) || [])
-      const allAvoirs = await getAllAvoirs(company.id, currentSectorSlug)
-      setAvoirs(allAvoirs)
+
+      try {
+        const allAvoirs = await getAllAvoirs(company.id, currentSectorSlug)
+        setAvoirs(Array.isArray(allAvoirs) ? allAvoirs : [])
+      } catch (avErr) {
+        console.warn('[ReportingPage] Avoirs non disponibles ou erreur:', avErr)
+        setAvoirs([])
+      }
     } catch (err: any) {
       toast.error('Erreur chargement rapports', err.message)
     } finally {
@@ -227,11 +234,19 @@ export const ReportingPage: React.FC = () => {
 
   // ─── Dépenses Filtrées par Période ────────────────────────────────────────
   const filteredExpenses = useMemo(() => {
-    // Filtrer les avoirs validés sur la période sélectionnée
+    return (expenses || []).filter((e) => {
+      const eDate = (e.expense_date || e.created_at || '').split('T')[0]
+      if (dateRangeStart && eDate < dateRangeStart) return false
+      if (dateRangeEnd && eDate > dateRangeEnd) return false
+      return true
+    })
+  }, [expenses, dateRangeStart, dateRangeEnd])
+
+  // ─── Avoirs Filtrés par Période ───────────────────────────────────────────
   const filteredAvoirs = useMemo(() => {
-    return avoirs.filter((a) => {
-      if (a.statut === 'annule') return false
-      const aDate = a.date_avoir ? a.date_avoir.slice(0, 10) : ''
+    return (avoirs || []).filter((a) => {
+      if (a?.statut === 'annule') return false
+      const aDate = a?.date_avoir ? a.date_avoir.slice(0, 10) : ''
       if (!aDate) return true
       if (dateRangeStart && aDate < dateRangeStart) return false
       if (dateRangeEnd && aDate > dateRangeEnd) return false
@@ -240,23 +255,18 @@ export const ReportingPage: React.FC = () => {
   }, [avoirs, dateRangeStart, dateRangeEnd])
 
   const totalAvoirsValides = useMemo(() => {
-    return filteredAvoirs.reduce((sum, a) => sum + (Number(a.montant_total_avoir) || 0), 0)
+    return (filteredAvoirs || []).reduce((sum, a) => sum + (Number(a?.montant_total_avoir) || 0), 0)
   }, [filteredAvoirs])
-
-  return expenses.filter((e) => {
-      const eDate = (e.expense_date || e.created_at || '').split('T')[0]
-      if (dateRangeStart && eDate < dateRangeStart) return false
-      if (dateRangeEnd && eDate > dateRangeEnd) return false
-      return true
-    })
-  }, [expenses, dateRangeStart, dateRangeEnd])
 
   // ─── Indicateurs Spécifiés au Point 14 ─────────────────────────────────────
 
-  // 1. Chiffre d'Affaires (CA) réel
+  // 1. Chiffre d'Affaires (CA) réel Brut et Net
   const totalRevenue = useMemo(() => {
-    return filteredSales.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
+    return (filteredSales || []).reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
   }, [filteredSales])
+
+  const totalRevenueBrut = totalRevenue
+  const totalRevenueNet = Math.max(0, totalRevenue - totalAvoirsValides)
 
   // 2. Total des Dépenses Réelles
   const totalExpenses = useMemo(() => {
@@ -351,6 +361,18 @@ export const ReportingPage: React.FC = () => {
         }
       })
 
+      // Calcul des quantités retournées par avoirs pour ce produit
+      let qtyAvoiree = 0
+      filteredAvoirs.forEach((av: any) => {
+        const lignes = Array.isArray(av.lignes) ? av.lignes : []
+        lignes.forEach((al: any) => {
+          if (al.article_id === prod.id || al.article_nom === prod.name) {
+            qtyAvoiree += Number(al.qte_retournee || 0)
+          }
+        })
+      })
+
+      const netQtySold = Math.max(0, realQtySold - qtyAvoiree)
       const totalPurchases = realQtySold * costPrice
       const totalSales = realQtySold > 0 ? realCaTTC : (realQtySold * defaultSell)
       const unitSale = realQtySold > 0 ? Math.round(totalSales / realQtySold) : defaultSell
@@ -632,6 +654,7 @@ export const ReportingPage: React.FC = () => {
                     <td className="p-4 text-right font-mono font-medium text-slate-600">{fmt(item.costPrice)}</td>
                     <td className="p-4 text-right font-mono font-bold text-slate-900">{fmt(item.sellingPrice)}</td>
                     <td className="p-4 text-center font-mono font-bold text-slate-700">{item.qtySold}</td>
+                    <td className="p-4 text-center font-mono font-bold text-rose-600">{item.qtyAvoiree > 0 ? `-${item.qtyAvoiree}` : '0'}</td>
                     <td className={`p-4 text-right font-mono font-black ${item.netMargin >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
                       {fmt(item.netMargin)}
                     </td>
