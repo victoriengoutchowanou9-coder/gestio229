@@ -22,6 +22,7 @@ import { useAppContext } from '../../../contexts/AppContext'
 import { getActiveCaisse, getCurrentCashSession, ActiveCaisseSession } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../../lib/sectorClient'
 import { ModalPortal, TransfertStockModal } from '../../../components/modals'
+import { CreerAvoirModal } from '../../../components/factures/CreerAvoirModal'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
 import { decomposerTTC } from '../../../utils/calculPrix'
 import { FactureBrasserieTemplate, FactureBrasserieData } from '../../../components/factures/FactureBrasserieTemplate'
@@ -412,6 +413,8 @@ export const POSPage: React.FC = () => {
 
   // Facture et Impression
   const [showInvoiceModal, setShowInvoiceModal] = useState(false)
+  const [showAvoirModal, setShowAvoirModal] = useState(false)
+  const [selectedSaleForAvoir, setSelectedSaleForAvoir] = useState<SaleRecord | null>(null)
   const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4' | 'brasserie'>('factureA4')
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
 
@@ -2289,153 +2292,18 @@ export const POSPage: React.FC = () => {
 
   // ─── Facture d'Avoir Réelle avec Supabase ──────────────────────────────────
 
-  const handleCreateAvoir = async (sale: SaleRecord) => {
-    if (sale.status === 'AVOIR') {
-      toast.error('Opération impossible', 'Cette facture fait déjà l\'objet d\'un avoir.')
+  const handleOpenAvoirModal = (sale?: SaleRecord) => {
+    if (sale && sale.status === "AVOIR") {
+      toast.error("Opération impossible", "Cette facture fait déjà l'objet d'un avoir.")
       return
     }
-
-    try {
-      // 1. Mettre à jour sales_orders dans Supabase
-      await supabaseTenant('sales_orders')
-        .update({
-          payment_status: 'avoir',
-          e_mecef_uid: `PAY:avoir|CL:${sale.customer_name.slice(0, 30)}|ST:AVOIR`.slice(0, 100)
-        })
-        .eq('id', sale.id)
-
-      // 2. Si crédit, restaurer la dette du client dans Supabase
-      if (sale.credit_amount > 0 && sale.customer_id) {
-        const cust = customers.find((c) => c.id === sale.customer_id)
-        if (cust) {
-          const updatedDebt = Math.max(0, (cust.current_debt || 0) - sale.credit_amount)
-          await supabaseTenant('customers')
-            .update({ current_debt: updatedDebt })
-            .eq('id', cust.id)
-
-          setCustomers((prev) =>
-            prev.map((c) => (c.id === cust.id ? { ...c, current_debt: updatedDebt } : c))
-          )
-        }
-      }
-
-      // 3. Réintégrer le stock dans le Stock Vente (en UV)
-      for (const line of sale.lines) {
-        if (line.product?.id) {
-          const prod = products.find((p) => p.id === line.product.id)
-          const currentStockVente = Number(prod?.stock_vente ?? prod?.sector_meta?.stock_vente ?? 0)
-          const currentStockMagasin = Number(prod?.stock_magasin ?? prod?.sector_meta?.stock_magasin ?? 0)
-          const restoredStockVente = Math.round((currentStockVente + line.qty) * 1000) / 1000
-
-          const currentMeta = prod?.sector_meta || {}
-          const updatedMeta = { ...currentMeta, stock_vente: restoredStockVente, stock_magasin: currentStockMagasin }
-
-          await supabaseTenant('products')
-            .update({ sector_meta: updatedMeta })
-            .eq('id', line.product.id)
-
-          const avoirCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
-          const avoirUvCost = Math.round(((line.product.cost_price || 0) / avoirCoef) * 100) / 100
-          const avoirTotalCost = Math.round(avoirUvCost * line.qty * 100) / 100
-
-          await supabaseTenant('stock_movements').insert({
-            company_id: company?.id ?? companyId ?? '',
-            product_id: line.product.id,
-            movement_type: 'RETOUR_AVOIR',
-            reference_type: 'sales_order',
-            reference_id: sale.id,
-            reference_number: `AVOIR-${sale.order_number}`,
-            quantity: line.qty,
-            previous_stock: currentStockVente,
-            new_stock: restoredStockVente,
-            unit_cost: avoirUvCost,
-            total_cost: avoirTotalCost,
-            notes: `Retour Stock Vente sur Avoir ${sale.order_number}`
-          })
-
-          setProducts((prev) =>
-            prev.map((p) => (p.id === line.product.id ? { ...p, stock_vente: restoredStockVente, sector_meta: updatedMeta } : p))
-          )
-        }
-      }
-
-      // 4. Si secteur Brasserie, réintégrer les emballages consignés et ajuster la situation client
-      if (currentSectorSlug === 'brasserie' && sale.emballages_consignes && sale.emballages_consignes.length > 0) {
-        try {
-          const compId = company?.id ?? companyId ?? ''
-          for (const emb of sale.emballages_consignes) {
-            const { data: embRow } = await supabase
-              .from('brasserie_emballages')
-              .select('id, stock_depot')
-              .eq('company_id', compId)
-              .eq('sector_slug', 'brasserie')
-              .eq('code', emb.code)
-              .maybeSingle()
-
-            if (embRow) {
-              const netSorti = emb.sortie - (emb.retour || 0)
-              if (netSorti > 0) {
-                await supabase.from('brasserie_mouvements_emballages').insert({
-                  company_id: compId,
-                  sector_slug: 'brasserie',
-                  emballage_id: embRow.id,
-                  client_id: sale.customer_id || null,
-                  type_mouvement: 'AVOIR_RETOUR',
-                  quantite: netSorti,
-                  reference: `AVOIR-${sale.order_number}`,
-                  vente_id: sale.id,
-                  notes: `Restitution emballages sur Facture d'Avoir ${sale.order_number}`,
-                  created_by_name: user?.full_name || 'Utilisateur',
-                })
-
-                const newStockDepot = (Number(embRow.stock_depot) || 0) + netSorti
-                await supabase
-                  .from('brasserie_emballages')
-                  .update({ stock_depot: newStockDepot, updated_at: new Date().toISOString() })
-                  .eq('id', embRow.id)
-
-                if (sale.customer_id) {
-                  const { data: exCons } = await supabase
-                    .from('brasserie_consignations')
-                    .select('*')
-                    .eq('company_id', compId)
-                    .eq('sector_slug', 'brasserie')
-                    .eq('client_id', sale.customer_id)
-                    .eq('emballage_id', embRow.id)
-                    .maybeSingle()
-
-                  if (exCons) {
-                    const newTotalSorti = Math.max(0, (Number(exCons.total_sorti) || 0) - netSorti)
-                    const newSoldeDu = Math.max(0, newTotalSorti - (Number(exCons.total_retourne) || 0))
-                    await supabase
-                      .from('brasserie_consignations')
-                      .update({
-                        total_sorti: newTotalSorti,
-                        solde_du: newSoldeDu,
-                        updated_at: new Date().toISOString(),
-                      })
-                      .eq('id', exCons.id)
-                  }
-                }
-              }
-            }
-          }
-        } catch (embAvoirErr) {
-          console.warn('[POSPage] Erreur réintégration emballages avoir brasserie :', embAvoirErr)
-        }
-      }
-
-      const updated = salesHistory.map((s) =>
-        s.id === sale.id ? { ...s, status: 'AVOIR' as const } : s
-      )
-      setSalesHistory(updated)
-      toast.success('Facture d\'Avoir générée', `Avoir créé avec succès pour la vente ${sale.order_number}`)
-    } catch (err: any) {
-      toast.error('Erreur création avoir', err.message)
-    }
+    setSelectedSaleForAvoir(sale || null)
+    setShowAvoirModal(true)
   }
 
-  // ─── Génération et Téléchargement PDF de Facture ───────────────────────────
+  const handleCreateAvoir = (sale: SaleRecord) => {
+    handleOpenAvoirModal(sale)
+  }
 
   const handleDownloadPDF = (sale: SaleRecord) => {
     try {
@@ -3523,6 +3391,12 @@ export const POSPage: React.FC = () => {
             >
               <RefreshCw className="w-3.5 h-3.5" /> Rafraîchir
             </button>
+            <button
+              onClick={() => handleOpenAvoirModal()}
+              className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+            >
+              <RotateCcw className="w-3.5 h-3.5" /> Créer un avoir
+            </button>
           </div>
 
           <div className="overflow-x-auto">
@@ -4134,6 +4008,29 @@ export const POSPage: React.FC = () => {
           onTransferSuccess={handleTransferSuccess}
         />
       )}
+
+      {/* ── MODALE CRÉATION FACTURE D'AVOIR (GLOBAL TOUS SECTEURS + EXTENSION BRASSERIE) ── */}
+      <CreerAvoirModal
+        isOpen={showAvoirModal}
+        onClose={() => {
+          setShowAvoirModal(false)
+          setSelectedSaleForAvoir(null)
+        }}
+        onSuccess={(nouvelAvoir) => {
+          toast.success("Facture d'Avoir générée", `Avoir ${nouvelAvoir.numero} enregistré avec succès.`)
+          loadData()
+        }}
+        initialFactureId={selectedSaleForAvoir?.id || null}
+        currentSectorSlug={currentSectorSlug}
+        caisseStatus={{
+          isTodayOpen: activeCaisse ? !activeCaisse.is_previous_day : false,
+          fond_actuel_especes: Number(activeCaisse?.fond_actuel_especes ?? 0),
+          fond_actuel_momo: Number(activeCaisse?.fond_actuel_momo ?? 0)
+        }}
+        salesList={salesHistory}
+        productsList={products}
+        customersList={customers}
+      />
     </div>
   )
 }

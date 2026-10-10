@@ -17,6 +17,7 @@ import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
 import { useTenant } from '../../hooks/useTenant'
 import { fetchResumeActivite } from '../../lib/supabaseTenant'
+import { getAllAvoirs, FactureAvoirRecord } from '../../services/factureAvoirService'
 import { getActiveSectorSlug, getActiveSectorMeta, filterItemsForSector } from '../../lib/sectorClient'
 import { getCotonouDates, extractCotonouDate } from '../../services/hubFinancialService'
 
@@ -46,6 +47,7 @@ export const DashboardPage: React.FC = () => {
   const [totalProductsValue, setTotalProductsValue] = useState<number>(0)
   const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
   const [resumeActivite, setResumeActivite] = useState<{ ca_ht: number, marge_brute: number }>({ ca_ht: 0, marge_brute: 0 })
+  const [avoirsDuMois, setAvoirsDuMois] = useState<FactureAvoirRecord[]>([])
 
   const currentSectorSlug = sectorSlug
   const sectorDisplayName = sectorMeta?.name || 'Sous-Logiciel'
@@ -149,6 +151,13 @@ export const DashboardPage: React.FC = () => {
       } catch (rErr) {
         console.warn('Avertissement chargement v_resume_activite:', rErr)
       }
+
+      try {
+        const avList = await getAllAvoirs(companyId, currentSectorSlug)
+        setAvoirsDuMois(avList)
+      } catch (avErr) {
+        console.warn('Avertissement chargement avoirs:', avErr)
+      }
     } catch (err: any) {
       console.error('Erreur chargement Dashboard :', err)
       setSalesToday([])
@@ -166,9 +175,15 @@ export const DashboardPage: React.FC = () => {
   // ─── Calculs Réels des Indicateurs Principaux du Secteur ───────────────────
 
   // 1. CA du jour (Total des ventes enregistrées aujourd'hui)
-  const caDuJour = useMemo(() => {
+  const caDuJourBrut = useMemo(() => {
     return salesToday.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
   }, [salesToday])
+
+  const caDuJourNet = useMemo(() => {
+    return Math.max(0, caDuJourBrut - (avoirsMetrics?.totalAvoirsAujourdhui || 0))
+  }, [caDuJourBrut, avoirsMetrics])
+
+  const caDuJour = caDuJourNet
 
   // Ventilation des règlements (Espèces, MoMo, Crédit) supportant le multi-paiement
   const { especesDuJour, momoDuJour, creancesDuJour } = useMemo(() => {
@@ -214,6 +229,51 @@ export const DashboardPage: React.FC = () => {
 
     return { especesDuJour: cash, momoDuJour: momo, creancesDuJour: credit }
   }, [salesToday])
+
+  // ── Indicateurs Avoirs Globaux Étape 8 ──
+  const avoirsMetrics = useMemo(() => {
+    const currentYearMonth = new Date().toISOString().slice(0, 7) // YYYY-MM
+    const currentToday = new Date().toISOString().slice(0, 10)
+
+    let totalAvoirsMois = 0
+    let totalRemboursementsEspeces = 0
+    let totalRemboursementsMoMo = 0
+    let totalCreditsClientsAvoirs = 0
+    let totalAvoirsAujourdhui = 0
+
+    avoirsDuMois.forEach((a) => {
+      if (a.statut === 'annule') return
+      const aMonth = a.date_avoir ? a.date_avoir.slice(0, 7) : ''
+      const aDate = a.date_avoir ? a.date_avoir.slice(0, 10) : ''
+      const mnt = Number(a.montant_total_avoir) || 0
+
+      if (aMonth === currentYearMonth) {
+        totalAvoirsMois += mnt
+        if (a.remboursement_effectue) {
+          if (a.mode_remboursement === 'especes') {
+            totalRemboursementsEspeces += mnt
+          } else if (a.mode_remboursement === 'momo') {
+            totalRemboursementsMoMo += mnt
+          }
+        }
+        if (a.mode_remboursement === 'credit_client') {
+          totalCreditsClientsAvoirs += mnt
+        }
+      }
+
+      if (aDate === currentToday) {
+        totalAvoirsAujourdhui += mnt
+      }
+    })
+
+    return {
+      totalAvoirsMois,
+      totalRemboursementsEspeces,
+      totalRemboursementsMoMo,
+      totalCreditsClientsAvoirs,
+      totalAvoirsAujourdhui
+    }
+  }, [avoirsDuMois])
 
   const todayDateStr = new Date().toLocaleDateString('fr-BJ', {
     weekday: 'long',
@@ -267,6 +327,45 @@ export const DashboardPage: React.FC = () => {
       </div>
 
       {/* ── Indicateurs Principaux avec Marge Brute Silo (v_resume_activite) ─────────────── */}
+      {/* ── WIDGETS FACTURES D'AVOIRS (CONFORME ÉTAPE 8 DU PROMPT) ── */}
+      <div className="bg-gradient-to-r from-rose-900/90 via-slate-900 to-amber-950 text-white rounded-3xl p-5 border border-rose-800/40 shadow-sm space-y-3">
+        <div className="flex items-center justify-between border-b border-white/10 pb-2">
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-pulse"></span>
+            <h3 className="text-xs font-bold uppercase tracking-wider text-rose-300">
+              Synthèse Factures d'Avoir & Régularisations
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400">Ce mois • Filtré {sectorDisplayName}</span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+          <div className="bg-white/5 border border-white/10 p-3 rounded-2xl">
+            <span className="text-[10px] text-slate-300 uppercase block font-semibold">Total Avoirs Mois</span>
+            <p className="text-lg font-black text-rose-400 font-mono mt-0.5">{fmt(avoirsMetrics.totalAvoirsMois)}</p>
+            <span className="text-[10px] text-slate-400">Toutes factures confondues</span>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 p-3 rounded-2xl">
+            <span className="text-[10px] text-slate-300 uppercase block font-semibold">Remboursements Espèces</span>
+            <p className="text-lg font-black text-amber-300 font-mono mt-0.5">{fmt(avoirsMetrics.totalRemboursementsEspeces)}</p>
+            <span className="text-[10px] text-slate-400">Sorties fond de caisse</span>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 p-3 rounded-2xl">
+            <span className="text-[10px] text-slate-300 uppercase block font-semibold">Remboursements MoMo</span>
+            <p className="text-lg font-black text-cyan-300 font-mono mt-0.5">{fmt(avoirsMetrics.totalRemboursementsMoMo)}</p>
+            <span className="text-[10px] text-slate-400">Sorties fond Mobile Money</span>
+          </div>
+
+          <div className="bg-white/5 border border-white/10 p-3 rounded-2xl">
+            <span className="text-[10px] text-slate-300 uppercase block font-semibold">Crédits Clients Issus Avoirs</span>
+            <p className="text-lg font-black text-emerald-300 font-mono mt-0.5">{fmt(avoirsMetrics.totalCreditsClientsAvoirs)}</p>
+            <span className="text-[10px] text-slate-400">Réductions créances & avoirs</span>
+          </div>
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* 1. CA du Jour */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-emerald-200 transition">

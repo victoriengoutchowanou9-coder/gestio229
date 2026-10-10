@@ -20,6 +20,7 @@ import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { calculateTaxFromTTC } from '../../../utils/tax'
+import { getAllAvoirs, FactureAvoirRecord } from '../../../services/factureAvoirService'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -171,6 +172,8 @@ export const ReportingPage: React.FC = () => {
       setExpenses((sectorExpenses as any) || [])
       setCustomers((sectorCustomers as any) || [])
       setProducts((sectorProducts as any) || [])
+      const allAvoirs = await getAllAvoirs(company.id, currentSectorSlug)
+      setAvoirs(allAvoirs)
     } catch (err: any) {
       toast.error('Erreur chargement rapports', err.message)
     } finally {
@@ -220,7 +223,23 @@ export const ReportingPage: React.FC = () => {
 
   // ─── Dépenses Filtrées par Période ────────────────────────────────────────
   const filteredExpenses = useMemo(() => {
-    return expenses.filter((e) => {
+    // Filtrer les avoirs validés sur la période sélectionnée
+  const filteredAvoirs = useMemo(() => {
+    return avoirs.filter((a) => {
+      if (a.statut === 'annule') return false
+      const aDate = a.date_avoir ? a.date_avoir.slice(0, 10) : ''
+      if (!aDate) return true
+      if (dateRangeStart && aDate < dateRangeStart) return false
+      if (dateRangeEnd && aDate > dateRangeEnd) return false
+      return true
+    })
+  }, [avoirs, dateRangeStart, dateRangeEnd])
+
+  const totalAvoirsValides = useMemo(() => {
+    return filteredAvoirs.reduce((sum, a) => sum + (Number(a.montant_total_avoir) || 0), 0)
+  }, [filteredAvoirs])
+
+  return expenses.filter((e) => {
       const eDate = (e.expense_date || e.created_at || '').split('T')[0]
       if (dateRangeStart && eDate < dateRangeStart) return false
       if (dateRangeEnd && eDate > dateRangeEnd) return false
@@ -347,6 +366,8 @@ export const ReportingPage: React.FC = () => {
         costPrice,
         sellingPrice: unitSale,
         qtySold: realQtySold,
+        qtyAvoiree,
+        netQtySold,
         totalPurchases,
         totalSales,
         netMargin,
@@ -456,6 +477,21 @@ export const ReportingPage: React.FC = () => {
 
       {/* ── 6 Indicateurs Majeurs Exigés par le Point 14 ──────────────────────── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {/* Indicateur Spécial : Avoirs Validés */}
+        <div className="bg-white rounded-3xl border border-rose-200 p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs font-bold uppercase text-rose-700">Avoirs Validés (Déduits)</span>
+            <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
+              -
+            </div>
+          </div>
+          <p className="text-2xl font-black text-rose-700 font-mono">-{fmt(totalAvoirsValides)}</p>
+          <div className="mt-2 text-[11px] text-slate-500 flex justify-between border-t border-slate-100 pt-1.5">
+            <span>CA Brut : {fmt(totalRevenueBrut)}</span>
+            <strong className="text-emerald-700">CA Net : {fmt(totalRevenueNet)}</strong>
+          </div>
+        </div>
+
         {/* 1. Chiffre d'Affaires */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
           <div className="flex items-center justify-between mb-3">
@@ -577,6 +613,7 @@ export const ReportingPage: React.FC = () => {
                   <th className="p-4 text-right">Coût d'achat</th>
                   <th className="p-4 text-right">Prix de vente</th>
                   <th className="p-4 text-center">Quantité vendue</th>
+                  <th className="p-4 text-center text-rose-600">Avoirs (Retour)</th>
                   <th className="p-4 text-right">Marge nette</th>
                   <th className="p-4 text-center">Taux de marge</th>
                 </tr>
