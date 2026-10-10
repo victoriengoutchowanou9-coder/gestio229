@@ -49,7 +49,44 @@ export const TableMissingVerifier: React.FC<TableMissingVerifierProps> = ({
     .join('\n')
 
   // Script SQL complet avec toutes les colonnes requises
-  const singleTableSql = `-- ==============================================================================
+  let singleTableSql = ''
+  if (tableName === 'poissonnerie_avaries') {
+    singleTableSql = `CREATE TABLE IF NOT EXISTS public.poissonnerie_avaries (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  company_id UUID NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+  secteur_id UUID,
+  sector_slug TEXT DEFAULT 'poissonnerie',
+  caisse_id UUID,
+  date_avarie DATE DEFAULT CURRENT_DATE,
+  produit_id UUID,
+  produit_nom TEXT NOT NULL,
+  quantite_kg NUMERIC(10,2) NOT NULL DEFAULT 0,
+  cause TEXT,
+  description TEXT,
+  perte_fcfa NUMERIC(12,2) DEFAULT 0,
+  temperature_relevee NUMERIC(5,2),
+  lot_numero TEXT,
+  fournisseur_id UUID,
+  photo_url TEXT,
+  reference TEXT DEFAULT concat('AVR-', to_char(NOW(), 'YYYYMMDD-HH24MISS')),
+  chambre_froide TEXT,
+  motif_avarie TEXT DEFAULT 'DLC',
+  valeur_estimee NUMERIC(12,2) DEFAULT 0,
+  action_prise TEXT DEFAULT 'En_Attente',
+  date_constat DATE DEFAULT CURRENT_DATE,
+  agent_constat TEXT,
+  notes TEXT,
+  created_by UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_poissonnerie_avaries_secteur ON public.poissonnerie_avaries(secteur_id);
+CREATE INDEX IF NOT EXISTS idx_poissonnerie_avaries_company ON public.poissonnerie_avaries(company_id);
+ALTER TABLE public.poissonnerie_avaries ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "allow_all" ON public.poissonnerie_avaries;
+CREATE POLICY "allow_all" ON public.poissonnerie_avaries FOR ALL USING (true) WITH CHECK (true);`
+  } else {
+    singleTableSql = `-- ==============================================================================
 -- CRÉATION COMPLÈTE DE LA TABLE ${tableName} POUR GESTIO 229
 -- ==============================================================================
 CREATE TABLE IF NOT EXISTS public.${tableName} (
@@ -74,6 +111,7 @@ CREATE POLICY "company_isolation" ON public.${tableName} FOR ALL
   WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
 
 CREATE INDEX IF NOT EXISTS idx_${tableName}_c_s ON public.${tableName}(company_id, sector_slug);`
+  }
 
   const handleCopy = () => {
     navigator.clipboard.writeText(singleTableSql)

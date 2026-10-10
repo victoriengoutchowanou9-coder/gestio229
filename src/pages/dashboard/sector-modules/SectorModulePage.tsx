@@ -94,7 +94,12 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
         .limit(1000)
       if (error) throw error
       setRows(data || [])
-      setTableMissing(false)
+      setTableMissing((wasMissing) => {
+        if (wasMissing) {
+          notify('success', 'Module activé avec succès !')
+        }
+        return false
+      })
     } catch (err: any) {
       console.error(`[${config.table}]`, err)
       if (isMissingTable(err)) setTableMissing(true)

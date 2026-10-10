@@ -118,7 +118,7 @@ const QuittancesPage         = mod('quittances')
 // Poissonnerie
 const ChambresFroidesPage    = mod('chambres_froides')
 const PeseePage              = mod('pesee_cartons')
-const AvariesPage            = mod('avaries_peremption')
+const AvariesPage            = React.lazy(() => import('./pages/PoissonnerieAvariesPage'))
 // Quincaillerie
 const MateriauxPage          = mod('materiaux_btp')
 const ConversionsPage        = mod('conversions_unites')
