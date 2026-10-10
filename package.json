@@ -6,7 +6,10 @@
   "description": "GESTIO 229 ERP & SaaS - Logiciel de gestion intégrée multi-activités (Bénin & UEMOA)",
   "scripts": {
     "dev": "vite",
+    "prebuild": "node scripts/check-circular.js",
     "build": "vite build",
+    "postbuild": "node scripts/verify-chunks.js",
+    "vercel-build": "npm run prebuild && npm run build && npm run postbuild",
     "postinstall": "echo ok",
     "preview": "vite preview"
   },

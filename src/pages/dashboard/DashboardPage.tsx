@@ -174,6 +174,51 @@ export const DashboardPage: React.FC = () => {
 
   // ─── Calculs Réels des Indicateurs Principaux du Secteur ───────────────────
 
+  // 0. Indicateurs Avoirs Globaux Étape 8 (Déclaré en premier pour éviter TDZ dans caDuJourNet)
+  const avoirsMetrics = useMemo(() => {
+    const currentYearMonth = new Date().toISOString().slice(0, 7) // YYYY-MM
+    const currentToday = new Date().toISOString().slice(0, 10)
+
+    let totalAvoirsMois = 0
+    let totalRemboursementsEspeces = 0
+    let totalRemboursementsMoMo = 0
+    let totalCreditsClientsAvoirs = 0
+    let totalAvoirsAujourdhui = 0
+
+    avoirsDuMois.forEach((a) => {
+      if (a.statut === 'annule') return
+      const aMonth = a.date_avoir ? a.date_avoir.slice(0, 7) : ''
+      const aDate = a.date_avoir ? a.date_avoir.slice(0, 10) : ''
+      const mnt = Number(a.montant_total_avoir) || 0
+
+      if (aMonth === currentYearMonth) {
+        totalAvoirsMois += mnt
+        if (a.remboursement_effectue) {
+          if (a.mode_remboursement === 'especes') {
+            totalRemboursementsEspeces += mnt
+          } else if (a.mode_remboursement === 'momo') {
+            totalRemboursementsMoMo += mnt
+          }
+        }
+        if (a.mode_remboursement === 'credit_client') {
+          totalCreditsClientsAvoirs += mnt
+        }
+      }
+
+      if (aDate === currentToday) {
+        totalAvoirsAujourdhui += mnt
+      }
+    })
+
+    return {
+      totalAvoirsMois,
+      totalRemboursementsEspeces,
+      totalRemboursementsMoMo,
+      totalCreditsClientsAvoirs,
+      totalAvoirsAujourdhui
+    }
+  }, [avoirsDuMois])
+
   // 1. CA du jour (Total des ventes enregistrées aujourd'hui)
   const caDuJourBrut = useMemo(() => {
     return salesToday.reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
@@ -229,51 +274,6 @@ export const DashboardPage: React.FC = () => {
 
     return { especesDuJour: cash, momoDuJour: momo, creancesDuJour: credit }
   }, [salesToday])
-
-  // ── Indicateurs Avoirs Globaux Étape 8 ──
-  const avoirsMetrics = useMemo(() => {
-    const currentYearMonth = new Date().toISOString().slice(0, 7) // YYYY-MM
-    const currentToday = new Date().toISOString().slice(0, 10)
-
-    let totalAvoirsMois = 0
-    let totalRemboursementsEspeces = 0
-    let totalRemboursementsMoMo = 0
-    let totalCreditsClientsAvoirs = 0
-    let totalAvoirsAujourdhui = 0
-
-    avoirsDuMois.forEach((a) => {
-      if (a.statut === 'annule') return
-      const aMonth = a.date_avoir ? a.date_avoir.slice(0, 7) : ''
-      const aDate = a.date_avoir ? a.date_avoir.slice(0, 10) : ''
-      const mnt = Number(a.montant_total_avoir) || 0
-
-      if (aMonth === currentYearMonth) {
-        totalAvoirsMois += mnt
-        if (a.remboursement_effectue) {
-          if (a.mode_remboursement === 'especes') {
-            totalRemboursementsEspeces += mnt
-          } else if (a.mode_remboursement === 'momo') {
-            totalRemboursementsMoMo += mnt
-          }
-        }
-        if (a.mode_remboursement === 'credit_client') {
-          totalCreditsClientsAvoirs += mnt
-        }
-      }
-
-      if (aDate === currentToday) {
-        totalAvoirsAujourdhui += mnt
-      }
-    })
-
-    return {
-      totalAvoirsMois,
-      totalRemboursementsEspeces,
-      totalRemboursementsMoMo,
-      totalCreditsClientsAvoirs,
-      totalAvoirsAujourdhui
-    }
-  }, [avoirsDuMois])
 
   const todayDateStr = new Date().toLocaleDateString('fr-BJ', {
     weekday: 'long',

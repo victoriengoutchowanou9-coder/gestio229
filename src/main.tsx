@@ -54,27 +54,44 @@ if (typeof window !== 'undefined') {
     }
   } catch (_) {}
 
-  // ── 3. Filet de sécurité global : chunk error → reload automatique ────────
-  // Si un import dynamique échoue EN DEHORS de safeLazy (ex: SW stale),
-  // on le capture ici et on recharge une fois.
+  // ── 3. Filet de sécurité global : chunk error + TDZ error → reload auto ──
+  const isAutoReloadableError = (msg: string) =>
+    msg.includes('dynamically imported module') ||
+    msg.includes('Failed to fetch') ||
+    msg.includes('Loading chunk') ||
+    msg.includes('Loading CSS chunk') ||
+    msg.includes('ChunkLoadError') ||
+    msg.includes('Importing a module script failed') ||
+    msg.includes('error loading dynamically imported module') ||
+    (msg.includes('Cannot access') && msg.includes('before initialization'))
+
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason
     const msg = reason instanceof Error ? reason.message : String(reason ?? '')
-    const isChunkError = (
-      msg.includes('dynamically imported module') ||
-      msg.includes('Failed to fetch') ||
-      msg.includes('Loading chunk') ||
-      msg.includes('Loading CSS chunk') ||
-      msg.includes('ChunkLoadError') ||
-      msg.includes('Importing a module script failed') ||
-      msg.includes('error loading dynamically imported module')
-    )
-    if (isChunkError) {
+    if (isAutoReloadableError(msg)) {
       event.preventDefault()
       const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
       if (!alreadyReloaded) {
-        console.warn('[GESTIO 229] Chunk error global intercepté — rechargement automatique…', msg)
+        console.warn('[GESTIO 229] Erreur auto-réparable interceptée (unhandledrejection) — rechargement…', msg)
         sessionStorage.setItem('gestio229_chunk_reload', '1')
+        if ('caches' in window) {
+          window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+        }
+        window.location.href = window.location.pathname + '?t=' + Date.now()
+      }
+    }
+  })
+
+  window.addEventListener('error', (event) => {
+    const msg = (event?.error?.message || event?.message || '')
+    if (msg.includes('Cannot access') && msg.includes('before initialization')) {
+      const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
+      if (!alreadyReloaded) {
+        console.warn('[GESTIO 229] Erreur TDZ globale interceptée (error) — purge + rechargement…', msg)
+        sessionStorage.setItem('gestio229_chunk_reload', '1')
+        if ('caches' in window) {
+          window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+        }
         window.location.href = window.location.pathname + '?t=' + Date.now()
       }
     }

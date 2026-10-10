@@ -35,6 +35,19 @@ function detectChunkError(err: Error | null): boolean {
   )
 }
 
+/**
+ * Détecte une erreur Temporal Dead Zone (TDZ) ou d'initialisation post-déploiement :
+ * "Cannot access 'X' before initialization"
+ */
+function detectTDZError(err: Error | null): boolean {
+  if (!err) return false
+  const msg = (err.message || '') + (err.name || '') + (err.stack || '')
+  return (
+    (msg.includes('Cannot access') && msg.includes('before initialization')) ||
+    (msg.includes('ReferenceError') && msg.includes('initialization'))
+  )
+}
+
 export class SectorErrorBoundary extends Component<Props, State> {
   public state: State = {
     hasError: false,
@@ -48,7 +61,7 @@ export class SectorErrorBoundary extends Component<Props, State> {
       hasError: true,
       error,
       errorInfo: null,
-      isChunkError: detectChunkError(error),
+      isChunkError: detectChunkError(error) || detectTDZError(error),
     }
   }
 
@@ -56,24 +69,32 @@ export class SectorErrorBoundary extends Component<Props, State> {
     console.error('[SectorErrorBoundary] Erreur interceptée dans le sous-logiciel :', error, errorInfo)
     this.setState({ errorInfo })
 
-    // ── Auto-reload si chunk error (post-déploiement) ─────────────────────
-    // On recharge automatiquement UNE seule fois (garde anti-boucle).
-    if (detectChunkError(error)) {
+    // ── Auto-reload si chunk error ou TDZ error (post-déploiement) ──────
+    const isAutoRecoverable = detectChunkError(error) || detectTDZError(error)
+    if (isAutoRecoverable) {
       const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
       if (!alreadyReloaded) {
-        console.warn('[SectorErrorBoundary] Chunk introuvable — rechargement automatique dans 800ms…')
+        console.warn('[SectorErrorBoundary] Incident auto-réparable (Chunk ou TDZ) — purge cache + rechargement immédiat…')
         sessionStorage.setItem('gestio229_chunk_reload', '1')
-        // Petit délai pour ne pas recharger avant que React ait fini le rendu
+        sessionStorage.removeItem('chunk_retry')
+        localStorage.removeItem('gestio229_app_version')
+        if ('caches' in window) {
+          window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+        }
         setTimeout(() => {
           window.location.href = window.location.pathname + '?t=' + Date.now()
-        }, 800)
+        }, 500)
       }
     }
   }
 
-  /** Hard reload avec cache-bust — bypass navigateur et SW */
+  /** Hard reload avec cache-bust & purge — bypass navigateur et SW */
   private handleReload = () => {
-    sessionStorage.removeItem('gestio229_chunk_reload')
+    sessionStorage.clear()
+    localStorage.removeItem('gestio229_app_version')
+    if ('caches' in window) {
+      window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+    }
     window.location.href = window.location.pathname + '?t=' + Date.now()
   }
 
