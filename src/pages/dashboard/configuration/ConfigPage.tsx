@@ -21,6 +21,153 @@ import {
 } from '../../../core/team/sectorRoles'
 import { imprimerieService, ImprimerieConfig } from '../../../services/imprimerieService'
 
+// ─── MAPPING DES MODULES & PERMISSIONS DYNAMIQUES PAR SECTEUR ────────────────
+const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> = {
+  "poissonnerie": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "chambres_froides", label: "Chambres Froides & T°" },
+    { id: "avaries_frigorifiques", label: "Avaries Frigorifiques" },
+  ],
+  "poissonnerie_produits_frais": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "chambres_froides", label: "Chambres Froides & T°" },
+    { id: "avaries_frigorifiques", label: "Avaries Frigorifiques" },
+  ],
+  "quincaillerie": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "materiaux_lourds", label: "Matériaux Lourds" },
+  ],
+  "quincaillerie_materiaux": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "materiaux_lourds", label: "Matériaux Lourds" },
+  ],
+  "supermarche": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+  ],
+  "supermarche_superette": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+  ],
+  "brasserie": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "consignes_retours", label: "Consignes & Retours" },
+  ],
+  "brasserie_boissons": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "consignes_retours", label: "Consignes & Retours" },
+  ],
+  "restaurant": [
+    { id: "ventes_pos", label: "Commandes & POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Recettes" },
+    { id: "clients", label: "Clients & Résas" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "cuisine_kds", label: "Cuisine & Bar (KDS)" },
+  ],
+  "station-service": [
+    { id: "ventes_pos", label: "Ventes & Pompes" },
+    { id: "caisse", label: "Caisse Pompistes" },
+    { id: "stocks_inventaires", label: "Cuves & Lubrifiants" },
+    { id: "clients", label: "Clients Flotte" },
+    { id: "fournisseurs_achats", label: "Fournisseurs Carburants" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+  ],
+  "imprimerie": [
+    { id: "ventes_pos", label: "Vente Rapide & Caisse" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks Papiers & Encres" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+    { id: "devis_bat", label: "Devis & Ordres BAT" },
+    { id: "prestations", label: "Prestations & Tarifs" },
+  ],
+  "default": [
+    { id: "ventes_pos", label: "Ventes / POS" },
+    { id: "caisse", label: "Caisse" },
+    { id: "stocks_inventaires", label: "Stocks & Inventaires" },
+    { id: "clients", label: "Clients" },
+    { id: "fournisseurs_achats", label: "Fournisseurs / Achats" },
+    { id: "depenses", label: "Dépenses" },
+    { id: "reporting_rapports", label: "Reporting & Rapports" },
+    { id: "tresorerie_banques", label: "Trésorerie & Banques" },
+    { id: "comptabilite_syscohada", label: "Comptabilité SYSCOHADA" },
+  ]
+}
+
 export const ConfigPage: React.FC = () => {
   const { company, user, refreshTenantContext } = useAuthStore()
   const { sectorSlug: currentSectorSlug } = useTenant()
@@ -169,6 +316,15 @@ export const ConfigPage: React.FC = () => {
     role: initialRole.id,
     sector: defaultSector,
     permissions: {
+      ventes_pos: !!initialRole.defaultPermissions?.ventes,
+      caisse: !!initialRole.defaultPermissions?.caisse,
+      stocks_inventaires: !!initialRole.defaultPermissions?.stock,
+      clients: !!initialRole.defaultPermissions?.clients,
+      fournisseurs_achats: !!initialRole.defaultPermissions?.fournisseurs,
+      depenses: !!initialRole.defaultPermissions?.depenses,
+      reporting_rapports: !!initialRole.defaultPermissions?.reporting,
+      tresorerie_banques: !!initialRole.defaultPermissions?.finances,
+      comptabilite_syscohada: !!initialRole.defaultPermissions?.syscohada,
       ...initialRole.defaultPermissions,
     },
   })
@@ -318,15 +474,30 @@ export const ConfigPage: React.FC = () => {
           is_active: true,
           permissions: {
             ...newUser.permissions,
+            ventes: !!((newUser.permissions as any).ventes_pos ?? (newUser.permissions as any).ventes),
+            ventes_pos: !!((newUser.permissions as any).ventes_pos ?? (newUser.permissions as any).ventes),
+            caisse: !!(newUser.permissions as any).caisse,
+            stock: !!((newUser.permissions as any).stocks_inventaires ?? (newUser.permissions as any).stock),
+            stocks_inventaires: !!((newUser.permissions as any).stocks_inventaires ?? (newUser.permissions as any).stock),
+            clients: !!(newUser.permissions as any).clients,
+            fournisseurs: !!((newUser.permissions as any).fournisseurs_achats ?? (newUser.permissions as any).fournisseurs),
+            fournisseurs_achats: !!((newUser.permissions as any).fournisseurs_achats ?? (newUser.permissions as any).fournisseurs),
+            depenses: !!(newUser.permissions as any).depenses,
+            reporting: !!((newUser.permissions as any).reporting_rapports ?? (newUser.permissions as any).reporting),
+            reporting_rapports: !!((newUser.permissions as any).reporting_rapports ?? (newUser.permissions as any).reporting),
+            finances: !!((newUser.permissions as any).tresorerie_banques ?? (newUser.permissions as any).finances),
+            tresorerie_banques: !!((newUser.permissions as any).tresorerie_banques ?? (newUser.permissions as any).finances),
+            syscohada: !!((newUser.permissions as any).comptabilite_syscohada ?? (newUser.permissions as any).syscohada),
+            comptabilite_syscohada: !!((newUser.permissions as any).comptabilite_syscohada ?? (newUser.permissions as any).syscohada),
             sector: cleanSector,
             sector_slug: cleanSector,
             assigned_sector: cleanSector,
             sector_id: cleanSector,
             role_label: roleLabel,
-            commercial: newUser.permissions.ventes,
-            treasury: newUser.permissions.finances,
-            purchases: newUser.permissions.fournisseurs,
-            accounting: newUser.permissions.syscohada
+            commercial: !!((newUser.permissions as any).ventes_pos ?? (newUser.permissions as any).ventes),
+            treasury: !!((newUser.permissions as any).tresorerie_banques ?? (newUser.permissions as any).finances),
+            purchases: !!((newUser.permissions as any).fournisseurs_achats ?? (newUser.permissions as any).fournisseurs),
+            accounting: !!((newUser.permissions as any).comptabilite_syscohada ?? (newUser.permissions as any).syscohada)
           }
         })
 
@@ -1312,13 +1483,29 @@ export const ConfigPage: React.FC = () => {
                     const newSector = normalizeSectorSlug(e.target.value)
                     const rolesForSec = getRolesForSector(newSector)
                     const firstR = rolesForSec[0]
+                    const defaultPerms = firstR ? { ...firstR.defaultPermissions } : {}
+                    const mappedPerms: Record<string, boolean> = {
+                      ventes_pos: !!defaultPerms.ventes,
+                      caisse: !!defaultPerms.caisse,
+                      stocks_inventaires: !!defaultPerms.stock,
+                      clients: !!defaultPerms.clients,
+                      fournisseurs_achats: !!defaultPerms.fournisseurs,
+                      depenses: !!defaultPerms.depenses,
+                      reporting_rapports: !!defaultPerms.reporting,
+                      tresorerie_banques: !!defaultPerms.finances,
+                      comptabilite_syscohada: !!defaultPerms.syscohada,
+                      chambres_froides: false,
+                      avaries_frigorifiques: false,
+                      materiaux_lourds: false,
+                      consignes_retours: false,
+                      cuisine_kds: false,
+                      ...defaultPerms
+                    }
                     setNewUser({
                       ...newUser,
                       sector: newSector,
                       role: firstR ? firstR.id : 'caissier',
-                      permissions: {
-                        ...(firstR ? firstR.defaultPermissions : newUser.permissions),
-                      },
+                      permissions: mappedPerms,
                     })
                   }}
                   className="w-full px-3 py-2.5 bg-white border border-emerald-300 rounded-xl text-sm font-bold text-slate-800"
@@ -1398,11 +1585,28 @@ export const ConfigPage: React.FC = () => {
                     const chosenId = e.target.value
                     const sectorRoles = getRolesForSector(newUser.sector)
                     const roleDef = sectorRoles.find((r) => r.id === chosenId)
-                    setNewUser({
-                      ...newUser,
-                      role: chosenId,
-                      permissions: roleDef ? { ...roleDef.defaultPermissions } : newUser.permissions,
-                    })
+                    if (roleDef) {
+                      const defP = roleDef.defaultPermissions || {}
+                      setNewUser({
+                        ...newUser,
+                        role: chosenId,
+                        permissions: {
+                          ...newUser.permissions,
+                          ventes_pos: !!defP.ventes,
+                          caisse: !!defP.caisse,
+                          stocks_inventaires: !!defP.stock,
+                          clients: !!defP.clients,
+                          fournisseurs_achats: !!defP.fournisseurs,
+                          depenses: !!defP.depenses,
+                          reporting_rapports: !!defP.reporting,
+                          tresorerie_banques: !!defP.finances,
+                          comptabilite_syscohada: !!defP.syscohada,
+                          ...defP
+                        },
+                      })
+                    } else {
+                      setNewUser({ ...newUser, role: chosenId })
+                    }
                   }}
                   className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800"
                 >
@@ -1414,41 +1618,43 @@ export const ConfigPage: React.FC = () => {
                 </select>
               </div>
 
-              {/* Permissions & Droits d'accès */}
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
-                <label className="block text-xs font-bold text-slate-800 uppercase tracking-wider mb-2">
-                  Permissions et droits d'accès
-                </label>
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
-                  {[
-                    { key: 'ventes', label: 'Ventes / POS' },
-                    { key: 'caisse', label: 'Caisse' },
-                    { key: 'stock', label: 'Stocks & Inventaires' },
-                    { key: 'clients', label: 'Clients' },
-                    { key: 'fournisseurs', label: 'Fournisseurs / Achats' },
-                    { key: 'depenses', label: 'Dépenses' },
-                    { key: 'reporting', label: 'Reporting & Rapports' },
-                    { key: 'finances', label: 'Trésorerie & Banques' },
-                    { key: 'syscohada', label: 'Comptabilité SYSCOHADA' },
-                  ].map((perm) => (
-                    <label key={perm.key} className="flex items-center gap-2 cursor-pointer text-slate-700 select-none">
-                      <input
-                        type="checkbox"
-                        checked={!!(newUser.permissions as any)[perm.key]}
-                        onChange={(e) => setNewUser({
-                          ...newUser,
-                          permissions: {
-                            ...newUser.permissions,
-                            [perm.key]: e.target.checked
-                          }
-                        })}
-                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
-                      />
-                      <span>{perm.label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
+              {/* Permissions & Droits d'accès dynamiques par secteur */}
+              {(() => {
+                const currentSecSlug = normalizeSectorSlug(newUser.sector)
+                const currentSectorMeta = subscribedSectors.find(s => s.slug === newUser.sector) || ALL_SECTORS_CATALOG.find(s => s.slug === currentSecSlug)
+                const secteurNom = currentSectorMeta?.name || newUser.sector
+                const modulesAAfficher = MODULES_PAR_SECTEUR[newUser.sector] || MODULES_PAR_SECTEUR[currentSecSlug] || MODULES_PAR_SECTEUR['default']
+
+                return (
+                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-slate-800 mb-2">
+                      PERMISSIONS ET DROITS D'ACCÈS - {secteurNom}
+                    </h4>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs">
+                      {modulesAAfficher.map((mod) => (
+                        <label key={mod.id} className="flex items-center gap-2 cursor-pointer text-slate-700 select-none">
+                          <input
+                            type="checkbox"
+                            checked={!!(newUser.permissions as any)[mod.id]}
+                            onChange={(e) => setNewUser({
+                              ...newUser,
+                              permissions: {
+                                ...newUser.permissions,
+                                [mod.id]: e.target.checked
+                              }
+                            })}
+                            className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 w-4 h-4"
+                          />
+                          <span>{mod.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-slate-400 mt-2">
+                      Modules du secteur : {secteurNom} ({modulesAAfficher.length} modules)
+                    </p>
+                  </div>
+                )
+              })()}
 
               <div className="pt-2 flex justify-end gap-2">
                 <button
