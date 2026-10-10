@@ -281,10 +281,10 @@ export async function fetchHubFinancialMetrics(
 
       if (mvtList && mvtList.length > 0) {
         for (const m of mvtList) {
-          // Filtrer uniquement les sorties de caisse (dépenses)
+          // Filtrer les sorties de caisse (dépenses d'exploitation et décaissements réels)
           const isSortie =
             (m.sens && ['debit', 'DEBIT', 'sortie', 'SORTIE'].includes(m.sens)) ||
-            (m.type && ['SORTIE', 'depense', 'DEPENSE', 'expense'].includes(m.type));
+            (m.type && ['SORTIE', 'depense', 'DEPENSE', 'expense', 'cloture'].includes(m.type));
           if (!isSortie) continue;
 
           const dDate = extractCotonouDate(null, m.created_at);
@@ -313,7 +313,7 @@ export async function fetchHubFinancialMetrics(
     console.warn('[HubFinancialService] Erreur lecture depenses:', dErr);
   }
 
-  // 4. Calculer les totaux consolidés (si RPC n'a pas répondu)
+  // 4. Calculer les totaux consolidés
   let calculatedTotals: HubFinancialTotals = {
     date: todayStr,
     ca_jour: 0,
@@ -336,8 +336,23 @@ export async function fetchHubFinancialMetrics(
     calculatedTotals.marge_mois += c.monthNetMargin;
   }
 
-  // Utiliser RPC en priorité si disponible et cohérent
-  const finalTotals = rpcTotals || calculatedTotals;
+  // Utiliser RPC pour le CA si disponible, mais si RPC retourne 0 pour les dépenses
+  // alors que des dépenses réelles existent dans caisse_mouvements, injecter les vraies dépenses
+  let finalTotals = calculatedTotals;
+  if (rpcTotals) {
+    finalTotals = {
+      ...rpcTotals,
+      // Si la RPC a retourné 0 dépenses alors que nos calculs ont trouvé des dépenses réelles
+      depenses_jour: rpcTotals.depenses_jour > 0 ? rpcTotals.depenses_jour : calculatedTotals.depenses_jour,
+      depenses_mois: rpcTotals.depenses_mois > 0 ? rpcTotals.depenses_mois : calculatedTotals.depenses_mois,
+      marge_jour: rpcTotals.depenses_jour === 0 && calculatedTotals.depenses_jour > 0
+        ? Math.max(0, (rpcTotals.ca_jour || calculatedTotals.ca_jour) - calculatedTotals.depenses_jour)
+        : (rpcTotals.marge_jour || calculatedTotals.marge_jour),
+      marge_mois: rpcTotals.depenses_mois === 0 && calculatedTotals.depenses_mois > 0
+        ? Math.max(0, (rpcTotals.ca_mois || calculatedTotals.ca_mois) - calculatedTotals.depenses_mois)
+        : (rpcTotals.marge_mois || calculatedTotals.marge_mois),
+    };
+  }
 
   return {
     totals: finalTotals,
