@@ -310,6 +310,16 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'gestion',
   },
 
+  'proprietaires_mandats': {
+    id: 'proprietaires_mandats',
+    label: 'Propriétaires & Mandats',
+    icon: 'Users',
+    path: 'proprietaires',
+    isCommon: false,
+    sectorSlugs: ['location', 'immobilier'],
+    group: 'gestion',
+  },
+
   'contrats_loyers': {
     id: 'contrats_loyers',
     label: 'Contrats & Loyers',
@@ -320,6 +330,26 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'commercial',
   },
 
+  'etats_lieux': {
+    id: 'etats_lieux',
+    label: 'États des Lieux',
+    icon: 'ClipboardList',
+    path: 'etats-lieux',
+    isCommon: false,
+    sectorSlugs: ['location', 'immobilier'],
+    group: 'gestion',
+  },
+
+  'cautions_depots': {
+    id: 'cautions_depots',
+    label: 'Cautions & Dépôts',
+    icon: 'Shield',
+    path: 'cautions',
+    isCommon: false,
+    sectorSlugs: ['location', 'immobilier'],
+    group: 'finance',
+  },
+
   'quittances': {
     id: 'quittances',
     label: 'Quittances',
@@ -328,6 +358,36 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     isCommon: false,
     sectorSlugs: ['location', 'immobilier'],
     group: 'finance',
+  },
+
+  'maintenances_travaux': {
+    id: 'maintenances_travaux',
+    label: 'Maintenance & Travaux',
+    icon: 'Wrench',
+    path: 'maintenances',
+    isCommon: false,
+    sectorSlugs: ['location', 'immobilier'],
+    group: 'gestion',
+  },
+
+  'alertes_immo': {
+    id: 'alertes_immo',
+    label: 'Alertes & Relances',
+    icon: 'AlertTriangle',
+    path: 'alertes',
+    isCommon: false,
+    sectorSlugs: ['location', 'immobilier'],
+    group: 'apercu',
+  },
+
+  'modeles_documents': {
+    id: 'modeles_documents',
+    label: 'Modèles Documents',
+    icon: 'FileText',
+    path: 'modeles-documents',
+    isCommon: false,
+    sectorSlugs: ['location', 'immobilier'],
+    group: 'admin',
   },
 
   // ══════════════════════════════════════════════════════════════════════

@@ -612,6 +612,50 @@ export const SectorLoader = {
       return { grouped, flat: imprimerieNav }
     }
 
+    // ── Menu spécifique Gestion Locative & Immobilière Pro ────────────────────
+    const isImmobilier = cleanSlug === 'immobilier' || cleanSlug === 'location' || cleanSlug === 'gestion-locative' || cleanSlug === 'gestion_locative'
+    if (isImmobilier) {
+      const immobilierNav: NavItem[] = [
+        // VUE D'ENSEMBLE
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        { id: 'alertes_immo', label: 'Alertes & Pilotage', icon: 'AlertTriangle', href: `${prefix}/alertes`, group: 'apercu' },
+
+        // GESTION IMMOBILIÈRE
+        { id: 'biens_locations', label: 'Biens & Logements', icon: 'Home', href: `${prefix}/biens`, group: 'commercial' },
+        { id: 'proprietaires_mandats', label: 'Propriétaires & Mandats', icon: 'Users', href: `${prefix}/proprietaires`, group: 'commercial' },
+        { id: 'clients', label: 'Locataires (Clients)', icon: 'Users', href: `${prefix}/clients`, group: 'commercial' },
+        { id: 'contrats_loyers', label: 'Contrats & Baux', icon: 'FileSignature', href: `${prefix}/contrats`, group: 'commercial' },
+        { id: 'etats_lieux', label: 'États des Lieux', icon: 'ClipboardList', href: `${prefix}/etats-lieux`, group: 'commercial' },
+        { id: 'cautions_depots', label: 'Cautions & Dépôts', icon: 'Shield', href: `${prefix}/cautions`, group: 'commercial' },
+        { id: 'quittances', label: 'Quittances & Règlements', icon: 'FileCheck', href: `${prefix}/quittances`, group: 'commercial' },
+
+        // FINANCE & COMPTABILITÉ
+        { id: 'caisse', label: 'Caisse & Encaissements', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses & Travaux', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+
+        // OPÉRATIONS & EXPLOITATION
+        { id: 'maintenances_travaux', label: 'Maintenance & Pannes', icon: 'Wrench', href: `${prefix}/maintenances`, group: 'gestion' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Artisans', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+        { id: 'stock', label: 'Stocks & Équipements', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+        { id: 'ventes', label: 'Vente & POS (Frais Annexes)', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'gestion' },
+
+        // ANALYSES & PILOTAGE
+        { id: 'rapports', label: 'Rapports & Analyses', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+
+        // ADMINISTRATION
+        { id: 'modeles_documents', label: 'Modèles de Documents', icon: 'FileText', href: `${prefix}/modeles-documents`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Agence', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(immobilierNav)
+      return { grouped, flat: immobilierNav }
+    }
+
     // ── Logique par défaut pour tous les autres secteurs (Strictement Inchangée) ──
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',

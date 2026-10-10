@@ -112,9 +112,16 @@ const ImprimerieVenteRapidePage     = safeLazy(() => import('./pages/dashboard/i
 // Supermarché & Supérette (Caisse Ultra-Rapide)
 const SupermarcheCaissePage       = safeLazy(() => import('./pages/dashboard/supermarche/SupermarcheCaissePage'))
 // Gestion Locative / Immobilier
-const BiensPage              = mod('biens_locations')
-const ContratsPage           = mod('contrats_loyers')
-const QuittancesPage         = mod('quittances')
+const ImmobilierDashboardPage = safeLazy(() => import('./pages/dashboard/immobilier/ImmobilierDashboardPage'))
+const BiensPage                 = mod('biens_locations')
+const ProprietairesPage         = mod('proprietaires_mandats')
+const ContratsPage              = mod('contrats_loyers')
+const EtatsLieuxPage            = mod('etats_lieux')
+const CautionsPage              = mod('cautions_depots')
+const QuittancesPage            = mod('quittances')
+const MaintenancesPage          = mod('maintenances_travaux')
+const AlertesImmoPage           = mod('alertes_immo')
+const ModelesDocumentsPage      = mod('modeles_documents')
 // Poissonnerie
 const ChambresFroidesPage    = mod('chambres_froides')
 const PeseePage              = mod('pesee_cartons')
@@ -209,6 +216,9 @@ const SectorAwareDashboard: React.FC = () => {
   }
   if (clean === 'imprimerie' || clean === 'impression') {
     return <ImprimerieDashboardPage />
+  }
+  if (clean === 'immobilier' || clean === 'location' || clean === 'gestion-locative' || clean === 'gestion_locative') {
+    return <ImmobilierDashboardPage />
   }
   return <DashboardPage />
 }
@@ -459,10 +469,16 @@ const AppRoutes: React.FC = () => {
         <Route path="matieres"       element={<ModuleGuard moduleId="matieres"><ImprimerieMatieresPage /></ModuleGuard>} />
         <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><ImprimerieSousTraitancePage /></ModuleGuard>} />
         <Route path="vente-rapide"   element={<ModuleGuard moduleId="ventes"><ImprimerieVenteRapidePage /></ModuleGuard>} />
-        {/* ── Modules Gestion Locative ── */}
-        <Route path="biens"      element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
-        <Route path="contrats"   element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
-        <Route path="quittances" element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
+        {/* ── Modules Gestion Locative & Immobilière ── */}
+        <Route path="biens"              element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
+        <Route path="proprietaires"      element={<ModuleGuard moduleId="proprietaires_mandats"><ProprietairesPage /></ModuleGuard>} />
+        <Route path="contrats"           element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
+        <Route path="etats-lieux"        element={<ModuleGuard moduleId="etats_lieux"><EtatsLieuxPage /></ModuleGuard>} />
+        <Route path="cautions"           element={<ModuleGuard moduleId="cautions_depots"><CautionsPage /></ModuleGuard>} />
+        <Route path="quittances"         element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
+        <Route path="maintenances"       element={<ModuleGuard moduleId="maintenances_travaux"><MaintenancesPage /></ModuleGuard>} />
+        <Route path="alertes"            element={<ModuleGuard moduleId="alertes_immo"><AlertesImmoPage /></ModuleGuard>} />
+        <Route path="modeles-documents"  element={<ModuleGuard moduleId="modeles_documents"><ModelesDocumentsPage /></ModuleGuard>} />
         {/* ── Modules Poissonnerie ── */}
         <Route path="chambres-froides" element={<ModuleGuard moduleId="chambres_froides"><ChambresFroidesPage /></ModuleGuard>} />
         <Route path="pesee"            element={<ModuleGuard moduleId="pesee_cartons"><PeseePage /></ModuleGuard>} />
@@ -580,10 +596,16 @@ const AppRoutes: React.FC = () => {
         <Route path="matieres"       element={<ModuleGuard moduleId="matieres"><ImprimerieMatieresPage /></ModuleGuard>} />
         <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><ImprimerieSousTraitancePage /></ModuleGuard>} />
         <Route path="vente-rapide"   element={<ModuleGuard moduleId="ventes"><ImprimerieVenteRapidePage /></ModuleGuard>} />
-        {/* ── Modules Gestion Locative ── */}
-        <Route path="biens"      element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
-        <Route path="contrats"   element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
-        <Route path="quittances" element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
+        {/* ── Modules Gestion Locative & Immobilière ── */}
+        <Route path="biens"              element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
+        <Route path="proprietaires"      element={<ModuleGuard moduleId="proprietaires_mandats"><ProprietairesPage /></ModuleGuard>} />
+        <Route path="contrats"           element={<ModuleGuard moduleId="contrats_loyers"><ContratsPage /></ModuleGuard>} />
+        <Route path="etats-lieux"        element={<ModuleGuard moduleId="etats_lieux"><EtatsLieuxPage /></ModuleGuard>} />
+        <Route path="cautions"           element={<ModuleGuard moduleId="cautions_depots"><CautionsPage /></ModuleGuard>} />
+        <Route path="quittances"         element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
+        <Route path="maintenances"       element={<ModuleGuard moduleId="maintenances_travaux"><MaintenancesPage /></ModuleGuard>} />
+        <Route path="alertes"            element={<ModuleGuard moduleId="alertes_immo"><AlertesImmoPage /></ModuleGuard>} />
+        <Route path="modeles-documents"  element={<ModuleGuard moduleId="modeles_documents"><ModelesDocumentsPage /></ModuleGuard>} />
         {/* ── Modules Poissonnerie ── */}
         <Route path="chambres-froides" element={<ModuleGuard moduleId="chambres_froides"><ChambresFroidesPage /></ModuleGuard>} />
         <Route path="pesee"            element={<ModuleGuard moduleId="pesee_cartons"><PeseePage /></ModuleGuard>} />
