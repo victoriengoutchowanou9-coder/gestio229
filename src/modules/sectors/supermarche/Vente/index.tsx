@@ -7,4 +7,4 @@
 // Clé d'isolation obligatoire : (company_id + sector_slug='supermarche')
 // =============================================================================
 
-export { default, POSPage } from '../../../../pages/dashboard/vente-pos/POSPage'
+export { default, SupermarcheCaissePage as POSPage } from '../../../../pages/dashboard/supermarche/SupermarcheCaissePage'

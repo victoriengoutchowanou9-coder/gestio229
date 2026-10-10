@@ -219,6 +219,182 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
     ],
   },
 
+  inventaire_supermarche: {
+    title: 'Inventaire & Contrôle des Écarts',
+    description: 'Comptages physiques par rayon, calcul des écarts en quantité et valeur avec traçabilité',
+    table: 'supermarche_inventaires',
+    refPrefix: 'INV',
+    fields: [
+      { key: 'reference', label: 'Référence', type: 'text' },
+      { key: 'rayon_nom', label: 'Rayon / Emplacement', type: 'text', required: true },
+      { key: 'produit_nom', label: 'Article / Produit', type: 'text', required: true },
+      { key: 'stock_theorique', label: 'Stock Théorique', type: 'number', required: true },
+      { key: 'stock_physique', label: 'Stock Compté (Physique)', type: 'number', required: true },
+      { key: 'ecart_qte', label: 'Écart (Quantité)', type: 'number' },
+      { key: 'valeur_ecart', label: 'Valeur de l\'Écart', type: 'number', money: true },
+      { key: 'motif_ajustement', label: 'Motif d\'ajustement', type: 'text', required: true },
+      { key: 'responsable', label: 'Responsable Comptage', type: 'text' },
+      { key: 'statut', label: 'Statut', type: 'select', options: ['EN_COURS', 'VALIDE', 'REJETE'], default: 'VALIDE' },
+    ],
+    statusKey: 'statut',
+    compute: (r) => {
+      const theo = n(r.stock_theorique)
+      const phys = n(r.stock_physique)
+      const ecart = phys - theo
+      const val = ecart * 1000 // valorisation indicative
+      return { ...r, ecart_qte: ecart, valeur_ecart: r.valeur_ecart ? n(r.valeur_ecart) : val }
+    },
+    rowTone: (r) => (n(r.ecart_qte) < 0 ? 'rose' : n(r.ecart_qte) > 0 ? 'amber' : 'emerald'),
+    cards: [
+      { label: 'Comptages réalisés', value: (r) => r.length },
+      { label: 'Écarts négatifs (Pertes)', value: (r) => count(r, (x) => n(x.ecart_qte) < 0), tone: 'rose' },
+      { label: 'Inventaires conformes', value: (r) => count(r, (x) => n(x.ecart_qte) === 0), tone: 'emerald' },
+    ],
+  },
+
+  reappro_intelligent: {
+    title: 'Réapprovisionnement Intelligent',
+    description: 'Aide à la commande : détection des stocks critiques, calcul des besoins et propositions fournisseurs',
+    table: 'supermarche_reappro',
+    refPrefix: 'CMD-PROP',
+    fields: [
+      { key: 'reference', label: 'Réf. Proposition', type: 'text' },
+      { key: 'produit_nom', label: 'Produit', type: 'text', required: true },
+      { key: 'fournisseur_nom', label: 'Fournisseur Habituel', type: 'text', required: true },
+      { key: 'stock_actuel', label: 'Stock Actuel', type: 'number', required: true },
+      { key: 'seuil_minimum', label: 'Seuil Minimum', type: 'number', required: true },
+      { key: 'quantite_suggeree', label: 'Quantité à Commander', type: 'number', required: true },
+      { key: 'prix_achat_estime', label: 'Coût Estimé', type: 'number', money: true },
+      { key: 'urgence', label: 'Niveau Urgence', type: 'select', options: ['CRITIQUE', 'MOYEN', 'NORMAL'], default: 'MOYEN' },
+      { key: 'statut', label: 'Décision', type: 'select', options: ['A_VALIDER', 'COMMANDE_TRANSMISE', 'REPORTE'], default: 'A_VALIDER' },
+    ],
+    statusKey: 'statut',
+    rowTone: (r) => (r.urgence === 'CRITIQUE' ? 'rose' : r.urgence === 'MOYEN' ? 'amber' : null),
+    cards: [
+      { label: 'Articles à commander', value: (r) => r.length },
+      { label: 'Urgences critiques (Rupture)', value: (r) => count(r, (x) => x.urgence === 'CRITIQUE'), tone: 'rose' },
+      { label: 'Budget estimé', value: (r) => fmtMoney(sum(r, 'prix_achat_estime')), tone: 'indigo' },
+    ],
+  },
+
+  etiquettes_prix: {
+    title: 'Étiquettes de Prix & Codes-Barres',
+    description: 'Génération et impression des étiquettes de rayon, codes-barres internes et vérification des marges',
+    table: 'supermarche_etiquettes',
+    fields: [
+      { key: 'code_barre', label: 'Code-Barres / EAN', type: 'text', required: true },
+      { key: 'designation', label: 'Nom de l\'Article', type: 'text', required: true },
+      { key: 'rayon', label: 'Rayon / Emplacement', type: 'text' },
+      { key: 'prix_achat', label: 'Prix d\'Achat', type: 'number', money: true, required: true },
+      { key: 'prix_vente', label: 'Prix de Vente TTC', type: 'number', money: true, required: true },
+      { key: 'marge_taux', label: 'Taux de Marge (%)', type: 'number' },
+      { key: 'format_etiquette', label: 'Format', type: 'select', options: ['Rayon 50x30mm', 'Gondole 70x40mm', 'Planche A4'], default: 'Rayon 50x30mm' },
+      { key: 'nb_exemplaires', label: 'Exemplaires', type: 'number', default: 1 },
+    ],
+    compute: (r) => {
+      const pa = n(r.prix_achat)
+      const pv = n(r.prix_vente)
+      const marge = pa > 0 ? Number((((pv - pa) / pa) * 100).toFixed(1)) : 0
+      return { ...r, marge_taux: marge }
+    },
+    rowTone: (r) => (n(r.marge_taux) < 15 ? 'rose' : null),
+    cards: [
+      { label: 'Étiquettes prêtes', value: (r) => r.length },
+      { label: 'Marge faible (< 15%)', value: (r) => count(r, (x) => n(x.marge_taux) < 15), tone: 'rose' },
+    ],
+  },
+
+  fidelite_clients: {
+    title: 'Programme de Fidélité Clients',
+    description: 'Gestion des points de fidélité, cagnottes et récompenses par numéro de téléphone ou carte client',
+    table: 'supermarche_fidelite',
+    refPrefix: 'FID',
+    fields: [
+      { key: 'client_nom', label: 'Nom du Client', type: 'text', required: true },
+      { key: 'telephone', label: 'Téléphone (Identifiant)', type: 'text', required: true },
+      { key: 'numero_carte', label: 'N° Carte Fidélité', type: 'text' },
+      { key: 'points_solde', label: 'Solde de Points', type: 'number', default: 0 },
+      { key: 'cumul_achats', label: 'Cumul Achats (FCFA)', type: 'number', money: true, default: 0 },
+      { key: 'niveau', label: 'Statut', type: 'select', options: ['BRONZE', 'ARGENT', 'OR', 'VIP'], default: 'BRONZE' },
+      { key: 'est_actif', label: 'Compte Actif', type: 'boolean', default: true },
+    ],
+    cards: [
+      { label: 'Clients fidélité', value: (r) => r.length },
+      { label: 'Membres Or / VIP', value: (r) => count(r, (x) => x.niveau === 'OR' || x.niveau === 'VIP'), tone: 'amber' },
+      { label: 'Points distribués', value: (r) => sum(r, 'points_solde').toLocaleString('fr-FR'), tone: 'emerald' },
+    ],
+  },
+
+  alertes_pilotage: {
+    title: 'Pilotage Gérant & Alertes Opérationnelles',
+    description: 'Surveillance en direct : ruptures imminentes, péremptions proches, écarts de caisse et marges critiques',
+    table: 'supermarche_alertes',
+    fields: [
+      { key: 'titre_alerte', label: 'Nature de l\'Alerte', type: 'text', required: true },
+      { key: 'type_alerte', label: 'Catégorie', type: 'select', options: ['STOCK_CRITIQUE', 'PEREMPTION_PROCHE', 'ECART_INVENTAIRE', 'MARGE_FAIBLE', 'COMMANDE_FOURNISSEUR'], default: 'STOCK_CRITIQUE' },
+      { key: 'priorite', label: 'Priorité', type: 'select', options: ['HAUTE', 'MOYENNE', 'FAIBLE'], default: 'HAUTE' },
+      { key: 'details', label: 'Détails & Impact', type: 'textarea' },
+      { key: 'action_requise', label: 'Action recommandée', type: 'text' },
+      { key: 'statut', label: 'Statut', type: 'select', options: ['A_TRAITER', 'EN_COURS', 'RESOLU'], default: 'A_TRAITER' },
+      { key: 'date_alerte', label: 'Date', type: 'date', default: today },
+    ],
+    statusKey: 'statut',
+    rowTone: (r) => (r.priorite === 'HAUTE' && r.statut !== 'RESOLU' ? 'rose' : r.priorite === 'MOYENNE' ? 'amber' : null),
+    cards: [
+      { label: 'Alertes actives', value: (r) => count(r, (x) => x.statut !== 'RESOLU'), tone: 'rose' },
+      { label: 'Urgences hautes', value: (r) => count(r, (x) => x.priorite === 'HAUTE' && x.statut !== 'RESOLU'), tone: 'rose' },
+      { label: 'Alertes traitées', value: (r) => count(r, (x) => x.statut === 'RESOLU'), tone: 'emerald' },
+    ],
+  },
+
+  comparaison_fournisseurs: {
+    title: 'Comparatif & Historique Fournisseurs',
+    description: 'Analyse comparative des prix d\'achat, délais de livraison et conditions par article',
+    table: 'supermarche_comparatif_fournisseurs',
+    fields: [
+      { key: 'produit_nom', label: 'Article / Produit', type: 'text', required: true },
+      { key: 'fournisseur_nom', label: 'Fournisseur', type: 'text', required: true },
+      { key: 'prix_unitaire_achat', label: 'Prix Unitaire Achat', type: 'number', money: true, required: true },
+      { key: 'conditionnement', label: 'Conditionnement', type: 'text', default: 'Carton' },
+      { key: 'delai_livraison_jours', label: 'Délai Livraison (Jours)', type: 'number', default: 2 },
+      { key: 'frais_livraison', label: 'Frais de port / Livraison', type: 'number', money: true, default: 0 },
+      { key: 'qualite_note', label: 'Note Fournisseur /5', type: 'number', default: 5 },
+      { key: 'recommande', label: 'Fournisseur Recommandé', type: 'boolean', default: false },
+    ],
+    cards: [
+      { label: 'Offres référencées', value: (r) => r.length },
+      { label: 'Fournisseurs recommandés', value: (r) => count(r, (x) => x.recommande), tone: 'emerald' },
+    ],
+  },
+
+  performance_caissiers: {
+    title: 'Suivi Performance des Caissiers',
+    description: 'Indicateurs d\'activité : nombre de tickets servis, volume encaissé, panier moyen et conformité',
+    table: 'supermarche_performance_caissiers',
+    fields: [
+      { key: 'caissier_nom', label: 'Nom du Caissier', type: 'text', required: true },
+      { key: 'date_session', label: 'Date', type: 'date', default: today, required: true },
+      { key: 'nombre_tickets', label: 'Nombre de Tickets', type: 'number', required: true },
+      { key: 'montant_total_ventes', label: 'Total Ventes Encaissé', type: 'number', money: true, required: true },
+      { key: 'panier_moyen', label: 'Panier Moyen', type: 'number', money: true },
+      { key: 'ecart_caisse', label: 'Écart de Caisse Clôture', type: 'number', money: true, default: 0 },
+      { key: 'duree_session_heures', label: 'Heures de Service', type: 'number', default: 8 },
+      { key: 'appreciation', label: 'Appréciation Superviseur', type: 'text' },
+    ],
+    compute: (r) => {
+      const tickets = n(r.nombre_tickets)
+      const ventes = n(r.montant_total_ventes)
+      const pm = tickets > 0 ? Math.round(ventes / tickets) : 0
+      return { ...r, panier_moyen: pm }
+    },
+    rowTone: (r) => (n(r.ecart_caisse) < 0 ? 'rose' : null),
+    cards: [
+      { label: 'Sessions enregistrées', value: (r) => r.length },
+      { label: 'Total Encaissé', value: (r) => fmtMoney(sum(r, 'montant_total_ventes')), tone: 'emerald' },
+      { label: 'Panier Moyen Global', value: (r) => (r.length ? fmtMoney(Math.round(sum(r, 'montant_total_ventes') / Math.max(1, sum(r, 'nombre_tickets')))) : '—'), tone: 'indigo' },
+    ],
+  },
+
   // ══════════════════════════ PHARMACIE ══════════════════════════
   ordonnances: {
     title: 'Ordonnances',

@@ -17,7 +17,16 @@ export const SECTOR_MANIFEST = {
     'Clients',
     'Fournisseurs',
     'Depenses',
-    'Reporting'
+    'Reporting',
+    'Rayons & Gondoles',
+    'Promos & DLC Courtes',
+    'Inventaire & Écarts',
+    'Réappro Intelligent',
+    'Étiquettes & Codes-Barres',
+    'Fidélité Clients',
+    'Pilotage Gérant & Alertes',
+    'Comparatif Fournisseurs',
+    'Performance Caissiers'
   ]
 }
 

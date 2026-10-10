@@ -573,6 +573,76 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'commercial',
   },
 
+  'inventaire_supermarche': {
+    id: 'inventaire_supermarche',
+    label: 'Inventaire & Écarts',
+    icon: 'ClipboardCheck',
+    path: 'inventaire',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'gestion',
+  },
+
+  'reappro_intelligent': {
+    id: 'reappro_intelligent',
+    label: 'Réappro Intelligent',
+    icon: 'TrendingUp',
+    path: 'reapprovisionnement',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'gestion',
+  },
+
+  'etiquettes_prix': {
+    id: 'etiquettes_prix',
+    label: 'Étiquettes & Codes-Barres',
+    icon: 'Barcode',
+    path: 'etiquettes',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'commercial',
+  },
+
+  'fidelite_clients': {
+    id: 'fidelite_clients',
+    label: 'Fidélité Clients',
+    icon: 'Award',
+    path: 'fidelite',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'commercial',
+  },
+
+  'alertes_pilotage': {
+    id: 'alertes_pilotage',
+    label: 'Pilotage Gérant & Alertes',
+    icon: 'ShieldAlert',
+    path: 'pilotage-alertes',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'apercu',
+  },
+
+  'comparaison_fournisseurs': {
+    id: 'comparaison_fournisseurs',
+    label: 'Comparatif Fournisseurs',
+    icon: 'Scale',
+    path: 'comparatif-fournisseurs',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'gestion',
+  },
+
+  'performance_caissiers': {
+    id: 'performance_caissiers',
+    label: 'Performance Caissiers',
+    icon: 'UserCheck',
+    path: 'performance-caissiers',
+    isCommon: false,
+    sectorSlugs: ['supermarche'],
+    group: 'admin',
+  },
+
   // ══════════════════════════════════════════════════════════════════════
   // MODULES SPÉCIFIQUES — BRASSERIE & DÉPÔT BOISSONS
   // ══════════════════════════════════════════════════════════════════════

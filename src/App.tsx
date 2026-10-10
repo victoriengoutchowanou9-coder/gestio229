@@ -59,6 +59,13 @@ const AbsencesPage           = mod('absences')
 // Supermarché
 const RayonsPage             = mod('rayons_gondoles')
 const PromosDLCPage          = mod('promos_dlc_courtes')
+const SupermarcheInventairePage = mod('inventaire_supermarche')
+const SupermarcheReapproPage    = mod('reappro_intelligent')
+const SupermarcheEtiquettesPage = mod('etiquettes_prix')
+const SupermarcheFidelitePage   = mod('fidelite_clients')
+const SupermarcheAlertesPage    = mod('alertes_pilotage')
+const SupermarcheComparatifPage = mod('comparaison_fournisseurs')
+const SupermarchePerfCaissiersPage = mod('performance_caissiers')
 // Pharmacie
 const OrdonnancesPage        = mod('ordonnances')
 const LotsPeremptionPage     = mod('lots_peremption')
@@ -101,6 +108,8 @@ const ImprimerieMatieresPage        = safeLazy(() => import('./pages/dashboard/i
 const ImprimerieSousTraitancePage   = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieSousTraitancePage'))
 const ImprimerieReportingPage       = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieReportingPage'))
 const ImprimerieVenteRapidePage     = safeLazy(() => import('./pages/dashboard/imprimerie/ImprimerieVenteRapidePage'))
+// Supermarché & Supérette (Caisse Ultra-Rapide)
+const SupermarcheCaissePage       = safeLazy(() => import('./pages/dashboard/supermarche/SupermarcheCaissePage'))
 // Gestion Locative / Immobilier
 const BiensPage              = mod('biens_locations')
 const ContratsPage           = mod('contrats_loyers')
@@ -209,6 +218,9 @@ const SectorAwareVentes: React.FC = () => {
   const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
   if (clean === 'imprimerie' || clean === 'impression') {
     return <ImprimerieVenteRapidePage />
+  }
+  if (clean === 'supermarche' || clean === 'superette') {
+    return <SupermarcheCaissePage />
   }
   return <POSPage />
 }
@@ -397,8 +409,15 @@ const AppRoutes: React.FC = () => {
         <Route path="notes"    element={<ModuleGuard moduleId="notes_resultats"><NotesResultatsPage /></ModuleGuard>} />
         <Route path="absences" element={<ModuleGuard moduleId="absences"><AbsencesPage /></ModuleGuard>} />
         {/* ── Modules Supermarché ── */}
-        <Route path="rayons"     element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
-        <Route path="promos-dlc" element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
+        <Route path="rayons"                  element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
+        <Route path="promos-dlc"              element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
+        <Route path="inventaire"              element={<ModuleGuard moduleId="inventaire_supermarche"><SupermarcheInventairePage /></ModuleGuard>} />
+        <Route path="reapprovisionnement"     element={<ModuleGuard moduleId="reappro_intelligent"><SupermarcheReapproPage /></ModuleGuard>} />
+        <Route path="etiquettes"              element={<ModuleGuard moduleId="etiquettes_prix"><SupermarcheEtiquettesPage /></ModuleGuard>} />
+        <Route path="fidelite"                element={<ModuleGuard moduleId="fidelite_clients"><SupermarcheFidelitePage /></ModuleGuard>} />
+        <Route path="pilotage-alertes"        element={<ModuleGuard moduleId="alertes_pilotage"><SupermarcheAlertesPage /></ModuleGuard>} />
+        <Route path="comparatif-fournisseurs" element={<ModuleGuard moduleId="comparaison_fournisseurs"><SupermarcheComparatifPage /></ModuleGuard>} />
+        <Route path="performance-caissiers"   element={<ModuleGuard moduleId="performance_caissiers"><SupermarchePerfCaissiersPage /></ModuleGuard>} />
         {/* ── Modules Pharmacie ── */}
         <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
         <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
