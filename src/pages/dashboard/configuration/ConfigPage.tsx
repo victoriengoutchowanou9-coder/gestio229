@@ -1341,7 +1341,7 @@ export const ConfigPage: React.FC = () => {
                   />
                 </div>
                 <p className="text-xs text-slate-600 leading-relaxed mb-3">
-                  Pour petits ateliers, graphistes indépendants et points de vente rapides. Vente express au comptoir, devis direct, encaissement immédiat et déduction automatique des matières premières.
+                  Pour petits ateliers, graphistes indépendants et points de vente rapides. Vente rapide au comptoir, devis direct, encaissement immédiat et déduction automatique des matières premières.
                 </p>
                 <div className="flex flex-wrap gap-1.5 text-[11px]">
                   <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded-md font-medium">Vente rapide POS</span>

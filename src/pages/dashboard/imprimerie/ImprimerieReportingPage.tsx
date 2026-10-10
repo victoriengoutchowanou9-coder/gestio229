@@ -643,7 +643,7 @@ export const ImprimerieReportingPage: React.FC = () => {
                           })}
                         </td>
                         <td className="px-4 py-2.5 font-mono font-bold text-slate-900">
-                          {c.commande?.numero_commande || 'Vente Express'}
+                          {c.commande?.numero_commande || 'Vente Rapide'}
                         </td>
                         <td className="px-4 py-2.5 font-semibold text-slate-800">
                           {c.commande?.client_nom || 'Client Comptoir'}

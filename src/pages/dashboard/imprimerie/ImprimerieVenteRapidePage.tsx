@@ -33,6 +33,8 @@ import {
 } from '../../../services/caisseSectorService'
 import { supabase } from '../../../lib/supabase'
 
+import { getSecteurTheme } from '../../../styles/secteursTheme'
+
 interface CartItem {
   prestation: PrestationImprimerie
   quantite: number
@@ -50,8 +52,9 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
 
   const activeSector = sectorSlug || 'imprimerie'
   const prefix = `/app/${activeSector}`
+  const theme = getSecteurTheme(activeSector)
 
-  // ── Navigation par Onglets (Vente Express, Commandes, Production, En attente, Articles, Rapports Matières) ──
+  // ── Navigation par Onglets (Vente Rapide, Commandes, Production, En attente, Articles, Rapports Matières) ──
   const [activeTab, setActiveTab] = useState<'express' | 'commandes' | 'production' | 'attente' | 'articles' | 'rapports'>('express')
 
   // ── Données Métier ──
@@ -663,16 +666,16 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       {/* ── BARRE DE NAVIGATION SUPÉRIEURE PAR ONGLETS (STYLE CAPTURE D'ÉCRAN) ── */}
       <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 -mx-4 sm:-mx-6 -mt-6 px-4 sm:px-6 pt-3 flex items-center justify-between overflow-x-auto gap-2">
         <div className="flex items-center gap-1 sm:gap-2">
-          {/* Onglet 1 : Vente Express */}
+          {/* Onglet 1 : Vente Rapide */}
           <button
             onClick={() => setActiveTab('express')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'express'
-                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                ? theme.tabActive
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
             }`}
           >
-            <ShoppingCart className="w-4 h-4 text-purple-600" /> Vente Express
+            <ShoppingCart className={`w-4 h-4 ${theme.icon}`} /> Vente Rapide
           </button>
 
           {/* Onglet 2 : Commandes & Historique */}
@@ -680,7 +683,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             onClick={() => setActiveTab('commandes')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'commandes'
-                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                ? theme.tabActive
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
             }`}
           >
@@ -695,7 +698,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             onClick={() => setActiveTab('production')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'production'
-                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                ? theme.tabActive
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
             }`}
           >
@@ -712,7 +715,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             onClick={() => setActiveTab('attente')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'attente'
-                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                ? theme.tabActive
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
             }`}
           >
@@ -729,7 +732,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             onClick={() => setActiveTab('articles')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'articles'
-                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                ? theme.tabActive
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
             }`}
           >
@@ -744,12 +747,12 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             onClick={() => setActiveTab('rapports')}
             className={`px-3.5 py-2.5 font-bold text-xs sm:text-sm border-b-2 transition-all flex items-center gap-2 whitespace-nowrap ${
               activeTab === 'rapports'
-                ? 'border-purple-600 text-purple-700 dark:text-purple-400 bg-purple-50/50 dark:bg-purple-950/20 rounded-t-xl'
+                ? theme.tabActive
                 : 'border-transparent text-slate-600 dark:text-slate-400 hover:text-slate-900'
             }`}
           >
-            <Box className="w-4 h-4 text-purple-600" /> Coûts Matières
-            <span className="px-1.5 py-0.2 bg-purple-100 text-purple-800 rounded-full text-[10px] font-black">
+            <Box className={`w-4 h-4 ${theme.icon}`} /> Coûts Matières
+            <span className={`px-1.5 py-0.2 ${theme.badge} rounded-full text-[10px] font-black`}>
               {Math.round(statsRapportMatieres.cumulCout).toLocaleString('fr-FR')} F
             </span>
           </button>
@@ -776,7 +779,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
 
           <button
             onClick={() => navigate(`${prefix}/caisse`)}
-            className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition shadow-xs whitespace-nowrap shrink-0"
+            className={`px-3.5 py-1.5 ${theme.primaryButton} rounded-xl text-xs font-bold transition shadow-xs whitespace-nowrap shrink-0`}
           >
             Ouvrir la caisse
           </button>
@@ -784,7 +787,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* VUE 1 : VENTE EXPRESS (GRILLE ARTICLES TACTILE + PANIER)              */}
+      {/* VUE 1 : VENTE RAPIDE (GRILLE ARTICLES TACTILE + PANIER)              */}
       {/* ===================================================================== */}
       {activeTab === 'express' && (
         <>
@@ -828,7 +831,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setRecuSuccess(null)}
-                  className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs transition"
+                  className={`flex-1 py-2.5 ${theme.primaryButton} rounded-xl text-xs font-bold transition`}
                 >
                   Nouvelle Vente
                 </button>
@@ -846,7 +849,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                     placeholder="Rechercher par code, nom..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-purple-500/20 focus:border-purple-500 transition"
+                    className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs sm:text-sm font-medium focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition"
                   />
                 </div>
 
@@ -858,7 +861,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       onClick={() => setSelectedCategory(cat)}
                       className={`px-4 py-1.5 rounded-full text-xs font-bold transition whitespace-nowrap ${
                         selectedCategory === cat
-                          ? 'bg-purple-600 text-white shadow-xs'
+                          ? theme.filterActive
                           : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
                       }`}
                     >
@@ -875,7 +878,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
 
                   <button
                     onClick={() => handleOpenArticleModal()}
-                    className="text-xs font-bold text-purple-700 hover:text-purple-800 flex items-center gap-1"
+                    className={`text-xs font-bold ${theme.textPrimary} hover:opacity-80 flex items-center gap-1`}
                   >
                     <Plus className="w-3.5 h-3.5" /> Ajouter un article
                   </button>
@@ -887,7 +890,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                     <p className="text-xs">Aucun article ne correspond à votre recherche.</p>
                     <button
                       onClick={() => handleOpenArticleModal()}
-                      className="px-4 py-2 bg-purple-600 text-white rounded-xl text-xs font-bold"
+                      className={`px-4 py-2 ${theme.primaryButton} rounded-xl text-xs font-bold`}
                     >
                       + Créer un article de vente rapide
                     </button>
@@ -900,10 +903,10 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                         <div
                           key={pres.id}
                           onClick={() => handleSelectPrestation(pres)}
-                          className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3.5 text-center flex flex-col justify-between hover:border-purple-400 hover:shadow-md transition cursor-pointer select-none group min-h-[120px]"
+                          className={`bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-3.5 text-center flex flex-col justify-between ${theme.cardHoverBorder} hover:shadow-md transition cursor-pointer select-none group min-h-[120px]`}
                         >
                           <div>
-                            <h3 className="font-bold text-xs text-slate-900 dark:text-slate-100 group-hover:text-purple-700 transition line-clamp-2 leading-tight">
+                            <h3 className="font-bold text-xs text-slate-900 dark:text-slate-100 group-hover:text-emerald-700 dark:group-hover:text-emerald-400 transition line-clamp-2 leading-tight">
                               {pres.nom}
                             </h3>
                             <span className="text-[10px] text-slate-400 font-mono block mt-0.5">
@@ -912,7 +915,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                           </div>
 
                           <div className="pt-2">
-                            <span className="text-sm font-black text-purple-700 dark:text-purple-400 block">
+                            <span className={`text-sm font-black ${theme.textPrimary} block`}>
                               {Number(pres.prix_vente).toLocaleString('fr-FR')} FCFA
                             </span>
 
@@ -938,7 +941,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
               <div className="lg:col-span-4 bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-4 sm:p-5 shadow-xs space-y-4 sticky top-4">
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                    <ShoppingCart className="w-4 h-4 text-purple-600" /> Panier ({panier.length})
+                    <ShoppingCart className={`w-4 h-4 ${theme.icon}`} /> Panier ({panier.length})
                   </h3>
 
                   {panier.length > 0 && (
@@ -1028,7 +1031,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       onClick={() => setModePaiement('especes')}
                       className={`py-1.5 rounded-xl border transition ${
                         modePaiement === 'especes'
-                          ? 'bg-purple-50 border-purple-500 text-purple-700'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-700 dark:bg-emerald-950/40'
                           : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                       }`}
                     >
@@ -1039,7 +1042,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       onClick={() => setModePaiement('momo_mtn')}
                       className={`py-1.5 rounded-xl border transition ${
                         modePaiement === 'momo_mtn'
-                          ? 'bg-purple-50 border-purple-500 text-purple-700'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-700 dark:bg-emerald-950/40'
                           : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                       }`}
                     >
@@ -1050,7 +1053,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       onClick={() => setModePaiement('momo_moov')}
                       className={`py-1.5 rounded-xl border transition ${
                         modePaiement === 'momo_moov'
-                          ? 'bg-purple-50 border-purple-500 text-purple-700'
+                          ? 'bg-emerald-50 border-emerald-500 text-emerald-700 dark:bg-emerald-950/40'
                           : 'border-slate-200 text-slate-600 hover:bg-slate-50'
                       }`}
                     >
@@ -1072,7 +1075,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                   <button
                     disabled={panier.length === 0 || submitting}
                     onClick={() => handleValiderVente(false)}
-                    className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white font-black rounded-2xl text-xs sm:text-sm transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-md shadow-purple-600/20"
+                    className={`w-full py-3 ${theme.primaryButton} font-black rounded-2xl text-xs sm:text-sm transition disabled:opacity-50 flex items-center justify-center gap-2 shadow-md ${theme.shadow}`}
                   >
                     <Check className="w-4 h-4" />
                     {submitting ? 'Validation...' : 'Valider ma vente'}
@@ -1242,7 +1245,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       <span className="font-mono font-bold text-xs text-slate-900 block">{cmd.numero_commande}</span>
                       <span className="text-xs font-semibold text-slate-700">{cmd.client_nom}</span>
                     </div>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 text-purple-800">
+                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${theme.badge}`}>
                       {cmd.statut}
                     </span>
                   </div>
@@ -1336,17 +1339,17 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h3 className="text-sm font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-                <Layers className="w-4 h-4 text-purple-600" /> Catalogue des Articles & Liaison Matières Premières
+                <Layers className={`w-4 h-4 ${theme.icon}`} /> Catalogue des Articles & Liaison Matières Premières
               </h3>
               <p className="text-xs text-slate-400">
-                Ajoutez vos articles de vente express et associez les matières premières consommées à chaque vente
+                Ajoutez vos articles de vente rapide et associez les matières premières consommées à chaque vente
               </p>
             </div>
 
             <div className="flex items-center gap-2">
               <button
                 onClick={() => handleOpenArticleModal()}
-                className="px-3.5 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs"
+                className={`px-3.5 py-1.5 ${theme.primaryButton} rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-xs`}
               >
                 <Plus className="w-3.5 h-3.5" /> Nouvel Article de Vente
               </button>
@@ -1355,7 +1358,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 onClick={() => setShowMatiereModal(true)}
                 className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
               >
-                <Box className="w-3.5 h-3.5 text-purple-600" /> Nouvelle Matière Première
+                <Box className={`w-3.5 h-3.5 ${theme.icon}`} /> Nouvelle Matière Première
               </button>
             </div>
           </div>
@@ -1367,14 +1370,14 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
               return (
                 <div
                   key={p.id}
-                  className="p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 text-xs flex flex-col justify-between space-y-2 hover:border-purple-300 transition"
+                  className={`p-3.5 bg-slate-50 dark:bg-slate-900 rounded-2xl border border-slate-200 text-xs flex flex-col justify-between space-y-2 ${theme.cardHoverBorder} transition`}
                 >
                   <div>
                     <div className="flex justify-between items-start">
                       <span className="font-bold text-slate-900 dark:text-slate-100">{p.nom}</span>
                       <button
                         onClick={() => handleOpenArticleModal(p)}
-                        className="text-slate-400 hover:text-purple-600 p-1 transition"
+                        className={`text-slate-400 hover:${theme.textPrimary} p-1 transition`}
                         title="Modifier cet article & ses matières"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
@@ -1385,7 +1388,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       {p.code} • {p.categorie}
                     </span>
 
-                    <span className="font-black text-purple-700 block mt-1">
+                    <span className={`font-black ${theme.textPrimary} block mt-1`}>
                       {Number(p.prix_vente).toLocaleString('fr-FR')} FCFA /{p.unite_facturation}
                     </span>
                   </div>
@@ -1396,7 +1399,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                     </span>
                     <button
                       onClick={() => handleOpenArticleModal(p)}
-                      className="text-purple-600 font-bold hover:underline"
+                      className={`${theme.textPrimary} font-bold hover:underline`}
                     >
                       Configurer BOM
                     </button>
@@ -1443,7 +1446,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 </button>
                 <button
                   onClick={() => setRapportPeriode('personnalise')}
-                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'personnalise' ? 'bg-white text-purple-700 shadow-xs' : ''}`}
+                  className={`px-3 py-1.5 rounded-xl transition ${rapportPeriode === 'personnalise' ? `bg-white ${theme.textPrimary} shadow-xs font-bold` : ''}`}
                 >
                   Personnalisé
                 </button>
@@ -1506,16 +1509,16 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
           {/* ── CARTES KPIS MATIÈRES PREMIÈRES ── */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3.5 text-xs">
             {/* KPI 1 : CUMUL COÛT MATIÈRES */}
-            <div className="bg-purple-900 text-white p-4 rounded-3xl shadow-xs space-y-1">
-              <div className="flex items-center justify-between text-purple-200">
+            <div className={`${theme.boxAccent} p-4 rounded-3xl shadow-xs space-y-1`}>
+              <div className={`flex items-center justify-between ${theme.textLight}`}>
                 <span className="font-bold uppercase tracking-wider text-[10px]">Coût Cumulé Matières</span>
-                <Box className="w-4 h-4 text-purple-300" />
+                <Box className={`w-4 h-4 ${theme.textLight}`} />
               </div>
               <p className="text-2xl font-black text-white">
                 {Math.round(statsRapportMatieres.cumulCout).toLocaleString('fr-FR')}{' '}
                 <span className="text-xs font-normal">FCFA</span>
               </p>
-              <p className="text-[11px] text-purple-200">
+              <p className={`text-[11px] ${theme.textLight}`}>
                 Cumul sur la période sélectionnée
               </p>
             </div>
@@ -1524,7 +1527,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             <div className="bg-white p-4 rounded-3xl border border-slate-200 shadow-xs space-y-1">
               <div className="flex items-center justify-between text-slate-400">
                 <span className="font-bold uppercase tracking-wider text-[10px]">Quantité Déstockée</span>
-                <Scissors className="w-4 h-4 text-purple-600" />
+                <Scissors className={`w-4 h-4 ${theme.icon}`} />
               </div>
               <p className="text-2xl font-black text-slate-900">
                 {statsRapportMatieres.cumulQte.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
@@ -1544,7 +1547,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 {statsRapportMatieres.nbSorties}
               </p>
               <p className="text-[11px] text-slate-400">
-                Liaisons ventes express & commandes
+                Liaisons ventes rapides & commandes
               </p>
             </div>
 
@@ -1556,7 +1559,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
               </div>
               <button
                 onClick={() => navigate(`${prefix}/reporting`)}
-                className="py-1.5 px-3 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl text-xs transition flex items-center justify-between mt-2"
+                className={`py-1.5 px-3 ${theme.secondaryButton} font-bold rounded-xl text-xs transition flex items-center justify-between mt-2`}
               >
                 <span>Voir le rapport financier</span>
                 <ArrowRight className="w-3.5 h-3.5" />
@@ -1569,14 +1572,14 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             <div className="p-4 border-b border-slate-100 flex items-center justify-between">
               <div>
                 <h3 className="font-black text-sm text-slate-900 flex items-center gap-2">
-                  <Box className="w-4 h-4 text-purple-600" /> Coût & Consommation par Matière Première
+                  <Box className={`w-4 h-4 ${theme.icon}`} /> Coût & Consommation par Matière Première
                 </h3>
                 <p className="text-[11px] text-slate-400">
                   Détail du coût de chaque matière première consommée lors des ventes
                 </p>
               </div>
 
-              <span className="text-xs font-bold px-3 py-1 bg-purple-50 text-purple-700 rounded-full">
+              <span className={`text-xs font-bold px-3 py-1 ${theme.secondaryButton} rounded-full`}>
                 {statsRapportMatieres.parMatiere.length} matière(s)
               </span>
             </div>
@@ -1623,7 +1626,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                           <td className="px-4 py-3 text-right text-slate-600">
                             {Math.round(m.coutUnitaireMoyen).toLocaleString('fr-FR')} F
                           </td>
-                          <td className="px-4 py-3 text-right font-black text-purple-700 text-sm">
+                          <td className={`px-4 py-3 text-right font-black ${theme.textPrimary} text-sm`}>
                             {Math.round(m.coutTotal).toLocaleString('fr-FR')} F
                           </td>
                           <td className="px-4 py-3">
@@ -1631,7 +1634,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                               <span className="text-[10px] font-bold">{m.partPct.toFixed(1)}%</span>
                               <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
                                 <div
-                                  className="bg-purple-600 h-full rounded-full"
+                                  className="bg-emerald-600 h-full rounded-full"
                                   style={{ width: `${Math.min(100, m.partPct)}%` }}
                                 />
                               </div>
@@ -1650,19 +1653,19 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                       )
                     })}
                   </tbody>
-                  <tfoot className="bg-purple-50/70 border-t-2 border-purple-200 font-black text-slate-900">
+                  <tfoot className="bg-emerald-50/70 border-t-2 border-emerald-200 font-black text-slate-900">
                     <tr>
-                      <td colSpan={4} className="px-4 py-3 text-right uppercase tracking-wider text-purple-900">
+                      <td colSpan={4} className="px-4 py-3 text-right uppercase tracking-wider text-emerald-900">
                         Total Cumulé Coûts Matières :
                       </td>
-                      <td className="px-4 py-3 text-right text-purple-900">
+                      <td className="px-4 py-3 text-right text-emerald-900">
                         {statsRapportMatieres.cumulQte.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}
                       </td>
                       <td className="px-4 py-3 text-right text-slate-400">-</td>
-                      <td className="px-4 py-3 text-right text-purple-950 text-sm">
+                      <td className="px-4 py-3 text-right text-emerald-950 text-sm">
                         {Math.round(statsRapportMatieres.cumulCout).toLocaleString('fr-FR')} FCFA
                       </td>
-                      <td colSpan={2} className="px-4 py-3 text-purple-700 text-left">
+                      <td colSpan={2} className={`px-4 py-3 ${theme.textPrimary} text-left`}>
                         100%
                       </td>
                     </tr>
@@ -1683,7 +1686,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h4 className="font-black text-base text-slate-900 dark:text-slate-100">
-                  {editingArticleId ? "Modifier l'Article de Vente" : "Nouvel Article de Vente Express"}
+                  {editingArticleId ? "Modifier l'Article de Vente" : "Nouvel Article de Vente Rapide"}
                 </h4>
                 <p className="text-xs text-slate-400">
                   Définissez le tarif et les matières premières associées (déstockées à la vente)
@@ -1756,7 +1759,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                     min="0"
                     value={articleForm.prix_vente}
                     onChange={(e) => setArticleForm({ ...articleForm, prix_vente: Number(e.target.value) })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-purple-700"
+                    className={`w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold ${theme.textPrimary}`}
                   />
                 </div>
               </div>
@@ -1765,7 +1768,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
               <div className="pt-3 border-t border-slate-100 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="font-bold text-slate-800 flex items-center gap-1.5">
-                    <Box className="w-3.5 h-3.5 text-purple-600" /> Matières Premières Liées (BOM)
+                    <Box className={`w-3.5 h-3.5 ${theme.icon}`} /> Matières Premières Liées (BOM)
                   </span>
 
                   <button
@@ -1785,7 +1788,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                         },
                       ])
                     }}
-                    className="text-[11px] font-bold text-purple-700 hover:underline flex items-center gap-1"
+                    className={`text-[11px] font-bold ${theme.textPrimary} hover:underline flex items-center gap-1`}
                   >
                     <Plus className="w-3 h-3" /> Associer une matière
                   </button>
@@ -1870,7 +1873,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition shadow-xs"
+                  className={`flex-1 py-2.5 ${theme.primaryButton} font-bold rounded-xl transition shadow-xs`}
                 >
                   Enregistrer l'Article
                 </button>
@@ -1888,7 +1891,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
           <div className="bg-white dark:bg-slate-800 rounded-3xl p-6 max-w-sm w-full space-y-4 shadow-2xl border border-slate-200">
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
               <h4 className="font-black text-sm text-slate-900 dark:text-slate-100 flex items-center gap-1.5">
-                <Box className="w-4 h-4 text-purple-600" /> Nouvelle Matière Première
+                <Box className={`w-4 h-4 ${theme.icon}`} /> Nouvelle Matière Première
               </h4>
               <button
                 onClick={() => setShowMatiereModal(false)}
@@ -1962,7 +1965,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                     min="0"
                     value={matiereForm.cout_moyen}
                     onChange={(e) => setMatiereForm({ ...matiereForm, cout_moyen: Number(e.target.value) })}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-purple-700"
+                    className={`w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-bold ${theme.textPrimary}`}
                   />
                 </div>
               </div>
@@ -1977,7 +1980,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl transition"
+                  className={`flex-1 py-2 ${theme.primaryButton} font-bold rounded-xl transition`}
                 >
                   Ajouter au Stock
                 </button>
@@ -2027,7 +2030,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
               </div>
             </div>
 
-            <div className="bg-purple-50 p-3 rounded-2xl space-y-1 font-semibold">
+            <div className="bg-emerald-50/70 p-3 rounded-2xl space-y-1 font-semibold border border-emerald-100">
               <div className="flex justify-between text-slate-700">
                 <span>Total Vente :</span>
                 <span className="font-black text-slate-900">{Number(selectedCommandeDetail.total_ttc).toLocaleString('fr-FR')} FCFA</span>
@@ -2104,7 +2107,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 />
               </div>
 
-              <div className="p-3 bg-purple-50 rounded-xl text-center font-black text-purple-900">
+              <div className="p-3 bg-emerald-50 rounded-xl text-center font-black text-emerald-900 border border-emerald-100">
                 Total estimé :{' '}
                 {Math.round(
                   (dimLargeur || 1) * (dimHauteur || 1) * (dimQuantite || 1) * Number(dimModalItem.prix_vente || 0)
@@ -2122,7 +2125,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold transition"
+                  className={`flex-1 py-2.5 ${theme.primaryButton} rounded-xl font-bold transition`}
                 >
                   Ajouter au Panier
                 </button>

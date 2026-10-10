@@ -469,6 +469,7 @@ const AppRoutes: React.FC = () => {
         <Route path="matieres"       element={<ModuleGuard moduleId="matieres"><ImprimerieMatieresPage /></ModuleGuard>} />
         <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><ImprimerieSousTraitancePage /></ModuleGuard>} />
         <Route path="vente-rapide"   element={<ModuleGuard moduleId="ventes"><ImprimerieVenteRapidePage /></ModuleGuard>} />
+        <Route path="vente-express"  element={<Navigate to="../vente-rapide" replace />} />
         {/* ── Modules Gestion Locative & Immobilière ── */}
         <Route path="biens"              element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
         <Route path="proprietaires"      element={<ModuleGuard moduleId="proprietaires_mandats"><ProprietairesPage /></ModuleGuard>} />
@@ -596,6 +597,7 @@ const AppRoutes: React.FC = () => {
         <Route path="matieres"       element={<ModuleGuard moduleId="matieres"><ImprimerieMatieresPage /></ModuleGuard>} />
         <Route path="sous-traitance" element={<ModuleGuard moduleId="sous_traitance"><ImprimerieSousTraitancePage /></ModuleGuard>} />
         <Route path="vente-rapide"   element={<ModuleGuard moduleId="ventes"><ImprimerieVenteRapidePage /></ModuleGuard>} />
+        <Route path="vente-express"  element={<Navigate to="../vente-rapide" replace />} />
         {/* ── Modules Gestion Locative & Immobilière ── */}
         <Route path="biens"              element={<ModuleGuard moduleId="biens_locations"><BiensPage /></ModuleGuard>} />
         <Route path="proprietaires"      element={<ModuleGuard moduleId="proprietaires_mandats"><ProprietairesPage /></ModuleGuard>} />

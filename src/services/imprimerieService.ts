@@ -958,7 +958,7 @@ export const imprimerieService = {
         numero_commande: cmdNum,
         client_nom: params.clientNom || 'Client Comptoir',
         client_tel: params.clientTel || null,
-        titre_travail: titreTravail || 'Vente Express',
+        titre_travail: titreTravail || 'Vente Rapide',
         date_commande: new Date().toISOString().split('T')[0],
         date_livraison_prevue: new Date().toISOString().split('T')[0],
         priorite: 'normale',
