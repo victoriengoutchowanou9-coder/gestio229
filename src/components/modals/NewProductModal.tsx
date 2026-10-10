@@ -290,6 +290,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
       // 3. Préparation du payload pour Supabase avec isolation sectorielle forcée
       const insertPayload: any = {
+        company_id: company?.id || companyId,
         code: autoCode,
         name: form.name.trim(),
         unit: form.uv,
@@ -299,6 +300,8 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         is_taxable: form.isVatSubject,
         tva_rate: form.isVatSubject ? form.vatRate : 0,
         min_stock_alert: 5,
+        sector_slug: activeSectorSlug,
+        secteur_slug: activeSectorSlug,
         sector_meta: sectorMeta,
         is_active: true,
       }

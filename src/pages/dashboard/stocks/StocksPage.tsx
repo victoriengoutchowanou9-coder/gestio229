@@ -144,7 +144,11 @@ export const StocksPage: React.FC = () => {
 
       if (error) throw error
 
-      const mapped: ProductStock[] = (data || []).map((p: any) => ({
+      // Isolation stricte par secteur d'activité
+      const currentActiveSector = sectorSlug || getActiveSectorSlug()
+      const isolatedData = filterItemsForSector(data || [], currentActiveSector)
+
+      const mapped: ProductStock[] = isolatedData.map((p: any) => ({
         id: p.id,
         code: p.code,
         name: p.name,

@@ -12,6 +12,7 @@ import SectorErrorBoundary from './components/common/SectorErrorBoundary'
 import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
 import { safeLazy } from './lib/safeLazy'
 import { useTenant } from './hooks/useTenant'
+import { getActiveSectorSlug } from './lib/sectorClient'
 import { ThemeProvider } from './context/ThemeContext'
 
 // ─── Lazy Loading des pages (safeLazy = auto-reload si chunk introuvable) ────
@@ -212,14 +213,14 @@ const SectorAwareDashboard: React.FC = () => {
   return <DashboardPage />
 }
 
-// ─── Vente & POS conditionnel (Spécialisé Vente Rapide pour Imprimerie) ───────────
+// ─── Vente & POS conditionnel (Spécialisé Vente Rapide pour Imprimerie & Caisse Supermarché) ───
 const SectorAwareVentes: React.FC = () => {
   const { sectorSlug } = useTenant()
-  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   if (clean === 'imprimerie' || clean === 'impression') {
     return <ImprimerieVenteRapidePage />
   }
-  if (clean === 'supermarche' || clean === 'superette') {
+  if (clean === 'supermarche' || clean === 'superette' || clean === 'supermarche-alimentation' || clean === 'supérette') {
     return <SupermarcheCaissePage />
   }
   return <POSPage />
@@ -228,7 +229,7 @@ const SectorAwareVentes: React.FC = () => {
 // ─── Stocks conditionnel (Spécialisé Matières Premières & Bobines Imprimerie) ────
 const SectorAwareStocks: React.FC = () => {
   const { sectorSlug } = useTenant()
-  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   if (clean === 'imprimerie' || clean === 'impression') {
     return <ImprimerieMatieresPage />
   }
@@ -530,8 +531,15 @@ const AppRoutes: React.FC = () => {
         <Route path="notes"    element={<ModuleGuard moduleId="notes_resultats"><NotesResultatsPage /></ModuleGuard>} />
         <Route path="absences" element={<ModuleGuard moduleId="absences"><AbsencesPage /></ModuleGuard>} />
         {/* ── Modules Supermarché ── */}
-        <Route path="rayons"     element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
-        <Route path="promos-dlc" element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
+        <Route path="rayons"                  element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
+        <Route path="promos-dlc"              element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
+        <Route path="inventaire"              element={<ModuleGuard moduleId="inventaire_supermarche"><SupermarcheInventairePage /></ModuleGuard>} />
+        <Route path="reapprovisionnement"     element={<ModuleGuard moduleId="reappro_intelligent"><SupermarcheReapproPage /></ModuleGuard>} />
+        <Route path="etiquettes"              element={<ModuleGuard moduleId="etiquettes_prix"><SupermarcheEtiquettesPage /></ModuleGuard>} />
+        <Route path="fidelite"                element={<ModuleGuard moduleId="fidelite_clients"><SupermarcheFidelitePage /></ModuleGuard>} />
+        <Route path="pilotage-alertes"        element={<ModuleGuard moduleId="alertes_pilotage"><SupermarcheAlertesPage /></ModuleGuard>} />
+        <Route path="comparatif-fournisseurs" element={<ModuleGuard moduleId="comparaison_fournisseurs"><SupermarcheComparatifPage /></ModuleGuard>} />
+        <Route path="performance-caissiers"   element={<ModuleGuard moduleId="performance_caissiers"><SupermarchePerfCaissiersPage /></ModuleGuard>} />
         {/* ── Modules Pharmacie ── */}
         <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
         <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
@@ -596,11 +604,11 @@ const AppRoutes: React.FC = () => {
         element={<ProtectedRoute><AppLayout /></ProtectedRoute>}
       >
         <Route index element={<Navigate to="/dashboard/tableau-bord" replace />} />
-        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
-        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><DashboardPage /></ModuleGuard>} />
-        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
-        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><POSPage /></ModuleGuard>} />
-        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><StocksPage /></ModuleGuard>} />
+        <Route path="tableau-bord"   element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
+        <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
+        <Route path="vente"          element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
         <Route path="clients"        element={<ModuleGuard moduleId="clients"><ClientsPage /></ModuleGuard>} />

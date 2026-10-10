@@ -21,6 +21,7 @@ import { formatFCFA } from '../../../utils/tax'
 import { checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { imprimerTicketThermique, telechargerTicketPDF, TicketData } from '../../../utils/thermalPrinter'
+import { filterItemsForSector, getActiveSectorSlug } from '../../../lib/sectorClient'
 
 const fmt = (n: number = 0) => formatFCFA(n)
 
@@ -122,16 +123,21 @@ export const SupermarcheCaissePage: React.FC = () => {
         setCaisseMessage(caisseStat.message || 'La session de caisse est fermée.')
       }
 
-      // 2. Charger les articles du supermarché
+      // 2. Charger les articles isolés du supermarché
+      let rawProds: any[] = []
       const { data, error } = await supabase
         .from('products')
         .select('*')
         .eq('company_id', companyId)
+        .neq('is_active', false)
         .order('name', { ascending: true })
 
       if (error) throw error
 
-      const mapped: SupermarcheProduct[] = (data || []).map((p: any) => ({
+      // Isolation stricte : filtrer pour que SEULS les produits Supermarché apparaissent
+      rawProds = filterItemsForSector(data || [], activeSector)
+
+      const mapped: SupermarcheProduct[] = rawProds.map((p: any) => ({
         id: p.id,
         code: p.code || p.sku || 'ART',
         name: p.name,
@@ -638,42 +644,54 @@ export const SupermarcheCaissePage: React.FC = () => {
 
         {/* GRILLE TACTILE DES PRODUITS */}
         <div className="flex-1 overflow-y-auto pr-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 content-start">
-          {filteredProducts.map((p) => {
-            const lowStock = p.current_stock <= 3
-            return (
-              <button
-                key={p.id}
-                onClick={() => ajouterAuPanier(p, 1)}
-                className="flex flex-col justify-between p-2.5 bg-slate-900/60 hover:bg-slate-700/60 active:scale-[0.98] border border-slate-700/60 rounded-xl text-left transition h-24 group relative overflow-hidden"
-              >
-                <div>
-                  <div className="text-xs font-bold text-slate-100 line-clamp-2 group-hover:text-emerald-400 transition">
-                    {p.name}
+          {filteredProducts.length === 0 ? (
+            <div className="col-span-full h-64 flex flex-col items-center justify-center text-center p-6 bg-slate-900/40 rounded-2xl border border-dashed border-slate-700/80 text-slate-400">
+              <div className="w-12 h-12 rounded-2xl bg-slate-800 text-slate-500 flex items-center justify-center mb-3">
+                <ShoppingCart className="w-6 h-6 stroke-1" />
+              </div>
+              <p className="font-bold text-sm text-slate-300">Aucun produit en stock Supermarché</p>
+              <p className="text-xs text-slate-500 max-w-sm mt-1">
+                Le stock de ce secteur est actuellement vide. Créez des articles dans le menu <strong>Stocks &gt; Nouveau Produit</strong> pour les retrouver ici.
+              </p>
+            </div>
+          ) : (
+            filteredProducts.map((p) => {
+              const lowStock = p.current_stock <= 3
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => ajouterAuPanier(p, 1)}
+                  className="flex flex-col justify-between p-2.5 bg-slate-900/60 hover:bg-slate-700/60 active:scale-[0.98] border border-slate-700/60 rounded-xl text-left transition h-24 group relative overflow-hidden"
+                >
+                  <div>
+                    <div className="text-xs font-bold text-slate-100 line-clamp-2 group-hover:text-emerald-400 transition">
+                      {p.name}
+                    </div>
+                    <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                      {p.code}
+                    </div>
                   </div>
-                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                    {p.code}
-                  </div>
-                </div>
 
-                <div className="flex items-end justify-between mt-1">
-                  <span className="text-xs font-black text-emerald-400">
-                    {fmt(p.selling_price)}
-                  </span>
-                  <span
-                    className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${
-                      p.current_stock <= 0
-                        ? 'bg-rose-950 text-rose-300 border border-rose-800'
-                        : lowStock
-                        ? 'bg-amber-950 text-amber-300 border border-amber-800'
-                        : 'bg-slate-800 text-slate-400'
-                    }`}
-                  >
-                    {p.current_stock} {p.unit}
-                  </span>
-                </div>
-              </button>
-            )
-          })}
+                  <div className="flex items-end justify-between mt-1">
+                    <span className="text-xs font-black text-emerald-400">
+                      {fmt(p.selling_price)}
+                    </span>
+                    <span
+                      className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${
+                        p.current_stock <= 0
+                          ? 'bg-rose-950 text-rose-300 border border-rose-800'
+                          : lowStock
+                          ? 'bg-amber-950 text-amber-300 border border-amber-800'
+                          : 'bg-slate-800 text-slate-400'
+                      }`}
+                    >
+                      {p.current_stock} {p.unit}
+                    </span>
+                  </div>
+                </button>
+              )
+            })
+          )}
         </div>
       </div>
 

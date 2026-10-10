@@ -54,7 +54,7 @@ export function getActiveSectorMeta() {
  * (ex: imprimerie <-> impression, immobilier <-> location, agrobusiness <-> agro, etc.)
  */
 export function canonicalSectorSlug(slug?: string | null): string {
-  if (!slug) return 'boutique'
+  if (!slug) return ''
   const clean = String(slug).toLowerCase().trim().replace(/^sec-/, '')
   if (clean === 'impression' || clean === 'imprimerie') return 'imprimerie'
   if (clean === 'station' || clean === 'stationservice' || clean === 'station-service') return 'station-service'
@@ -65,6 +65,8 @@ export function canonicalSectorSlug(slug?: string | null): string {
   if (clean === 'brasserie' || clean === 'depot-boissons' || clean === 'depot_boissons' || clean === 'depot' || clean === 'boissons') return 'brasserie'
   if (clean === 'poissonnerie' || clean === 'poissons' || clean === 'chambre-froide') return 'poissonnerie'
   if (clean === 'cosmetique' || clean === 'cosmetiques') return 'cosmetiques'
+  if (clean === 'supermarche' || clean === 'superette' || clean === 'supermarche-alimentation' || clean === 'supermarché' || clean === 'supérette') return 'supermarche'
+  if (clean === 'boutique' || clean === 'commerce-general' || clean === 'general') return 'boutique'
   return clean
 }
 
@@ -115,18 +117,26 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
  */
 export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   if (!item) return false
-  const active = (targetSectorSlug || getActiveSectorSlug()).toLowerCase().trim().replace(/^sec-/, '')
-  const activeCanon = canonicalSectorSlug(active)
+  const rawActive = targetSectorSlug || getActiveSectorSlug() || 'boutique'
+  const active = rawActive.toLowerCase().trim().replace(/^sec-/, '')
+  const activeCanon = canonicalSectorSlug(active) || 'boutique'
 
-  // 1. Tag explicite par colonne sector_slug ou sector_id
-  const directSlug = item.sector_slug || item.sector_id
+  // 1. Tag explicite par colonne sector_slug, sector_id, secteur_id, secteur_slug
+  const directSlug = item.sector_slug || item.sector_id || item.secteur_id || item.secteur_slug
   if (directSlug && typeof directSlug === 'string') {
     const directCanon = canonicalSectorSlug(directSlug)
-    if (directCanon === activeCanon) return true
+    if (directCanon && directCanon === activeCanon) return true
+    if (directSlug.toLowerCase().trim() === active) return true
     return false // Isolation stricte : appartient explicitement à un autre secteur
   }
 
-  // 1b. Permissions (pour user_profiles)
+  // 1b. Si objet secteur relié (jointure SQL)
+  if (item.secteur && typeof item.secteur === 'object') {
+    const sSlug = item.secteur.slug || item.secteur.code
+    if (sSlug && (canonicalSectorSlug(sSlug) === activeCanon || String(sSlug).toLowerCase().trim() === active)) return true
+  }
+
+  // 1c. Permissions (pour user_profiles)
   if (item.permissions && typeof item.permissions === 'object') {
     const permSlug = item.permissions.sector_slug || item.permissions.sector_id
     if (permSlug && typeof permSlug === 'string') {
@@ -138,10 +148,11 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
 
   // 2. Tag explicite dans sector_meta JSONB
   if (item.sector_meta && typeof item.sector_meta === 'object') {
-    const metaSlug = item.sector_meta.sector_slug || item.sector_meta.sector
+    const metaSlug = item.sector_meta.sector_slug || item.sector_meta.sector || item.sector_meta.secteur
     if (metaSlug && typeof metaSlug === 'string') {
       const metaCanon = canonicalSectorSlug(metaSlug)
-      if (metaCanon === activeCanon) return true
+      if (metaCanon && metaCanon === activeCanon) return true
+      if (String(metaSlug).toLowerCase().trim() === active) return true
       return false
     }
   }
@@ -151,10 +162,10 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
     try {
       const parsed = typeof item.notes === 'string' ? JSON.parse(item.notes) : item.notes
       if (parsed?.sector_slug) {
-        return String(parsed.sector_slug).toLowerCase().trim().replace(/^sec-/, '') === active
+        return canonicalSectorSlug(parsed.sector_slug) === activeCanon
       }
       if (parsed?.sector) {
-        return String(parsed.sector).toLowerCase().trim().replace(/^sec-/, '') === active
+        return canonicalSectorSlug(parsed.sector) === activeCanon
       }
     } catch (e) {}
   }
@@ -163,28 +174,36 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   if (typeof item.e_mecef_uid === 'string' && item.e_mecef_uid.includes('SEC:')) {
     const match = item.e_mecef_uid.match(/SEC:([^|]+)/)
     if (match && match[1]) {
-      return match[1].toLowerCase().trim().replace(/^sec-/, '') === active
+      return canonicalSectorSlug(match[1]) === activeCanon
     }
   }
 
-  // 3. Cas de rétrocompatibilité pour les données existantes antérieures à la restructuration :
-  // Les produits frigorifiques avec cartons / coefficients -> Poissonnerie
-  if (active === 'poissonnerie') {
-    return !!(item.sector_meta?.coef && Number(item.sector_meta.coef) > 1) ||
-      /tilapia|hake|hm 16|cuisse|poisson/i.test(item.name || item.product_name || '')
+  // 3. Cas sémantique d'isolation pour articles historiques orphelins (sans marqueur explicite)
+  const itemName = String(item.name || item.product_name || item.designation || '').toLowerCase()
+
+  // Les boissons brasserie, bières et casiers (Beaufort, Béninoise, Castel, etc.) appartiennent TOUJOURS à Brasserie
+  const isDrinkOrBeer = /beaufort|béninoise|beninoise|castel|guinness|sobebra|youki|casier|casiers|capsule|c12t|c20t|c24t|bière|biere/i.test(itemName)
+  if (isDrinkOrBeer) {
+    return activeCanon === 'brasserie'
   }
 
-  // Les produits généraux anciens d'ETS BIO -> Boutique
-  if (active === 'boutique') {
-    const isFish = !!(item.sector_meta?.coef && Number(item.sector_meta.coef) > 1) ||
-      /tilapia|hake|hm 16|cuisse|poisson/i.test(item.name || item.product_name || '')
-    return !isFish
+  // Les matériaux BTP (ciment, fer à béton, tôle, pointes) appartiennent TOUJOURS à Quincaillerie
+  const isBTP = /ciment|fer à béton|fer a beton|béton|beton|tôle|tole|quincaillerie|pointes|brouette/i.test(itemName)
+  if (isBTP) {
+    return activeCanon === 'quincaillerie'
   }
 
-  // 4. Règle absolue d'isolation : les données sans marqueur sectoriel explicite
+  // Les produits frigorifiques / poissons -> Poissonnerie
+  const isFish = !!(item.sector_meta?.coef && Number(item.sector_meta.coef) > 1) ||
+    /tilapia|hake|hm 16|cuisse|poisson|chinchard/i.test(itemName)
+  if (isFish) {
+    return activeCanon === 'poissonnerie'
+  }
+
+  // 4. Règle absolue d'isolation : les données résiduelles sans marqueur sectoriel explicite
   // n'apparaissent QUE dans 'boutique' (secteur historique par défaut) et JAMAIS
-  // dans les autres sous-logiciels (Poissonnerie, Pharmacie, Microfinance, etc.)
-  return active === 'boutique'
+  // dans les autres sous-logiciels spécialisés (Supermarché, Brasserie, Poissonnerie, Pharmacie, etc.)
+  return activeCanon === 'boutique'
 }
 
 /**
@@ -204,6 +223,7 @@ export function withSectorMeta<T extends Record<string, any>>(data: T, targetSec
   return {
     ...data,
     sector_slug: active,
+    secteur_slug: active,
     sector_meta: {
       ...(data.sector_meta || {}),
       sector_slug: active,
