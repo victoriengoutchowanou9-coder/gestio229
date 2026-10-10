@@ -242,7 +242,7 @@ export const AbonnementPage: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8 max-w-6xl mx-auto pb-12">
+    <div className="space-y-8 w-full max-w-none px-3 lg:px-4 pb-12">
       {/* ─── En-tête de la Page ───────────────────────────────────────── */}
       <div>
         <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Mon Abonnement & Tarifs SaaS</h1>

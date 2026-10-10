@@ -2704,12 +2704,12 @@ export const POSPage: React.FC = () => {
               </button>
             </div>
 
-            {/* Grille des articles sous forme de cartes professionnelles */}
+            {/* Grille des articles sous forme de cartes professionnelles (100% largeur fluide) */}
             <div className={clsx(
-              'flex-1 overflow-y-auto grid gap-3 pr-1 pb-4',
+              'flex-1 overflow-y-auto grid gap-3 pr-1 pb-4 w-full max-w-none',
               isCartVisible
-                ? 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4'
-                : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5'
+                ? 'grid-cols-2 md:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5'
+                : 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 2xl:grid-cols-6'
             )}>
               {filteredProducts.length === 0 ? (
                 <div className="col-span-full p-8 text-center text-slate-400 text-xs">

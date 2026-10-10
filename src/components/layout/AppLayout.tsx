@@ -49,10 +49,10 @@ const AppLayout: React.FC = () => {
       >
         <Header />
         <main 
-          className="flex-1 overflow-y-auto pt-4 transition-colors duration-200"
+          className="flex-1 overflow-y-auto pt-2 lg:pt-3 transition-colors duration-200 w-full"
           style={{ background: 'var(--bg-main)' }}
         >
-          <div className="px-4 pb-6 md:px-6 md:pb-8 animate-fade-in max-w-7xl w-full mx-auto">
+          <div className="w-full max-w-none px-3 lg:px-4 pb-6 md:pb-8 animate-fade-in">
             <SectorErrorBoundary>
               <AppProvider>
                 <Outlet />

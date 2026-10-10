@@ -673,7 +673,7 @@ export const SyscohadaPage: React.FC = () => {
   }
 
   return (
-    <div className="p-4 sm:p-6 max-w-7xl mx-auto space-y-6">
+    <div className="p-4 sm:p-6 w-full max-w-none px-3 lg:px-4 space-y-6">
       {/* ─── EN-TÊTE PRINCIPAL ────────────────────────────────────────────── */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-gradient-to-r from-slate-900 to-slate-800 text-white p-6 rounded-3xl shadow-lg border border-slate-700">
         <div>

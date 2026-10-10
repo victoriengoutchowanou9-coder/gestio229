@@ -46,6 +46,12 @@
   box-sizing: border-box;
 }
 
+html, body, #root {
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: hidden;
+}
+
 html, body {
   margin: 0 !important;
   padding: 0 !important;
@@ -61,8 +67,30 @@ html, body {
 
 #root, .app-container {
   height: 100% !important;
+  width: 100% !important;
+  max-width: 100% !important;
   background: var(--bg-main) !important;
   color: var(--text-main) !important;
+}
+
+/* ── Règle globale plein écran pro (Tous secteurs) : zéro espace vide latéral ── */
+.page-content, .secteur-content, .dashboard-content {
+  width: 100% !important;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+  padding-left: 12px !important;
+  padding-right: 12px !important;
+}
+
+/* ── Rectangle Blanc Contrôles Fenêtre en haut à droite ── */
+.top-bar-right-controls {
+  background: #ffffff !important;
+  color: #000000 !important;
+}
+
+.top-bar-right-controls button {
+  color: #000000 !important;
 }
 
 /* Thème Clair : Cartes blanches, texte bleu nuit, bordures douces */

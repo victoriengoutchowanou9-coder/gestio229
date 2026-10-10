@@ -847,7 +847,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }`}>
 
       {/* ══ HEADER ══════════════════════════════════════════════════════════ */}
-      <div className="max-w-7xl mx-auto mb-8">
+      <div className="w-full max-w-none px-3 lg:px-4 mb-8">
         <div className={`flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 pb-6 border-b ${
           darkMode ? 'border-slate-800' : 'border-slate-200'
         }`}>
@@ -886,7 +886,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             </p>
           </div>
 
-          {/* Actions globales (réservation espace coin vert PWA via lg:pr-36) */}
+          {/* Actions globales (réservation espace coin vert PWA via ) */}
           <div className="flex items-center gap-2 flex-wrap self-start lg:pr-36">
             {/* Toggle Mode Sombre / Clair */}
             <button
@@ -957,7 +957,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       </div>
 
       {/* ══ GRILLE KPI DU JOUR & DU MOIS ════════════════════════════════════ */}
-      <div className="max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
+      <div className="w-full max-w-none px-3 lg:px-4 grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
 
         {/* ── SECTION PARTIE 3 : TABLEAU DE BORD DU JOUR ────────────────── */}
         <div className={`rounded-2xl p-6 shadow-xl relative overflow-hidden border ${
@@ -1100,7 +1100,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
       {/* ══ ÉTAT VIDE (AUCUNE ACTIVITÉ ENREGISTRÉE) ══════════════════════════ */}
       {activeActivities.length === 0 && (
-        <div className="max-w-7xl mx-auto mb-10">
+        <div className="w-full max-w-none px-3 lg:px-4 mb-10">
           <div className={`border border-dashed rounded-2xl p-12 text-center ${
             darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-300'
           }`}>
@@ -1127,7 +1127,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
       {/* ══ PARTIE 5 — CARTE DE CHAQUE ACTIVITÉ ═════════════════════════════ */}
       {activeActivities.length > 0 && (
-        <div className="max-w-7xl mx-auto mb-12">
+        <div className="w-full max-w-none px-3 lg:px-4 mb-12">
           <div className="flex items-center justify-between mb-6">
             <div>
               <h3 className={`text-xl font-bold tracking-tight flex items-center gap-2 ${darkMode ? 'text-white' : 'text-slate-900'}`}>
@@ -1269,7 +1269,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
       {/* ══ SECTION ACTIVITÉS ARCHIVÉES (PARTIE 9 — CONSERVATION DES DONNÉES) ═ */}
       {showArchived && archivedActivities.length > 0 && (
-        <div className="max-w-7xl mx-auto mb-12 p-6 bg-slate-900/40 border border-slate-800 rounded-2xl">
+        <div className="w-full max-w-none px-3 lg:px-4 mb-12 p-6 bg-slate-900/40 border border-slate-800 rounded-2xl">
           <h4 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2">
             <Archive size={16} className="text-slate-500" />
             <span>Activités archivées (données historiques conservées)</span>

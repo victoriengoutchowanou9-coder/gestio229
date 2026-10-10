@@ -431,7 +431,7 @@ export const ClotureCaisse: React.FC = () => {
   }, [lignes])
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto">
+    <div className="space-y-6 w-full max-w-none px-3 lg:px-4">
       {/* En-tête de la page */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700">
         <div>

@@ -165,8 +165,8 @@ const Header: React.FC = () => {
         </div>
       </div>
 
-      {/* ── DROITE : LES 3 SUR MÊME LIGNE OBLIGATOIRE (pr-36 sur desktop pour réserver coin bande verte) ── */}
-      <div className="flex items-center gap-2 sm:gap-3 flex-nowrap shrink-0 lg:pr-36">
+      {/* ── DROITE : Actions + Rectangle Blanc Contrôles Fenêtre ── */}
+      <div className="flex items-center gap-2 sm:gap-3 flex-nowrap shrink-0">
         {/* 1. Theme Switch */}
         <button
           onClick={toggle}
@@ -200,6 +200,48 @@ const Header: React.FC = () => {
             <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
           )}
         </button>
+
+        {/* 4. Rectangle Blanc Contrôles Fenêtre (Clé, 3 points, Agrandir, Réduire, X) */}
+        <div className="hidden sm:flex items-center gap-1.5 bg-white text-black px-2 py-1 rounded-xl border border-gray-200 shadow-sm top-bar-right-controls shrink-0">
+          <button 
+            type="button"
+            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
+            title="Sécurité & Clés"
+          >
+            🔑
+          </button>
+          <button 
+            type="button"
+            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
+            title="Options supplémentaires"
+          >
+            ⋮
+          </button>
+          <button 
+            type="button"
+            onClick={() => {
+              if (document.fullscreenElement) {
+                document.exitFullscreen().catch(() => {})
+              } else {
+                document.documentElement.requestFullscreen().catch(() => {})
+              }
+            }}
+            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
+            title="Plein écran / Agrandir"
+          >
+            □
+          </button>
+          <button 
+            type="button"
+            onClick={() => {
+              window.location.href = '/hub'
+            }}
+            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
+            title="Fermer / Retour"
+          >
+            ✕
+          </button>
+        </div>
       </div>
     </header>
   )

@@ -352,7 +352,7 @@ export const BrasserieGrillesPage: React.FC = () => {
   }, [products, priceSearch])
 
   return (
-    <div className="space-y-6 p-4 md:p-6 max-w-7xl mx-auto">
+    <div className="space-y-6 p-4 md:p-6 w-full max-w-none px-3 lg:px-4">
       {/* ─── En-tête de Page ──────────────────────────────────────────────── */}
       <div 
         className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-3xl border border-slate-200/80 shadow-sm no-drag"
