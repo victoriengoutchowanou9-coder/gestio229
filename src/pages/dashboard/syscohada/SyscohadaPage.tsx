@@ -36,9 +36,14 @@ import {
   buildGrandLivreForAccount,
   buildTrialBalance,
   buildAibReport,
-  generateFECFile,
   AibReportRow
 } from '../../../services/accountingService'
+import {
+  calculateDgiFinancialStatements,
+  generateDgiEdiXml,
+  DgiEdiMetadata,
+  ControlAnomaly
+} from '../../../services/dgiEdiService'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
 
@@ -74,7 +79,7 @@ export const SyscohadaPage: React.FC = () => {
 
   // Navigation onglets
   const [activeTab, setActiveTab] = useState<
-    'journal' | 'grandlivre' | 'balance' | 'lettrage' | 'aib' | 'etats' | 'plan' | 'budget'
+    'journal' | 'grandlivre' | 'balance' | 'lettrage' | 'aib' | 'etats' | 'dgi' | 'plan' | 'budget'
   >('journal')
 
   // Filtre Journal
@@ -83,6 +88,26 @@ export const SyscohadaPage: React.FC = () => {
   const [selectedAccountFilter, setSelectedAccountFilter] = useState<string>('all')
   const [startDate, setStartDate] = useState<string>('')
   const [endDate, setEndDate] = useState<string>('')
+
+  // ─── MODULE EDI DGI OFFICIEL SYSCOHADA (BÉNIN) ──────────────────────────────
+  const [dgiSubTab, setDgiSubTab] = useState<'cadre' | 'actif' | 'passif' | 'resultat' | 'controles'>('cadre')
+  const [dgiMeta, setDgiMeta] = useState<DgiEdiMetadata>({
+    ifu: company?.ifu || '3202396066408',
+    exercice: new Date().getFullYear(),
+    idImpotNature: 'LIASSE_NO',
+    dateDebutExercice: `${new Date().getFullYear()}-01-01`,
+    dateFinExercice: `${new Date().getFullYear()}-12-31`,
+    dateArreteComptes: `${new Date().getFullYear()}-12-31`,
+    exercicePrecedentClosLe: `${new Date().getFullYear() - 1}-12-31`,
+    dureeExercicePrecedentMois: 12,
+    codeActivite: 'A030101',
+    ville: 'Cotonou',
+    email: company?.email || '',
+    adresseGeo: 'Cotonou, Bénin',
+    greffe: 'Tribunal de Commerce de Cotonou',
+    rcm: 'RB/COT/23 B 1234',
+    numCnss: '123456789'
+  })
 
   // Données réelles Supabase
   const [entries, setEntries] = useState<AccountingEntry[]>([])
@@ -480,6 +505,86 @@ export const SyscohadaPage: React.FC = () => {
     return sum + e.lines.filter((l) => l.account_number === '445100').reduce((s, l) => s + l.debit, 0)
   }, 0)
 
+  // ─── ÉTATS FINANCIERS DGI SYSCOHADA SYSTÈME NORMAL ────────────────────────
+  const dgiStatements = useMemo(() => {
+    return calculateDgiFinancialStatements(trialBalanceRows)
+  }, [trialBalanceRows])
+
+  // Export Fichier XML EDI DGI e-Services
+  const handleExportDgiXml = () => {
+    try {
+      const xml = generateDgiEdiXml(dgiMeta, dgiStatements)
+      const blob = new Blob([xml], { type: 'application/xml;charset=utf-8' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      // Nom officiel respectant la nomenclature DGI
+      const nowTs = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14)
+      a.download = `EDI_ETATS_FINANCIERS_${dgiMeta.ifu}_${dgiMeta.exercice}_${nowTs}.xml`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast.success('Fichier EDI XML généré avec succès !', 'Fichier prêt pour le dépôt sur le portail e-services DGI Bénin.')
+    } catch (err: any) {
+      toast.error('Erreur génération EDI', err.message)
+    }
+  }
+
+  // Export PDF Officiel DGI Bilan & Résultat
+  const handleExportDgiPdf = () => {
+    const doc = new jsPDF()
+    doc.setFontSize(14)
+    doc.text(`RÉPUBLIQUE DU BÉNIN — DIRECTION GÉNÉRALE DES IMPÔTS`, 14, 15)
+    doc.setFontSize(11)
+    doc.text(`ÉTATS FINANCIERS SYSCOHADA (SYSTÈME NORMAL) — EXERCICE ${dgiMeta.exercice}`, 14, 22)
+    doc.setFontSize(9)
+    doc.text(`Contribuable : ${company?.name || 'ENTREPRISE'} | IFU : ${dgiMeta.ifu} | Secteur : ${activeSector.toUpperCase()}`, 14, 28)
+
+    // Tableau Résultat
+    const resRows = dgiStatements.resultat.map(r => [
+      r.code.replace('NO_RESULTAT_', ''),
+      r.label,
+      r.note || '',
+      fmt(r.netN),
+      fmt(r.netNMinus1)
+    ])
+
+    autoTable(doc, {
+      startY: 34,
+      head: [['Réf', 'Compte de Résultat', 'Note', `Exercice N (${dgiMeta.exercice})`, `Exercice N-1 (${dgiMeta.exercice - 1})`]],
+      body: resRows,
+      theme: 'grid',
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [15, 23, 42] }
+    })
+
+    doc.addPage()
+    doc.setFontSize(12)
+    doc.text(`BILAN SYSCOHADA — ACTIF & PASSIF (EXERCICE ${dgiMeta.exercice})`, 14, 15)
+
+    const actifRows = dgiStatements.actif.map(a => [
+      a.code.replace('NO_ACTIF_', ''),
+      a.label,
+      fmt(a.brutN),
+      fmt(a.amortN),
+      fmt(a.netN),
+      fmt(a.netNMinus1)
+    ])
+
+    autoTable(doc, {
+      startY: 22,
+      head: [['Réf', 'Actif Immobilisé & Circulant', 'Brut N', 'Amort/Dépr N', 'Net N', 'Net N-1']],
+      body: actifRows,
+      theme: 'grid',
+      styles: { fontSize: 7.5 },
+      headStyles: { fillColor: [16, 185, 129] }
+    })
+
+    doc.save(`Etats_Financiers_DGI_${dgiMeta.ifu}_${dgiMeta.exercice}.pdf`)
+    toast.success('PDF DGI généré', 'Téléchargement terminé.')
+  }
+
   // ─── EXPORT FEC ─────────────────────────────────────────────────────────────
   const handleExportFEC = () => {
     const fecContent = generateFECFile(entries)
@@ -668,6 +773,7 @@ export const SyscohadaPage: React.FC = () => {
           { id: 'lettrage', label: 'Lettrage Tiers', icon: FileCheck },
           { id: 'aib', label: 'État Fiscal AIB (449200)', icon: Percent },
           { id: 'etats', label: 'États SMT (Bilan/Résultat)', icon: PieChart },
+          { id: 'dgi', label: 'États EDI DGI Bénin (Normal)', icon: FileSpreadsheet },
           { id: 'plan', label: 'Plan SYSCOHADA 2018', icon: HelpCircle },
           { id: 'budget', label: 'Budgets Prévisionnels', icon: Target },
         ].map((tab) => {
@@ -1256,6 +1362,339 @@ export const SyscohadaPage: React.FC = () => {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* ─── ONGLET : ÉTATS FINANCIERS EDI DGI BÉNIN (SYSTÈME NORMAL) ──────── */}
+      {activeTab === 'dgi' && (
+        <div className="bg-white rounded-3xl border border-slate-200 shadow-sm p-6 space-y-6">
+          {/* En-tête officiel DGI */}
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-emerald-100 text-emerald-800 border border-emerald-200">
+                  EDI DGI BÉNIN v2.0
+                </span>
+                <span className="text-xs font-bold text-slate-500">SYSCOHADA Système Normal (SN)</span>
+              </div>
+              <h3 className="text-lg font-black text-slate-900 mt-1">
+                Génération des États Financiers EDI & Télédéclaration e-Services
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Conforme au modèle officiel DGI-Etats-Financiers-SN.xlsm — Automatisation à partir du Livre Journal & Balance
+              </p>
+            </div>
+
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={handleExportDgiPdf}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition flex items-center gap-2"
+                title="Générer un aperçu PDF certifié des états financiers"
+              >
+                <Printer className="w-4 h-4 text-slate-600" />
+                Aperçu PDF Officiel
+              </button>
+
+              <button
+                onClick={handleExportDgiXml}
+                className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-md shadow-emerald-200"
+                title="Générer le fichier XML EDI officiel à déposer sur e-services.impots.bj"
+              >
+                <Download className="w-4 h-4" />
+                Générer Fichier XML EDI
+              </button>
+            </div>
+          </div>
+
+          {/* Indicateur de contrôles & anomalies */}
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+              <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Actif Net (BK)</span>
+              <p className="text-base font-black font-mono text-slate-900 mt-1">
+                {fmt(dgiStatements.totals.totalActifNet)}
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+              <span className="text-[10px] font-bold text-slate-400 uppercase block">Total Passif Net (DT)</span>
+              <p className="text-base font-black font-mono text-slate-900 mt-1">
+                {fmt(dgiStatements.totals.totalPassifNet)}
+              </p>
+            </div>
+
+            <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
+              <span className="text-[10px] font-bold text-slate-400 uppercase block">Résultat Net Exercice (XN)</span>
+              <p className={`text-base font-black font-mono mt-1 ${dgiStatements.totals.resultatNet >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
+                {fmt(dgiStatements.totals.resultatNet)}
+              </p>
+            </div>
+
+            <div className={`p-4 rounded-2xl border flex flex-col justify-between ${
+              dgiStatements.anomalies.length === 0
+                ? 'bg-emerald-50/50 border-emerald-200 text-emerald-900'
+                : 'bg-rose-50 border-rose-200 text-rose-900'
+            }`}>
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black uppercase">Contrôle Cohérence</span>
+                {dgiStatements.anomalies.length === 0 ? (
+                  <CheckCircle className="w-4 h-4 text-emerald-600" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-600" />
+                )}
+              </div>
+              <p className="text-xs font-bold mt-1">
+                {dgiStatements.anomalies.length === 0
+                  ? 'Équilibre Parfait (Δ = 0)'
+                  : `${dgiStatements.anomalies.length} anomalie(s) détectée(s)`}
+              </p>
+            </div>
+          </div>
+
+          {/* Sous-navigation DGI */}
+          <div className="flex items-center gap-1.5 border-b border-slate-200 pb-2 text-xs font-bold overflow-x-auto">
+            {[
+              { id: 'cadre', label: '1. Informations Générales (FICHE R1)' },
+              { id: 'actif', label: '2. Bilan Actif (NO_ACTIF)' },
+              { id: 'passif', label: '3. Bilan Passif (NO_PASSIF)' },
+              { id: 'resultat', label: '4. Compte de Résultat (NO_RESULTAT)' },
+              { id: 'controles', label: `5. Contrôles & Validation (${dgiStatements.anomalies.length})` },
+            ].map((sub) => (
+              <button
+                key={sub.id}
+                onClick={() => setDgiSubTab(sub.id as any)}
+                className={`px-3.5 py-1.5 rounded-xl transition whitespace-nowrap ${
+                  dgiSubTab === sub.id
+                    ? 'bg-slate-900 text-white font-black'
+                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                }`}
+              >
+                {sub.label}
+              </button>
+            ))}
+          </div>
+
+          {/* SOUS-ONGLET 1 : Informations Générales & Cadrage */}
+          {dgiSubTab === 'cadre' && (
+            <div className="space-y-4">
+              <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 text-amber-900 text-xs">
+                <p className="font-bold">Instructions officielles DGI e-Services :</p>
+                <p className="mt-0.5 text-amber-800">
+                  Ces informations identifient la déclaration et le contribuable dans la racine XML (<span className="font-mono font-bold">&lt;infos&gt;</span> et <span className="font-mono font-bold">&lt;tab idEdiType="NO_FR1A"&gt;</span>).
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Numéro IFU (13 chiffres) *</label>
+                  <input
+                    type="text"
+                    value={dgiMeta.ifu}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, ifu: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Exercice Fiscal *</label>
+                  <input
+                    type="number"
+                    value={dgiMeta.exercice}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, exercice: Number(e.target.value) })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Type d'états financiers *</label>
+                  <input
+                    type="text"
+                    disabled
+                    value={dgiMeta.idImpotNature || 'LIASSE_NO'}
+                    className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl font-mono text-slate-500 font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Date Début Exercice *</label>
+                  <input
+                    type="date"
+                    value={dgiMeta.dateDebutExercice}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, dateDebutExercice: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Date Fin Exercice *</label>
+                  <input
+                    type="date"
+                    value={dgiMeta.dateFinExercice}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, dateFinExercice: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Date Arrêté des Comptes *</label>
+                  <input
+                    type="date"
+                    value={dgiMeta.dateArreteComptes || dgiMeta.dateFinExercice}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, dateArreteComptes: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Code Activité Principale (Nomenclature DGI) *</label>
+                  <input
+                    type="text"
+                    value={dgiMeta.codeActivite || 'A030101'}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, codeActivite: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Ville du Siège *</label>
+                  <input
+                    type="text"
+                    value={dgiMeta.ville || 'Cotonou'}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, ville: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Email officiel e-Services *</label>
+                  <input
+                    type="email"
+                    value={dgiMeta.email || ''}
+                    onChange={(e) => setDgiMeta({ ...dgiMeta, email: e.target.value })}
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SOUS-ONGLET 2 : ACTIF */}
+          {dgiSubTab === 'actif' && (
+            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-slate-50 border-b border-slate-200 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="px-3 py-3">Réf DGI</th>
+                    <th className="px-4 py-3 font-sans">Rubrique Actif</th>
+                    <th className="px-3 py-3 text-center">Note</th>
+                    <th className="px-4 py-3 text-right">Brut N</th>
+                    <th className="px-4 py-3 text-right">Amort/Dépr N</th>
+                    <th className="px-4 py-3 text-right text-emerald-800">Net N</th>
+                    <th className="px-4 py-3 text-right text-slate-500">Net N-1</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dgiStatements.actif.map((row) => (
+                    <tr key={row.code} className={row.code.includes('TOTAL') || row.code === 'NO_ACTIF_BK' || row.code === 'NO_ACTIF_AZ' ? 'bg-slate-50 font-black' : 'hover:bg-slate-50/50'}>
+                      <td className="px-3 py-2.5 text-slate-500">{row.code.replace('NO_ACTIF_', '')}</td>
+                      <td className="px-4 py-2.5 font-sans font-medium text-slate-800">{row.label}</td>
+                      <td className="px-3 py-2.5 text-center text-slate-400">{row.note}</td>
+                      <td className="px-4 py-2.5 text-right">{fmt(row.brutN)}</td>
+                      <td className="px-4 py-2.5 text-right text-rose-600">{fmt(row.amortN)}</td>
+                      <td className="px-4 py-2.5 text-right font-black text-emerald-700">{fmt(row.netN)}</td>
+                      <td className="px-4 py-2.5 text-right text-slate-400">{fmt(row.netNMinus1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SOUS-ONGLET 3 : PASSIF */}
+          {dgiSubTab === 'passif' && (
+            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-slate-50 border-b border-slate-200 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="px-3 py-3">Réf DGI</th>
+                    <th className="px-4 py-3 font-sans">Rubrique Passif & Capitaux Propres</th>
+                    <th className="px-3 py-3 text-center">Note</th>
+                    <th className="px-4 py-3 text-right text-indigo-800">Exercice N</th>
+                    <th className="px-4 py-3 text-right text-slate-500">Exercice N-1</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dgiStatements.passif.map((row) => (
+                    <tr key={row.code} className={row.code.includes('TOTAL') || row.code === 'NO_PASSIF_DT' || row.code === 'NO_PASSIF_DF' ? 'bg-slate-50 font-black' : 'hover:bg-slate-50/50'}>
+                      <td className="px-3 py-2.5 text-slate-500">{row.code.replace('NO_PASSIF_', '')}</td>
+                      <td className="px-4 py-2.5 font-sans font-medium text-slate-800">{row.label}</td>
+                      <td className="px-3 py-2.5 text-center text-slate-400">{row.note}</td>
+                      <td className="px-4 py-2.5 text-right font-black text-slate-900">{fmt(row.netN)}</td>
+                      <td className="px-4 py-2.5 text-right text-slate-400">{fmt(row.netNMinus1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SOUS-ONGLET 4 : RÉSULTAT */}
+          {dgiSubTab === 'resultat' && (
+            <div className="overflow-x-auto border border-slate-200 rounded-2xl">
+              <table className="w-full text-left text-xs font-mono">
+                <thead className="bg-slate-50 border-b border-slate-200 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="px-3 py-3">Réf DGI</th>
+                    <th className="px-4 py-3 font-sans">Poste Compte de Résultat</th>
+                    <th className="px-2 py-3 text-center">Signe</th>
+                    <th className="px-3 py-3 text-center">Note</th>
+                    <th className="px-4 py-3 text-right text-slate-900">Exercice N</th>
+                    <th className="px-4 py-3 text-right text-slate-500">Exercice N-1</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dgiStatements.resultat.map((row) => (
+                    <tr key={row.code} className={row.code.includes('MARGE') || row.code.includes('CHIFFRE') || row.code.includes('VALEUR') || row.code.includes('RÉSULTAT') ? 'bg-slate-50 font-black' : 'hover:bg-slate-50/50'}>
+                      <td className="px-3 py-2.5 text-slate-500">{row.code.replace('NO_RESULTAT_', '')}</td>
+                      <td className="px-4 py-2.5 font-sans font-medium text-slate-800">{row.label}</td>
+                      <td className="px-2 py-2.5 text-center text-slate-400 font-bold">{row.sign}</td>
+                      <td className="px-3 py-2.5 text-center text-slate-400">{row.note}</td>
+                      <td className={`px-4 py-2.5 text-right font-bold ${row.netN < 0 ? 'text-rose-600' : 'text-slate-900'}`}>{fmt(row.netN)}</td>
+                      <td className="px-4 py-2.5 text-right text-slate-400">{fmt(row.netNMinus1)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* SOUS-ONGLET 5 : CONTRÔLES DE COHÉRENCE */}
+          {dgiSubTab === 'controles' && (
+            <div className="space-y-4">
+              <h4 className="font-bold text-slate-900 text-sm">Contrôles Réglementaires DGI e-Services</h4>
+
+              {dgiStatements.anomalies.length === 0 ? (
+                <div className="p-6 bg-emerald-50 rounded-2xl border border-emerald-200 text-center space-y-2">
+                  <CheckCircle className="w-8 h-8 text-emerald-600 mx-auto" />
+                  <h5 className="font-bold text-emerald-900">Tous les contrôles sont conformes !</h5>
+                  <p className="text-xs text-emerald-700 max-w-md mx-auto">
+                    Actif = Passif, équilibre financier respecté. Le fichier EDI XML généré passera avec succès la validation sur la plateforme e-services de la DGI Bénin.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {dgiStatements.anomalies.map((an, i) => (
+                    <div key={i} className="p-4 bg-rose-50 border border-rose-200 rounded-2xl flex items-start gap-3">
+                      <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                      <div>
+                        <h5 className="font-bold text-rose-900 text-xs">{an.title}</h5>
+                        <p className="text-xs text-rose-700 mt-0.5">{an.description}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
