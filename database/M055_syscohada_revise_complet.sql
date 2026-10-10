@@ -1,8 +1,7 @@
 -- =============================================================================
--- GESTIO 229 SaaS — Migration M055 : Système Comptable Professionnel SYSCOHADA Révisé 2018
+-- GESTIO 229 SaaS — Migration M055 (CORRIGÉE IDEMPOTENTE)
+-- Système Comptable Professionnel SYSCOHADA Révisé 2018
 -- Conforme Acte Uniforme OHADA & Réglementation Fiscale Bénin (UEMOA)
--- Journaux : JV, JA, JC, JB, JOD, JS, JR — Distinction Engagement vs Règlement
--- Isolation stricte par company_id et sector_slug — Compte AIB officiel : 449200
 -- =============================================================================
 
 -- 1. Table des Journaux Comptables
@@ -22,7 +21,7 @@ CREATE TABLE IF NOT EXISTS accounting_periods (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     fiscal_year INT NOT NULL,
-    period_code VARCHAR(20) NOT NULL, -- ex: '2026-01', '2026-Q1', '2026'
+    period_code VARCHAR(20) NOT NULL, -- ex: '2026-01', '2026'
     name VARCHAR(100) NOT NULL,
     start_date DATE NOT NULL,
     end_date DATE NOT NULL,
@@ -38,17 +37,17 @@ CREATE TABLE IF NOT EXISTS accounting_entries (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     sector_slug TEXT NOT NULL DEFAULT 'boutique',
-    journal_code VARCHAR(10) NOT NULL, -- JV, JA, JC, JB, JOD, JS, JR
-    entry_number VARCHAR(100) NOT NULL, -- ex: JV-2026-000001
+    journal_code VARCHAR(10) NOT NULL DEFAULT 'OD',
+    entry_number VARCHAR(100) NOT NULL DEFAULT 'OD-000001',
     entry_date DATE NOT NULL DEFAULT CURRENT_DATE,
     accounting_period VARCHAR(20) NOT NULL DEFAULT to_char(CURRENT_DATE, 'YYYY-MM'),
-    reference VARCHAR(150), -- Numéro de facture, de reçu ou de chèque
-    document_type VARCHAR(50), -- 'facture_vente', 'facture_achat', 'recu_caisse', 'paiement_banque', 'od', 'bulletin_paie'
+    reference VARCHAR(150),
+    document_type VARCHAR(50),
     document_id VARCHAR(100),
-    description TEXT NOT NULL,
-    source_module VARCHAR(50), -- 'ventes', 'achats', 'caisse', 'depenses', 'paie', 'manuel'
-    source_id VARCHAR(100), -- Clé unique pour empêcher les doublons
-    status VARCHAR(30) DEFAULT 'valide', -- 'brouillon', 'valide', 'annule', 'extourne', 'cloture'
+    description TEXT NOT NULL DEFAULT 'Écriture comptable',
+    source_module VARCHAR(50),
+    source_id VARCHAR(100),
+    status VARCHAR(30) DEFAULT 'valide',
     total_debit NUMERIC(15,2) DEFAULT 0.00,
     total_credit NUMERIC(15,2) DEFAULT 0.00,
     created_by UUID REFERENCES user_profiles(id),
@@ -56,22 +55,38 @@ CREATE TABLE IF NOT EXISTS accounting_entries (
     validated_at TIMESTAMPTZ DEFAULT now()
 );
 
+-- CRITIQUE : Ajout garanti des colonnes si accounting_entries existait déjà
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS sector_slug TEXT NOT NULL DEFAULT 'boutique';
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS journal_code VARCHAR(10) DEFAULT 'OD';
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS entry_number VARCHAR(100);
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS accounting_period VARCHAR(20) DEFAULT to_char(CURRENT_DATE, 'YYYY-MM');
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS reference VARCHAR(150);
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS document_type VARCHAR(50);
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS document_id VARCHAR(100);
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS description TEXT DEFAULT 'Écriture comptable';
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS source_module VARCHAR(50);
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS source_id VARCHAR(100);
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS status VARCHAR(30) DEFAULT 'valide';
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS total_debit NUMERIC(15,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS total_credit NUMERIC(15,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entries ADD COLUMN IF NOT EXISTS validated_at TIMESTAMPTZ DEFAULT now();
+
 -- 4. Table des Lignes d'Écritures Comptables (Partie Double Stricte)
 CREATE TABLE IF NOT EXISTS accounting_entry_lines (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    entry_id UUID NOT NULL REFERENCES accounting_entries(id) ON DELETE CASCADE,
+    entry_id UUID REFERENCES accounting_entries(id) ON DELETE CASCADE,
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     sector_slug TEXT NOT NULL DEFAULT 'boutique',
     line_number INT NOT NULL DEFAULT 1,
-    account_number VARCHAR(50) NOT NULL,
-    account_label VARCHAR(255) NOT NULL,
+    account_number VARCHAR(50) NOT NULL DEFAULT '471000',
+    account_label VARCHAR(255) NOT NULL DEFAULT 'Compte d''attente',
     description TEXT,
     debit NUMERIC(15,2) NOT NULL DEFAULT 0.00,
     credit NUMERIC(15,2) NOT NULL DEFAULT 0.00,
-    third_party_id VARCHAR(100), -- Id client ou fournisseur pour lettrage
+    third_party_id VARCHAR(100),
     third_party_name VARCHAR(255),
-    lettering VARCHAR(30), -- Code de lettrage pour rapprochement
-    tax_code VARCHAR(30), -- 'TVA18', 'EXO', etc.
+    lettering VARCHAR(30),
+    tax_code VARCHAR(30),
     tax_rate NUMERIC(5,2) DEFAULT 0.00,
     tax_amount NUMERIC(15,2) DEFAULT 0.00,
     aib_rate NUMERIC(5,2) DEFAULT 0.00,
@@ -79,44 +94,50 @@ CREATE TABLE IF NOT EXISTS accounting_entry_lines (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Index pour performances et isolation instantanée
+-- CRITIQUE : Ajout garanti des colonnes si accounting_entry_lines existait déjà
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS sector_slug TEXT NOT NULL DEFAULT 'boutique';
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS company_id UUID;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS entry_id UUID;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS line_number INT DEFAULT 1;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS account_number VARCHAR(50);
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS account_label VARCHAR(255);
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS description TEXT;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS debit NUMERIC(15,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS credit NUMERIC(15,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS third_party_id VARCHAR(100);
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS third_party_name VARCHAR(255);
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS lettering VARCHAR(30);
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS tax_code VARCHAR(30);
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS tax_rate NUMERIC(5,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS tax_amount NUMERIC(15,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS aib_rate NUMERIC(5,2) DEFAULT 0.00;
+ALTER TABLE IF EXISTS accounting_entry_lines ADD COLUMN IF NOT EXISTS aib_amount NUMERIC(15,2) DEFAULT 0.00;
+
+-- 5. Index pour performances et isolation instantanée
 CREATE INDEX IF NOT EXISTS idx_acc_entries_scope ON accounting_entries(company_id, sector_slug, journal_code);
 CREATE INDEX IF NOT EXISTS idx_acc_entries_source ON accounting_entries(company_id, source_module, source_id, journal_code);
 CREATE INDEX IF NOT EXISTS idx_acc_lines_entry ON accounting_entry_lines(entry_id);
 CREATE INDEX IF NOT EXISTS idx_acc_lines_account ON accounting_entry_lines(company_id, sector_slug, account_number);
-CREATE INDEX IF NOT EXISTS idx_acc_lines_third_party ON accounting_entry_lines(company_id, third_party_id);
 
--- 5. Table du Plan Comptable SYSCOHADA Révisé 2018
+-- 6. Plan comptable SYSCOHADA Révisé 2018
 CREATE TABLE IF NOT EXISTS syscohada_accounts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID REFERENCES companies(id) ON DELETE CASCADE,
     code VARCHAR(50) NOT NULL,
     name VARCHAR(255) NOT NULL,
     account_class INT NOT NULL,
-    account_type VARCHAR(50) NOT NULL, -- 'ACTIF', 'PASSIF', 'CHARGE', 'PRODUIT', 'TRESORERIE'
+    account_type VARCHAR(50) NOT NULL,
     is_active BOOLEAN DEFAULT true,
-    is_system BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT now(),
     UNIQUE(company_id, code)
 );
 
--- Index pour recherche rapide du plan comptable
-CREATE INDEX IF NOT EXISTS idx_syscohada_accounts ON syscohada_accounts(company_id, code);
-
--- 6. Activation RLS
+-- 7. Activation RLS sécurisée
 ALTER TABLE accounting_journals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounting_periods ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounting_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE accounting_entry_lines ENABLE ROW LEVEL SECURITY;
 ALTER TABLE syscohada_accounts ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS p_accounting_journals_tenant ON accounting_journals;
-CREATE POLICY p_accounting_journals_tenant ON accounting_journals
-    FOR ALL USING (company_id = (auth.jwt() ->> 'company_id')::uuid OR auth.jwt() IS NULL);
-
-DROP POLICY IF EXISTS p_accounting_periods_tenant ON accounting_periods;
-CREATE POLICY p_accounting_periods_tenant ON accounting_periods
-    FOR ALL USING (company_id = (auth.jwt() ->> 'company_id')::uuid OR auth.jwt() IS NULL);
 
 DROP POLICY IF EXISTS p_accounting_entries_tenant ON accounting_entries;
 CREATE POLICY p_accounting_entries_tenant ON accounting_entries
@@ -124,8 +145,4 @@ CREATE POLICY p_accounting_entries_tenant ON accounting_entries
 
 DROP POLICY IF EXISTS p_accounting_entry_lines_tenant ON accounting_entry_lines;
 CREATE POLICY p_accounting_entry_lines_tenant ON accounting_entry_lines
-    FOR ALL USING (company_id = (auth.jwt() ->> 'company_id')::uuid OR auth.jwt() IS NULL);
-
-DROP POLICY IF EXISTS p_syscohada_accounts_tenant ON syscohada_accounts;
-CREATE POLICY p_syscohada_accounts_tenant ON syscohada_accounts
     FOR ALL USING (company_id = (auth.jwt() ->> 'company_id')::uuid OR auth.jwt() IS NULL);
