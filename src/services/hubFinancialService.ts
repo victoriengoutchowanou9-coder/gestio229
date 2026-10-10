@@ -221,6 +221,7 @@ export async function fetchHubFinancialMetrics(
   }
 
   // 3. Récupérer les dépenses réelles et les imputer aux secteurs et au cumul
+  // Priorité : table 'depenses', fallback : 'caisse_mouvements' (sens=debit / type=SORTIE)
   try {
     const { data: depList } = await supabase
       .from('depenses')
@@ -265,6 +266,46 @@ export async function fetchHubFinancialMetrics(
         if (isThisMonth) {
           card.monthExpenses += montant;
           card.monthNetMargin = Math.max(0, card.monthNetMargin - montant);
+        }
+      }
+    } else {
+      // ─── Fallback : lire caisse_mouvements (données réelles — 59+ lignes) ───
+      // Les dépenses réelles sont enregistrées avec sens='debit' ou type='SORTIE'
+      const { data: mvtList } = await supabase
+        .from('caisse_mouvements')
+        .select('id, montant, created_at, sector_slug, sens, type, caisse_id')
+        .eq('company_id', companyId)
+        .gte('created_at', monthStartStr)
+        .order('created_at', { ascending: false })
+        .limit(500);
+
+      if (mvtList && mvtList.length > 0) {
+        for (const m of mvtList) {
+          // Filtrer uniquement les sorties de caisse (dépenses)
+          const isSortie =
+            (m.sens && ['debit', 'DEBIT', 'sortie', 'SORTIE'].includes(m.sens)) ||
+            (m.type && ['SORTIE', 'depense', 'DEPENSE', 'expense'].includes(m.type));
+          if (!isSortie) continue;
+
+          const dDate = extractCotonouDate(null, m.created_at);
+          if (!dDate) continue;
+
+          const isToday = dDate === todayStr;
+          const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+          if (!isToday && !isThisMonth) continue;
+
+          const montant = Number(m.montant) || 0;
+          const targetSlug = (m.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+          const card = initSector(targetSlug);
+
+          if (isToday) {
+            card.dayExpenses += montant;
+            card.dayNetMargin = Math.max(0, card.dayNetMargin - montant);
+          }
+          if (isThisMonth) {
+            card.monthExpenses += montant;
+            card.monthNetMargin = Math.max(0, card.monthNetMargin - montant);
+          }
         }
       }
     }

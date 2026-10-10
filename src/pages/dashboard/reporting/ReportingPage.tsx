@@ -86,6 +86,7 @@ export const ReportingPage: React.FC = () => {
   // Données réelles
   const [sales, setSales] = useState<SaleRecord[]>([])
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([])
+  const [caisseDepenses, setCaisseDepenses] = useState<{montant: number; created_at: string; sector_slug?: string}[]>([])
   const [customers, setCustomers] = useState<CustomerRecord[]>([])
   const [products, setProducts] = useState<ProductRecord[]>([])
   const [avoirs, setAvoirs] = useState<FactureAvoirRecord[]>([])
@@ -178,6 +179,41 @@ export const ReportingPage: React.FC = () => {
       setCustomers((sectorCustomers as any) || [])
       setProducts((sectorProducts as any) || [])
 
+      // ─── Fallback dépenses : caisse_mouvements (données réelles) ─────────────
+      // Si la table expenses est vide (0 rows), lire caisse_mouvements avec sens=debit
+      if (!expData || expData.length === 0) {
+        try {
+          const caisseQuery = supabase
+            .from('caisse_mouvements')
+            .select('id, montant, created_at, sector_slug, sens, type')
+            .eq('company_id', company.id)
+            .order('created_at', { ascending: false })
+            .limit(500)
+
+          // Filtrer par secteur si disponible
+          const { data: caisseData } = currentSectorSlug
+            ? await caisseQuery.eq('sector_slug', currentSectorSlug)
+            : await caisseQuery
+
+          const depSorties = (caisseData || []).filter((m: any) => {
+            const isSortie =
+              (m.sens && ['debit', 'DEBIT', 'sortie', 'SORTIE'].includes(m.sens)) ||
+              (m.type && ['SORTIE', 'depense', 'DEPENSE', 'expense'].includes(m.type))
+            return isSortie
+          }).map((m: any) => ({
+            montant: Number(m.montant) || 0,
+            created_at: m.created_at,
+            sector_slug: m.sector_slug
+          }))
+          setCaisseDepenses(depSorties)
+        } catch (cErr) {
+          console.warn('[ReportingPage] Erreur lecture caisse_mouvements:', cErr)
+          setCaisseDepenses([])
+        }
+      } else {
+        setCaisseDepenses([])
+      }
+
       try {
         const allAvoirs = await getAllAvoirs(company.id, currentSectorSlug)
         setAvoirs(Array.isArray(allAvoirs) ? allAvoirs : [])
@@ -234,13 +270,28 @@ export const ReportingPage: React.FC = () => {
 
   // ─── Dépenses Filtrées par Période ────────────────────────────────────────
   const filteredExpenses = useMemo(() => {
-    return (expenses || []).filter((e) => {
-      const eDate = (e.expense_date || e.created_at || '').split('T')[0]
+    if (expenses && expenses.length > 0) {
+      return expenses.filter((e) => {
+        const eDate = (e.expense_date || e.created_at || '').split('T')[0]
+        if (dateRangeStart && eDate < dateRangeStart) return false
+        if (dateRangeEnd && eDate > dateRangeEnd) return false
+        return true
+      })
+    }
+    // Fallback caisse_mouvements
+    return (caisseDepenses || []).filter((e) => {
+      const eDate = (e.created_at || '').split('T')[0]
       if (dateRangeStart && eDate < dateRangeStart) return false
       if (dateRangeEnd && eDate > dateRangeEnd) return false
       return true
-    })
-  }, [expenses, dateRangeStart, dateRangeEnd])
+    }).map((m) => ({
+      id: m.created_at,
+      expense_date: m.created_at,
+      amount: m.montant,
+      category: 'Caisse (Sortie)',
+      created_at: m.created_at,
+    }))
+  }, [expenses, caisseDepenses, dateRangeStart, dateRangeEnd])
 
   // ─── Avoirs Filtrés par Période ───────────────────────────────────────────
   const filteredAvoirs = useMemo(() => {
@@ -270,7 +321,7 @@ export const ReportingPage: React.FC = () => {
 
   // 2. Total des Dépenses Réelles
   const totalExpenses = useMemo(() => {
-    return filteredExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
+    return (filteredExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
   }, [filteredExpenses])
 
   // 3. Marge Brute réelle (Calculée sur le HT)
@@ -292,9 +343,10 @@ export const ReportingPage: React.FC = () => {
     if (!products.length) return 0.25 // 25% par défaut si pas de catalogue
     let totalCost = 0
     let totalSelling = 0
-    products.forEach((p) => {
-      const cost = Number(p.cost_price || p.purchase_price || 0)
-      const sell = Number(p.selling_price_ttc || p.unit_price_ttc || 0)
+    products.forEach((p: any) => {
+      const meta = p.sector_meta || {}
+      const cost = Number(p.cost_price || p.purchase_price || meta.price_achat_ht || 0)
+      const sell = Number(p.selling_price || p.selling_price_ttc || p.unit_price_ttc || meta.price_vente_uv_ttc || 0)
       if (cost > 0 && sell > 0) {
         totalCost += cost
         totalSelling += sell
@@ -316,15 +368,29 @@ export const ReportingPage: React.FC = () => {
 
   // 5. Total Créances réelles non soldées (Point 14)
   const totalReceivables = useMemo(() => {
-    return customers.reduce((sum, c) => sum + (Number(c.current_debt) || 0), 0)
+    return (customers || []).reduce((sum, c: any) => sum + (Number(c.current_debt ?? c.solde_creance ?? 0)), 0)
   }, [customers])
 
   // 6. Total Stock réel valorisé au coût d'achat (Point 14)
   const totalStockValue = useMemo(() => {
-    return products.reduce((sum, p) => {
-      const qty = (Number(p.current_stock) || 0) + (Number(p.warehouse_stock) || 0)
-      const cost = Number(p.cost_price || p.purchase_price || 0)
-      return sum + qty * cost
+    return (products || []).reduce((sum, p: any) => {
+      const meta = p.sector_meta || {}
+      const qty = Number(
+        p.current_stock ??
+        p.stock ??
+        p.stock_vente ??
+        meta.stock_vente ??
+        meta.stock_magasin ??
+        p.warehouse_stock ??
+        0
+      ) + Number(p.warehouse_stock ?? meta.stock_magasin ?? 0)
+      // Si meta.stock_vente et meta.stock_magasin sont tous deux présents, compter stock_vente + stock_magasin
+      const qtyReelle = (meta.stock_vente != null || meta.stock_magasin != null)
+        ? (Number(meta.stock_vente || 0) + Number(meta.stock_magasin || 0))
+        : qty
+
+      const cost = Number(p.cost_price ?? p.purchase_price ?? meta.price_achat_ht ?? meta.cout_achat ?? 0)
+      return sum + (qtyReelle * cost)
     }, 0)
   }, [products])
 
