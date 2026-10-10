@@ -102,22 +102,26 @@ export const ReportingPage: React.FC = () => {
       ] = await Promise.all([
         supabase
           .from('sales_orders')
-          .select('*, customer:customers(id, name), items:sales_order_items(*)')
+          .select('id, order_number, order_date, created_at, total_amount, subtotal_ht, total_cost, tva_amount, aib_amount, status, payment_status, payment_method, sector_slug, notes, customer_name, customer:customers(id, name)')
           .eq('company_id', company.id)
-          .order('created_at', { ascending: false }),
+          .order('created_at', { ascending: false })
+          .limit(300),
         supabase
           .from('expenses')
-          .select('*')
+          .select('id, reference_number, category, amount, payment_method, expense_date, description, created_at')
           .eq('company_id', company.id)
-          .order('created_at', { ascending: false }),
+          .order('created_at', { ascending: false })
+          .limit(200),
         supabase
           .from('customers')
-          .select('*')
-          .eq('company_id', company.id),
+          .select('id, name, code, phone, current_debt, is_active')
+          .eq('company_id', company.id)
+          .limit(200),
         supabase
           .from('products')
-          .select('*')
+          .select('id, name, code, selling_price, cost_price, is_active, sector_meta')
           .eq('company_id', company.id)
+          .limit(500)
       ])
 
       if (salesErr) console.warn('Erreur chargement ventes:', salesErr)

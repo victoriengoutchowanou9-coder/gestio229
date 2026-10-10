@@ -46,6 +46,7 @@ import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { isVraiCodeEmballage } from '../../../utils/emballages'
+import { getCachedData, setCachedData } from '../../../utils/cache'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -528,8 +529,14 @@ export const POSPage: React.FC = () => {
       setCheckingCaisse(false)
     }
 
-    // 1. Récupération robuste des produits (isolation stricte par secteur d'activité)
+    // 1. Récupération robuste des produits (avec Cache LocalStorage 5 min pour affichage instantané)
     try {
+      const cacheKey = `prods_${companyId}_${currentSectorSlug}`
+      const cached = getCachedData<Product[]>(cacheKey)
+      if (cached && cached.length > 0) {
+        setProducts(cached)
+      }
+
       let rawProds: any[] = []
       const { data, error: prodsError } = await supabaseTenant('products')
         .select('*, category:product_categories(name)')
@@ -589,6 +596,7 @@ export const POSPage: React.FC = () => {
         }
       })
       setProducts(mappedProds)
+      setCachedData(cacheKey, mappedProds, 5 * 60 * 1000)
     } catch (prodErr: any) {
       console.error('[POSPage] Erreur récupération produits:', prodErr)
       setLoadError(`Erreur produits: ${prodErr.message || 'Impossible de charger le catalogue'}`)
@@ -668,7 +676,7 @@ export const POSPage: React.FC = () => {
       const { data: salesData, error: salesOrdersError } = await supabaseTenant('sales_orders')
         .select('*, customer:customers(id, name, ifu_number), items:sales_order_items(*)')
         .order('created_at', { ascending: false })
-        .limit(100)
+        .limit(40)
 
       if (!salesOrdersError && salesData && salesData.length > 0) {
         const sectorFilteredSales = filterItemsForSector(salesData, currentSectorSlug)
@@ -1507,788 +1515,316 @@ export const POSPage: React.FC = () => {
   // ─── Validation de la Vente ────────────────────────────────────────────────
 
   const handleValidateSale = async () => {
-    // 0. Contrôle emballages brasserie obligatoire (Client comptoir => Reste = 0)
+    // 0. Contrôle emballages brasserie obligatoire
     const embCheck = validerConditionsEmballage()
     if (!embCheck.ok) {
       toast.error('Validation emballages requise', embCheck.message || '')
       return
     }
-
-    // 0-BIS. Contrôle caisse ouverte obligatoire pour ce secteur
     if (!activeCaisse) {
       toast.error('Caisse fermée', 'Veuillez ouvrir la caisse avant d\'encaisser une vente.')
       return
     }
-
     if (activeCaisse.is_previous_day) {
-      toast.error('Session de caisse antérieure non clôturée', 'La caisse est restée ouverte depuis un jour antérieur. Vous devez clôturer cette session avant d\'effectuer une nouvelle vente.')
+      toast.error('Session de caisse antérieure non clôturée', 'Clôturez cette session avant d\'effectuer une nouvelle vente.')
       return
     }
-
-    // 1. Contrôle strict des montants
     if (isMultiMode) {
       if (Math.abs(multiDiff) > 0.01) {
-        toast.error('Paiement non équilibré', `La somme des règlements (${fmt(multiSum)}) doit être strictement égale au Total TTC (${fmt(totalNetTTC)}).`)
-        return
-      }
-      if (multiMode1Amount < 0 || multiMode2Amount < 0) {
-        toast.error('Montant invalide', 'Les montants des règlements ne peuvent pas être négatifs.')
+        toast.error('Paiement non équilibré', `Somme (${fmt(multiSum)}) ≠ Total TTC (${fmt(totalNetTTC)}).`)
         return
       }
     } else if (isCash && cashGiven < totalNetTTC) {
-      toast.error('Espèces insuffisantes', `Le montant remis (${fmt(cashGiven)}) est inférieur au total TTC (${fmt(totalNetTTC)}).`)
+      toast.error('Espèces insuffisantes', `Remis (${fmt(cashGiven)}) < Total TTC (${fmt(totalNetTTC)}).`)
       return
     }
 
-    // 2. Contrôle crédit obligatoire
     const creditAmount = isMultiMode
       ? ((multiMode1Canal === 'credit' ? multiMode1Amount : 0) + (multiMode2Canal === 'credit' ? multiMode2Amount : 0))
       : (singleMethod === 'credit' ? totalNetTTC : 0)
 
-    if (creditAmount > 0) {
-      if (!selectedCustomerId) {
-        toast.error('Client Obligatoire', 'Veuillez sélectionner un client pour une vente à crédit.')
-        return
-      }
-      if (selectedCustomer && selectedCustomer.credit_authorized === false) {
-        toast.error('Crédit non autorisé', `Le client ${selectedCustomer.name} n'est pas autorisé aux achats à crédit.`)
-        return
-      }
+    if (creditAmount > 0 && !selectedCustomerId) {
+      toast.error('Client Obligatoire', 'Veuillez sélectionner un client pour une vente à crédit.')
+      return
+    }
+    if (creditAmount > 0 && selectedCustomer?.credit_authorized === false) {
+      toast.error('Crédit non autorisé', `${selectedCustomer.name} n'est pas autorisé aux achats à crédit.`)
+      return
     }
 
-    setPaying(true)
+    // ─── SNAPSHOT des données avant de vider l'UI ─────────────────────────────
+    const cartSnapshot = [...cart]
+    const selectedCustomerSnapshot = selectedCustomer ? { ...selectedCustomer } : null
+    const brasserieEmballageRowsSnapshot = [...brasserieEmballageRows]
+    const isMultiModeSnapshot = isMultiMode
+    const multiMode1CanalSnapshot = multiMode1Canal
+    const multiMode1AmountSnapshot = multiMode1Amount
+    const multiMode2CanalSnapshot = multiMode2Canal
+    const multiMode2AmountSnapshot = multiMode2Amount
+    const singleMethodSnapshot = singleMethod
+    const totalNetTTCSnapshot = totalNetTTC
+    const cartFiscalSummarySnapshot = { ...cartFiscalSummary }
+    const isDeferredSnapshot = isDeferred
+    const activeCaisseSnapshot = activeCaisse ? { ...activeCaisse } : null
+
+    // Génération orderNum avant l'envoi réseau
+    const rawSector = (secteurActif?.slug || currentSectorSlug || 'GEN').replace(/^sec-/, '')
+    const secteurCode = rawSector.substring(0, 3).toUpperCase()
+    let dateStr = ''
     try {
-      // Génération sécurisée numéro commande par secteur (ex: BRA-20261009-xxxx, QUI-20261009-xxxx)
-      const rawSector = (secteurActif?.slug || currentSectorSlug || 'GEN').replace(/^sec-/, '')
-      const secteurCode = rawSector.substring(0, 3).toUpperCase()
-      let dateStr = ''
+      dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Porto-Novo' }).replace(/-/g, '')
+    } catch {
+      dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    }
+    const randStr = Math.random().toString(36).substring(2, 6).toUpperCase()
+    const timeStr = Date.now().toString().slice(-4)
+    const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
+    const custName = selectedCustomerSnapshot ? selectedCustomerSnapshot.name : 'Client Comptoir'
+
+    // ─── OPTIMISTIC UI : Vider le panier instantanément ─────────────────────
+    clearCart()
+    setBrasserieRetours({})
+    toast.success('Vente enregistrée !', `Réf : ${orderNum}`)
+
+    // Préparer la SaleRecord localement pour afficher la facture tout de suite
+    const paymentsList: PaymentLine[] = isMultiModeSnapshot
+      ? [
+          ...(multiMode1AmountSnapshot > 0 ? [{ method: multiMode1CanalSnapshot as any, amount: multiMode1AmountSnapshot }] : []),
+          ...(multiMode2AmountSnapshot > 0 ? [{ method: multiMode2CanalSnapshot as any, amount: multiMode2AmountSnapshot }] : []),
+        ]
+      : [{ method: singleMethodSnapshot as any, amount: totalNetTTCSnapshot }]
+    const primaryMethod = isMultiModeSnapshot
+      ? (paymentsList.find(p => p.amount > 0)?.method || 'especes')
+      : singleMethodSnapshot
+    const ancienneDetteEstim = Number(selectedCustomerSnapshot?.solde_creance ?? selectedCustomerSnapshot?.current_debt ?? 0)
+    const creditActuel = creditAmount
+    const montantRestantDuGlobalEstim = ancienneDetteEstim + creditActuel
+    const optimisticSale: SaleRecord = {
+      id: `optimistic-${orderNum}`,
+      order_number: orderNum,
+      date: new Date().toISOString(),
+      customer_name: custName,
+      customer_id: selectedCustomerSnapshot?.id,
+      customer_ifu: selectedCustomerSnapshot?.ifu_number,
+      total_amount: totalNetTTCSnapshot,
+      total_ht: cartFiscalSummarySnapshot.ht,
+      total_tva: cartFiscalSummarySnapshot.tva,
+      total_aib: cartFiscalSummarySnapshot.aib,
+      total_exonere: cartFiscalSummarySnapshot.totalExonere,
+      amount_paid: totalNetTTCSnapshot - creditAmount,
+      credit_amount: creditAmount,
+      ancienne_dette_avant_facture: ancienneDetteEstim,
+      montant_credit_actuel: creditActuel,
+      montant_restant_du_global: montantRestantDuGlobalEstim,
+      payments: paymentsList,
+      is_deferred: isDeferredSnapshot,
+      status: isDeferredSnapshot ? 'A_LIVRER' : 'COMPLET',
+      lines: cartSnapshot,
+      emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons')
+        ? brasserieEmballageRowsSnapshot.map(e => ({ code: e.code, designation: e.designation, precedent: e.precedent, facture: e.facture, sortie: e.facture, rendus: e.rendus, retour: e.rendus, reste: e.reste, net_du: e.reste }))
+        : undefined
+    }
+    setCurrentSale(optimisticSale)
+    setSalesHistory(prev => [optimisticSale, ...prev.slice(0, 99)])
+    setPrintFormat('factureA4')
+    setShowInvoiceModal(true)
+
+    // ─── ENVOI EN ARRIÈRE-PLAN ────────────────────────────────────────────────
+    ;(async () => {
       try {
-        dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Africa/Porto-Novo' }).replace(/-/g, '')
-      } catch {
-        dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '')
-      }
-      const randStr = Math.random().toString(36).substring(2, 6).toUpperCase()
-      const timeStr = Date.now().toString().slice(-4)
-      const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
+        const totalCostHT = cartSnapshot.reduce((sum, item) => {
+          const coef = Math.max(1, Number(item.product.coef || item.product.sector_meta?.coef || 1))
+          const isTaxed = Boolean(item.product.is_vat_subject ?? item.product.is_taxable ?? (Number(item.product.tva_rate) > 0))
+          const vatRate = isTaxed ? Number(item.product.vat_rate ?? item.product.tva_rate ?? 18) : 0
+          const uvCostTTC = (Number(item.product.cost_price) || 0) / coef
+          const uvCostHT = isTaxed ? (uvCostTTC / (1 + vatRate / 100)) : uvCostTTC
+          return sum + (item.qty * uvCostHT)
+        }, 0)
+        const totalCostHTRounded = Math.round(totalCostHT * 100) / 100
 
-      const paymentsList: PaymentLine[] = isMultiMode
-        ? [
-            ...(multiMode1Amount > 0 ? [{ method: multiMode1Canal as any, amount: multiMode1Amount }] : []),
-            ...(multiMode2Amount > 0 ? [{ method: multiMode2Canal as any, amount: multiMode2Amount }] : []),
-          ]
-        : [{ method: singleMethod as any, amount: totalNetTTC }]
-
-      const primaryMethod = isMultiMode
-        ? (paymentsList.find(p => p.amount > 0)?.method || 'especes')
-        : singleMethod
-
-      // Calcul strict du Coût d'achat HT au niveau de l'Unité de Vente (UV)
-      // cost_price est le prix d'achat du conditionnement UCD (ex: Tonne ou Carton). Il doit être divisé par coef pour obtenir le coût UV (sac/pièce).
-      // Si assujetti à TVA, le coût d'achat est ramené en Hors Taxe (HT).
-      const totalCostHT = cart.reduce((sum, item) => {
-        const coef = Math.max(1, Number(item.product.coef || item.product.sector_meta?.coef || 1))
-        const isTaxed = Boolean(
-          item.product.is_vat_subject ??
-          item.product.is_taxable ??
-          item.product.sector_meta?.is_taxable ??
-          (Number(item.product.tva_rate) > 0) ??
-          (Number(item.product.vat_rate) > 0) ??
-          false
-        )
-        const vatRate = isTaxed ? Number(item.product.vat_rate ?? item.product.tva_rate ?? 18) : 0
-        const rawPackageCost = Number(item.product.cost_price) || 0
-        const uvCostTTC = rawPackageCost / coef
-        const uvCostHT = isTaxed ? (uvCostTTC / (1 + vatRate / 100)) : uvCostTTC
-        return sum + (item.qty * uvCostHT)
-      }, 0)
-
-      const totalCostHTRounded = Math.round(totalCostHT * 100) / 100
-      // Marge d'exploitation stricte : CA HT - Coût d'Achat HT (hors TVA et hors AIB)
-      const grossMarginHT = Math.round((cartFiscalSummary.ht - totalCostHTRounded) * 100) / 100
-
-      // Calcul strict dette antérieure et montant restant dû global (Règle Métier 1)
-      let ancienneDette = 0
-      if (selectedCustomer?.id) {
-        ancienneDette = Number(selectedCustomer.solde_creance ?? selectedCustomer.current_debt ?? 0)
-        try {
-          const { data: creances } = await supabase
-            .from('creances_clients')
-            .select('montant_restant_ttc')
-            .eq('client_id', selectedCustomer.id)
-            .neq('statut', 'payé')
-          if (creances && creances.length > 0) {
-            const sumCreances = creances.reduce((s, c) => s + Number(c.montant_restant_ttc || 0), 0)
-            if (sumCreances > 0) ancienneDette = sumCreances
-          }
-        } catch (_) {}
-      }
-
-      const creditActuel = creditAmount
-      const montantRestantDuGlobal = ancienneDette + creditActuel
-
-      const notesPayload = {
-        sector_slug: currentSectorSlug,
-        payments: paymentsList,
-        customer_name: selectedCustomer ? selectedCustomer.name : 'Client Comptoir',
-        customer_ifu: selectedCustomer?.ifu_number || null,
-        is_deferred: isDeferred,
-        total_exonere: cartFiscalSummary.totalExonere,
-        ancienne_dette_avant_facture: ancienneDette,
-        montant_credit_actuel: creditActuel,
-        montant_restant_du_global: montantRestantDuGlobal,
-        lines: cart.map(c => ({
-          product: {
-            id: c.product.id,
-            code: c.product.code,
-            name: c.product.name,
-            unit: c.product.unit || c.product.uv || 'Pièce',
-            cost_price: c.product.cost_price,
-            selling_price: c.product.selling_price,
-            is_vat_subject: c.product.is_vat_subject,
-            vat_rate: c.product.vat_rate,
-            is_aib_subject: c.product.is_aib_subject,
-            aib_rate: c.product.aib_rate,
-            coef: c.product.coef
-          },
-          qty: c.qty,
-          unitPrice: c.unitPrice,
-          discount: c.discount
-        })),
-        emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieEmballageRows.map(e => ({
-          code: e.code,
-          designation: e.designation,
-          precedent: e.precedent,
-          facture: e.facture,
-          sortie: e.facture,
-          rendus: e.rendus,
-          retour: e.rendus,
-          reste: e.reste,
-          net_du: e.reste
-        })) : undefined
-      }
-
-      // 1. Insertion garantie et rapide dans sales_orders (colonnes 100% valides)
-      const custName = selectedCustomer ? selectedCustomer.name : 'Client Comptoir'
-      const todayDate = new Date().toISOString().split('T')[0]
-      const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferred ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
-
-      const salePayload: any = {
-        company_id: company?.id ?? companyId ?? '',
-        order_number: orderNum, // FIX CRITIQUE : TOUJOURS FOURNI (CONTRAINTE NOT NULL)
-        // cash_session_id doit être null car la FK PostgreSQL pointe vers l'ancienne table cash_sessions (inutilisée).
-        // La session active de sessions_caisse est tracée dans notes et caisse_mouvements.
-        cash_session_id: null,
-        order_type: isDeferred ? 'pos_deferred' : 'pos_direct',
-        order_date: todayDate,
-        subtotal_ht: cartFiscalSummary.ht,
-        tva_amount: cartFiscalSummary.tva,
-        aib_amount: cartFiscalSummary.aib,
-        total_amount: totalNetTTC,
-        total_cost: totalCostHTRounded,
-        paid_amount: totalNetTTC - creditAmount,
-        credit_amount: creditAmount,
-        payment_status: creditAmount >= totalNetTTC ? 'credit' : primaryMethod,
-        payment_method: primaryMethod,
-        customer_name: custName,
-        status: isDeferred ? 'pending_delivery' : 'COMPLET',
-        sector_slug: currentSectorSlug,
-        e_mecef_uid: encodedMeta,
-        created_by: user?.id || null,
-        notes: JSON.stringify(notesPayload)
-      }
-
-      const { data: savedDbSale, error: salesDbError } = await supabase
-        .from('sales_orders')
-        .insert(salePayload)
-        .select()
-        .single()
-
-      if (salesDbError || !savedDbSale?.id) {
-        console.error('Erreur critique insertion sales_orders:', salesDbError)
-        const errDetail = salesDbError?.message || 'Erreur inconnue'
-        throw new Error(`Échec d'enregistrement de la vente dans Supabase : ${errDetail}`)
-      }
-
-      // 2. Insertion des lignes réelles dans sales_order_items (colonnes 100% valides)
-      const lineItems = cart.map((line) => {
-        const coef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
-        const isTaxed = Boolean(
-          line.product.is_vat_subject ??
-          line.product.is_taxable ??
-          (Number(line.product.tva_rate) > 0) ??
-          false
-        )
-        const itemVatRate = isTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
-        const lineTotal = line.qty * line.unitPrice
-        const lineHt = isTaxed ? Math.round((lineTotal / (1 + itemVatRate / 100)) * 100) / 100 : lineTotal
-        const uvCostTTC = (Number(line.product.cost_price) || 0) / coef
-        const uvCostHT = isTaxed ? Math.round((uvCostTTC / (1 + itemVatRate / 100)) * 100) / 100 : Math.round(uvCostTTC * 100) / 100
-
-        return {
-          order_id: savedDbSale.id,
-          product_id: line.product.id,
-          product_name: line.product.name,
-          quantity: line.qty,
-          unit_price: line.unitPrice,
-          unit_cost: uvCostHT,
-          tva_rate: itemVatRate,
-          total_ht: lineHt,
-          total_ttc: lineTotal,
-          company_id: company?.id ?? companyId ?? '',
-          sector_slug: currentSectorSlug
+        let ancienneDette = ancienneDetteEstim
+        if (selectedCustomerSnapshot?.id) {
+          try {
+            const { data: creances } = await supabase.from('creances_clients').select('montant_restant_ttc').eq('client_id', selectedCustomerSnapshot.id).neq('statut', 'payé').limit(50)
+            if (creances && creances.length > 0) {
+              const s = creances.reduce((acc, c) => acc + Number(c.montant_restant_ttc || 0), 0)
+              if (s > 0) ancienneDette = s
+            }
+          } catch (_) {}
         }
-      })
-      await supabase.from('sales_order_items').insert(lineItems)
+        const montantRestantDuGlobal = ancienneDette + creditActuel
 
-      // 3. Déstockage ultra-rapide en parallèle du Stock Vente et traçabilité mouvements
-      await Promise.all(cart.map(async (line) => {
-        if (!line.product?.id) return
-
-        const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
-        const currentStockMagasin = Number(line.product.stock_magasin ?? line.product.sector_meta?.stock_magasin ?? 0)
-        const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
-
-        const currentMeta = line.product.sector_meta || {}
-        const updatedMeta = {
-          ...currentMeta,
-          stock_vente: newStockVente,
-          stock_magasin: currentStockMagasin,
-          ucd: line.product.ucd || currentMeta.ucd || 'Carton',
-          uv: line.product.uv || currentMeta.uv || line.product.unit || 'Pièce',
-          coef: Number(line.product.coef || currentMeta.coef || 1)
+        const todayDate = new Date().toISOString().split('T')[0]
+        const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferredSnapshot ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
+        const notesPayload = {
+          sector_slug: currentSectorSlug, payments: paymentsList, customer_name: custName,
+          customer_ifu: selectedCustomerSnapshot?.ifu_number || null, is_deferred: isDeferredSnapshot,
+          total_exonere: cartFiscalSummarySnapshot.totalExonere, ancienne_dette_avant_facture: ancienneDette,
+          montant_credit_actuel: creditActuel, montant_restant_du_global: montantRestantDuGlobal,
+          lines: cartSnapshot.map(c => ({ product: { id: c.product.id, code: c.product.code, name: c.product.name, unit: c.product.unit || c.product.uv || 'Pièce', cost_price: c.product.cost_price, selling_price: c.product.selling_price, is_vat_subject: c.product.is_vat_subject, vat_rate: c.product.vat_rate, is_aib_subject: c.product.is_aib_subject, aib_rate: c.product.aib_rate, coef: c.product.coef }, qty: c.qty, unitPrice: c.unitPrice, discount: c.discount })),
+          emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieEmballageRowsSnapshot.map(e => ({ code: e.code, designation: e.designation, precedent: e.precedent, facture: e.facture, sortie: e.facture, rendus: e.rendus, retour: e.rendus, reste: e.reste, net_du: e.reste })) : undefined
         }
 
-        const lineCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
-        const lineIsTaxed = Boolean(line.product.is_vat_subject ?? line.product.is_taxable ?? false)
-        const lineVatRate = lineIsTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
-        const lineUvCostTTC = (Number(line.product.cost_price) || 0) / lineCoef
-        const lineUvCostHT = lineIsTaxed ? Math.round((lineUvCostTTC / (1 + lineVatRate / 100)) * 100) / 100 : Math.round(lineUvCostTTC * 100) / 100
-        const movementTotalCostHT = Math.round(line.qty * lineUvCostHT * 100) / 100
+        const salePayload: any = {
+          company_id: company?.id ?? companyId ?? '', order_number: orderNum, cash_session_id: null,
+          order_type: isDeferredSnapshot ? 'pos_deferred' : 'pos_direct', order_date: todayDate,
+          subtotal_ht: cartFiscalSummarySnapshot.ht, tva_amount: cartFiscalSummarySnapshot.tva,
+          aib_amount: cartFiscalSummarySnapshot.aib, total_amount: totalNetTTCSnapshot,
+          total_cost: totalCostHTRounded, paid_amount: totalNetTTCSnapshot - creditAmount,
+          credit_amount: creditAmount, payment_status: creditAmount >= totalNetTTCSnapshot ? 'credit' : primaryMethod,
+          payment_method: primaryMethod, customer_name: custName,
+          status: isDeferredSnapshot ? 'pending_delivery' : 'COMPLET', sector_slug: currentSectorSlug,
+          e_mecef_uid: encodedMeta, created_by: user?.id || null, notes: JSON.stringify(notesPayload)
+        }
 
-        await Promise.allSettled([
-          supabase.from('products').update({ sector_meta: updatedMeta }).eq('id', line.product.id),
-          supabase.from('stock_movements').insert({
-            company_id: company?.id ?? companyId ?? '',
-            sector_slug: currentSectorSlug,
-            product_id: line.product.id,
-            movement_type: 'VENTE_POS',
-            reference_type: 'sales_order',
-            reference_id: savedDbSale.id,
-            reference_number: orderNum,
-            quantity: -line.qty,
-            previous_stock: currentStockVente,
-            new_stock: newStockVente,
-            unit_cost: lineUvCostHT,
-            total_cost: movementTotalCostHT,
-            notes: `Vente POS ${orderNum} - Déstockage : ${line.qty} ${line.product.uv || line.product.unit || 'UV'}`
-          })
-        ])
-      }))
+        // INSERT vente + lignes (opération critique)
+        const { data: savedDbSale, error: salesDbError } = await supabase.from('sales_orders').insert(salePayload).select('id').single()
+        if (salesDbError || !savedDbSale?.id) {
+          toast.error('Synchro vente échouée', `Réf ${orderNum} — vérifiez la connexion.`)
+          return
+        }
 
-      // Mise à jour instantanée du state React local des produits
-      setProducts((prev) =>
-        prev.map((p) => {
-          const item = cart.find((c) => c.product.id === p.id)
-          if (!item) return p
-          const curVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
-          const newVente = Math.max(0, Math.round((curVente - item.qty) * 1000) / 1000)
-          return {
-            ...p,
-            stock_vente: newVente,
-            sector_meta: { ...(p.sector_meta || {}), stock_vente: newVente }
-          }
+        // Mise à jour de la SaleRecord optimiste avec le vrai ID
+        setSalesHistory(prev => prev.map(s => s.id === `optimistic-${orderNum}` ? { ...s, id: savedDbSale.id } : s))
+
+        const lineItems = cartSnapshot.map((line) => {
+          const coef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
+          const isTaxed = Boolean(line.product.is_vat_subject ?? line.product.is_taxable ?? (Number(line.product.tva_rate) > 0))
+          const itemVatRate = isTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
+          const lineTotal = line.qty * line.unitPrice
+          const lineHt = isTaxed ? Math.round((lineTotal / (1 + itemVatRate / 100)) * 100) / 100 : lineTotal
+          const uvCostTTC = (Number(line.product.cost_price) || 0) / coef
+          const uvCostHT = isTaxed ? Math.round((uvCostTTC / (1 + itemVatRate / 100)) * 100) / 100 : Math.round(uvCostTTC * 100) / 100
+          return { order_id: savedDbSale.id, product_id: line.product.id, product_name: line.product.name, quantity: line.qty, unit_price: line.unitPrice, unit_cost: uvCostHT, tva_rate: itemVatRate, total_ht: lineHt, total_ttc: lineTotal, company_id: company?.id ?? companyId ?? '', sector_slug: currentSectorSlug }
         })
-      )
+        await supabase.from('sales_order_items').insert(lineItems)
 
-      // 4. Si client avec crédit, mise à jour stricte de la créance dans Supabase (Règle 1)
-      if (selectedCustomer && creditAmount > 0) {
-        try {
-          await supabaseTenant('customers')
-            .update({
-              current_debt: montantRestantDuGlobal,
-              solde_creance: montantRestantDuGlobal
-            })
-            .eq('id', selectedCustomer.id)
-        } catch (_) {}
+        // Opérations secondaires en parallèle (non-bloquantes)
+        const bgOps: Promise<any>[] = []
 
-        try {
-          await supabase
-            .from('clients')
-            .update({ solde_creance: montantRestantDuGlobal })
-            .eq('id', selectedCustomer.id)
-        } catch (_) {}
+        // Déstockage parallèle
+        cartSnapshot.forEach(line => {
+          if (!line.product?.id) return
+          const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
+          const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
+          const currentMeta = line.product.sector_meta || {}
+          const updatedMeta = { ...currentMeta, stock_vente: newStockVente, stock_magasin: Number(line.product.stock_magasin ?? currentMeta.stock_magasin ?? 0), ucd: line.product.ucd || currentMeta.ucd || 'Carton', uv: line.product.uv || currentMeta.uv || line.product.unit || 'Pièce', coef: Number(line.product.coef || currentMeta.coef || 1) }
+          const lineCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
+          const lineIsTaxed = Boolean(line.product.is_vat_subject ?? line.product.is_taxable ?? false)
+          const lineVatRate = lineIsTaxed ? Number(line.product.vat_rate ?? line.product.tva_rate ?? 18) : 0
+          const lineUvCostTTC = (Number(line.product.cost_price) || 0) / lineCoef
+          const lineUvCostHT = lineIsTaxed ? Math.round((lineUvCostTTC / (1 + lineVatRate / 100)) * 100) / 100 : Math.round(lineUvCostTTC * 100) / 100
+          bgOps.push(supabase.from('products').update({ sector_meta: updatedMeta }).eq('id', line.product.id).then(() => {}))
+          bgOps.push(supabase.from('stock_movements').insert({ company_id: company?.id ?? companyId ?? '', sector_slug: currentSectorSlug, product_id: line.product.id, movement_type: 'VENTE_POS', reference_type: 'sales_order', reference_id: savedDbSale.id, reference_number: orderNum, quantity: -line.qty, previous_stock: currentStockVente, new_stock: newStockVente, unit_cost: lineUvCostHT, total_cost: Math.round(line.qty * lineUvCostHT * 100) / 100, notes: `Vente POS ${orderNum}` }).then(() => {}))
+        })
 
-        // Enregistrement créance individuelle rattachée à la vente
-        try {
-          await supabase.from('creances_clients').insert({
-            company_id: company?.id ?? companyId ?? '',
-            client_id: selectedCustomer.id,
-            facture_id: savedDbSale.id,
-            montant_initial_ttc: creditAmount,
-            montant_restant_ttc: creditAmount,
-            statut: 'impayé',
-            created_at: new Date().toISOString()
-          })
-        } catch (crErr) {
-          console.warn('[POSPage] Sauvegarde creances_clients non bloquante :', crErr)
-        }
+        // Mise à jour stock local React
+        setProducts((prev) => prev.map((p) => {
+          const item = cartSnapshot.find((c) => c.product.id === p.id)
+          if (!item) return p
+          const newVente = Math.max(0, Math.round((Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0) - item.qty) * 1000) / 1000)
+          return { ...p, stock_vente: newVente, sector_meta: { ...(p.sector_meta || {}), stock_vente: newVente } }
+        }))
 
-        setCustomers((prev) =>
-          prev.map((c) =>
-            c.id === selectedCustomer.id
-              ? { ...c, current_debt: montantRestantDuGlobal, solde_creance: montantRestantDuGlobal }
-              : c
-          )
-        )
-
-        // E. Logique Créances Historiques (client_debts) :
-        // - Nouvel achat à crédit si solde restant -> ajoute au total_dette de la créance en_cours
-        // - Nouvel achat à crédit si ancienne soldée (ou aucune) -> crée une NOUVELLE ligne client_debts
-        try {
-          const compId = company?.id ?? companyId ?? ''
-          const secSlug = currentSectorSlug || 'boutique'
-
-          const { data: existingDebts } = await supabase
-            .from('client_debts')
-            .select('*')
-            .eq('company_id', compId)
-            .eq('client_id', selectedCustomer.id)
-            .eq('status', 'en_cours')
-            .order('created_at', { ascending: false })
-            .limit(1)
-
-          if (existingDebts && existingDebts.length > 0) {
-            const activeDebt = existingDebts[0]
-            const updatedTotalDette = (Number(activeDebt.total_dette) || 0) + creditAmount
-            const updatedSoldeDu = updatedTotalDette - (Number(activeDebt.total_rembourse) || 0)
-
-            await supabase
-              .from('client_debts')
-              .update({
-                total_dette: updatedTotalDette,
-                solde_du: updatedSoldeDu,
-                updated_at: new Date().toISOString()
-              })
-              .eq('id', activeDebt.id)
-          } else {
-            await supabase
-              .from('client_debts')
-              .insert({
-                company_id: compId,
-                sector_code: secSlug,
-                client_id: selectedCustomer.id,
-                total_dette: creditAmount,
-                total_rembourse: 0,
-                solde_du: creditAmount,
-                status: 'en_cours',
-                created_at: new Date().toISOString(),
-                updated_at: new Date().toISOString()
-              })
-          }
-        } catch (debtErr) {
-          console.warn('[POSPage] Sauvegarde client_debts non bloquante :', debtErr)
-        }
-      }
-
-      // 4-BIS. Brasserie & Dépôt de Boissons : Gestion Automatique des Emballages et Consignations
-      if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieEmballageRows.length > 0) {
-        try {
-          const compId = company?.id ?? companyId ?? ''
-          const isComptoir = !selectedCustomer || selectedCustomer.code === 'COMPTOIR' || (selectedCustomer.name || '').toLowerCase().includes('comptoir')
-          const clientNom = selectedCustomer?.name || (isComptoir ? 'Client Comptoir' : 'Client')
-          const clientId = selectedCustomer?.id || null
-
-          for (const emb of brasserieEmballageRows) {
-            const codeEmb = (emb.code || '').trim().toUpperCase()
-            // SÉCURITÉ ABSOLUE : Ignorer tout code fantôme UUID ou non conforme
-            if (!isVraiCodeEmballage(codeEmb)) continue
-
-            const designationEmb = emb.designation || `Casier ${codeEmb}`
-            const retour = Number(emb.rendus) || 0
-            const sortie = Number(emb.facture) || 0
-            const prec = Number(emb.precedent) || 0
-            const duFinal = Number(emb.reste) || 0
-            const soldeApresSortie = prec + sortie
-
-            if (sortie === 0 && retour === 0) continue
-
-            // 1. Récupérer ou auto-créer l'ID dans brasserie_emballages
-            let realEmbId = emb.id
-            if (!realEmbId) {
-              const matched = brasserieEmballagesList.find(e => e.code === codeEmb)
-              realEmbId = matched?.id
-            }
-            if (!realEmbId) {
-              const { data: dbEmb } = await supabase
-                .from('brasserie_emballages')
-                .select('id')
-                .eq('company_id', compId)
-                .eq('code', codeEmb)
-                .maybeSingle()
-              if (dbEmb?.id) {
-                realEmbId = dbEmb.id
+        // Crédit client
+        if (selectedCustomerSnapshot && creditAmount > 0) {
+          bgOps.push(supabaseTenant('customers').update({ current_debt: montantRestantDuGlobal }).eq('id', selectedCustomerSnapshot.id).then(() => {}))
+          bgOps.push(supabase.from('creances_clients').insert({ company_id: company?.id ?? companyId ?? '', client_id: selectedCustomerSnapshot.id, facture_id: savedDbSale.id, montant_initial_ttc: creditAmount, montant_restant_ttc: creditAmount, statut: 'impayé', created_at: new Date().toISOString() }).then(() => {}))
+          setCustomers((prev) => prev.map((c) => c.id === selectedCustomerSnapshot.id ? { ...c, current_debt: montantRestantDuGlobal, solde_creance: montantRestantDuGlobal } : c))
+          bgOps.push((async () => {
+            try {
+              const compId = company?.id ?? companyId ?? ''
+              const { data: existingDebts } = await supabase.from('client_debts').select('id, total_dette, total_rembourse').eq('company_id', compId).eq('client_id', selectedCustomerSnapshot.id).eq('status', 'en_cours').order('created_at', { ascending: false }).limit(1)
+              if (existingDebts && existingDebts.length > 0) {
+                const d = existingDebts[0]
+                const newTotal = (Number(d.total_dette) || 0) + creditAmount
+                await supabase.from('client_debts').update({ total_dette: newTotal, solde_du: newTotal - (Number(d.total_rembourse) || 0), updated_at: new Date().toISOString() }).eq('id', d.id)
               } else {
-                const { data: createdEmb } = await supabase
-                  .from('brasserie_emballages')
-                  .insert({
-                    company_id: compId,
-                    sector_slug: 'brasserie',
-                    code: codeEmb,
-                    designation: designationEmb,
-                    type: 'casier',
-                    unite: 'unité',
-                    valeur_consignation: 0,
-                    stock_depot: 0,
-                    is_active: true
-                  })
-                  .select('id')
-                  .single()
-                if (createdEmb?.id) realEmbId = createdEmb.id
+                await supabase.from('client_debts').insert({ company_id: compId, sector_code: currentSectorSlug || 'boutique', client_id: selectedCustomerSnapshot.id, total_dette: creditAmount, total_rembourse: 0, solde_du: creditAmount, status: 'en_cours', created_at: new Date().toISOString(), updated_at: new Date().toISOString() })
               }
-            }
+            } catch (_) {}
+          })())
+        }
 
-            // 2. Récupérer ou auto-créer dans brasserie_emballages_types
-            let embTypeId: string | null = null
-            const { data: dbType } = await supabase
-              .from('brasserie_emballages_types')
-              .select('id')
-              .eq('company_id', compId)
-              .eq('code', codeEmb)
-              .maybeSingle()
-            if (dbType?.id) {
-              embTypeId = dbType.id
-            } else if (isVraiCodeEmballage(codeEmb)) {
-              const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
-              const safeSecteurId = isValidUUID(company?.sector_id) ? company?.sector_id : null
-              const { data: createdType } = await supabase
-                .from('brasserie_emballages_types')
-                .insert({
-                  company_id: compId,
-                  secteur_id: safeSecteurId,
-                  code: codeEmb,
-                  nom: designationEmb,
-                  stock_depot: 0
-                })
-                .select('id')
-                .maybeSingle()
-              if (createdType?.id) embTypeId = createdType.id
-            }
-
+        // Emballages Brasserie
+        if ((currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') && brasserieEmballageRowsSnapshot.length > 0) {
+          bgOps.push((async () => {
+            const compId = company?.id ?? companyId ?? ''
+            const isComptoir = !selectedCustomerSnapshot || selectedCustomerSnapshot.code === 'COMPTOIR' || (selectedCustomerSnapshot.name || '').toLowerCase().includes('comptoir')
+            const clientNom = selectedCustomerSnapshot?.name || (isComptoir ? 'Client Comptoir' : 'Client')
+            const clientId = selectedCustomerSnapshot?.id || null
             const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
             const safeSecteurId = isValidUUID(company?.sector_id) ? company?.sector_id : null
-
-            // 4. Enregistrement AUTOMATIQUE dans brasserie_emballages_mouvements (PARTIE 2 DU PROMPT)
-            if (sortie > 0 && !isComptoir) {
-              try {
-                await supabase.from('brasserie_emballages_mouvements').insert({
-                  company_id: compId,
-                  secteur_id: safeSecteurId,
-                  client_id: isValidUUID(clientId) ? clientId : null,
-                  client_nom: clientNom,
-                  emballage_type_id: isValidUUID(embTypeId) ? embTypeId : (isValidUUID(realEmbId) ? realEmbId : null),
-                  code: codeEmb,
-                  emballage_code: codeEmb,
-                  type_mouvement: 'SORTIE',
-                  quantite: sortie,
-                  vente_id: savedDbSale.id,
-                  vente_numero: orderNum,
-                  date: new Date().toISOString(),
-                  solde_avant: prec,
-                  solde_apres: soldeApresSortie,
-                  observation: `Vente N° ${orderNum}`
-                })
-              } catch (errSortie) {
-                console.error('[POSPage] Erreur insert SORTIE:', errSortie)
+            for (const emb of brasserieEmballageRowsSnapshot) {
+              const codeEmb = (emb.code || '').trim().toUpperCase()
+              if (!isVraiCodeEmballage(codeEmb)) continue
+              const designationEmb = emb.designation || `Casier ${codeEmb}`
+              const retour = Number(emb.rendus) || 0
+              const sortie = Number(emb.facture) || 0
+              const prec = Number(emb.precedent) || 0
+              const duFinal = Number(emb.reste) || 0
+              const soldeApresSortie = prec + sortie
+              if (sortie === 0 && retour === 0) continue
+              let realEmbId = emb.id
+              if (!realEmbId) {
+                const matched = brasserieEmballagesList.find(e => e.code === codeEmb)
+                realEmbId = matched?.id
               }
-            }
-
-            if (retour > 0 && !isComptoir) {
-              try {
-                await supabase.from('brasserie_emballages_mouvements').insert({
-                  company_id: compId,
-                  secteur_id: safeSecteurId,
-                  client_id: isValidUUID(clientId) ? clientId : null,
-                  client_nom: clientNom,
-                  emballage_type_id: isValidUUID(embTypeId) ? embTypeId : (isValidUUID(realEmbId) ? realEmbId : null),
-                  code: codeEmb,
-                  emballage_code: codeEmb,
-                  type_mouvement: 'RETOUR',
-                  quantite: retour,
-                  vente_id: savedDbSale.id,
-                  vente_numero: orderNum,
-                  date: new Date().toISOString(),
-                  solde_avant: soldeApresSortie,
-                  solde_apres: duFinal,
-                  observation: `Retour immédiat vente N° ${orderNum}`
-                })
-              } catch (errRetour) {
-                console.error('[POSPage] Erreur insert RETOUR:', errRetour)
-              }
-            }
-
-            // 5. Enregistrement M046 dans mouvements_emballages
-            try {
-              await supabase.from('mouvements_emballages').insert({
-                company_id: compId,
-                secteur_id: company?.sector_id || compId,
-                client_id: isComptoir ? null : clientId,
-                vente_id: savedDbSale.id,
-                facture_id: savedDbSale.id,
-                emballage_id: realEmbId,
-                precedent: prec,
-                facture_qte: sortie,
-                retour_qte: retour,
-                du_final: duFinal,
-                date_mouvement: todayDate
-              })
-            } catch (_) {}
-
-            // 6. Mise à jour solde actuel dans clients_emballages_soldes
-            if (!isComptoir && clientId && realEmbId) {
-              try {
-                await supabase.from('clients_emballages_soldes').upsert({
-                  company_id: compId,
-                  secteur_id: company?.sector_id || compId,
-                  client_id: clientId,
-                  emballage_id: realEmbId,
-                  du_actuel: duFinal,
-                  updated_at: new Date().toISOString()
-                })
-              } catch (_) {}
-            }
-
-            // 7. Mouvement brasserie_mouvements_emballages SORTIE_VENTE & RETOUR_IMMEDIAT
-            if (realEmbId) {
-              if (sortie > 0) {
-                try {
-                  await supabase.from('brasserie_mouvements_emballages').insert({
-                    company_id: compId,
-                    sector_slug: 'brasserie',
-                    emballage_id: realEmbId,
-                    client_id: clientId,
-                    type_mouvement: 'SORTIE_VENTE',
-                    quantite: sortie,
-                    reference: orderNum,
-                    vente_id: savedDbSale.id,
-                    created_by_name: user?.full_name || 'Vendeur',
-                  })
-                } catch (_) {}
-              }
-
-              if (retour > 0) {
-                try {
-                  await supabase.from('brasserie_mouvements_emballages').insert({
-                    company_id: compId,
-                    sector_slug: 'brasserie',
-                    emballage_id: realEmbId,
-                    client_id: clientId,
-                    type_mouvement: 'RETOUR_IMMEDIAT',
-                    quantite: retour,
-                    reference: orderNum,
-                    vente_id: savedDbSale.id,
-                    created_by_name: user?.full_name || 'Vendeur',
-                  })
-                } catch (_) {}
-              }
-
-              // 8. Décrémentation / incrémentation stock dépôt
-              try {
-                const { data: embRow } = await supabase
-                  .from('brasserie_emballages')
-                  .select('stock_depot')
-                  .eq('id', realEmbId)
-                  .maybeSingle()
-                if (embRow) {
-                  const currentStockDepot = Number(embRow.stock_depot) || 0
-                  const updatedStockDepot = Math.max(0, currentStockDepot - sortie + retour)
-                  await supabase
-                    .from('brasserie_emballages')
-                    .update({ stock_depot: updatedStockDepot, updated_at: new Date().toISOString() })
-                    .eq('id', realEmbId)
+              if (!realEmbId) {
+                const { data: dbEmb } = await supabase.from('brasserie_emballages').select('id').eq('company_id', compId).eq('code', codeEmb).maybeSingle()
+                if (dbEmb?.id) { realEmbId = dbEmb.id } else {
+                  const { data: createdEmb } = await supabase.from('brasserie_emballages').insert({ company_id: compId, sector_slug: 'brasserie', code: codeEmb, designation: designationEmb, type: 'casier', unite: 'unité', valeur_consignation: 0, stock_depot: 0, is_active: true }).select('id').single()
+                  if (createdEmb?.id) realEmbId = createdEmb.id
                 }
-              } catch (_) {}
-
-              // 9. Mise à jour de brasserie_consignations
-              if (!isComptoir && clientId) {
-                try {
-                  const { data: exCons } = await supabase
-                    .from('brasserie_consignations')
-                    .select('*')
-                    .eq('company_id', compId)
-                    .eq('sector_slug', 'brasserie')
-                    .eq('client_id', clientId)
-                    .eq('emballage_id', realEmbId)
-                    .maybeSingle()
-
-                  if (exCons) {
-                    const newSorti = (Number(exCons.total_sorti) || 0) + sortie
-                    const newRetour = (Number(exCons.total_retourne) || 0) + retour
-                    await supabase
-                      .from('brasserie_consignations')
-                      .update({
-                        total_sorti: newSorti,
-                        total_retourne: newRetour,
-                        solde_du: Math.max(0, newSorti - newRetour),
-                        derniere_sortie: new Date().toISOString(),
-                        dernier_retour: retour > 0 ? new Date().toISOString() : exCons.dernier_retour,
-                        updated_at: new Date().toISOString(),
-                      })
-                      .eq('id', exCons.id)
-                  } else {
-                    await supabase
-                      .from('brasserie_consignations')
-                      .insert({
-                        company_id: compId,
-                        sector_slug: 'brasserie',
-                        client_id: clientId,
-                        emballage_id: realEmbId,
-                        total_sorti: sortie,
-                        total_retourne: retour,
-                        solde_du: Math.max(0, sortie - retour),
-                        derniere_sortie: new Date().toISOString(),
-                        dernier_retour: retour > 0 ? new Date().toISOString() : null,
-                      })
-                  }
-                } catch (_) {}
               }
+              let embTypeId: string | null = null
+              const { data: dbType } = await supabase.from('brasserie_emballages_types').select('id').eq('company_id', compId).eq('code', codeEmb).maybeSingle()
+              if (dbType?.id) { embTypeId = dbType.id } else if (isVraiCodeEmballage(codeEmb)) {
+                const { data: createdType } = await supabase.from('brasserie_emballages_types').insert({ company_id: compId, secteur_id: safeSecteurId, code: codeEmb, nom: designationEmb, stock_depot: 0 }).select('id').maybeSingle()
+                if (createdType?.id) embTypeId = createdType.id
+              }
+              const mouvPs: Promise<any>[] = []
+              if (sortie > 0 && !isComptoir) mouvPs.push(supabase.from('brasserie_emballages_mouvements').insert({ company_id: compId, secteur_id: safeSecteurId, client_id: isValidUUID(clientId) ? clientId : null, client_nom: clientNom, emballage_type_id: isValidUUID(embTypeId) ? embTypeId : (isValidUUID(realEmbId) ? realEmbId : null), code: codeEmb, emballage_code: codeEmb, type_mouvement: 'SORTIE', quantite: sortie, vente_id: savedDbSale.id, vente_numero: orderNum, date: new Date().toISOString(), solde_avant: prec, solde_apres: soldeApresSortie, observation: `Vente N° ${orderNum}` }).then(() => {}))
+              if (retour > 0 && !isComptoir) mouvPs.push(supabase.from('brasserie_emballages_mouvements').insert({ company_id: compId, secteur_id: safeSecteurId, client_id: isValidUUID(clientId) ? clientId : null, client_nom: clientNom, emballage_type_id: isValidUUID(embTypeId) ? embTypeId : (isValidUUID(realEmbId) ? realEmbId : null), code: codeEmb, emballage_code: codeEmb, type_mouvement: 'RETOUR', quantite: retour, vente_id: savedDbSale.id, vente_numero: orderNum, date: new Date().toISOString(), solde_avant: soldeApresSortie, solde_apres: duFinal, observation: `Retour vente N° ${orderNum}` }).then(() => {}))
+              mouvPs.push(supabase.from('mouvements_emballages').insert({ company_id: compId, secteur_id: company?.sector_id || compId, client_id: isComptoir ? null : clientId, vente_id: savedDbSale.id, facture_id: savedDbSale.id, emballage_id: realEmbId, precedent: prec, facture_qte: sortie, retour_qte: retour, du_final: duFinal, date_mouvement: todayDate }).then(() => {}))
+              if (!isComptoir && clientId && realEmbId) mouvPs.push(supabase.from('clients_emballages_soldes').upsert({ company_id: compId, secteur_id: company?.sector_id || compId, client_id: clientId, emballage_id: realEmbId, du_actuel: duFinal, updated_at: new Date().toISOString() }).then(() => {}))
+              if (realEmbId) {
+                if (sortie > 0) mouvPs.push(supabase.from('brasserie_mouvements_emballages').insert({ company_id: compId, sector_slug: 'brasserie', emballage_id: realEmbId, client_id: clientId, type_mouvement: 'SORTIE_VENTE', quantite: sortie, reference: orderNum, vente_id: savedDbSale.id, created_by_name: user?.full_name || 'Vendeur' }).then(() => {}))
+                if (retour > 0) mouvPs.push(supabase.from('brasserie_mouvements_emballages').insert({ company_id: compId, sector_slug: 'brasserie', emballage_id: realEmbId, client_id: clientId, type_mouvement: 'RETOUR_IMMEDIAT', quantite: retour, reference: orderNum, vente_id: savedDbSale.id, created_by_name: user?.full_name || 'Vendeur' }).then(() => {}))
+                mouvPs.push((async () => { const { data: embRow } = await supabase.from('brasserie_emballages').select('stock_depot').eq('id', realEmbId).maybeSingle(); if (embRow) { await supabase.from('brasserie_emballages').update({ stock_depot: Math.max(0, (Number(embRow.stock_depot) || 0) - sortie + retour), updated_at: new Date().toISOString() }).eq('id', realEmbId) } })())
+                if (!isComptoir && clientId) mouvPs.push((async () => { const { data: exCons } = await supabase.from('brasserie_consignations').select('id, total_sorti, total_retourne, dernier_retour').eq('company_id', compId).eq('sector_slug', 'brasserie').eq('client_id', clientId).eq('emballage_id', realEmbId).maybeSingle(); if (exCons) { const ns = (Number(exCons.total_sorti) || 0) + sortie; const nr = (Number(exCons.total_retourne) || 0) + retour; await supabase.from('brasserie_consignations').update({ total_sorti: ns, total_retourne: nr, solde_du: Math.max(0, ns - nr), derniere_sortie: new Date().toISOString(), dernier_retour: retour > 0 ? new Date().toISOString() : exCons.dernier_retour, updated_at: new Date().toISOString() }).eq('id', exCons.id) } else { await supabase.from('brasserie_consignations').insert({ company_id: compId, sector_slug: 'brasserie', client_id: clientId, emballage_id: realEmbId, total_sorti: sortie, total_retourne: retour, solde_du: Math.max(0, sortie - retour), derniere_sortie: new Date().toISOString(), dernier_retour: retour > 0 ? new Date().toISOString() : null }) } })())
+              }
+              await Promise.allSettled(mouvPs)
             }
-          }
-        } catch (embErr) {
-          console.warn('[POSPage] Erreur enregistrement consignation brasserie :', embErr)
+          })())
         }
+
+        // Caisse
+        bgOps.push((async () => {
+          const paidCash = isMultiModeSnapshot ? ((multiMode1CanalSnapshot === 'especes' ? multiMode1AmountSnapshot : 0) + (multiMode2CanalSnapshot === 'especes' ? multiMode2AmountSnapshot : 0)) : (singleMethodSnapshot === 'especes' ? totalNetTTCSnapshot : 0)
+          const paidMomo = isMultiModeSnapshot ? ((['momo_mtn','momo_moov'].includes(multiMode1CanalSnapshot) ? multiMode1AmountSnapshot : 0) + (['momo_mtn','momo_moov'].includes(multiMode2CanalSnapshot) ? multiMode2AmountSnapshot : 0)) : (['momo_mtn','momo_moov'].includes(singleMethodSnapshot) ? totalNetTTCSnapshot : 0)
+          if (paidCash <= 0 && paidMomo <= 0) return
+          const compId = company?.id ?? companyId ?? ''
+          const caisseId = activeCaisseSnapshot?.caisse_id || activeCaisseSnapshot?.id || null
+          await Promise.allSettled([
+            enregistrerMouvementCaisse({ company_id: compId, sector_slug: currentSectorSlug, caisse_id: caisseId, caisse_session_id: activeCaisseSnapshot?.id, type: 'vente', sens: 'entree', montant_especes: paidCash, montant_momo: paidMomo, source_module: 'vente_pos', source_id: orderNum, motif: `Vente POS ${orderNum} (Client: ${custName || 'Comptoir'})`, user_name: user?.full_name || 'Caissier', user_id: user?.id }),
+            paidCash > 0 ? enregistrerEntreeCaisse({ company_id: compId, secteur_id: currentSectorSlug, caisse_id: caisseId, montant: paidCash, mode_paiement: 'espece', source: 'VENTE', reference_id: savedDbSale?.id || null }) : Promise.resolve(),
+            paidMomo > 0 ? enregistrerEntreeCaisse({ company_id: compId, secteur_id: currentSectorSlug, caisse_id: caisseId, montant: paidMomo, mode_paiement: 'mtn_momo', source: 'VENTE', reference_id: savedDbSale?.id || null }) : Promise.resolve(),
+            (async () => { try { const { data: registers } = await supabaseTenant('cash_registers').select('id, current_cash_balance, current_momo_balance').limit(1); if (registers?.length) { const reg = registers[0]; await supabaseTenant('cash_registers').update({ current_cash_balance: (Number(reg.current_cash_balance) || 0) + paidCash, current_momo_balance: (Number(reg.current_momo_balance) || 0) + paidMomo }).eq('id', reg.id) } } catch (_) {} })()
+          ])
+        })())
+
+        // Audit
+        bgOps.push(import('../../../services/auditService').then(({ logAuditEvent }) => logAuditEvent({ companyId: company?.id ?? companyId ?? '', userId: user?.id, userName: user?.full_name || user?.username, userRole: user?.role, module: 'Vente-POS', action: 'VENTE', description: `Vente N° ${orderNum} — ${fmt(totalNetTTCSnapshot)} — Client: ${custName}`, entityName: 'sales_orders', entityId: savedDbSale.id }).catch(() => {})).catch(() => {}))
+
+        await Promise.allSettled(bgOps)
+      } catch (bgErr: any) {
+        console.error('[POSPage] Erreur background vente:', bgErr)
+        toast.error('Synchro arrière-plan échouée', bgErr.message || 'La vente sera re-synchronisée au prochain rechargement.')
       }
-
-      // 5. Synchronisation Caisse en temps réel & persistance Supabase
-      const paidCash = isMultiMode
-        ? ((multiMode1Canal === 'especes' ? multiMode1Amount : 0) + (multiMode2Canal === 'especes' ? multiMode2Amount : 0))
-        : (singleMethod === 'especes' ? totalNetTTC : 0)
-
-      const paidMomo = isMultiMode
-        ? (
-            (['momo_mtn', 'momo_moov'].includes(multiMode1Canal) ? multiMode1Amount : 0) +
-            (['momo_mtn', 'momo_moov'].includes(multiMode2Canal) ? multiMode2Amount : 0)
-          )
-        : (['momo_mtn', 'momo_moov'].includes(singleMethod) ? totalNetTTC : 0)
-
-      if (paidCash > 0 || paidMomo > 0) {
-        const compId = company?.id ?? companyId ?? ''
-        const caisseId = activeCaisse?.caisse_id || activeCaisse?.id || null
-
-        // Exécution en parallèle des mises à jour de caisse
-        await Promise.allSettled([
-          enregistrerMouvementCaisse({
-            company_id: compId,
-            sector_slug: currentSectorSlug,
-            caisse_id: caisseId,
-            caisse_session_id: activeCaisse?.id,
-            type: 'vente',
-            sens: 'entree',
-            montant_especes: paidCash,
-            montant_momo: paidMomo,
-            source_module: 'vente_pos',
-            source_id: orderNum,
-            motif: `Vente POS ${orderNum} (Client: ${custName || 'Comptoir'})`,
-            user_name: user?.full_name || 'Caissier',
-            user_id: user?.id,
-          }),
-          paidCash > 0 ? enregistrerEntreeCaisse({
-            company_id: compId,
-            secteur_id: currentSectorSlug,
-            caisse_id: caisseId,
-            montant: paidCash,
-            mode_paiement: 'espece',
-            source: 'VENTE',
-            reference_id: savedDbSale?.id || null
-          }) : Promise.resolve(),
-          paidMomo > 0 ? enregistrerEntreeCaisse({
-            company_id: compId,
-            secteur_id: currentSectorSlug,
-            caisse_id: caisseId,
-            montant: paidMomo,
-            mode_paiement: 'mtn_momo',
-            source: 'VENTE',
-            reference_id: savedDbSale?.id || null
-          }) : Promise.resolve(),
-          (async () => {
-            try {
-              const { data: registers } = await supabaseTenant('cash_registers').select('*').limit(1)
-              if (registers && registers.length > 0) {
-                const reg = registers[0]
-                await supabaseTenant('cash_registers')
-                  .update({
-                    current_cash_balance: (Number(reg.current_cash_balance) || 0) + paidCash,
-                    current_momo_balance: (Number(reg.current_momo_balance) || 0) + paidMomo
-                  })
-                  .eq('id', reg.id)
-              }
-            } catch (_) {}
-          })()
-        ])
-      }
-
-      // 6. Traçabilité Journal d'Audit automatique dans Supabase (non bloquant)
-      import('../../../services/auditService')
-        .then(({ logAuditEvent }) => {
-          logAuditEvent({
-            companyId: company?.id ?? companyId ?? '',
-            userId: user?.id,
-            userName: user?.full_name || user?.username,
-            userRole: user?.role,
-            module: 'Vente-POS',
-            action: 'VENTE',
-            description: `Vente N° ${orderNum} enregistrée - Montant: ${fmt(totalNetTTC)} (${primaryMethod}) - Client: ${custName}`,
-            entityName: 'sales_orders',
-            entityId: savedDbSale.id
-          }).catch(() => {})
-        })
-        .catch(() => {})
-
-      const newSale: SaleRecord = {
-        id: savedDbSale.id,
-        order_number: orderNum,
-        date: new Date().toISOString(),
-        customer_name: custName,
-        customer_id: selectedCustomer?.id,
-        customer_ifu: selectedCustomer?.ifu_number,
-        total_amount: totalNetTTC,
-        total_ht: cartFiscalSummary.ht,
-        total_tva: cartFiscalSummary.tva,
-        total_aib: cartFiscalSummary.aib,
-        total_exonere: cartFiscalSummary.totalExonere,
-        amount_paid: totalNetTTC - creditAmount,
-        credit_amount: creditAmount,
-        ancienne_dette_avant_facture: ancienneDette,
-        montant_credit_actuel: creditActuel,
-        montant_restant_du_global: montantRestantDuGlobal,
-        payments: paymentsList,
-        is_deferred: isDeferred,
-        status: isDeferred ? 'A_LIVRER' : 'COMPLET',
-        lines: [...cart],
-        emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieEmballageRows.map(e => ({
-          code: e.code,
-          designation: e.designation,
-          precedent: e.precedent,
-          facture: e.facture,
-          sortie: e.facture,
-          rendus: e.rendus,
-          retour: e.rendus,
-          reste: e.reste,
-          net_du: e.reste
-        })) : undefined
-      }
-
-      setCurrentSale(newSale)
-      setPrintFormat('factureA4')
-      setShowInvoiceModal(true)
-      clearCart()
-      setBrasserieRetours({})
-      toast.success('Vente enregistrée avec succès !', `Réf : ${orderNum}`)
-    } catch (err: any) {
-      toast.error('Erreur validation vente', err.message)
-    } finally {
-      setPaying(false)
-    }
+    })()
   }
+
 
   // ─── Facture d'Avoir Réelle avec Supabase ──────────────────────────────────
 

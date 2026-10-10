@@ -173,9 +173,10 @@ export async function fetchHubFinancialMetrics(
       .from('sales_orders')
       .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status')
       .eq('company_id', companyId)
+      .gte('created_at', monthStartStr)
       .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
       .order('created_at', { ascending: false })
-      .limit(2000);
+      .limit(1000);
 
     if (salesList && salesList.length > 0) {
       for (const item of salesList) {
@@ -225,8 +226,9 @@ export async function fetchHubFinancialMetrics(
       .from('depenses')
       .select('id, montant, date_depense, created_at, secteur_id')
       .eq('company_id', companyId)
+      .gte('created_at', monthStartStr)
       .order('created_at', { ascending: false })
-      .limit(1000);
+      .limit(500);
 
     // Récupérer la table secteurs pour mapper secteur_id UUID vers slug
     const { data: secList } = await supabase

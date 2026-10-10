@@ -136,6 +136,10 @@ const ClientsPage: React.FC = () => {
   const [customers, setCustomers] = useState<Customer[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [page, setPage] = useState(0)
+  const PAGE_SIZE = 20
+  const [totalCount, setTotalCount] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
   const [filterDebtorsOnly, setFilterDebtorsOnly] = useState(false)
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -393,8 +397,9 @@ const ClientsPage: React.FC = () => {
   const [form, setForm] = useState<CustomerFormState>(initialFormState)
 
   // Chargement des dettes et paiements réels depuis Supabase
-  const loadDebtsAndPayments = useCallback(async () => {
-    if (!currentCompanyId) return
+  // Filtre sur les clients actuellement affichés (page courante)
+  const loadDebtsAndPayments = useCallback(async (clientIds: string[]) => {
+    if (!currentCompanyId || clientIds.length === 0) return
     const activeSector = currentSectorSlug || 'boutique'
     try {
       const [debtsRes, paymentsRes] = await Promise.all([
@@ -403,12 +408,14 @@ const ClientsPage: React.FC = () => {
           .select('*')
           .eq('company_id', currentCompanyId)
           .eq('sector_code', activeSector)
+          .in('client_id', clientIds)
           .order('created_at', { ascending: false }),
         supabase
           .from('debt_payments')
           .select('*')
           .eq('company_id', currentCompanyId)
           .eq('sector_code', activeSector)
+          .in('client_id', clientIds)
           .order('payment_date', { ascending: false })
       ])
 
@@ -454,10 +461,18 @@ const ClientsPage: React.FC = () => {
     setLoading(true)
     try {
       // Isolation stricte multi-secteurs garantie par supabaseTenant
-      const { data, error } = await supabaseTenant('clients')
-        .select('*')
-        .neq('is_active', false)
+      let query = supabaseTenant('clients')
+        .select('id, code, name, ifu_number, phone, email, address, city, credit_limit, current_debt, payment_terms_days, credit_authorized, discount_eligible, discount_rate, is_active', { count: 'exact' })
+        .eq('is_active', true)
         .order('name')
+        .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
+
+      if (search.trim()) {
+        const s = search.trim()
+        query = query.or(`name.ilike.%${s}%,phone.ilike.%${s}%,code.ilike.%${s}%`)
+      }
+
+      const { data, error, count } = await query
 
       if (error) throw error
 
@@ -477,18 +492,40 @@ const ClientsPage: React.FC = () => {
       })
 
       setCustomers(mapped)
-      await loadDebtsAndPayments()
+      setTotalCount(count || 0)
+      setHasMore((count || 0) > (page + 1) * PAGE_SIZE)
+
+      // Charger les dettes uniquement pour les clients de la page courante
+      const ids = mapped.map((c) => c.id)
+      if (ids.length > 0) {
+        await loadDebtsAndPayments(ids)
+      } else {
+        setDebtsByClient({})
+        setPayments([])
+        setPaymentsByClient({})
+      }
     } catch (err: any) {
       toast.error('Erreur chargement clients', err.message)
       setCustomers([])
     } finally {
       setLoading(false)
     }
-  }, [currentCompanyId, supabaseTenant, loadDebtsAndPayments, toast])
+  }, [currentCompanyId, supabaseTenant, loadDebtsAndPayments, toast, page, search, PAGE_SIZE])
 
+  // Réinitialiser la page à 0 quand la recherche change
   useEffect(() => {
-    loadCustomers()
-  }, [loadCustomers])
+    setPage(0)
+  }, [search])
+
+  // Recharger les clients quand page ou search change (debounce 300ms pour search)
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      loadCustomers()
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [page, search, loadCustomers])
+
+
 
   // Calcul précis des créances d'un client (client_debts + debt_payments + legacy)
   const getCustomerDetteInfo = useCallback((cust: Customer) => {
@@ -1043,8 +1080,9 @@ const ClientsPage: React.FC = () => {
             <p className="text-slate-400 text-sm">Créez vos clients ou utilisez le client comptoir par défaut.</p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-600">
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-700 uppercase">
                 <tr>
                   <th className="px-5 py-3.5">Client</th>
@@ -1164,8 +1202,37 @@ const ClientsPage: React.FC = () => {
               </tbody>
             </table>
           </div>
-        )}
-      </div>
+
+          {/* Contrôles de Pagination Serveur (Norme Performance 20/page) */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-6 py-4 border-t border-slate-100 bg-slate-50/50">
+            <div className="text-xs font-medium text-slate-500">
+              Affichage de <span className="font-bold text-slate-800">{customers.length}</span> sur <span className="font-bold text-slate-800">{totalCount}</span> client(s) — Page <span className="font-bold text-emerald-700">{page + 1}</span> sur {Math.max(1, Math.ceil(totalCount / PAGE_SIZE))}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+                disabled={page === 0 || loading}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm"
+              >
+                ← Précédent
+              </button>
+              <div className="text-xs font-bold text-slate-700 px-2">
+                {page + 1}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPage((p) => p + 1)}
+                disabled={!hasMore || loading}
+                className="px-3.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed transition shadow-sm"
+              >
+                Suivant →
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
 
       {/* MODAL 1: Création Client avec Logique Crédit et Réduction */}
       {showModal && (

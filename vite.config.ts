@@ -31,6 +31,18 @@ export default defineConfig({
     // Identifiant unique de chaque build — change à chaque déploiement Vercel
     // Utilisé pour détecter un nouveau déploiement et forcer un rechargement propre
     __APP_VERSION__: JSON.stringify(`${Date.now()}`),
-  }
+  },
+  build: {
+    chunkSizeWarningLimit: 1000,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+          supabase: ['@supabase/supabase-js'],
+          router: ['react-router-dom'],
+        },
+      },
+    },
+  },
 })
 
