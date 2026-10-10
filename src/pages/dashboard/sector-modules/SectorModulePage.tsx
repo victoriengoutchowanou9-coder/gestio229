@@ -251,6 +251,7 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
           tableName={config.table}
           moduleTitle={config.title}
           sectorSlug={sectorSlug || 'global'}
+          fields={config.fields}
           onRetry={load}
           isRetrying={loading}
         />

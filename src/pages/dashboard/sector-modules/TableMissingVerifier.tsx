@@ -10,6 +10,7 @@ interface TableMissingVerifierProps {
   tableName: string
   moduleTitle: string
   sectorSlug: string
+  fields?: Array<{ key: string; type?: string; money?: boolean }>
   onRetry: () => void
   isRetrying: boolean
 }
@@ -18,6 +19,7 @@ export const TableMissingVerifier: React.FC<TableMissingVerifierProps> = ({
   tableName,
   moduleTitle,
   sectorSlug,
+  fields,
   onRetry,
   isRetrying,
 }) => {
@@ -25,24 +27,53 @@ export const TableMissingVerifier: React.FC<TableMissingVerifierProps> = ({
   const [showSql, setShowSql] = useState(false)
   const { toast } = useUIStore() as any
 
-  // Script SQL minimal et complet dédié à cette table précise
-  const singleTableSql = `-- Création de la table ${tableName} pour GESTIO 229
+  // Génération dynamique des colonnes métier
+  const columnsSql = (fields || [])
+    .map((f) => {
+      let sqlType = 'TEXT'
+      if (f.type === 'number' || f.money) sqlType = 'NUMERIC(15,2) DEFAULT 0'
+      else if (f.type === 'boolean') sqlType = 'BOOLEAN DEFAULT FALSE'
+      else if (f.type === 'date') sqlType = 'DATE DEFAULT CURRENT_DATE'
+      return `    ${f.key} ${sqlType},`
+    })
+    .join('\n')
+
+  const alterColumnsSql = (fields || [])
+    .map((f) => {
+      let sqlType = 'TEXT'
+      if (f.type === 'number' || f.money) sqlType = 'NUMERIC(15,2) DEFAULT 0'
+      else if (f.type === 'boolean') sqlType = 'BOOLEAN DEFAULT FALSE'
+      else if (f.type === 'date') sqlType = 'DATE DEFAULT CURRENT_DATE'
+      return `ALTER TABLE public.${tableName} ADD COLUMN IF NOT EXISTS ${f.key} ${sqlType};`
+    })
+    .join('\n')
+
+  // Script SQL complet avec toutes les colonnes requises
+  const singleTableSql = `-- ==============================================================================
+-- CRÉATION COMPLÈTE DE LA TABLE ${tableName} POUR GESTIO 229
+-- ==============================================================================
 CREATE TABLE IF NOT EXISTS public.${tableName} (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE,
     sector_slug TEXT DEFAULT '${sectorSlug}',
+${columnsSql}
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
 ALTER TABLE public.${tableName} ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE;
 ALTER TABLE public.${tableName} ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT '${sectorSlug}';
 ALTER TABLE public.${tableName} ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW();
 ALTER TABLE public.${tableName} ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+${alterColumnsSql}
+
 ALTER TABLE public.${tableName} ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "company_isolation" ON public.${tableName};
 CREATE POLICY "company_isolation" ON public.${tableName} FOR ALL
   USING (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1))
-  WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));`
+  WITH CHECK (company_id = (SELECT company_id FROM public.user_profiles WHERE auth_user_id = auth.uid() LIMIT 1));
+
+CREATE INDEX IF NOT EXISTS idx_${tableName}_c_s ON public.${tableName}(company_id, sector_slug);`
 
   const handleCopy = () => {
     navigator.clipboard.writeText(singleTableSql)
