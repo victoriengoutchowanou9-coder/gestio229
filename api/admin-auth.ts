@@ -86,17 +86,18 @@ function secureCompare(a: string, b: string): boolean {
 
 // ─── Vérification du mot de passe (hash SHA-256 ou texte via env) ─────────
 function verifyPassword(input: string): boolean {
-  const adminPasswordHash = process.env.ADMIN_PASSWORD_HASH || ''
-  const adminPasswordPlain = process.env.ADMIN_PASSWORD || ''
+  const adminPasswordHash = (process.env.ADMIN_PASSWORD_HASH || '').trim()
+  const adminPasswordPlain = (process.env.ADMIN_PASSWORD || '').trim()
+  const cleanInput = (input || '').trim()
 
   if (adminPasswordHash) {
-    // Méthode préférée : comparaison via hash SHA-256
-    const inputHash = crypto.createHash('sha256').update(input).digest('hex')
-    return secureCompare(inputHash, adminPasswordHash.toLowerCase())
+    // Méthode hash SHA-256
+    const inputHash = crypto.createHash('sha256').update(cleanInput).digest('hex')
+    return secureCompare(inputHash.toLowerCase(), adminPasswordHash.toLowerCase())
   }
   if (adminPasswordPlain) {
-    // Fallback : comparaison texte (non recommandé en production)
-    return secureCompare(input, adminPasswordPlain)
+    // Méthode texte en clair
+    return secureCompare(cleanInput, adminPasswordPlain)
   }
   return false
 }
@@ -151,22 +152,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Récupérer les identifiants depuis les variables d'environnement UNIQUEMENT
-  const adminUsername = process.env.ADMIN_USERNAME || ''
+  const adminUsername = (process.env.ADMIN_USERNAME || '').trim()
 
   if (!adminUsername) {
-    // Variables non configurées
+    // Variables non configurées sur Vercel
     console.error('[AdminAuth] ADMIN_USERNAME non défini dans les variables d\'environnement.')
-    return res.status(500).json({ success: false, error: 'Configuration serveur incomplète.' })
+    return res.status(500).json({ success: false, error: 'Configuration serveur incomplète : ADMIN_USERNAME absent.' })
   }
 
-  // Vérification des identifiants (timing-safe)
-  const usernameMatch = secureCompare(String(username).trim(), adminUsername)
+  // Vérification de l'identifiant (insensible à la casse et sans espaces parasites)
+  const usernameMatch = secureCompare(String(username).trim().toLowerCase(), adminUsername.toLowerCase())
   const passwordMatch = verifyPassword(String(password))
 
   if (!usernameMatch || !passwordMatch) {
     await logAdminAction('ECHEC_CONNEXION', 'failure', { attemptedUser: '[masqué]' }, clientIp)
     // Délai artificiel pour freiner les attaques par force brute
-    await new Promise((r) => setTimeout(r, 300 + Math.random() * 400))
+    await new Promise((r) => setTimeout(r, 200 + Math.random() * 200))
     return res.status(401).json({ success: false, error: 'Identifiant ou mot de passe incorrect.' })
   }
 
