@@ -1,4 +1,4 @@
 @echo off
 git add -A
-git commit -m "feat(caisse): rapport PDF par email via Brevo, destinataires, cron 23h et securite admin"
+git commit -m "feat(caisse): transition complete vers Gmail SMTP Nodemailer pour rapports PDF et ajout bouton test direct"
 git push origin main

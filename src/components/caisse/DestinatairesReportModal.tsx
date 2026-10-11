@@ -1,5 +1,6 @@
 // =============================================================================
 // GESTIO 229 SaaS — Configuration Destinataires Rapport de Caisse (Admin)
+// Gestion des emails et outil de test Gmail SMTP en direct
 // =============================================================================
 
 import React, { useState, useEffect } from 'react'
@@ -14,7 +15,9 @@ import {
   RefreshCw,
   X,
   Send,
-  AlertCircle
+  AlertCircle,
+  Check,
+  Zap
 } from 'lucide-react'
 import { ModalPortal } from '../modals/ModalPortal'
 import {
@@ -46,6 +49,11 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
+  // États pour le Test Gmail SMTP
+  const [testEmailInput, setTestEmailInput] = useState('victoriengoutchowanou9@gmail.com')
+  const [testingSmtp, setTestingSmtp] = useState(false)
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+
   const loadData = async () => {
     if (!companyId) return
     setLoading(true)
@@ -62,6 +70,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
       loadData()
       setErrorMessage(null)
       setSuccessMessage(null)
+      setTestResult(null)
     }
   }, [isOpen, companyId])
 
@@ -103,11 +112,51 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
     }
   }
 
+  // ─── Test direct de la configuration Gmail SMTP ────────────────────────────
+  const handleTestSmtp = async () => {
+    const target = testEmailInput.trim()
+    if (!target || !target.includes('@')) {
+      setTestResult({ success: false, message: 'Veuillez saisir une adresse email de test valide.' })
+      return
+    }
+
+    setTestingSmtp(true)
+    setTestResult(null)
+
+    try {
+      const response = await fetch('/api/test-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ testEmail: target })
+      })
+
+      const data = await response.json()
+      if (response.ok && data.success) {
+        setTestResult({
+          success: true,
+          message: data.message || `Email de test envoyé avec succès à ${target} !`
+        })
+      } else {
+        setTestResult({
+          success: false,
+          message: data.error || 'Échec du test de connexion Gmail SMTP.'
+        })
+      }
+    } catch (err: any) {
+      setTestResult({
+        success: false,
+        message: err?.message || 'Erreur réseau lors de l\'appel de test SMTP.'
+      })
+    } finally {
+      setTestingSmtp(false)
+    }
+  }
+
   if (!isAdmin) return null
 
   return (
     <ModalPortal isOpen={isOpen} onClose={onClose} id="modal-destinataires-report">
-      <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-xl w-full border border-slate-200 max-h-[90vh] flex flex-col">
+      <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-xl w-full border border-slate-200 max-h-[92vh] flex flex-col">
         {/* Header */}
         <div className="flex justify-between items-start pb-4 border-b border-slate-100">
           <div>
@@ -120,7 +169,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
                   Destinataires du Rapport de Caisse
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Envoi automatique à 23h00 et transmission instantanée du PDF
+                  Envoi automatique Gmail SMTP à 23h00 et transmission manuelle du PDF
                 </p>
               </div>
             </div>
@@ -159,16 +208,16 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
           </div>
         )}
 
-        {/* Formulaire d'ajout */}
-        <form onSubmit={handleAdd} className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 mb-4">
+        {/* Formulaire d'ajout de destinataire */}
+        <form onSubmit={handleAdd} className="bg-indigo-50/50 border border-indigo-100 rounded-2xl p-4 mb-3">
           <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-2 flex items-center gap-1.5">
             <UserPlus className="w-3.5 h-3.5 text-indigo-600" />
-            Ajouter un destinataire
+            Ajouter un destinataire officiel
           </h4>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <input
               type="text"
-              placeholder="Nom (ex: Directeur, Expert-Comptable...)"
+              placeholder="Nom (ex: Directeur, Comptable...)"
               value={nomInput}
               onChange={(e) => setNomInput(e.target.value)}
               className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-indigo-500 focus:outline-none"
@@ -202,23 +251,23 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
         </form>
 
         {/* Liste des Destinataires */}
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[140px] max-h-[220px]">
           <div className="flex items-center justify-between text-xs text-slate-500 font-bold px-1 mb-1">
             <span>Destinataires enregistrés ({destinataires.length})</span>
             {loading && <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />}
           </div>
 
           {destinataires.length === 0 ? (
-            <div className="p-8 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400 text-xs">
-              <Mail className="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p className="font-semibold text-slate-600">Aucun destinataire configuré pour le moment</p>
-              <p className="mt-1">Ajoutez les adresses emails de la direction ou de la comptabilité ci-dessus.</p>
+            <div className="p-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400 text-xs">
+              <Mail className="w-7 h-7 mx-auto mb-1.5 opacity-40" />
+              <p className="font-semibold text-slate-600">Aucun destinataire configuré</p>
+              <p className="mt-0.5">Ajoutez ci-dessus les emails qui recevront le rapport quotidien.</p>
             </div>
           ) : (
             destinataires.map((dest) => (
               <div
                 key={dest.id}
-                className={`p-3 rounded-2xl border transition flex items-center justify-between gap-3 ${
+                className={`p-2.5 rounded-2xl border transition flex items-center justify-between gap-3 ${
                   dest.actif
                     ? 'bg-white border-slate-200 shadow-sm'
                     : 'bg-slate-50 border-slate-200 opacity-60'
@@ -280,15 +329,74 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
           )}
         </div>
 
+        {/* ── Section Outil de Test Gmail SMTP ── */}
+        <div className="mt-3 p-3.5 bg-slate-900 text-white rounded-2xl space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold flex items-center gap-1.5 text-emerald-400">
+              <Zap className="w-3.5 h-3.5" />
+              Tester la configuration Gmail SMTP
+            </span>
+            <span className="text-[10px] text-slate-400 font-mono">
+              smtp.gmail.com:587
+            </span>
+          </div>
+
+          <div className="flex gap-2">
+            <input
+              type="email"
+              value={testEmailInput}
+              onChange={(e) => setTestEmailInput(e.target.value)}
+              placeholder="Adresse email de réception du test..."
+              className="flex-1 px-3 py-1.5 bg-slate-800 border border-slate-700 rounded-xl text-xs text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+            <button
+              type="button"
+              onClick={handleTestSmtp}
+              disabled={testingSmtp}
+              className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer shrink-0"
+              title="Envoyer un email test pour valider les paramètres SMTP Vercel"
+            >
+              {testingSmtp ? (
+                <>
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Test en cours...
+                </>
+              ) : (
+                <>
+                  <Send className="w-3.5 h-3.5" /> Tester l'envoi
+                </>
+              )}
+            </button>
+          </div>
+
+          {testResult && (
+            <div
+              className={`p-2 rounded-xl text-xs flex items-start gap-1.5 ${
+                testResult.success
+                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                  : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+              }`}
+            >
+              {testResult.success ? (
+                <Check className="w-4 h-4 shrink-0 mt-0.5" />
+              ) : (
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              )}
+              <div className="flex-1 break-words">
+                <span>{testResult.message}</span>
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Footer */}
-        <div className="pt-4 border-t border-slate-100 mt-4 flex items-center justify-between">
+        <div className="pt-3 border-t border-slate-100 mt-3 flex items-center justify-between">
           <p className="text-[11px] text-slate-400">
             {destinataires.filter((d) => d.actif).length} destinataire(s) actif(s) sur {destinataires.length}
           </p>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition"
+            className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition cursor-pointer"
           >
             Fermer
           </button>

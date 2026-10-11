@@ -1,10 +1,11 @@
 // =============================================================================
 // GESTIO 229 ERP — Vercel Cron Job Quotidien : GET /api/cron-rapport-caisse
-// Déclenché tous les soirs à 23h00 pour expédier le rapport sans clic
+// Déclenché tous les soirs à 23h00 pour expédier le rapport via Gmail SMTP
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
+import nodemailer from 'nodemailer'
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
@@ -14,16 +15,39 @@ function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
 }
 
-export default async function handler(req: VercelRequest, res: VercelResponse) {
-  console.log('[cron-rapport-caisse] ⏰ Démarrage du Cron Job Quotidien de 23h00...')
+function getTransporter() {
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com'
+  const port = Number(process.env.SMTP_PORT) || 587
+  const user = process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
+  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '')
 
-  const brevoApiKey = process.env.BREVO_API_KEY
-  if (!brevoApiKey) {
-    console.error('[cron-rapport-caisse] ❌ Clé BREVO_API_KEY non configurée.')
-    return res.status(500).json({
-      success: false,
-      error: 'BREVO_API_KEY manquante sur Vercel'
-    })
+  if (!pass) {
+    throw new Error('Variable SMTP_PASS manquante sur Vercel. Impossible d\'envoyer le rapport automatique.')
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: false, // 587 STARTTLS
+    auth: {
+      user,
+      pass
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  })
+}
+
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  console.log('[cron-rapport-caisse] ⏰ Démarrage du Cron Job Quotidien de 23h00 via Gmail SMTP...')
+
+  let transporter: nodemailer.Transporter
+  try {
+    transporter = getTransporter()
+  } catch (err: any) {
+    console.error('[cron-rapport-caisse] ❌ Configuration SMTP incomplète :', err.message)
+    return res.status(500).json({ success: false, error: err.message })
   }
 
   try {
@@ -46,6 +70,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const heureFormatted = '23:00'
     const results: any[] = []
 
+    const fromName = process.env.SMTP_FROM_NAME || 'GESTIO229'
+    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou9@gmail.com'
+    const fromHeader = `"${fromName}" <${fromEmail}>`
+    const subject = `Rapport Caisse GESTIO 229 - ${dateFormatted}`
+
     // 2. Parcourir chaque entreprise
     for (const company of companies) {
       try {
@@ -56,19 +85,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('company_id', company.id)
           .eq('actif', true)
 
-        let recipients = (destinataires || []).map((d) => ({
-          email: (d.email || '').trim().toLowerCase(),
-          name: d.nom || d.email.split('@')[0]
-        })).filter((r) => r.email.includes('@'))
+        let recipients = (destinataires || []).map((d) => (d.email || '').trim().toLowerCase()).filter((e) => e.includes('@'))
 
-        // Fallback sur l'email de l'entreprise si aucun destinataire
+        // Fallback sur l'email de l'entreprise ou SMTP_FROM_EMAIL
         if (recipients.length === 0 && company.email) {
-          recipients = [{ email: company.email.trim().toLowerCase(), name: company.name || 'Direction' }]
+          recipients = [company.email.trim().toLowerCase()]
         }
-
         if (recipients.length === 0) {
-          console.log(`[cron-rapport-caisse] Entreprise ${company.name} : aucun destinataire configuré.`)
-          continue
+          recipients = [fromEmail]
         }
 
         // B. Chiffre d'Affaires du jour & marge brute depuis sales_orders
@@ -181,7 +205,7 @@ TOP DES 5 MEILLEURS PRODUITS VENDUS :
 -------------------------------------
 ${top5Text}
 
-Rapport généré et envoyé automatiquement par le service d'arrêté de caisse GESTIO 229 à 23h00.
+Rapport généré et envoyé automatiquement par le service d'arrêté de caisse GESTIO 229 à 23h00 via Gmail SMTP.
         `.trim()
 
         const top5RowsHtml = top5.length > 0
@@ -266,35 +290,21 @@ Rapport généré et envoyé automatiquement par le service d'arrêté de caisse
 </html>
         `.trim()
 
-        // H. Envoi Brevo
-        const brevoPayload = {
-          sender: {
-            name: 'GESTIO 229',
-            email: process.env.BREVO_SENDER_EMAIL || 'notification@gestio229.com'
-          },
-          to: recipients,
-          subject: `Rapport Caisse GESTIO - ${dateFormatted}`,
-          htmlContent: htmlBody,
-          textContent: textBody
+        // H. Envoi Gmail SMTP via Nodemailer
+        const mailOptions = {
+          from: fromHeader,
+          to: recipients.join(', '),
+          subject,
+          text: textBody,
+          html: htmlBody
         }
 
-        const bRes = await fetch('https://api.brevo.com/v3/smtp/email', {
-          method: 'POST',
-          headers: {
-            accept: 'application/json',
-            'api-key': brevoApiKey,
-            'content-type': 'application/json'
-          },
-          body: JSON.stringify(brevoPayload)
-        })
-
-        const bJson = await bRes.json().catch(() => ({}))
+        const info = await transporter.sendMail(mailOptions)
         results.push({
           company: company.name,
-          recipients: recipients.map((r) => r.email),
-          status: bRes.ok ? 'sent' : 'failed',
-          messageId: bJson?.messageId,
-          error: bRes.ok ? null : bJson?.message
+          recipients,
+          status: 'sent',
+          messageId: info.messageId
         })
       } catch (cErr: any) {
         console.error(`[cron-rapport-caisse] Erreur entreprise ${company.name} :`, cErr)

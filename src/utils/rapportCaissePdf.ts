@@ -375,7 +375,7 @@ export async function envoyerRapportCaisseMail(params: {
 
     return {
       success: true,
-      message: result.message || 'Rapport transmis avec succès par Brevo !',
+      message: result.message || 'Rapport transmis avec succès via Gmail SMTP !',
       recipients: result.recipients || emails || []
     }
   } catch (err: any) {

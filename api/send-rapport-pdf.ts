@@ -1,10 +1,11 @@
 // =============================================================================
 // GESTIO 229 ERP — Vercel Serverless Function : POST /api/send-rapport-pdf
-// Envoi du Rapport de Caisse PDF via Brevo API (SMTP transactionnel)
+// Envoi du Rapport de Caisse PDF via Gmail SMTP (Nodemailer)
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
+import nodemailer from 'nodemailer'
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
@@ -12,6 +13,30 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
+}
+
+function getTransporter() {
+  const host = process.env.SMTP_HOST || 'smtp.gmail.com'
+  const port = Number(process.env.SMTP_PORT) || 587
+  const user = process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
+  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '')
+
+  if (!pass) {
+    throw new Error('Configuration manquante : variable SMTP_PASS non définie sur Vercel. Veuillez configurer le mot de passe d\'application Gmail dans les variables d\'environnement.')
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    secure: false, // Port 587 utilise STARTTLS
+    auth: {
+      user,
+      pass
+    },
+    tls: {
+      rejectUnauthorized: false
+    }
+  })
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -26,7 +51,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method !== 'POST') {
-    return res.status(455 || 405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST.' })
+    return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST.' })
   }
 
   try {
@@ -40,26 +65,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       metadata = {}
     } = req.body || {}
 
-    const brevoApiKey = process.env.BREVO_API_KEY
-
-    if (!brevoApiKey) {
-      console.warn('[send-rapport-pdf] BREVO_API_KEY non définie dans les variables d\'environnement.')
-      return res.status(500).json({
-        success: false,
-        error: 'Configuration manquante : BREVO_API_KEY n\'est pas définie sur Vercel. Veuillez ajouter votre clé API Brevo dans les variables d\'environnement du projet Vercel.'
-      })
+    // 1. Initialiser le transporteur Nodemailer
+    let transporter: nodemailer.Transporter
+    try {
+      transporter = getTransporter()
+    } catch (cfgErr: any) {
+      return res.status(500).json({ success: false, error: cfgErr.message })
     }
 
-    // 1. Récupérer les destinataires actifs
-    const targetRecipients: Array<{ email: string; name?: string }> = []
+    // 2. Récupérer les destinataires actifs depuis parametres_destinataires (où actif = true)
+    const targetEmails: string[] = []
     const seenEmails = new Set<string>()
 
-    // A. Depuis la table parametres_destinataires si companyId fourni
     if (companyId) {
       try {
         const { data: dbDest, error: dbErr } = await supabase
           .from('parametres_destinataires')
-          .select('email, nom')
+          .select('email, nom, actif')
           .eq('company_id', companyId)
           .eq('actif', true)
 
@@ -68,7 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             const em = (d.email || '').trim().toLowerCase()
             if (em && em.includes('@') && !seenEmails.has(em)) {
               seenEmails.add(em)
-              targetRecipients.push({ email: em, name: d.nom || em.split('@')[0] })
+              targetEmails.push(em)
             }
           })
         }
@@ -77,19 +99,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // B. Destinataires supplémentaires passés dans la requête
+    // Destinataires supplémentaires passés en paramètre
     if (Array.isArray(customEmails)) {
       customEmails.forEach((raw) => {
         const em = (raw || '').trim().toLowerCase()
         if (em && em.includes('@') && !seenEmails.has(em)) {
           seenEmails.add(em)
-          targetRecipients.push({ email: em, name: em.split('@')[0] })
+          targetEmails.push(em)
         }
       })
     }
 
-    // C. Si aucun destinataire trouvé, chercher l'email de l'entreprise
-    if (targetRecipients.length === 0 && companyId) {
+    // Si aucun destinataire trouvé, repli sur l'email de l'entreprise
+    if (targetEmails.length === 0 && companyId) {
       try {
         const { data: comp } = await supabase
           .from('companies')
@@ -101,20 +123,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const em = comp.email.trim().toLowerCase()
           if (!seenEmails.has(em)) {
             seenEmails.add(em)
-            targetRecipients.push({ email: em, name: comp.name || 'Direction' })
+            targetEmails.push(em)
           }
         }
       } catch (_) {}
     }
 
-    if (targetRecipients.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Aucun destinataire actif configuré. Veuillez ajouter au moins un email actif dans les paramètres des destinataires.'
-      })
+    // Si toujours aucun destinataire, utiliser SMTP_FROM_EMAIL comme secours
+    if (targetEmails.length === 0) {
+      const fallbackEmail = process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
+      targetEmails.push(fallbackEmail)
     }
 
-    // 2. Préparation du résumé textuel et HTML
+    // 3. Préparation des données du rapport
     const dateFormatted = date || new Date().toLocaleDateString('fr-BJ')
     const heureFormatted = heure || new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
     const caissier = metadata.nomCaissier || metadata.operateur || 'Caissier Principal'
@@ -133,8 +154,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       : '  Aucune vente enregistrée aujourd\'hui.'
 
     const textBody = `
-RAPPORT DE CAISSE JOURNALIER - GESTIO 229
-==========================================
+RAPPORT DE CAISSE GESTIO 229
+============================
 Date : ${dateFormatted}
 Heure : ${heureFormatted}
 Caissier : ${caissier}
@@ -142,7 +163,7 @@ Secteur : ${secteur}
 
 SYNTHÈSE FINANCIÈRE DE LA JOURNÉE :
 -----------------------------------
-- Chiffre d'Affaires (CA) du jour : ${formatFCFA(ca)}
+- Chiffre d'Affaires du jour (CA) : ${formatFCFA(ca)}
 - Caisse Espèces du jour : ${formatFCFA(espJour)}
 - Caisse MoMo du jour : ${formatFCFA(momoJour)}
 - Fond Actuel (Persistant) : ${formatFCFA(fondActuel)}
@@ -154,11 +175,11 @@ TOP DES 5 MEILLEURS PRODUITS VENDUS :
 -------------------------------------
 ${top5Text}
 
-Le rapport officiel complet au format PDF est disponible en pièce jointe de cet email.
+Veuillez trouver le rapport officiel certifié complet en pièce jointe au format PDF.
 
 --
 GESTIO 229 ERP & SaaS
-Solution de Gestion Intégrée Multi-Activités
+Solution de Gestion Intégrée Multi-Activités (Bénin & UEMOA)
 www.gestio229.com
     `.trim()
 
@@ -178,7 +199,7 @@ www.gestio229.com
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Rapport Caisse GESTIO - ${dateFormatted}</title>
+  <title>Rapport Caisse GESTIO 229 - ${dateFormatted}</title>
 </head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
   <div style="max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
@@ -190,13 +211,13 @@ www.gestio229.com
     </div>
 
     <!-- Métadonnées -->
-    <div style="padding: 18px 24px; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; display: flex; font-size: 12px; color: #475569;">
-      <div style="flex: 1;">
-        <span style="color: #64748b;">Caissier :</span> <strong style="color: #0f172a;">${caissier}</strong>
-      </div>
-      <div style="flex: 1; text-align: right;">
-        <span style="color: #64748b;">Date & Heure :</span> <strong style="color: #0f172a;">${dateFormatted} à ${heureFormatted}</strong>
-      </div>
+    <div style="padding: 16px 24px; background: #f1f5f9; border-bottom: 1px solid #e2e8f0; font-size: 12px; color: #475569;">
+      <table style="width: 100%;">
+        <tr>
+          <td><span style="color: #64748b;">Caissier :</span> <strong style="color: #0f172a;">${caissier}</strong></td>
+          <td style="text-align: right;"><span style="color: #64748b;">Date & Heure :</span> <strong style="color: #0f172a;">${dateFormatted} à ${heureFormatted}</strong></td>
+        </tr>
+      </table>
     </div>
 
     <!-- Synthèse financière KPI -->
@@ -253,8 +274,8 @@ www.gestio229.com
       </table>
 
       <!-- Note PJ -->
-      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 14px; display: flex; align-items: center; font-size: 12px; color: #166534;">
-        <span>📎 <strong>Document PDF joint :</strong> Le rapport officiel détaillé et certifié est disponible en pièce jointe de cet email.</span>
+      <div style="background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 12px; padding: 14px; font-size: 12px; color: #166534;">
+        📎 <strong>Document PDF joint :</strong> Le rapport officiel certifié complet est disponible en pièce jointe de cet email.
       </div>
     </div>
 
@@ -268,72 +289,50 @@ www.gestio229.com
 </html>
     `.trim()
 
-    // 3. Construction du payload Brevo v3
-    const subject = `Rapport Caisse GESTIO - ${dateFormatted}`
-    const sender = {
-      name: 'GESTIO 229',
-      email: process.env.BREVO_SENDER_EMAIL || 'notification@gestio229.com'
-    }
+    // 4. Configuration de l'expéditeur et de l'objet
+    const fromName = process.env.SMTP_FROM_NAME || 'GESTIO229'
+    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou9@gmail.com'
+    const fromHeader = `"${fromName}" <${fromEmail}>`
+    const subject = `Rapport Caisse GESTIO 229 - ${dateFormatted}`
 
     const cleanSectorFileName = (secteur || 'Caisse').replace(/[^a-zA-Z0-9]/g, '_')
     const fileName = `Rapport_Caisse_${cleanSectorFileName}_${dateFormatted.replace(/\//g, '-')}.pdf`
 
-    const brevoPayload: any = {
-      sender,
-      to: targetRecipients.map((r) => ({ email: r.email, name: r.name })),
-      subject,
-      htmlContent: htmlBody,
-      textContent: textBody
-    }
-
-    // Ajouter la pièce jointe PDF si présente
+    // Pièce jointe PDF
+    const attachments: any[] = []
     if (pdfBase64) {
-      // Retirer l'éventuel préfixe "data:application/pdf;base64,"
       const cleanBase64 = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64
-      brevoPayload.attachment = [
-        {
-          name: fileName,
-          content: cleanBase64
-        }
-      ]
-    }
-
-    // 4. Appel de l'API Brevo v3
-    const brevoRes = await fetch('https://api.brevo.com/v3/smtp/email', {
-      method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'api-key': brevoApiKey,
-        'content-type': 'application/json'
-      },
-      body: JSON.stringify(brevoPayload)
-    })
-
-    const brevoData = await brevoRes.json().catch(() => ({}))
-
-    if (!brevoRes.ok) {
-      console.error('[send-rapport-pdf] Erreur API Brevo :', brevoRes.status, brevoData)
-      return res.status(brevoRes.status).json({
-        success: false,
-        error: brevoData?.message || `Erreur Brevo (${brevoRes.status}) : Impossible d'envoyer l'email.`,
-        details: brevoData
+      attachments.push({
+        filename: fileName,
+        content: Buffer.from(cleanBase64, 'base64'),
+        contentType: 'application/pdf'
       })
     }
 
-    const emailList = targetRecipients.map((r) => r.email)
-    console.log(`[send-rapport-pdf] ✅ Rapport envoyé avec succès à ${emailList.join(', ')} (MessageId: ${brevoData?.messageId})`)
+    // 5. Envoi via Nodemailer
+    const mailOptions = {
+      from: fromHeader,
+      to: targetEmails.join(', '),
+      subject,
+      text: textBody,
+      html: htmlBody,
+      attachments
+    }
+
+    const info = await transporter.sendMail(mailOptions)
+    console.log(`[send-rapport-pdf] ✅ Email envoyé avec succès via Gmail SMTP à ${targetEmails.join(', ')} (MessageId: ${info.messageId})`)
 
     return res.status(200).json({
       success: true,
-      message: `Rapport transmis avec succès à ${emailList.length} destinataire(s) via Brevo.`,
-      recipients: emailList,
-      messageId: brevoData?.messageId
+      message: `Rapport transmis avec succès à ${targetEmails.length} destinataire(s) via Gmail SMTP.`,
+      recipients: targetEmails,
+      messageId: info.messageId
     })
   } catch (error: any) {
-    console.error('[send-rapport-pdf] Exception non gérée :', error)
+    console.error('[send-rapport-pdf] Exception envoi Gmail SMTP :', error)
     return res.status(500).json({
       success: false,
-      error: error?.message || 'Erreur interne du serveur lors de l\'envoi du rapport.'
+      error: error?.message || 'Erreur lors de l\'envoi du rapport via Gmail SMTP.'
     })
   }
 }

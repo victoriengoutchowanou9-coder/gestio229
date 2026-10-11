@@ -1225,7 +1225,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
       const pdfBase64 = await blobToBase64(blob)
 
-      // 2. Transmettre au backend /api/send-rapport-pdf (Brevo API)
+      // 2. Transmettre au backend /api/send-rapport-pdf (Gmail SMTP)
       const res = await envoyerRapportCaisseMail({
         companyId: currentCompanyId,
         secteurId: currentSectorSlug,
@@ -1258,7 +1258,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
       toast.success(
         'Rapport PDF envoyé avec succès !',
-        `Le rapport a été expédié via Brevo aux destinataires actifs : ${updatedEmails.join(', ')}`
+        `Le rapport a été expédié via Gmail SMTP aux destinataires actifs : ${updatedEmails.join(', ')}`
       )
     } catch (err: any) {
       console.error('Erreur envoi rapport email:', err)
@@ -2258,7 +2258,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                     onClick={handleSendReportByEmail}
                     disabled={isSendingReportMail}
                     className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition disabled:opacity-50"
-                    title="Envoyer immédiatement le rapport complet avec PDF joint aux destinataires (Brevo)"
+                    title="Envoyer immédiatement le rapport complet avec PDF joint aux destinataires (Gmail SMTP)"
                   >
                     {isSendingReportMail ? (
                       <>
