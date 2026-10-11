@@ -871,13 +871,120 @@ export interface CaisseJournaliereDTO {
 }
 
 /**
+ * Formule obligatoire RÈGLE 2 GESTIO 229 :
+ * FOND ACTUEL ESPÈCES = [Somme des clôtures validées du secteur] - [Somme des Retraits ESPÈCES Trésorerie] - [Somme des Dépenses ESPÈCES]
+ * FOND ACTUEL MOMO = [Somme des clôtures validées MOMO] - [Somme des Retraits MOMO Trésorerie]
+ * Les fonds actuels sont STRICTEMENT persistants et ne dépendent jamais de la date.
+ */
+export async function calculerFondsActuelsSector(
+  companyId: string,
+  sectorSlug: string
+): Promise<{ fond_actuel_especes: number; fond_actuel_momo: number }> {
+  if (!companyId || !sectorSlug) {
+    return { fond_actuel_especes: 0, fond_actuel_momo: 0 }
+  }
+  const clean = cleanSectorSlug(sectorSlug)
+
+  try {
+    // 1. Somme de toutes les clôtures validées pour ce secteur (caisse_clotures)
+    const { data: clotures } = await supabase
+      .from('caisse_clotures')
+      .select('total_especes_jour, total_momo_jour')
+      .eq('company_id', companyId)
+      .eq('sector_slug', clean)
+
+    let totalCloturesEsp = 0
+    let totalCloturesMomo = 0
+    if (clotures && clotures.length > 0) {
+      clotures.forEach((c: any) => {
+        totalCloturesEsp += Number(c.total_especes_jour || 0)
+        totalCloturesMomo += Number(c.total_momo_jour || 0)
+      })
+    }
+
+    // 2. Somme de tous les retraits validés vers la Trésorerie pour ce secteur
+    let totalRetraitsEsp = 0
+    let totalRetraitsMomo = 0
+
+    // Vérifier treasury_transfers
+    try {
+      const { data: transfers } = await supabase
+        .from('treasury_transfers')
+        .select('amount, type, status')
+        .eq('company_id', companyId)
+        .eq('sector_slug', clean)
+        .in('status', ['APPROVED', 'VALIDE', 'valide'])
+
+      if (transfers && transfers.length > 0) {
+        transfers.forEach((t: any) => {
+          const isCash = t.type === 'Espèces' || t.type === 'especes' || t.type === 'cash'
+          const amt = Number(t.amount || 0)
+          if (isCash) totalRetraitsEsp += amt
+          else totalRetraitsMomo += amt
+        })
+      }
+    } catch (_) {}
+
+    // Vérifier également demandes_retrait si utilisé
+    try {
+      const { data: retAll } = await supabase
+        .from('demandes_retrait')
+        .select('montant, mode_paiement, statut')
+        .eq('company_id', companyId)
+        .eq('sector_slug', clean)
+        .in('statut', ['valide', 'APPROVED'])
+
+      if (retAll && retAll.length > 0) {
+        retAll.forEach((r: any) => {
+          const m = (r.mode_paiement || '').toLowerCase()
+          const amt = Number(r.montant || 0)
+          if (['espece', 'especes', 'cash'].includes(m)) totalRetraitsEsp += amt
+          else totalRetraitsMomo += amt
+        })
+      }
+    } catch (_) {}
+
+    // 3. Somme de toutes les dépenses payées depuis le fond du secteur
+    let totalDepensesEsp = 0
+    try {
+      const { data: depMvts } = await supabase
+        .from('caisse_mouvements')
+        .select('montant, type')
+        .eq('company_id', companyId)
+        .eq('sector_slug', clean)
+        .eq('type', 'depense')
+
+      if (depMvts && depMvts.length > 0) {
+        depMvts.forEach((d: any) => {
+          totalDepensesEsp += Number(d.montant || 0)
+        })
+      }
+    } catch (_) {}
+
+    const fond_actuel_especes = totalCloturesEsp - totalRetraitsEsp - totalDepensesEsp
+    const fond_actuel_momo = totalCloturesMomo - totalRetraitsMomo
+
+    return {
+      fond_actuel_especes,
+      fond_actuel_momo,
+    }
+  } catch (err) {
+    console.warn('[CAISSE-SERVICE] Erreur calculerFondsActuelsSector:', err)
+    return { fond_actuel_especes: 0, fond_actuel_momo: 0 }
+  }
+}
+
+/**
  * Récupère le Fond Actuel officiel pour un secteur et une caisse
+ * (RÈGLE 1 & 2 : Persistant, ne dépend pas de la date)
  */
 export async function getFondsActuelsBySector(
   companyId: string,
   secteurId: string,
-  caisseId?: string | null
+  caisseId?: string | null,
+  sectorSlug?: string | null
 ): Promise<FondsActuelsDTO> {
+  const clean = cleanSectorSlug(sectorSlug)
   const fallback: FondsActuelsDTO = {
     company_id: companyId,
     secteur_id: secteurId,
@@ -888,14 +995,24 @@ export async function getFondsActuelsBySector(
     fond_actuel_momo: 0,
   }
 
-  if (!companyId || !secteurId) return fallback
+  if (!companyId) return fallback
+
+  // Calcul basé sur l'historique complet persistant des clôtures et retraits
+  if (sectorSlug) {
+    const calc = await calculerFondsActuelsSector(companyId, sectorSlug)
+    fallback.fond_actuel_especes = calc.fond_actuel_especes
+    fallback.fond_actuel_momo = calc.fond_actuel_momo
+  }
 
   try {
     let query = supabase
       .from('fonds_actuels')
       .select('*')
       .eq('company_id', companyId)
-      .eq('secteur_id', secteurId)
+
+    if (secteurId) {
+      query = query.eq('secteur_id', secteurId)
+    }
 
     if (caisseId) {
       query = query.or(`caisse_id.eq.${caisseId},caisse_id.is.null`)
@@ -911,8 +1028,12 @@ export async function getFondsActuelsBySector(
         caisse_id: data.caisse_id,
         fond_initial_especes: Number(data.fond_initial_especes) || 0,
         fond_initial_momo: Number(data.fond_initial_momo) || 0,
-        fond_actuel_especes: Number(data.fond_actuel_especes ?? data.solde_actuel ?? 0),
-        fond_actuel_momo: Number(data.fond_actuel_momo ?? 0),
+        fond_actuel_especes: fallback.fond_actuel_especes !== 0
+          ? fallback.fond_actuel_especes
+          : Number(data.fond_actuel_especes ?? data.solde_actuel ?? 0),
+        fond_actuel_momo: fallback.fond_actuel_momo !== 0
+          ? fallback.fond_actuel_momo
+          : Number(data.fond_actuel_momo ?? 0),
       }
     }
   } catch (err) {

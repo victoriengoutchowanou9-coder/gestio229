@@ -501,157 +501,57 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       }
       setRepaymentsToday(repList)
 
-      // 3. Mouvements de caisse
-      const saleMovements: CashMovement[] = []
-      parsedSales.forEach((s: any) => {
-        s.parsedPayments.forEach((p: any, idx: number) => {
-          const isCash = p.method === 'cash' || p.method === 'especes'
-          const isMomo = p.method.includes('momo') || p.method.includes('wave') || p.method.includes('flooz')
-          if (p.amount > 0 && (isCash || isMomo)) {
-            saleMovements.push({
-              id: `mov-${s.id}-${idx}`,
-              created_at: s.created_at,
-              user_name: s.created_by_name || 'Vendeur / Caissier',
-              type: 'ENCAISSEMENT',
-              payment_channel: isCash ? 'Espèces' : 'MoMo',
-              amount: Number(p.amount) || 0,
-              motif: `Vente POS N° ${s.order_number || s.id.slice(0, 8)} (${p.method})`,
-              reference: s.order_number || s.id.slice(0, 8),
-              status: 'VALIDE'
-            })
-          }
-        })
-      })
-
-      const repaymentMovements: CashMovement[] = repList.map((r: any) => {
-        const isCash = ['cash', 'especes', 'espèces'].includes((r.payment_method || '').toLowerCase())
-        return {
-          id: `rep-${r.id}`,
-          created_at: r.created_at,
-          user_name: r.created_by_name || 'Caissier',
-          type: 'REMBOURSEMENT',
-          payment_channel: isCash ? 'Espèces' : 'MoMo',
-          amount: Number(r.amount) || 0,
-          motif: `Remboursement créance : ${r.customer?.name || r.customer_name || 'Client'}`,
-          reference: r.reference || `RC-${r.id.slice(0, 6)}`,
-          status: 'VALIDE'
-        }
-      })
-
-      // Charger les demandes de transfert directement depuis Supabase (treasury_transfers ou audit_logs)
-      let transferMovements: CashMovement[] = []
+      // 3. Charger l'Historique réel et persistant des mouvements de caisse (RÈGLE 4)
+      let allDbMovements: CashMovement[] = []
       try {
-        const { data: dbTransfers } = await supabase
-          .from('treasury_transfers')
+        const { data: dbMvts } = await supabase
+          .from('caisse_mouvements')
           .select('*')
           .eq('company_id', currentCompanyId)
-          .or(`sector_slug.eq.${currentSectorSlug},sector_slug.is.null`)
-          .gte('created_at', startOfDay)
+          .eq('sector_slug', currentSectorSlug)
           .order('created_at', { ascending: false })
-        if (dbTransfers && dbTransfers.length > 0) {
-          setPendingRequests(dbTransfers)
-          transferMovements = dbTransfers.map((r: any) => ({
-            id: r.id,
-            created_at: r.created_at,
-            user_name: r.requested_by,
-            type: 'RETRAIT',
-            payment_channel: r.type,
-            amount: Number(r.amount) || 0,
-            motif: `Demande transfert trésorerie : ${r.motif}`,
-            reference: `TR-${r.id.slice(0, 6)}`,
-            status: r.status === 'APPROVED' ? 'VALIDE' : r.status === 'REJECTED' ? 'REFUSE' : 'EN_ATTENTE'
-          }))
-        } else {
-          // Requête vers audit_logs pour les demandes
-          const { data: auditTransfers } = await supabase
-            .from('audit_logs')
-            .select('*')
-            .eq('company_id', currentCompanyId)
-            .eq('action', 'DEMANDE_TRANSFERT_TRESORERIE')
-            .gte('created_at', startOfDay)
-            .order('created_at', { ascending: false })
-          if (auditTransfers && auditTransfers.length > 0) {
-            const mapped = auditTransfers.map((a: any) => {
-              const det = typeof a.details === 'string' ? JSON.parse(a.details) : (a.details || {})
-              return {
-                id: a.id,
-                created_at: a.created_at,
-                requested_by: a.user_name || 'Caissier',
-                type: det.type || 'Espèces',
-                amount: Number(det.amount) || 0,
-                motif: det.motif || '',
-                status: det.status || 'EN_ATTENTE'
-              }
-            })
-            setPendingRequests(mapped)
-            transferMovements = mapped.map((r: any) => ({
-              id: r.id,
-              created_at: r.created_at,
-              user_name: r.requested_by,
-              type: 'RETRAIT',
-              payment_channel: r.type,
-              amount: r.amount,
-              motif: `Demande transfert trésorerie : ${r.motif}`,
-              reference: `TR-${r.id.slice(0, 6)}`,
-              status: r.status === 'APPROVED' ? 'VALIDE' : r.status === 'REJECTED' ? 'REFUSE' : 'EN_ATTENTE'
-            }))
-          }
-        }
-      } catch (e) {}
+          .limit(100)
 
-      // 4. Dépenses réelles du jour (déduites des fonds conformément à la règle officielle)
-      let depensesList: any[] = []
-      try {
-        const { data: dbDeps } = await supabase
-          .from('depenses')
-          .select('*')
-          .eq('company_id', currentCompanyId)
-          .gte('created_at', startOfDay)
-          .order('created_at', { ascending: false })
-        if (dbDeps && dbDeps.length > 0) {
-          depensesList = dbDeps
-        }
-      } catch (_) {}
+        if (dbMvts && dbMvts.length > 0) {
+          allDbMovements = dbMvts.map((m: any) => {
+            const isCash = (m.montant_especes > 0) || (m.type === 'especes') || (!m.montant_momo && m.sens === 'entree')
+            const isMomo = (m.montant_momo > 0) || (m.type === 'momo')
+            const channel = (isCash && isMomo) ? 'Tous' : isMomo ? 'MoMo' : 'Espèces'
 
-      try {
-        const { data: dbExps } = await supabase
-          .from('expenses')
-          .select('*')
-          .eq('company_id', currentCompanyId)
-          .gte('created_at', startOfDay)
-          .order('created_at', { ascending: false })
-        if (dbExps && dbExps.length > 0) {
-          const secExps = filterItemsForSector(dbExps, currentSectorSlug)
-          secExps.forEach((e: any) => {
-            if (!depensesList.some((d) => d.id === e.id)) {
-              depensesList.push(e)
+            let movType: CashMovement['type'] = 'ENCAISSEMENT'
+            if (m.type === 'cloture') movType = 'CLOTURE'
+            else if (m.type === 'depense' || m.sens === 'sortie') movType = 'RETRAIT'
+            else if (m.type === 'reglement_client') movType = 'REMBOURSEMENT'
+            else if (m.type === 'ajustement') movType = 'AJUSTEMENT'
+            else if (m.type === 'transfert' || m.type === 'retrait') movType = 'TRANSFERT'
+
+            return {
+              id: m.id,
+              created_at: m.created_at,
+              user_name: m.user_name || 'Caissier',
+              type: movType,
+              payment_channel: channel,
+              amount: Number(m.montant) || 0,
+              motif: m.motif || `Mouvement ${m.type}`,
+              reference: m.source_id || m.reference_id || `MVT-${m.id.slice(0, 6)}`,
+              status: 'VALIDE' as const
             }
           })
         }
-      } catch (_) {}
+      } catch (mvtErr) {
+        console.warn('Erreur chargement caisse_mouvements:', mvtErr)
+      }
 
-      setDepensesToday(depensesList)
-
-      const depensesMovements: CashMovement[] = depensesList.map((d: any) => {
-        const isCash = ['espece', 'especes', 'cash'].includes((d.mode_paiement || d.payment_method || '').toLowerCase())
-        return {
-          id: `dep-${d.id}`,
-          created_at: d.created_at || d.date_depense || new Date().toISOString(),
-          user_name: d.created_by_name || 'Utilisateur',
-          type: 'RETRAIT',
-          payment_channel: isCash ? 'Espèces' : 'MoMo',
-          amount: Number(d.montant || d.amount) || 0,
-          motif: `Dépense : ${d.description || d.title || d.categorie || d.category || 'Sortie'}`,
-          reference: `DEP-${d.id.slice(0, 6)}`,
-          status: 'VALIDE'
-        }
-      })
-
-      setMovementsHistory(
-        [...transferMovements, ...depensesMovements, ...repaymentMovements, ...saleMovements].sort(
-          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      // Si caisse_mouvements n'a pas encore de lignes, utiliser les mouvements calculés en mémoire
+      if (allDbMovements.length > 0) {
+        setMovementsHistory(allDbMovements)
+      } else {
+        setMovementsHistory(
+          [...transferMovements, ...depensesMovements, ...repaymentMovements, ...saleMovements].sort(
+            (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          )
         )
-      )
+      }
 
       // 5. Charger les fonds actuels officiels & compteurs journaliers (Isolation Stricte Secteur M048)
       const secId = secteurActif?.id
@@ -659,7 +559,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       const todayDate = new Date().toISOString().split('T')[0]
       if (currentCompanyId && secId) {
         try {
-          const fondRes = await getFondsActuelsBySector(currentCompanyId, secId, cId)
+          const fondRes = await getFondsActuelsBySector(currentCompanyId, secId, cId, currentSectorSlug)
           setFondsActuelsData(fondRes)
 
           const jourRes = await getCaisseJournaliereBySector(currentCompanyId, secId, cId, todayDate)
@@ -877,11 +777,18 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const retraitsEspecesJour = totalRetraitsEspeces
   const retraitsMomoJour = totalRetraitsMomo
 
-  // 4. FORMULE FINALE CORRIGÉE DEMANDÉE :
-  // Fond Actuel Espèces = Dernier Fond (dernière clôture) + Espèces du Jour (aujourd'hui) - Dépenses du Jour - Retraits du Jour
-  // Fond Actuel MoMo = Dernier Fond MoMo (dernière clôture) + MoMo du Jour (aujourd'hui) - Dépenses MoMo du Jour - Retraits MoMo du Jour
-  const fondActuelEspeces = reportEspeces + especesDuJour - depensesEspecesJour - retraitsEspecesJour
-  const fondActuelMomo = reportMomo + momoDuJour - depensesMomoJour - retraitsMomoJour
+  // 4. FORMULE OBLIGATOIRE DU FOND ACTUEL (RÈGLES 1 & 2) :
+  // Le Fond Actuel est un cumul persistant par secteur qui ne dépend PAS de la date.
+  // FOND ACTUEL ESPÈCES = [Somme de toutes les clôtures validées du secteur] - [Somme des Retraits ESPÈCES Trésorerie] - [Somme des Dépenses ESPÈCES]
+  // FOND ACTUEL MOMO = [Somme de toutes les clôtures validées MOMO] - [Somme des Retraits MOMO Trésorerie]
+  // Si le fond est calculé par getFondsActuelsBySector (calculerFondsActuelsSector), l'utiliser en priorité absolue.
+  const fondActuelEspeces = (fondsActuelsData.fond_actuel_especes !== undefined && fondsActuelsData.fond_actuel_especes !== 0)
+    ? fondsActuelsData.fond_actuel_especes
+    : (reportEspeces - retraitsEspecesJour - depensesEspecesJour)
+
+  const fondActuelMomo = (fondsActuelsData.fond_actuel_momo !== undefined && fondsActuelsData.fond_actuel_momo !== 0)
+    ? fondsActuelsData.fond_actuel_momo
+    : (reportMomo - retraitsMomoJour)
 
   // Fond théorique espèces à la clôture (pour vérification écarts physiques si besoin)
   const fondTheoriqueEsp = fondActuelEspeces + especesDuJour
