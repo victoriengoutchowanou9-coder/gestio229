@@ -6,6 +6,15 @@
 import { useState, useEffect, useCallback } from 'react'
 import { adminApiFetch, useAdminStore } from '../store/adminStore'
 
+async function safeJsonFetch(res: Response): Promise<any> {
+  const text = await res.text()
+  try {
+    return JSON.parse(text)
+  } catch {
+    throw new Error(text || `Erreur serveur (${res.status})`)
+  }
+}
+
 export function useAdminStats() {
   const [data, setData] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -16,7 +25,7 @@ export function useAdminStats() {
     setError(null)
     try {
       const res = await adminApiFetch('/api/admin-data?action=stats')
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setData(json.data)
       else setError(json.error)
     } catch (e: any) {
@@ -40,7 +49,7 @@ export function useAdminCompanies() {
     setError(null)
     try {
       const res = await adminApiFetch('/api/admin-data?action=companies')
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setCompanies(json.data || [])
       else setError(json.error)
     } catch (e: any) {
@@ -65,7 +74,7 @@ export function useAdminCompanyDetail(id: string | null) {
     setError(null)
     try {
       const res = await adminApiFetch(`/api/admin-data?action=company_detail&id=${id}`)
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setData(json.data)
       else setError(json.error)
     } catch (e: any) {
@@ -93,7 +102,7 @@ export function useAdminFeedbacks(filters: { status?: string; type?: string; sec
       if (filters.type) params.set('type', filters.type)
       if (filters.sector) params.set('sector', filters.sector)
       const res = await adminApiFetch(`/api/admin-data?${params}`)
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setFeedbacks(json.data || [])
       else setError(json.error)
     } catch (e: any) {
@@ -112,7 +121,7 @@ export function useAdminFeedbacksCount() {
   const load = useCallback(async () => {
     try {
       const res = await adminApiFetch('/api/admin-data?action=feedbacks_count')
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setCount(json.count || 0)
     } catch (_) {}
   }, [])
@@ -130,7 +139,7 @@ export function useAdminAuditLogs() {
     setError(null)
     try {
       const res = await adminApiFetch('/api/admin-data?action=admin_audit')
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setLogs(json.data || [])
       else setError(json.error)
     } catch (e: any) {
@@ -154,7 +163,7 @@ export function useAdminFinances(period: string = 'month') {
     setError(null)
     try {
       const res = await adminApiFetch(`/api/admin-data?action=finances&period=${period}`)
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setData(json.data)
       else setError(json.error)
     } catch (e: any) {
@@ -176,7 +185,7 @@ export function useAdminSectorsStats() {
     setLoading(true)
     try {
       const res = await adminApiFetch('/api/admin-data?action=sectors_stats')
-      const json = await res.json()
+      const json = await safeJsonFetch(res)
       if (json.success) setData(json.data)
     } catch (_) {}
     finally { setLoading(false) }

@@ -56,7 +56,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // ── STATISTIQUES GLOBALES ──────────────────────────────────────────────
     if (action === 'stats') {
       const [companiesRes, salesRes, expensesRes, usersRes] = await Promise.all([
-        sb.from('companies').select('id, name, subscription_status, subscription_plan, created_at, selected_sectors, sectors, is_active'),
+        sb.from('companies').select('*'),
         sb.from('sales_orders').select('total_amount, created_at, company_id'),
         sb.from('expenses').select('amount, created_at, company_id'),
         sb.from('user_profiles').select('id, company_id'),
@@ -127,7 +127,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'companies') {
       const { data: companies, error } = await sb
         .from('companies')
-        .select('id, name, ifu_number, rccm_number, phone, email, address, city, subscription_status, subscription_plan, plan, selected_sectors, sectors, active_sector, created_at, updated_at, is_active')
+        .select('*')
         .order('created_at', { ascending: false })
 
       if (error) throw error
