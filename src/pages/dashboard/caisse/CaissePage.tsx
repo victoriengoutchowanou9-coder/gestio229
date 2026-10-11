@@ -12,7 +12,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
-  Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download
+  Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -21,6 +21,7 @@ import { useTenant } from '../../../hooks/useTenant'
 import { getActiveCaisse } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../components/modals'
+import { DestinatairesReportModal } from '../../../components/caisse/DestinatairesReportModal'
 import { logAuditEvent } from '../../../services/auditService'
 import { formatFCFA } from '../../../utils/formatters'
 import { genererRapportCaissePDF, blobToBase64, envoyerRapportCaisseMail } from '../../../utils/rapportCaissePdf'
@@ -173,10 +174,16 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [showWithdrawalModal, setShowWithdrawalModal] = useState(false)
   const [showAdjustModal, setShowAdjustModal] = useState(false)
   const [showReportModal, setShowReportModal] = useState(false)
+  const [showDestinatairesModal, setShowDestinatairesModal] = useState(false)
   const [activeReportClosure, setActiveReportClosure] = useState<CashClosure | null>(null)
   const [customReportEmail, setCustomReportEmail] = useState<string>('')
   const [isSendingReportMail, setIsSendingReportMail] = useState<boolean>(false)
   const [isOperatingCaisse, setIsOperatingCaisse] = useState<boolean>(false)
+  const [totalCreances, setTotalCreances] = useState<number>(0)
+
+  // Droits d'accès d'administration (Rapport par Email & Gestion Destinataires)
+  const userRole = ((user?.role || '') as string).toLowerCase()
+  const isAdminOrManager = ['admin', 'administrateur', 'super_admin', 'dirigeant', 'gerant', 'patron'].includes(userRole)
 
   // Saisie ouverture
   const [openInputCash, setOpenInputCash] = useState<number>(0)
@@ -630,6 +637,17 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             })
             setAllRetraitsTotals({ especes: rEsp, momo: rMo })
           }
+          // 6. Total créances de l'entreprise pour le rapport
+          try {
+            const { data: dbClients } = await supabase
+              .from('clients')
+              .select('solde_creance, current_debt')
+              .eq('company_id', currentCompanyId)
+            if (dbClients && dbClients.length > 0) {
+              const cTot = dbClients.reduce((acc, c: any) => acc + (Number(c.solde_creance ?? c.current_debt ?? 0)), 0)
+              setTotalCreances(cTot)
+            }
+          } catch (_) {}
         } catch (fErr) {
           console.warn('Erreur chargement fonds_actuels/caisse_jour:', fErr)
         }
@@ -647,6 +665,48 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   useEffect(() => {
     loadCaisseData()
   }, [loadCaisseData])
+
+  // ─── Indicateurs Spéciaux pour Rapport PDF & Email ──────────────────────────
+  const margeBruteJour = useMemo(() => {
+    return salesToday.reduce((acc, s) => {
+      const totAmt = Number(s.total_amount || 0)
+      const totCost = Number(s.total_cost || 0)
+      return acc + (totAmt - totCost)
+    }, 0)
+  }, [salesToday])
+
+  const top5ProduitsJour = useMemo(() => {
+    const agg: Record<string, { quantite: number; totalVentes: number }> = {}
+    salesToday.forEach((s: any) => {
+      let lines = Array.isArray(s.lines) ? s.lines : null
+      if (!lines && s.notes) {
+        try {
+          const pNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+          if (Array.isArray(pNotes.lines)) lines = pNotes.lines
+        } catch (_) {}
+      }
+      if (Array.isArray(lines) && lines.length > 0) {
+        lines.forEach((l: any) => {
+          const pName = l.product?.name || l.name || 'Produit'
+          const q = Number(l.qty || l.quantity || 1)
+          const t = Number(l.unitPrice || l.unit_price || 0) * q || (Number(s.total_amount || 0) / lines.length)
+          if (!agg[pName]) agg[pName] = { quantite: 0, totalVentes: 0 }
+          agg[pName].quantite += q
+          agg[pName].totalVentes += t
+        })
+      } else {
+        const pName = s.customer_name ? `Vente ${s.customer_name}` : `Vente #${s.order_number || s.id?.slice(0, 6) || 'CMD'}`
+        if (!agg[pName]) agg[pName] = { quantite: 0, totalVentes: 0 }
+        agg[pName].quantite += 1
+        agg[pName].totalVentes += Number(s.total_amount || 0)
+      }
+    })
+
+    return Object.entries(agg)
+      .map(([nom, val]) => ({ nom, quantite: val.quantite, totalVentes: val.totalVentes }))
+      .sort((a, b) => b.totalVentes - a.totalVentes)
+      .slice(0, 5)
+  }, [salesToday])
 
   // =============================================================================
   // AUDIT & FORMULES FINANCIÈRES CAISSE OPÉRATIONNELLE :
@@ -1090,7 +1150,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     }
   }
 
-  // ─── Envoi du Rapport par Email avec PDF joint ─────────────────────────────
+
+  // ─── Envoi du Rapport par Email avec PDF joint (API Brevo Backend) ───────────
   const handleSendReportByEmail = async () => {
     if (!activeReportClosure) return
     const emailCible = customReportEmail.trim()
@@ -1099,18 +1160,9 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       allEmails.push(emailCible)
     }
 
-    if (allEmails.length === 0) {
-      if (company?.email) {
-        allEmails.push(company.email.trim())
-      } else {
-        alert('Veuillez renseigner au moins une adresse email pour transmettre le rapport.')
-        toast.error('Email requis', 'Saisissez une adresse email valide.')
-        return
-      }
-    }
-
     setIsSendingReportMail(true)
     try {
+      const heureActuelle = new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
       const donneesPDF = {
         company: {
           name: company?.name || 'GESTIO 229',
@@ -1136,6 +1188,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           nom: activeReportClosure.closed_by || user?.full_name || 'Caissier'
         },
         date: activeReportClosure.closed_at,
+        heure: heureActuelle,
         synthese: {
           fondInitialEspeces: fondInitialEspeces,
           encaissementsEspeces: especesDuJour,
@@ -1148,8 +1201,15 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           ecartMomo: 0,
           caDuJour: caDuJour,
           especesDuJour: especesDuJour,
-          momoDuJour: activeReportClosure.fond_momo
+          momoDuJour: momoDuJour || activeReportClosure.fond_momo,
+          fondActuel: fondActuelEspeces + fondActuelMomo,
+          fondActuelEspeces: fondActuelEspeces,
+          fondActuelMomo: fondActuelMomo,
+          totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+          margeBruteJour: margeBruteJour,
+          totalCreances: totalCreances
         },
+        top5Produits: top5ProduitsJour,
         mouvements: movementsHistory.map((m) => ({
           heure: new Date(m.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
           type: m.type,
@@ -1161,36 +1221,44 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         notes: activeReportClosure.notes
       }
 
-      // 1. Générer le PDF sous forme de blob et base64
+      // 1. Générer le PDF avec les 12 sections obligatoires
       const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
       const pdfBase64 = await blobToBase64(blob)
 
-      // 2. Envoyer par email (Edge Function avec fallback)
+      // 2. Transmettre au backend /api/send-rapport-pdf (Brevo API)
       const res = await envoyerRapportCaisseMail({
         companyId: currentCompanyId,
         secteurId: currentSectorSlug,
         caisseId: cashRegisterId || caisseActive?.id,
-        date: activeReportClosure.closed_at,
+        date: new Date(activeReportClosure.closed_at).toLocaleDateString('fr-BJ'),
+        heure: heureActuelle,
         pdfBase64,
-        emails: allEmails,
+        emails: allEmails.length > 0 ? allEmails : undefined,
         metadata: {
+          nomCaissier: activeReportClosure.closed_by || user?.full_name || 'Caissier',
           secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
-          totalReel: activeReportClosure.total_fermeture,
           caDuJour: caDuJour,
-          operateur: activeReportClosure.closed_by
+          especesDuJour: especesDuJour,
+          momoDuJour: momoDuJour || activeReportClosure.fond_momo,
+          fondActuel: fondActuelEspeces + fondActuelMomo,
+          totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+          margeBruteJour: margeBruteJour,
+          totalCreances: totalCreances,
+          top5Produits: top5ProduitsJour
         }
       })
 
+      const updatedEmails = Array.from(new Set([...allEmails, ...(res.recipients || [])]))
       const updated = {
         ...activeReportClosure,
-        emailed_to: allEmails
+        emailed_to: updatedEmails
       }
       setActiveReportClosure(updated)
       setCustomReportEmail('')
 
       toast.success(
-        'Rapport PDF envoyé !',
-        `Le rapport de caisse a été transmis avec succès à : ${allEmails.join(', ')}`
+        'Rapport PDF envoyé avec succès !',
+        `Le rapport a été expédié via Brevo aux destinataires actifs : ${updatedEmails.join(', ')}`
       )
     } catch (err: any) {
       console.error('Erreur envoi rapport email:', err)
@@ -1627,6 +1695,18 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             <FileText className="w-3.5 h-3.5 text-emerald-400" />
             <span>Rapport de Caisse (PDF)</span>
           </button>
+
+          {/* Bouton Configuration Destinataires Rapport (Admin / Dirigeant uniquement) */}
+          {isAdminOrManager && (
+            <button
+              onClick={() => setShowDestinatairesModal(true)}
+              className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+              title="Configurer les destinataires recevant automatiquement le rapport à 23h00 et par envoi manuel"
+            >
+              <Mail className="w-3.5 h-3.5 text-indigo-600" />
+              <span>Destinataires Rapport</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -2171,7 +2251,26 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                 <FileText className="w-4 h-4 text-emerald-600" />
                 Rapport Officiel de Clôture (Z de Caisse)
               </h3>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                {isAdminOrManager && (
+                  <button
+                    type="button"
+                    onClick={handleSendReportByEmail}
+                    disabled={isSendingReportMail}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition disabled:opacity-50"
+                    title="Envoyer immédiatement le rapport complet avec PDF joint aux destinataires (Brevo)"
+                  >
+                    {isSendingReportMail ? (
+                      <>
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Envoi...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-3.5 h-3.5" /> Envoyer PDF par Email
+                      </>
+                    )}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleTelechargerReportPDF}
@@ -2318,6 +2417,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         isOpen={showWithdrawalModal}
         onClose={() => setShowWithdrawalModal(false)}
         onSuccess={handleSendWithdrawalRequest}
+      />
+      {/* Modal Configuration Destinataires Rapport (Admin / Dirigeant) */}
+      <DestinatairesReportModal
+        isOpen={showDestinatairesModal}
+        onClose={() => setShowDestinatairesModal(false)}
+        companyId={currentCompanyId}
+        isAdmin={isAdminOrManager}
       />
     </div>
   )

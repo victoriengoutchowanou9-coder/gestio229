@@ -35,6 +35,7 @@ export interface RapportCaisseData {
     nom: string
   }
   date: string | Date
+  heure?: string
   synthese: {
     fondInitialEspeces: number
     fondInitialMomo?: number
@@ -51,7 +52,19 @@ export interface RapportCaisseData {
     caDuJour: number
     especesDuJour: number
     momoDuJour: number
+    // Métriques exigées :
+    fondActuel?: number
+    fondActuelEspeces?: number
+    fondActuelMomo?: number
+    totalDepensesJour?: number
+    margeBruteJour?: number
+    totalCreances?: number
   }
+  top5Produits?: Array<{
+    nom: string
+    quantite: number
+    totalVentes: number
+  }>
   mouvements?: Array<{
     heure?: string
     type: string
@@ -67,71 +80,82 @@ export interface RapportCaisseData {
 const fmt = (n: number = 0) => formatFCFA(n)
 
 /**
- * Génère le document PDF du Rapport de Caisse / Z de Caisse
- * et permet le téléchargement direct ou l'extraction du Blob
+ * Génère le document PDF officiel du Rapport de Caisse
+ * comprenant les 12 sections obligatoires.
  */
 export function genererRapportCaissePDF(
   donnees: RapportCaisseData,
   options: { save?: boolean; fileName?: string } = { save: true }
 ): { doc: jsPDF; blob: Blob; fileName: string } {
   const doc = new jsPDF()
-  const dateStr = typeof donnees.date === 'string'
-    ? donnees.date
-    : donnees.date.toISOString().split('T')[0]
-
-  const dateFormatee = new Date(donnees.date).toLocaleDateString('fr-FR', {
+  const dateObj = donnees.date instanceof Date ? donnees.date : new Date(donnees.date)
+  const dateStr = dateObj.toLocaleDateString('fr-BJ', {
     day: '2-digit',
     month: '2-digit',
-    year: 'numeric',
+    year: 'numeric'
+  })
+  const heureStr = donnees.heure || dateObj.toLocaleTimeString('fr-BJ', {
     hour: '2-digit',
     minute: '2-digit'
   })
 
   // 1. En-tête officiel
   doc.setFillColor(15, 23, 42) // Slate 900
-  doc.rect(0, 0, 210, 24, 'F')
+  doc.rect(0, 0, 210, 26, 'F')
 
   doc.setTextColor(255, 255, 255)
   doc.setFontSize(14)
   doc.setFont('helvetica', 'bold')
-  doc.text(`RAPPORT OFFICIEL DE CAISSE (Z DE CAISSE)`, 14, 11)
+  doc.text(`RAPPORT OFFICIEL DE CAISSE JOURNALIER`, 14, 11)
 
   doc.setFontSize(9)
   doc.setFont('helvetica', 'normal')
-  doc.text(`${donnees.company.name || 'GESTIO 229'} • Secteur : ${donnees.secteur.nom.toUpperCase()} • Édité le ${dateFormatee}`, 14, 18)
+  doc.text(
+    `${donnees.company.name || 'GESTIO 229'} • Secteur : ${donnees.secteur.nom.toUpperCase()} • Édité le ${dateStr} à ${heureStr}`,
+    14,
+    19
+  )
 
-  // 2. Bloc Métadonnées
+  // 2. Bloc Métadonnées & Identification
   doc.setTextColor(30, 41, 59)
   doc.setFontSize(10)
   doc.setFont('helvetica', 'bold')
-  doc.text(`Informations d'exploitation`, 14, 32)
+  doc.text(`1. Informations d'Exploitation`, 14, 34)
 
   doc.setFontSize(8.5)
   doc.setFont('helvetica', 'normal')
-  doc.text(`Caisse : ${donnees.caisse.nom}`, 14, 38)
-  doc.text(`Opérateur / Caissier : ${donnees.user.nom}`, 14, 43)
-  if (donnees.company.phone) doc.text(`Contact : ${donnees.company.phone}`, 14, 48)
+  doc.text(`Date : ${dateStr}`, 14, 40)
+  doc.text(`Heure : ${heureStr}`, 14, 45)
+  doc.text(`Nom du Caissier : ${donnees.user.nom}`, 14, 50)
+  doc.text(`Secteur d'Activité : ${donnees.secteur.nom}`, 14, 55)
 
-  doc.text(`Date d'arrêté : ${dateStr}`, 120, 38)
-  if (donnees.session?.id) doc.text(`Réf. Session : ${donnees.session.id.slice(0, 18)}`, 120, 43)
-  doc.text(`Statut : CLÔTURÉ & CONTRÔLÉ`, 120, 48)
+  doc.text(`Point de Caisse : ${donnees.caisse.nom}`, 120, 40)
+  if (donnees.session?.id) doc.text(`Réf. Session : ${donnees.session.id.slice(0, 18)}`, 120, 45)
+  doc.text(`Entreprise : ${donnees.company.name || 'GESTIO 229'}`, 120, 50)
+  if (donnees.company.phone) doc.text(`Contact : ${donnees.company.phone}`, 120, 55)
 
-  // 3. Tableau Synthèse Financière des Fonds & Activité
+  // 3. Tableau Synthèse Financière Complète
   const syn = donnees.synthese
+  const totalDepenses = syn.totalDepensesJour ?? (syn.depensesEspeces + (syn.depensesMomo || 0))
+  const fondActuelTotal = syn.fondActuel ?? ((syn.fondActuelEspeces || 0) + (syn.fondActuelMomo || 0))
+
   const tableauSynthese = [
-    ['Fond Initial Espèces (Ouverture)', fmt(syn.fondInitialEspeces), '', ''],
-    ['Encaissements Espèces (Ventes + Recouvrements)', `+${fmt(syn.encaissementsEspeces)}`, '', ''],
-    ['Dépenses & Sorties Espèces', `-${fmt(syn.depensesEspeces)}`, '', ''],
-    ['Fond Théorique Espèces', fmt(syn.fondTheoriqueEspeces), fmt(syn.fondReelEspeces), fmt(syn.ecartEspeces)],
-    ['Fond Théorique MoMo / Mobile Money', fmt(syn.fondTheoriqueMomo || 0), fmt(syn.fondReelMomo || 0), fmt(syn.ecartMomo || 0)],
-    ['Chiffre d\'Affaires Total du Jour (CA)', fmt(syn.caDuJour), '', ''],
-    ['Total Net Espèces Journée', fmt(syn.especesDuJour), '', ''],
-    ['Total Net MoMo Journée', fmt(syn.momoDuJour), '', ''],
+    ['Chiffre d\'Affaires du Jour (CA)', fmt(syn.caDuJour), 'Total ventes facturées'],
+    ['Caisse Espèces du Jour', fmt(syn.especesDuJour), 'Encaissé en espèces'],
+    ['Caisse MoMo du Jour', fmt(syn.momoDuJour), 'Encaissé via Mobile Money'],
+    [
+      'Fond Actuel Persistant (Cumul)',
+      fmt(fondActuelTotal),
+      `Espèces : ${fmt(syn.fondActuelEspeces || 0)} | MoMo : ${fmt(syn.fondActuelMomo || 0)}`
+    ],
+    ['Total Dépenses du Jour', fmt(totalDepenses), 'Décaissements validés'],
+    ['Marge Brute du Jour', fmt(syn.margeBruteJour ?? 0), 'CA - Coût d\'achat des ventes'],
+    ['Total Créances Clients', fmt(syn.totalCreances ?? 0), 'Solde restant dû par les clients']
   ]
 
   autoTable(doc, {
-    startY: 53,
-    head: [['Désignation des Flux', 'Théorique / Mvt', 'Compté Réel', 'Écart']],
+    startY: 60,
+    head: [['Indicateur Financier', 'Montant (FCFA)', 'Précision / Détail']],
     body: tableauSynthese,
     theme: 'striped',
     headStyles: {
@@ -145,26 +169,70 @@ export function genererRapportCaissePDF(
       textColor: [30, 41, 59]
     },
     columnStyles: {
-      0: { cellWidth: 90, fontStyle: 'bold' },
-      1: { cellWidth: 35, halign: 'right' },
-      2: { cellWidth: 35, halign: 'right', fontStyle: 'bold' },
-      3: { cellWidth: 30, halign: 'right', fontStyle: 'bold' },
+      0: { cellWidth: 80, fontStyle: 'bold' },
+      1: { cellWidth: 45, halign: 'right', fontStyle: 'bold' },
+      2: { cellWidth: 65, fontSize: 8, textColor: [100, 116, 139] }
     },
     alternateRowStyles: {
       fillColor: [248, 250, 252]
     }
   })
 
-  // 4. Tableau du Détail des Mouvements de Caisse du Jour
-  let currentY = (doc as any).lastAutoTable?.finalY ? (doc as any).lastAutoTable.finalY + 8 : 120
+  let currentY = (doc as any).lastAutoTable?.finalY ? (doc as any).lastAutoTable.finalY + 8 : 130
 
-  if (donnees.mouvements && donnees.mouvements.length > 0) {
+  // 4. Section : Top des 5 Meilleurs Produits Vendus
+  if (donnees.top5Produits && donnees.top5Produits.length > 0) {
     doc.setFontSize(10)
     doc.setFont('helvetica', 'bold')
     doc.setTextColor(30, 41, 59)
-    doc.text(`Détail des opérations & encaissements de la journée (${donnees.mouvements.length} lignes)`, 14, currentY)
+    doc.text(`2. Top des 5 Meilleurs Produits Vendus de la Journée`, 14, currentY)
 
-    const corpsMouvements = donnees.mouvements.slice(0, 30).map((m) => [
+    const corpsTop5 = donnees.top5Produits.slice(0, 5).map((p, idx) => [
+      `#${idx + 1}`,
+      p.nom,
+      p.quantite.toLocaleString('fr-BJ'),
+      fmt(p.totalVentes)
+    ])
+
+    autoTable(doc, {
+      startY: currentY + 3,
+      head: [['Rang', 'Désignation Produit / Article', 'Quantité Vendue', 'Chiffre d\'Affaires (FCFA)']],
+      body: corpsTop5,
+      theme: 'grid',
+      headStyles: {
+        fillColor: [79, 70, 229], // Indigo 600
+        textColor: [255, 255, 255],
+        fontSize: 8.5,
+        fontStyle: 'bold'
+      },
+      bodyStyles: {
+        fontSize: 8,
+        textColor: [30, 41, 59]
+      },
+      columnStyles: {
+        0: { cellWidth: 15, halign: 'center', fontStyle: 'bold' },
+        1: { cellWidth: 95 },
+        2: { cellWidth: 35, halign: 'right' },
+        3: { cellWidth: 45, halign: 'right', fontStyle: 'bold' }
+      }
+    })
+
+    currentY = (doc as any).lastAutoTable?.finalY + 8
+  }
+
+  // 5. Section : Détail des Opérations & Mouvements du Jour
+  if (donnees.mouvements && donnees.mouvements.length > 0) {
+    if (currentY > 210) {
+      doc.addPage()
+      currentY = 20
+    }
+
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(30, 41, 59)
+    doc.text(`3. Mouvements & Opérations de Caisse du Jour (${donnees.mouvements.length} opérations)`, 14, currentY)
+
+    const corpsMouvements = donnees.mouvements.slice(0, 25).map((m) => [
       m.heure || '--:--',
       m.type,
       fmt(m.montant),
@@ -201,7 +269,7 @@ export function genererRapportCaissePDF(
     currentY = (doc as any).lastAutoTable?.finalY + 8
   }
 
-  // 5. Observations et Signatures
+  // 6. Observations & Signatures
   if (currentY > 240) {
     doc.addPage()
     currentY = 20
@@ -227,8 +295,8 @@ export function genererRapportCaissePDF(
   doc.text(`Visa Direction & Contrôle\n(Mention "Vérifié & Approuvé")`, 135, currentY + 21)
 
   // Nom de fichier normalisé
-  const cleanSecteur = donnees.secteur.nom.replace(/[^a-zA-Z0-9]/g, '_')
-  const fileName = options.fileName || `Rapport_Caisse_${cleanSecteur}_${dateStr}.pdf`
+  const cleanSecteur = (donnees.secteur.nom || donnees.secteur.slug).replace(/[^a-zA-Z0-9]/g, '_')
+  const fileName = options.fileName || `Rapport_Caisse_${cleanSecteur}_${dateObj.toISOString().slice(0, 10)}.pdf`
 
   if (options.save !== false) {
     doc.save(fileName)
@@ -246,7 +314,6 @@ export async function blobToBase64(blob: Blob): Promise<string> {
     const reader = new FileReader()
     reader.onloadend = () => {
       const res = reader.result as string
-      // Extraire seulement les données après 'base64,'
       const base64 = res.includes(',') ? res.split(',')[1] : res
       resolve(base64)
     }
@@ -256,64 +323,63 @@ export async function blobToBase64(blob: Blob): Promise<string> {
 }
 
 /**
- * Envoie le rapport de caisse PDF aux destinataires associés
- * (via Edge Function Supabase send-rapport-caisse ou fallback direct)
+ * Envoie le rapport de caisse PDF par Email
+ * Appelle POST /api/send-rapport-pdf avec le PDF généré et les métadonnées
  */
 export async function envoyerRapportCaisseMail(params: {
   companyId: string
   secteurId: string
   caisseId?: string
   date: string
+  heure?: string
   pdfBase64: string
-  emails: string[]
-  metadata?: {
-    secteurNom?: string
-    totalReel?: number
-    caDuJour?: number
-    operateur?: string
+  emails?: string[]
+  metadata: {
+    caDuJour: number
+    especesDuJour: number
+    momoDuJour: number
+    fondActuel: number
+    totalDepensesJour: number
+    margeBruteJour: number
+    totalCreances: number
+    nomCaissier: string
+    secteurNom: string
+    top5Produits?: Array<{ nom: string; quantite: number; totalVentes: number }>
   }
 }): Promise<{ success: boolean; message: string; recipients: string[] }> {
-  const { companyId, secteurId, caisseId, date, pdfBase64, emails, metadata } = params
-
-  if (!emails || emails.length === 0) {
-    throw new Error('Aucun destinataire email spécifié pour l\'envoi du rapport.')
-  }
+  const { companyId, secteurId, caisseId, date, heure, pdfBase64, emails, metadata } = params
 
   try {
-    // 1. Tenter l'appel à la fonction Supabase Edge
-    const { data, error } = await supabase.functions.invoke('send-rapport-caisse', {
-      body: {
-        company_id: companyId,
-        secteur_id: secteurId,
-        caisse_id: caisseId,
+    const response = await fetch('/api/send-rapport-pdf', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        companyId,
+        secteurId,
+        caisseId,
         date,
+        heure: heure || new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' }),
         pdfBase64,
         emails,
         metadata
-      }
+      })
     })
 
-    if (!error && data?.success) {
-      return {
-        success: true,
-        message: `Rapport transmis avec succès à ${emails.join(', ')}`,
-        recipients: emails
-      }
+    const result = await response.json()
+
+    if (!response.ok || !result.success) {
+      throw new Error(result.error || result.message || `Erreur serveur (${response.status})`)
     }
-  } catch (err) {
-    console.warn('[envoyerRapportCaisseMail] Edge function non joignable, enregistrement traçabilité locale :', err)
-  }
 
-  // 2. Traçabilité archivée en BDD
-  try {
-    await supabase.from('clotures_caisse').update({
-      commentaire: `Rapport transmis à : ${emails.join(', ')} le ${new Date().toISOString()}`
-    }).eq('company_id', companyId).order('created_at', { ascending: false }).limit(1)
-  } catch (_) {}
-
-  return {
-    success: true,
-    message: `Rapport PDF prêt et transmis à : ${emails.join(', ')}`,
-    recipients: emails
+    return {
+      success: true,
+      message: result.message || 'Rapport transmis avec succès par Brevo !',
+      recipients: result.recipients || emails || []
+    }
+  } catch (err: any) {
+    console.error('[envoyerRapportCaisseMail] Erreur appel API backend :', err)
+    throw err
   }
 }
