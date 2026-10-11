@@ -6,7 +6,28 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
-import { verifyAdminToken } from './admin-auth'
+import * as crypto from 'crypto'
+
+const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET || 'gestio229_admin_secret_change_in_production'
+
+function verifyAdminToken(token: string): { valid: boolean; payload?: any } {
+  try {
+    const parts = token.split('.')
+    if (parts.length !== 2) return { valid: false }
+    const [payloadB64, sig] = parts
+    const expectedSig = crypto
+      .createHmac('sha256', ADMIN_SESSION_SECRET)
+      .update(payloadB64)
+      .digest('base64url')
+    if (sig !== expectedSig) return { valid: false }
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString())
+    if (payload.exp < Date.now()) return { valid: false }
+    if (payload.role !== 'super_admin_universel') return { valid: false }
+    return { valid: true, payload }
+  } catch {
+    return { valid: false }
+  }
+}
 
 // ─── Client Supabase avec service_role (bypass RLS) ─────────────────────
 function getSupabaseAdmin() {
