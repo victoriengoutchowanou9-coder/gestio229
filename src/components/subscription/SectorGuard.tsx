@@ -14,6 +14,7 @@ import { getActiveSectorSlug, isSectorSubscribed, canonicalSectorSlug } from '..
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
 import { normalizeSectorSlug } from '../../core/team/sectorRoles'
+import { ModuleSkeleton } from '../ui/Skeleton'
 
 interface SectorGuardProps {
   children: React.ReactNode
@@ -36,11 +37,7 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
 
   // ─── 3. Guard critique : en attente de l'initialisation du store d'authentification ───
   if (!company && (status === 'idle' || status === 'loading')) {
-    return (
-      <div className="min-h-[75vh] flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
+    return <ModuleSkeleton />
   }
 
   // Vérification de la période d'essai (30 jours) et de la validité de l'abonnement

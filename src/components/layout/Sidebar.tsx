@@ -56,9 +56,25 @@ interface NavItemProps {
 }
 
 const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }) => {
+  // Préchargement au hover / focus pour navigation < 300ms
+  const handleMouseEnter = () => {
+    // Si c'est une route connue, précharger le chunk
+    if (href.includes('vente')) import('../../pages/dashboard/vente-pos/POSPage').catch(() => {})
+    else if (href.includes('caisse')) import('../../pages/dashboard/caisse/CaissePage').catch(() => {})
+    else if (href.includes('stocks')) import('../../pages/dashboard/stocks/StocksPage').catch(() => {})
+    else if (href.includes('clients')) import('../../pages/dashboard/clients/ClientsPage').catch(() => {})
+    else if (href.includes('fournisseurs') || href.includes('achats')) import('../../pages/dashboard/fournisseurs/FournisseursPage').catch(() => {})
+    else if (href.includes('tresorerie')) import('../../pages/dashboard/tresorerie/TresoreriePage').catch(() => {})
+    else if (href.includes('depenses')) import('../../pages/dashboard/depenses/DepensesPage').catch(() => {})
+    else if (href.includes('reporting')) import('../../pages/dashboard/reporting/ReportingPage').catch(() => {})
+    else if (href.includes('tableau-bord') || href.includes('dashboard')) import('../../pages/dashboard/DashboardPage').catch(() => {})
+  }
+
   return (
     <NavLink
       to={href}
+      onMouseEnter={handleMouseEnter}
+      onFocus={handleMouseEnter}
       className={({ isActive }) =>
         clsx(
           'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group',

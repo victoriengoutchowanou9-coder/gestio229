@@ -4,7 +4,7 @@
 // =============================================================================
 
 import React, { useState, useEffect } from 'react'
-import { useLocation, Link } from 'react-router-dom'
+import { useLocation, Link, useNavigate } from 'react-router-dom'
 import { Menu, Bell, ArrowLeft } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
@@ -32,6 +32,7 @@ const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
 }
 
 const Header: React.FC = () => {
+  const navigate = useNavigate()
   const location = useLocation()
   const company = useAuthStore((s) => s.company)
   const user = useAuthStore((s) => s.user)
@@ -234,7 +235,7 @@ const Header: React.FC = () => {
           <button 
             type="button"
             onClick={() => {
-              window.location.href = '/hub'
+              navigate('/hub')
             }}
             className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
             title="Fermer / Retour"

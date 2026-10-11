@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp,
   DollarSign,
@@ -122,6 +123,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 }) => {
   const isAdmin = !userRole || userRole === 'administrateur' || userRole === 'super_admin';
   const { darkMode, toggleDarkMode } = useUIStore();
+  const navigate = useNavigate();
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [activities, setActivities] = useState<ActivityEntry[]>(() => {
@@ -825,7 +827,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     if (onSelectSector) {
       onSelectSector(act.sectorSlug, act.id, act.name, act.location);
     } else {
-      window.location.href = `/app/${act.sectorSlug}?activityId=${act.id}`;
+      navigate(`/app/${act.sectorSlug}?activityId=${act.id}`);
     }
   };
 

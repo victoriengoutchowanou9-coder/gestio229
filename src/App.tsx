@@ -14,6 +14,8 @@ import { safeLazy } from './lib/safeLazy'
 import { useTenant } from './hooks/useTenant'
 import { getActiveSectorSlug } from './lib/sectorClient'
 import { ThemeProvider } from './context/ThemeContext'
+import { useAppCacheStore } from './store/appCacheStore'
+import { preloadCommonModules } from './lib/modulePreloader'
 
 // ─── Lazy Loading des pages (safeLazy = auto-reload si chunk introuvable) ────
 
@@ -308,10 +310,20 @@ const SectorAwareGrilles: React.FC = () => {
 
 const AppInitializer: React.FC = () => {
   const initialize = useAuthStore((s) => s.initialize)
+  const company = useAuthStore((s) => s.company)
+  const preloadEssentialData = useAppCacheStore((s) => s.preloadEssentialData)
 
   useEffect(() => {
     initialize()
   }, [initialize])
+
+  // Dès que l'entreprise est connue, charger le cache essentiel et précharger les modules
+  useEffect(() => {
+    if (company?.id) {
+      preloadEssentialData(company.id)
+      preloadCommonModules()
+    }
+  }, [company?.id, preloadEssentialData])
 
   return null
 }

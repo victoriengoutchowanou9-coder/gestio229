@@ -12,6 +12,7 @@ import { Lock, ShieldAlert, ArrowRight, ArrowLeft, Sparkles, CheckCircle2 } from
 import { useAuthStore } from '../../store/authStore'
 import { checkModuleAccess } from '../../core/subscription/subscriptionEngine'
 import SectorLoader from '../../lib/SectorLoader'
+import { ModuleSkeleton } from '../ui/Skeleton'
 
 interface ModuleGuardProps {
   moduleId: string
@@ -24,11 +25,7 @@ export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) 
   const status = useAuthStore((s) => s.status)
 
   if (!company && (status === 'idle' || status === 'loading')) {
-    return (
-      <div className="min-h-[70vh] flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-      </div>
-    )
+    return <ModuleSkeleton />
   }
 
   // 1. Contrôle abonnement entreprise
