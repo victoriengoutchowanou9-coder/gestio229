@@ -12,6 +12,7 @@ import { useTheme } from '../../context/ThemeContext'
 import { getActiveSectorMeta } from '../../lib/sectorClient'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
 import { supabase } from '../../lib/supabase'
+import FeedbackButton from '../common/FeedbackButton'
 
 // Mapping route → titre de page
 const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
@@ -185,6 +186,9 @@ const Header: React.FC = () => {
 
         {/* 2. Essai + jours restants */}
         {renderTrialBadge()}
+
+        {/* 2.5 Bouton Avis & Suggestions pour les entreprises */}
+        <FeedbackButton sectorSlug={sectorMeta.slug} />
 
         {/* 3. Cloche */}
         <button

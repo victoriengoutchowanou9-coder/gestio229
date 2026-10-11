@@ -17,6 +17,19 @@ import { ThemeProvider } from './context/ThemeContext'
 import { useAppCacheStore } from './store/appCacheStore'
 import { preloadCommonModules } from './lib/modulePreloader'
 
+// ─── GESTIO 229 ADMIN — Back-Office Super Administrateur ──────────────────
+import AdminLoginPage from './pages/admin/AdminLoginPage'
+import AdminLayout, { AdminRoute } from './components/admin/AdminLayout'
+import AdminDashboard from './pages/admin/AdminDashboard'
+import AdminCompanies from './pages/admin/AdminCompanies'
+import AdminCompanyDetail from './pages/admin/AdminCompanyDetail'
+import AdminSubscriptions from './pages/admin/AdminSubscriptions'
+import AdminFinances from './pages/admin/AdminFinances'
+import AdminSectors from './pages/admin/AdminSectors'
+import AdminFeedbacks from './pages/admin/AdminFeedbacks'
+import AdminAuditLog from './pages/admin/AdminAuditLog'
+import AdminSettings from './pages/admin/AdminSettings'
+
 // ─── Lazy Loading des pages (safeLazy = auto-reload si chunk introuvable) ────
 
 // Auth
@@ -685,6 +698,38 @@ const AppRoutes: React.FC = () => {
         <Route path="journal-audit"  element={<ModuleGuard moduleId="audit"><AuditPage /></ModuleGuard>} />
         <Route path="abonnement"     element={<AbonnementPage />} />
         <Route path="utilisateurs"   element={<ModuleGuard moduleId="utilisateurs"><UtilisateursPage /></ModuleGuard>} />
+      </Route>
+
+      {/* ═══════════════════════════════════════════════════════════════════
+          GESTIO 229 ADMIN — ESPACE PRIVÉ DU SUPER ADMINISTRATEUR
+          Totalement séparé des routes entreprises. Jamais accessible
+          depuis l'espace normal des entreprises. Token JWT en sessionStorage.
+          ═══════════════════════════════════════════════════════════════════ */}
+
+      {/* Page de connexion Super Admin (non protégée) */}
+      <Route path="/admin/login" element={<AdminLoginPage />} />
+
+      {/* Routes protégées du Back-Office Super Admin */}
+      <Route
+        path="/admin"
+        element={
+          <AdminRoute>
+            <AdminLayout />
+          </AdminRoute>
+        }
+      >
+        {/* Redirection par défaut vers le dashboard */}
+        <Route index element={<Navigate to="/admin/dashboard" replace />} />
+        <Route path="dashboard"    element={<AdminDashboard />} />
+        <Route path="companies"    element={<AdminCompanies />} />
+        <Route path="companies/:id" element={<AdminCompanyDetail />} />
+        <Route path="subscriptions" element={<AdminSubscriptions />} />
+        <Route path="finances"     element={<AdminFinances />} />
+        <Route path="stats"        element={<AdminDashboard />} />
+        <Route path="sectors"      element={<AdminSectors />} />
+        <Route path="feedbacks"    element={<AdminFeedbacks />} />
+        <Route path="audit"        element={<AdminAuditLog />} />
+        <Route path="settings"     element={<AdminSettings />} />
       </Route>
 
       {/* Fallback */}
