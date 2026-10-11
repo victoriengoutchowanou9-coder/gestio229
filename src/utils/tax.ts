@@ -31,22 +31,35 @@ export function calculateTaxFromTTC(
   aibRate: number = 1
 ): TaxCalculationResult {
   const safeTtc = Math.max(0, Number(ttc) || 0)
-  const safeVatRate = Math.max(0, Number(vatRate) || 0)
-  const safeAibRate = Math.max(0, Number(aibRate) || 0)
+  const safeVatRate = isVatSubject ? Math.max(0, Number(vatRate) || 0) : 0
+  const safeAibRate = isAibSubject ? Math.max(0, Number(aibRate) || 0) : 0
+
+  const rateTvaDec = safeVatRate / 100
+  const rateAibDec = safeAibRate / 100
 
   let ht = safeTtc
   let vatAmount = 0
-
-  if (isVatSubject && safeVatRate > 0) {
-    // Formule OHADA / Bénin : HT = TTC / (1 + Taux/100)
-    ht = Math.round((safeTtc / (1 + safeVatRate / 100)) * 100) / 100
-    vatAmount = Math.round((safeTtc - ht) * 100) / 100
-  }
-
   let aibAmount = 0
-  if (isAibSubject && safeAibRate > 0) {
-    // L'AIB est calculé EXCLUSIVEMENT sur le montant HT (Règle Fiscale Bénin DGI)
-    aibAmount = Math.round((ht * (safeAibRate / 100)) * 100) / 100
+
+  if (rateTvaDec > 0 || rateAibDec > 0) {
+    // Formules exigées :
+    // 1. TVA seule : HT = TTC / (1 + taux TVA)
+    // 2. AIB seul : HT = TTC / (1 + taux AIB)
+    // 3. TVA + AIB : HT = TTC / (1 + taux TVA + taux AIB)
+    const divider = 1 + rateTvaDec + rateAibDec
+    ht = Math.round(safeTtc / divider)
+    vatAmount = Math.round(ht * rateTvaDec)
+    aibAmount = Math.round(ht * rateAibDec)
+
+    // Ajustement rigoureux des arrondis au franc près pour garantir : TTC = HT + TVA + AIB
+    const diff = safeTtc - (ht + vatAmount + aibAmount)
+    if (diff !== 0) {
+      if (rateTvaDec > 0) {
+        vatAmount += diff
+      } else if (rateAibDec > 0) {
+        aibAmount += diff
+      }
+    }
   }
 
   return {
@@ -57,27 +70,28 @@ export function calculateTaxFromTTC(
     isVatSubject,
     aibRate: isAibSubject ? safeAibRate : 0,
     aibAmount,
-    // Règle d'or GESTIO 229 : L'AIB ne doit jamais augmenter le prix TTC catalogue payé par le client
     totalLineWithAib: safeTtc,
   }
 }
 
 /**
- * Calcule la marge brute sur la base HT fiscale appropriée
+ * Calcule la marge brute sur la base HT fiscale appropriée (considère TVA et AIB)
  */
 export function calculateMargin(
   sellTtc: number,
   buyTtc: number,
   isVatSubject: boolean = true,
-  vatRate: number = 18
+  vatRate: number = 18,
+  isAibSubject: boolean = false,
+  aibRate: number = 1
 ): {
   sellHt: number
   buyHt: number
   grossMargin: number
   marginRate: number
 } {
-  const sellTax = calculateTaxFromTTC(sellTtc, isVatSubject, vatRate)
-  const buyTax = calculateTaxFromTTC(buyTtc, isVatSubject, vatRate)
+  const sellTax = calculateTaxFromTTC(sellTtc, isVatSubject, vatRate, isAibSubject, aibRate)
+  const buyTax = calculateTaxFromTTC(buyTtc, isVatSubject, vatRate, isAibSubject, aibRate)
 
   const sellHt = sellTax.htPrice
   const buyHt = buyTax.htPrice

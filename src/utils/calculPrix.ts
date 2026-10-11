@@ -53,28 +53,33 @@ export function decomposerTTC(
   // 1. Total TTC fixé AVANT toute décomposition fiscale
   const totalTTC = Math.round(pu * safeQte * 100) / 100
 
-  // 2. Décomposition TVA
-  let htExact: number
-  let tvaExact: number
+  const rateTvaDec = appliquerTVA ? safeTauxTVA : 0
+  const rateAibDec = appliquerAIB ? safeTauxAIB : 0
 
-  if (appliquerTVA && safeTauxTVA > 0) {
-    htExact = totalTTC / (1 + safeTauxTVA)
-    tvaExact = totalTTC - htExact
-  } else {
-    htExact = totalTTC
-    tvaExact = 0
+  let ht = totalTTC
+  let tva = 0
+  let aib = 0
+
+  if (rateTvaDec > 0 || rateAibDec > 0) {
+    // Formules exigées :
+    // 1. TVA seule : HT = TTC / (1 + taux TVA)
+    // 2. AIB seul : HT = TTC / (1 + taux AIB)
+    // 3. TVA + AIB : HT = TTC / (1 + taux TVA + taux AIB)
+    const divider = 1 + rateTvaDec + rateAibDec
+    ht = Math.round(totalTTC / divider)
+    tva = Math.round(ht * rateTvaDec)
+    aib = Math.round(ht * rateAibDec)
+
+    // Ajustement rigoureux des arrondis au franc près pour garantir : TTC = HT + TVA + AIB
+    const diff = totalTTC - (ht + tva + aib)
+    if (diff !== 0) {
+      if (rateTvaDec > 0) {
+        tva += diff
+      } else if (rateAibDec > 0) {
+        aib += diff
+      }
+    }
   }
-
-  // 3. Calcul AIB sur la base HT uniquement
-  let aibExact = 0
-  if (appliquerAIB && safeTauxAIB > 0) {
-    aibExact = htExact * safeTauxAIB
-  }
-
-  // Arrondis à 2 décimales pour la précision financière
-  const ht = Math.round(htExact * 100) / 100
-  const tva = Math.round(tvaExact * 100) / 100
-  const aib = Math.round(aibExact * 100) / 100
 
   // Le net à payer reste STRICTEMENT le Total TTC
   const netAPayer = totalTTC
