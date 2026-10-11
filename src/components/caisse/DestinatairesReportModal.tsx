@@ -169,7 +169,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
                   Destinataires du Rapport de Caisse
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Envoi automatique Gmail SMTP à 23h00 et transmission manuelle du PDF
+                  Envoi immédiat dès la fermeture de la caisse et transmission manuelle du PDF (Gmail SMTP)
                 </p>
               </div>
             </div>

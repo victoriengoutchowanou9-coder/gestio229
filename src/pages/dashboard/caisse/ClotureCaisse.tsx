@@ -21,6 +21,7 @@ import { formatFCFA } from '../../../utils/formatters'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import { getOrCreateSecteurBDD, getSoldeFondActuel } from '../../../services/caisseDepensesService'
 import { genererRapportCaissePDF, blobToBase64, envoyerRapportCaisseMail, RapportCaisseData } from '../../../utils/rapportCaissePdf'
+import { getDestinatairesActifs } from '../../../services/destinatairesReportService'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -272,6 +273,52 @@ export const ClotureCaisse: React.FC = () => {
       await refreshFonds()
       setClotureSuccess(true)
       setShowConfirmModal(false)
+
+      // ── Envoi automatique immédiat du rapport PDF consolidé (sans attendre 23h00) ──
+      const sendRapportAutomatique = async () => {
+        try {
+          const repData = construireDonneesRapport()
+          const { blob } = genererRapportCaissePDF(repData, { save: false })
+          const pdfBase64 = await blobToBase64(blob)
+
+          let targetEmails: string[] = []
+          try {
+            const actifs = await getDestinatairesActifs(companyId)
+            targetEmails = actifs.map((d) => d.email.trim().toLowerCase()).filter(Boolean)
+          } catch (_) {}
+
+          if (user?.email) targetEmails.push(user.email.trim().toLowerCase())
+          try {
+            const { data: comp } = await supabase.from('companies').select('email').eq('id', companyId).maybeSingle()
+            if (comp?.email) targetEmails.push(comp.email.trim().toLowerCase())
+          } catch (_) {}
+
+          targetEmails = Array.from(new Set(targetEmails.filter(Boolean)))
+          const totalSolde = lignes.reduce((s, l) => s + (l.soldeActuel || 0), 0)
+
+          const res = await envoyerRapportCaisseMail({
+            companyId,
+            secteurId: currentSectorSlug || 'multi-secteurs',
+            date: dateCloture,
+            pdfBase64,
+            emails: targetEmails.length > 0 ? targetEmails : undefined,
+            metadata: {
+              secteurNom: 'Synthèse Multi-Secteurs',
+              totalReel: totalSolde,
+              caDuJour: repData.synthese.caDuJour,
+              operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire'
+            }
+          })
+          const sentCount = res.recipients?.length || targetEmails.length
+          toast.success('Rapport envoyé par email !', `Rapport envoyé à ${sentCount} destinataire(s) sans attendre 23h00.`)
+        } catch (e: any) {
+          console.error('[ClotureCaisse] Erreur envoi automatique rapport :', e)
+          toast.error('Erreur SMTP', e?.message || 'Échec de l\'envoi automatique du rapport.')
+        }
+      }
+
+      sendRapportAutomatique()
+
       toast.success(
         'Journée clôturée avec succès !',
         'Les soldes finaux (positifs ou découverts) sont reportés au lendemain.'
@@ -387,20 +434,20 @@ export const ClotureCaisse: React.FC = () => {
       const { blob } = genererRapportCaissePDF(data, { save: false })
       const pdfBase64 = await blobToBase64(blob)
 
-      // Récupérer les adresses emails de destination
-      const destEmails: string[] = []
-      if (user?.email) destEmails.push(user.email)
-
+      // Récupérer les adresses emails de destination enregistrées
+      let destEmails: string[] = []
       try {
-        const { data: comp } = await supabase.from('companies').select('email').eq('id', companyId).maybeSingle()
-        if (comp?.email && !destEmails.includes(comp.email)) {
-          destEmails.push(comp.email)
-        }
+        const actifs = await getDestinatairesActifs(companyId)
+        destEmails = actifs.map((d) => d.email.trim().toLowerCase()).filter(Boolean)
       } catch (_) {}
 
-      if (destEmails.length === 0) {
-        destEmails.push('direction@gestio229.com')
-      }
+      if (user?.email) destEmails.push(user.email.trim().toLowerCase())
+      try {
+        const { data: comp } = await supabase.from('companies').select('email').eq('id', companyId).maybeSingle()
+        if (comp?.email) destEmails.push(comp.email.trim().toLowerCase())
+      } catch (_) {}
+
+      destEmails = Array.from(new Set(destEmails.filter(Boolean)))
 
       const totalSoldeActuel = lignes.reduce((s, l) => s + (l.soldeActuel || 0), 0)
       const res = await envoyerRapportCaisseMail({

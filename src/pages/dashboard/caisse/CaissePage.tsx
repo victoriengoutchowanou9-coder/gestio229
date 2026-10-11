@@ -22,6 +22,7 @@ import { getActiveCaisse } from '../../../lib/supabaseTenant'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { AdjustFundsModal, WithdrawalRequestModal, ModalPortal } from '../../../components/modals'
 import { DestinatairesReportModal } from '../../../components/caisse/DestinatairesReportModal'
+import { getDestinatairesActifs } from '../../../services/destinatairesReportService'
 import { logAuditEvent } from '../../../services/auditService'
 import { formatFCFA } from '../../../utils/formatters'
 import { genererRapportCaissePDF, blobToBase64, envoyerRapportCaisseMail } from '../../../utils/rapportCaissePdf'
@@ -1000,12 +1001,19 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       const closedAt = new Date().toISOString()
       const closedBy = user?.full_name || 'Caissier'
 
-      // Récupérer les adresses emails de notification configurées
-      const recipientEmails: string[] = []
-      if ((company as any)?.closure_email_1) recipientEmails.push((company as any).closure_email_1.trim())
-      if ((company as any)?.closure_email_2) recipientEmails.push((company as any).closure_email_2.trim())
-      if ((company as any)?.closure_email_3) recipientEmails.push((company as any).closure_email_3.trim())
-      if (recipientEmails.length === 0 && company?.email) recipientEmails.push(company.email.trim())
+      // Récupérer tous les destinataires actifs enregistrés (parametres_destinataires)
+      let recipientEmails: string[] = []
+      try {
+        const destActifs = await getDestinatairesActifs(currentCompanyId)
+        recipientEmails = destActifs.map((d) => d.email.trim().toLowerCase()).filter(Boolean)
+      } catch (_) {}
+
+      // Fallbacks légitimes si aucun destinataire spécifique n'est configuré
+      if ((company as any)?.closure_email_1) recipientEmails.push((company as any).closure_email_1.trim().toLowerCase())
+      if ((company as any)?.closure_email_2) recipientEmails.push((company as any).closure_email_2.trim().toLowerCase())
+      if ((company as any)?.closure_email_3) recipientEmails.push((company as any).closure_email_3.trim().toLowerCase())
+      if (company?.email) recipientEmails.push(company.email.trim().toLowerCase())
+      recipientEmails = Array.from(new Set(recipientEmails.filter(Boolean)))
 
       // 1. Clôture officielle dans la base (caisse_sessions + caisses + caisse_clotures + mouvements)
       const closeRes = await cloturerSessionCaisse(
@@ -1042,6 +1050,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       }
 
       setClosuresHistory([newClosure, ...closuresHistory])
+      setActiveReportClosure(newClosure)
 
       // Transfert officiel M048 : du jour -> fond actuel, remise à 0 du jour
       const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id) ? user.id : null
@@ -1065,31 +1074,6 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       setShowCloseModal(false)
       setShowReportModal(false)
       setClosingNotes('')
-      toast.success('Caisse clôturée avec succès !', `Nouveau fond espèces : ${fmt(Number(closingPhysicalCash))}`)
-
-      // Rapport en arrière-plan envoyé par email (table report_emails)
-      try {
-        await supabase.from('report_emails').insert({
-          company_id: currentCompanyId,
-          sector_slug: currentSectorSlug,
-          report_type: 'cloture_caisse',
-          recipient: recipientEmails.join(', ') || company?.email || 'direction@gestio229.bj',
-          payload: {
-            caisse_id: activeSessionId,
-            closed_at: closedAt,
-            closed_by: closedBy,
-            fond_especes_theorique: fondTheoriqueEsp,
-            fond_especes_physique: Number(closingPhysicalCash),
-            ecart_especes: ecart,
-            fond_momo: momoDuJour,
-            total_fermeture: Number(closingPhysicalCash) + momoDuJour,
-            notes: closingNotes,
-          },
-          status: 'sent'
-        })
-      } catch (emErr) {
-        console.warn('Avertissement insertion report_emails:', emErr)
-      }
 
       // Traçabilité Audit Senior
       await logAuditEvent({
@@ -1103,10 +1087,108 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         description: `Clôture caisse ${currentSectorSlug} par ${closedBy}. Espèces : ${fmt(Number(closingPhysicalCash))}, MoMo : ${fmt(momoDuJour)}`
       })
 
-      toast.success(
-        'Caisse Clôturée avec Succès !',
-        `Rapport Z envoyé en arrière-plan. Total encaissé de la journée : ${fmt(totalEntreesDuJour)}`
-      )
+      // ── ENVOI IMMÉDIAT DU RAPPORT PDF VIA GMAIL SMTP (Sans attendre 23h00) ──
+      const sendRapportCaisse = async () => {
+        try {
+          const heureActuelle = new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
+          const donneesPDF = {
+            company: {
+              name: company?.name || 'GESTIO 229',
+              ifu: (company as any)?.ifu_number,
+              rccm: (company as any)?.rccm_number,
+              phone: company?.phone,
+              email: company?.email
+            },
+            secteur: {
+              nom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
+              slug: currentSectorSlug
+            },
+            caisse: {
+              nom: caisseActive?.nom || `Caisse ${currentSectorSlug.toUpperCase()}`,
+              id: cashRegisterId || caisseActive?.id
+            },
+            session: {
+              id: newClosure.id,
+              dateCloture: closedAt,
+              fermePar: closedBy
+            },
+            user: {
+              nom: closedBy
+            },
+            date: closedAt,
+            heure: heureActuelle,
+            synthese: {
+              fondInitialEspeces: fondInitialEspeces,
+              encaissementsEspeces: especesDuJour,
+              depensesEspeces: sumDepensesEspeces,
+              fondTheoriqueEspeces: fondTheoriqueEsp,
+              fondTheoriqueMomo: momoDuJour,
+              fondReelEspeces: Number(closingPhysicalCash),
+              fondReelMomo: momoDuJour,
+              ecartEspeces: ecart,
+              ecartMomo: 0,
+              caDuJour: caDuJour,
+              especesDuJour: especesDuJour,
+              momoDuJour: momoDuJour,
+              fondActuel: Number(closingPhysicalCash) + momoDuJour,
+              fondActuelEspeces: Number(closingPhysicalCash),
+              fondActuelMomo: momoDuJour,
+              totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+              margeBruteJour: margeBruteJour,
+              totalCreances: totalCreances
+            },
+            top5Produits: top5ProduitsJour,
+            mouvements: movementsHistory.map((m) => ({
+              heure: new Date(m.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+              type: m.type,
+              montant: m.amount,
+              mode: m.payment_channel,
+              motif: m.motif,
+              reference: m.reference
+            })),
+            notes: closingNotes
+          }
+
+          const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
+          const pdfBase64 = await blobToBase64(blob)
+
+          const res = await envoyerRapportCaisseMail({
+            companyId: currentCompanyId,
+            secteurId: currentSectorSlug,
+            caisseId: cashRegisterId || caisseActive?.id,
+            date: new Date(closedAt).toLocaleDateString('fr-BJ'),
+            heure: heureActuelle,
+            pdfBase64,
+            emails: recipientEmails.length > 0 ? recipientEmails : undefined,
+            metadata: {
+              nomCaissier: closedBy,
+              secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
+              caDuJour: caDuJour,
+              especesDuJour: especesDuJour,
+              momoDuJour: momoDuJour,
+              fondActuel: Number(closingPhysicalCash) + momoDuJour,
+              totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+              margeBruteJour: margeBruteJour,
+              totalCreances: totalCreances,
+              top5Produits: top5ProduitsJour
+            }
+          })
+
+          const sentRecipients = res.recipients || recipientEmails
+          toast.success(
+            'Rapport envoyé par email !',
+            `Rapport envoyé à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}) sans attendre 23h00.`
+          )
+        } catch (mailErr: any) {
+          console.error('[sendRapportCaisse] Échec envoi direct :', mailErr)
+          toast.error('Erreur SMTP', mailErr?.message || 'Échec de l\'envoi automatique du rapport de caisse par email.')
+        }
+      }
+
+      // Déclenchement immédiat de l'envoi dès la confirmation de fermeture
+      sendRapportCaisse()
+
+      toast.success('Caisse clôturée avec succès !', `Nouveau fond espèces : ${fmt(Number(closingPhysicalCash))}`)
 
       await loadCaisseData()
       if (refreshFonds) await refreshFonds()
@@ -1324,8 +1406,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       setCustomReportEmail('')
 
       toast.success(
-        'Rapport PDF envoyé avec succès !',
-        `Le rapport a été expédié via Gmail SMTP aux destinataires actifs : ${updatedEmails.join(', ')}`
+        'Rapport envoyé avec succès !',
+        `Rapport envoyé à ${updatedEmails.length} destinataire(s) (${updatedEmails.join(', ')}) via Gmail SMTP.`
       )
     } catch (err: any) {
       console.error('Erreur envoi rapport email:', err)
@@ -2359,25 +2441,24 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                 Rapport Officiel de Clôture (Z de Caisse)
               </h3>
               <div className="flex items-center gap-1.5 flex-wrap justify-end">
-                {isAdminOrManager && (
-                  <button
-                    type="button"
-                    onClick={handleSendReportByEmail}
-                    disabled={isSendingReportMail}
-                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition disabled:opacity-50"
-                    title="Envoyer immédiatement le rapport complet avec PDF joint aux destinataires (Gmail SMTP)"
-                  >
-                    {isSendingReportMail ? (
-                      <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Envoi...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="w-3.5 h-3.5" /> Envoyer PDF par Email
-                      </>
-                    )}
-                  </button>
-                )}
+                {/* Bouton de renvoi manuel du rapport PDF */}
+                <button
+                  type="button"
+                  onClick={handleSendReportByEmail}
+                  disabled={isSendingReportMail}
+                  className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold flex items-center gap-1 shadow-sm transition disabled:opacity-50"
+                  title="Renvoyer le rapport complet avec PDF joint aux destinataires enregistrés (Gmail SMTP)"
+                >
+                  {isSendingReportMail ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Envoi...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-3.5 h-3.5" /> Renvoyer le PDF
+                    </>
+                  )}
+                </button>
                 <button
                   type="button"
                   onClick={handleTelechargerReportPDF}
