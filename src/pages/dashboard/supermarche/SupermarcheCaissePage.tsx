@@ -426,21 +426,19 @@ export const SupermarcheCaissePage: React.FC = () => {
 
       if (orderErr) throw orderErr
 
-      // 2. Enregistrement des lignes d'articles & Décrémentation Stock
-      for (const line of cart) {
-        // Enregistrer la ligne de vente
-        await supabase.from('sales_order_items').insert({
-          order_id: orderData.id,
-          product_id: line.product.id,
-          product_name: line.product.name,
-          quantity: line.qty,
-          unit_price: line.unitPrice,
-          total_price: line.totalLine
-        })
+      // 2. Écritures secondaires en parallèle : Lignes d'articles, Déstockage & Mouvements de caisse
+      const lineItems = cart.map(line => ({
+        order_id: orderData.id,
+        product_id: line.product.id,
+        product_name: line.product.name,
+        quantity: line.qty,
+        unit_price: line.unitPrice,
+        total_price: line.totalLine
+      }))
 
-        // Décrémenter le stock dans products
+      const productUpdates = cart.map(line => {
         const nouveauStockVente = Math.max(0, line.product.current_stock - line.qty)
-        await supabase
+        return supabase
           .from('products')
           .update({
             current_stock: nouveauStockVente,
@@ -448,32 +446,47 @@ export const SupermarcheCaissePage: React.FC = () => {
             updated_at: dateNow
           })
           .eq('id', line.product.id)
-      }
+      })
 
-      // 3. Mouvement de caisse si paiement comptant (espèces ou MoMo)
+      const caisseOps: Promise<any>[] = []
       if (paymentMethod === 'especes') {
-        try {
-          await enregistrerEntreeCaisse({
+        caisseOps.push(
+          enregistrerEntreeCaisse({
             companyId,
             secteurSlug: activeSector,
             montant: totalNet,
             typeFond: 'especes',
             motif: `Vente supermarché ${orderNumber}`,
             reference: orderNumber
-          })
-        } catch (_) {}
+          }).catch(() => {})
+        )
       } else if (paymentMethod === 'momo_mtn' || paymentMethod === 'momo_moov') {
-        try {
-          await enregistrerEntreeCaisse({
+        caisseOps.push(
+          enregistrerEntreeCaisse({
             companyId,
             secteurSlug: activeSector,
             montant: totalNet,
             typeFond: 'mtn_momo',
             motif: `Vente supermarché ${orderNumber} (${paymentMethod})`,
             reference: orderNumber
-          })
-        } catch (_) {}
+          }).catch(() => {})
+        )
       }
+
+      // Exécution parallèle sans bloquer
+      await Promise.all([
+        supabase.from('sales_order_items').insert(lineItems),
+        ...productUpdates,
+        ...caisseOps
+      ])
+
+      // Mise à jour locale du stock sans recharger toute la base
+      setProducts(prev => prev.map(p => {
+        const match = cart.find(l => l.product.id === p.id)
+        if (!match) return p
+        const ns = Math.max(0, p.current_stock - match.qty)
+        return { ...p, current_stock: ns, stock_vente: ns }
+      }))
 
       // 4. Objet Ticket pour impression
       const ticketInfo: TicketData = {
@@ -530,8 +543,7 @@ export const SupermarcheCaissePage: React.FC = () => {
       setClientNom('Client Comptoir')
       setClientTel('')
 
-      toast.success('Vente validée avec succès !', `N° Ticket : ${orderNumber}`)
-      loadProducts()
+      toast.success('Enregistré', `Vente ${orderNumber} enregistrée avec succès.`)
     } catch (err: any) {
       console.error('Erreur validation vente supermarché :', err)
       toast.error('Échec de validation', err.message || 'Impossible d\'enregistrer la vente.')

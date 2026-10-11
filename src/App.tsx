@@ -152,14 +152,20 @@ const FullPageLoader = () => (
 // ─── Guards ─────────────────────────────────────────────────────────────────
 
 /**
- * ProtectedRoute : redirige vers /login si non authentifié
+ * ProtectedRoute / PrivateRoute :
+ * Affiche un loader (spinner "Chargement...") tant que isLoading = true.
+ * Si isLoading = false et pas de session => redirige vers /login.
+ * Si session existe => affiche la page demandée, même après F5.
  */
-const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const status = useAuthStore((s) => s.status)
-  if (status === 'idle' || status === 'loading') return <FullPageLoader />
-  if (status === 'unauthenticated') return <Navigate to="/login" replace />
+  const isLoading = status === 'idle' || status === 'loading'
+  if (isLoading) return <FullPageLoader />
+  if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
   return <>{children}</>
 }
+
+export const PrivateRoute = ProtectedRoute
 
 /**
  * AdminHubGuard : Bloque l'accès au HUB aux utilisateurs internes non-admin
@@ -183,11 +189,22 @@ const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 }
 
 /**
+ * RootRedirect : Redirige intelligemment depuis la racine / selon le profil connecté
+ */
+const RootRedirect: React.FC = () => {
+  const tenantCtx = useAuthStore((s) => s.tenantCtx)
+  const target = tenantCtx?.routingDecision?.redirectTo || '/hub'
+  return <Navigate to={target} replace />
+}
+
+/**
  * PublicRoute : redirige vers /dashboard si déjà connecté
  */
 const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const status = useAuthStore((s) => s.status)
   const tenantCtx = useAuthStore((s) => s.tenantCtx)
+
+  if (status === 'idle' || status === 'loading') return <FullPageLoader />
 
   const isConfirmationOrSignupReturn = 
     window.location.search.includes('confirmed=') || 
@@ -195,8 +212,9 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
     window.location.search.includes('code=') ||
     window.location.hash.includes('access_token')
 
-  if (status === 'authenticated' && tenantCtx && !isConfirmationOrSignupReturn) {
-    return <Navigate to={tenantCtx.routingDecision.redirectTo} replace />
+  if (status === 'authenticated' && !isConfirmationOrSignupReturn) {
+    const target = tenantCtx?.routingDecision?.redirectTo || '/hub'
+    return <Navigate to={target} replace />
   }
   return <>{children}</>
 }
@@ -343,6 +361,16 @@ const SuspendedPage = () => {
 const AppRoutes: React.FC = () => {
   return (
     <Routes>
+      {/* Racine : Redirection intelligente vers le Hub ou le secteur actif */}
+      <Route
+        path="/"
+        element={
+          <ProtectedRoute>
+            <RootRedirect />
+          </ProtectedRoute>
+        }
+      />
+
       {/* Routes publiques */}
       <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/connexion" element={<PublicRoute><LoginPage /></PublicRoute>} />

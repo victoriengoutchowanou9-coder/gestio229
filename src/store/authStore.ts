@@ -55,28 +55,88 @@ export const useAuthStore = create<AuthState>()(
       errorMessage: null,
 
       // ─── Initialisation au démarrage de l'app ─────────────────────────────
-      // RÈGLE : L'initialisation NE doit PAS connecter automatiquement l'utilisateur.
-      // Même si Supabase a une session active ou que zustand a persisté un user,
-      // on affiche TOUJOURS l'écran de connexion et on attend le clic "Se connecter".
-      // La connexion ne se fait QUE via login() explicitement appelé par l'utilisateur.
+      // Appelle d'abord supabase.auth.getSession() et attend la réponse.
+      // Écoute les changements avec supabase.auth.onAuthStateChange pour maintenir la session.
+      // Ce n'est qu'après avoir confirmé qu'il n'y a AUCUNE session que l'on passe en 'unauthenticated'.
 
       initialize: async () => {
         set({ status: 'loading' })
         try {
-          // 1. Déconnecter immédiatement toute session Supabase Auth active.
-          //    Cela empêche la reconnexion automatique via le token JWT mémorisé.
-          await supabase.auth.signOut().catch(() => {})
-        } catch (_) {}
+          // 1. Récupérer la session Supabase persistée
+          const { data: { session }, error: sessionError } = await supabase.auth.getSession()
 
-        // 2. Toujours atterrir sur l'écran de connexion (status unauthenticated).
-        //    L'autofill navigateur reste actif côté form, mais NE provoque PAS de connexion.
-        set({
-          status: 'unauthenticated',
-          user: null,
-          company: null,
-          tenantCtx: null,
-          errorMessage: null,
-        })
+          if (sessionError) {
+            console.warn('[AuthStore] Erreur getSession:', sessionError.message)
+          }
+
+          if (session?.user) {
+            // Utilisateur connecté via Supabase Auth
+            let ctx = await SectorLoader.loadTenantContext(session.user.id, session.user.email)
+
+            if (!ctx) {
+              // Tentative d'auto-guérison si contexte non résolu immédiatement
+              const persisted = get().user
+              if (persisted) {
+                ctx = await SectorLoader.loadTenantContext(
+                  session.user.id,
+                  session.user.email,
+                  persisted
+                )
+              }
+            }
+
+            if (ctx && ctx.user && ctx.company) {
+              set({
+                status: 'authenticated',
+                user: ctx.user,
+                company: ctx.company,
+                tenantCtx: ctx,
+                errorMessage: null,
+              })
+              return
+            }
+          }
+
+          // 2. Utilisateurs internes (non gérés directement par Supabase Auth)
+          // Vérifier si un profil utilisateur valide est persisté dans le store Zustand
+          const persistedUser = get().user
+          if (persistedUser && persistedUser.id) {
+            const ctx = await SectorLoader.loadTenantContext(
+              persistedUser.auth_user_id || persistedUser.id,
+              persistedUser.email,
+              persistedUser
+            )
+
+            if (ctx && ctx.user && ctx.company) {
+              set({
+                status: 'authenticated',
+                user: ctx.user,
+                company: ctx.company,
+                tenantCtx: ctx,
+                errorMessage: null,
+              })
+              return
+            }
+          }
+
+          // 3. Aucune session confirmée : passer en unauthenticated
+          set({
+            status: 'unauthenticated',
+            user: null,
+            company: null,
+            tenantCtx: null,
+            errorMessage: null,
+          })
+        } catch (err: any) {
+          console.error('[AuthStore] Erreur lors de l\'initialisation de la session :', err)
+          set({
+            status: 'unauthenticated',
+            user: null,
+            company: null,
+            tenantCtx: null,
+            errorMessage: null,
+          })
+        }
       },
 
       // ─── Connexion Unifiée : Administrateur & Utilisateurs Internes ────────
@@ -660,14 +720,33 @@ export const useAuthStore = create<AuthState>()(
 
 // ─── Écouter les changements Supabase Auth ──────────────────────────────────
 
-supabase.auth.onAuthStateChange((event, session) => {
+supabase.auth.onAuthStateChange(async (event, session) => {
   if (event === 'SIGNED_OUT') {
     useAuthStore.setState({
       status: 'unauthenticated',
       user: null,
       company: null,
       tenantCtx: null,
+      errorMessage: null,
     })
+  } else if ((event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') && session?.user) {
+    const state = useAuthStore.getState()
+    if (state.status !== 'authenticated' || state.user?.email !== session.user.email) {
+      try {
+        const ctx = await SectorLoader.loadTenantContext(session.user.id, session.user.email)
+        if (ctx && ctx.user && ctx.company) {
+          useAuthStore.setState({
+            status: 'authenticated',
+            user: ctx.user,
+            company: ctx.company,
+            tenantCtx: ctx,
+            errorMessage: null,
+          })
+        }
+      } catch (e) {
+        console.warn('[onAuthStateChange] Erreur chargement contexte :', e)
+      }
+    }
   }
 })
 

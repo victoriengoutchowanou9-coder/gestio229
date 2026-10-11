@@ -21,6 +21,15 @@ interface ModuleGuardProps {
 export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) => {
   const company = useAuthStore((s) => s.company)
   const user = useAuthStore((s) => s.user)
+  const status = useAuthStore((s) => s.status)
+
+  if (!company && (status === 'idle' || status === 'loading')) {
+    return (
+      <div className="min-h-[70vh] flex items-center justify-center">
+        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
+      </div>
+    )
+  }
 
   // 1. Contrôle abonnement entreprise
   const access = checkModuleAccess(moduleId, company)

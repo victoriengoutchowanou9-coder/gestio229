@@ -16,10 +16,10 @@ const supabaseAnonKey = (env.VITE_SUPABASE_ANON_KEY as string) || 'sb_publishabl
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
-    autoRefreshToken: true,
     persistSession: true,
+    autoRefreshToken: true,
     detectSessionInUrl: true,
-    storageKey: 'gestio229_session',
+    storage: typeof window !== 'undefined' ? window.localStorage : undefined,
   },
   global: {
     headers: {
