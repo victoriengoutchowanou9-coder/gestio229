@@ -55,6 +55,7 @@ export const TresoreriePage: React.FC = () => {
 
   const [accounts, setAccounts] = useState<TreasuryAccount[]>([])
   const [pendingTransfers, setPendingTransfers] = useState<PendingTransfer[]>([])
+  const [allTransfersHistory, setAllTransfersHistory] = useState<PendingTransfer[]>([])
   const [loading, setLoading] = useState(true)
 
   // Modals
@@ -71,12 +72,54 @@ export const TresoreriePage: React.FC = () => {
     alert_threshold: 50000
   })
 
+  // Initialisation automatique des comptes COFFRE-FORT + MOMO MARCHANDS si vide (PARTIE 2D)
+  const initDefaultAccounts = async (compId: string): Promise<TreasuryAccount[]> => {
+    const created: TreasuryAccount[] = []
+    try {
+      // Créer COFFRE-FORT (Espèces)
+      const { data: vault } = await supabase
+        .from('treasury_accounts')
+        .insert({
+          company_id: compId,
+          name: 'COFFRE-FORT (Espèces)',
+          type: 'vault',
+          institution: 'Trésorerie Centrale',
+          account_number: 'COFFRE-PRINCIPAL',
+          balance: 0,
+          syscohada_code: '571000',
+          is_active: true
+        })
+        .select()
+        .single()
+      if (vault) created.push({ id: vault.id, name: vault.name, type: 'vault', institution: vault.institution, account_number: vault.account_number, balance: 0, alert_threshold: 50000 })
+    } catch (_) {}
+    try {
+      // Créer MOMO MARCHANDS central
+      const { data: momo } = await supabase
+        .from('treasury_accounts')
+        .insert({
+          company_id: compId,
+          name: 'MOMO MARCHANDS Central',
+          type: 'mobile_money',
+          institution: 'MTN / Moov Central',
+          account_number: 'MOMO-CENTRAL',
+          balance: 0,
+          syscohada_code: '521100',
+          is_active: true
+        })
+        .select()
+        .single()
+      if (momo) created.push({ id: momo.id, name: momo.name, type: 'mobile_money', institution: momo.institution, account_number: momo.account_number, balance: 0, alert_threshold: 10000 })
+    } catch (_) {}
+    return created
+  }
+
   // Charger les comptes trésorerie réels
   const loadTreasuryData = useCallback(async () => {
     if (!currentCompanyId) return
     setLoading(true)
     try {
-      // 1. Charger depuis Supabase si table existante
+      // 1. Charger depuis Supabase
       const { data: dbAccounts, error } = await supabase
         .from('treasury_accounts')
         .select('*')
@@ -86,20 +129,51 @@ export const TresoreriePage: React.FC = () => {
         const sectorAccs = filterItemsForSector(dbAccounts, currentSectorSlug)
         setAccounts(sectorAccs)
       } else {
-        setAccounts([])
+        // Initialisation automatique si aucun compte (PARTIE 2D)
+        const defaults = await initDefaultAccounts(currentCompanyId)
+        setAccounts(defaults)
       }
 
-      // 2. Charger les demandes de versements caisse en attente du secteur depuis Supabase
+      // 2. Charger les demandes de versements — sources multiples
+      let allTransfers: PendingTransfer[] = []
       try {
         const { data: dbTransfers } = await supabase
           .from('treasury_transfers')
           .select('*')
           .eq('company_id', currentCompanyId)
-          .or(`sector_slug.eq.${currentSectorSlug},sector_slug.is.null`)
           .order('created_at', { ascending: false })
+          .limit(100)
         if (dbTransfers && dbTransfers.length > 0) {
-          setPendingTransfers(dbTransfers)
-        } else {
+          allTransfers = dbTransfers
+        }
+      } catch (_) {}
+
+      // Fallback : demandes_retrait
+      if (allTransfers.length === 0) {
+        try {
+          const { data: demandesRet } = await supabase
+            .from('demandes_retrait')
+            .select('*')
+            .eq('company_id', currentCompanyId)
+            .order('created_at', { ascending: false })
+            .limit(100)
+          if (demandesRet && demandesRet.length > 0) {
+            allTransfers = demandesRet.map((d: any) => ({
+              id: d.id,
+              created_at: d.created_at,
+              requested_by: d.demandeur_nom || 'Caissier',
+              type: d.mode_paiement === 'momo' ? 'MoMo' : 'Espèces',
+              amount: Number(d.montant) || 0,
+              motif: d.motif || '',
+              status: d.statut === 'valide' || d.statut === 'APPROVED' ? 'APPROVED' : d.statut === 'refuse' || d.statut === 'REJECTED' ? 'REJECTED' : 'EN_ATTENTE'
+            }))
+          }
+        } catch (_) {}
+      }
+
+      // Fallback final : audit_logs
+      if (allTransfers.length === 0) {
+        try {
           const { data: auditTransfers } = await supabase
             .from('audit_logs')
             .select('*')
@@ -107,7 +181,7 @@ export const TresoreriePage: React.FC = () => {
             .eq('action', 'DEMANDE_TRANSFERT_TRESORERIE')
             .order('created_at', { ascending: false })
           if (auditTransfers && auditTransfers.length > 0) {
-            setPendingTransfers(auditTransfers.map((a: any) => {
+            allTransfers = auditTransfers.map((a: any) => {
               const det = typeof a.details === 'string' ? JSON.parse(a.details) : (a.details || {})
               return {
                 id: a.id,
@@ -118,14 +192,13 @@ export const TresoreriePage: React.FC = () => {
                 motif: det.motif || '',
                 status: det.status || 'EN_ATTENTE'
               }
-            }))
-          } else {
-            setPendingTransfers([])
+            })
           }
-        }
-      } catch (e) {
-        setPendingTransfers([])
+        } catch (_) {}
       }
+
+      setAllTransfersHistory(allTransfers)
+      setPendingTransfers(allTransfers.filter((t: any) => t.status === 'EN_ATTENTE'))
     } catch (err: any) {
       console.error('Erreur chargement trésorerie :', err)
       setAccounts([])
@@ -214,9 +287,11 @@ export const TresoreriePage: React.FC = () => {
     })
   }
 
-  // Approuver une demande de versement envoyée par la caisse
+  // Approuver une demande de versement — DOUBLE TRANSACTION (PARTIE 2B)
+  // Espèces : décrémente Caisse Tiroir + incrémente COFFRE-FORT
+  // MoMo : décrémente Caisse MoMo + incrémente MOMO MARCHANDS central
   const handleApproveTransfer = async (transfer: PendingTransfer) => {
-    // Trouver le compte de destination correspondant (ex: coffre pour espèces, momo pour momo)
+    // 1. Trouver le compte de destination correspondant
     const target = accounts.find((a) =>
       transfer.type === 'Espèces' ? a.type === 'vault' : a.type === 'mobile_money'
     ) || accounts[0]
@@ -228,12 +303,12 @@ export const TresoreriePage: React.FC = () => {
       )
       saveAccounts(updatedAccounts)
 
-      // Mise à jour persistante Supabase
+      // Mise à jour persistante du solde du compte de trésorerie (crédit)
       if (company?.id) {
         try {
           await supabase
             .from('treasury_accounts')
-            .update({ balance: newBal })
+            .update({ balance: newBal, updated_at: new Date().toISOString() })
             .eq('id', target.id)
         } catch (updErr) {
           console.warn('Fallback mise à jour solde treasury_accounts:', updErr)
@@ -241,11 +316,14 @@ export const TresoreriePage: React.FC = () => {
       }
     }
 
+    // 2. Marquer la demande comme APPROUVÉE
     const updatedTransfers: PendingTransfer[] = pendingTransfers.map((t) =>
       t.id === transfer.id ? { ...t, status: 'APPROVED' } : t
     )
-    setPendingTransfers(updatedTransfers)
+    setPendingTransfers(updatedTransfers.filter((t) => t.status === 'EN_ATTENTE'))
+    setAllTransfersHistory((prev) => prev.map((t) => t.id === transfer.id ? { ...t, status: 'APPROVED' } : t))
 
+    // 3. Mettre à jour treasury_transfers
     if (company?.id) {
       try {
         await supabase
@@ -255,6 +333,44 @@ export const TresoreriePage: React.FC = () => {
       } catch (e) {}
     }
 
+    // 4. Mettre à jour demandes_retrait côté caisse
+    if (company?.id) {
+      try {
+        await supabase
+          .from('demandes_retrait')
+          .update({ statut: 'valide', valide_par: user?.full_name, valide_at: new Date().toISOString() })
+          .eq('id', transfer.id)
+      } catch (e) {}
+    }
+
+    // 5. Enregistrer mouvement dans caisse_mouvements côté trésorerie (CRÉDIT du compte)
+    try {
+      await supabase.from('caisse_mouvements').insert({
+        company_id: company?.id ?? currentCompanyId,
+        sector_slug: 'tresorerie',
+        type: 'reception_caisse', // Réception en trésorerie depuis la caisse
+        sens: 'entree_depuis_caisse',
+        montant: transfer.amount,
+        montant_especes: transfer.type === 'Espèces' ? transfer.amount : 0,
+        montant_momo: transfer.type === 'MoMo' ? transfer.amount : 0,
+        motif: `Versement validé depuis caisse — ${transfer.motif}`,
+        source_module: 'tresorerie_validation',
+        source_id: transfer.id,
+        user_name: user?.full_name || 'Admin',
+        user_id: user?.id,
+        created_at: new Date().toISOString()
+      })
+    } catch (_) {}
+
+    // 6. Mettre à jour le mouvement caisse côté caissière (statut en_attente → valide)
+    try {
+      await supabase
+        .from('caisse_mouvements')
+        .update({ statut: 'valide', updated_at: new Date().toISOString() })
+        .eq('source_id', transfer.id)
+        .eq('type', 'retrait_tresorerie')
+    } catch (_) {}
+
     await logAuditEvent({
       companyId: company?.id,
       userId: user?.id,
@@ -263,30 +379,45 @@ export const TresoreriePage: React.FC = () => {
       action: 'APPROBATION_TRANSFERT_CAISSE',
       module: 'TRESORERIE',
       sector: currentSectorSlug.toUpperCase(),
-      description: `Approbation du transfert de caisse de ${fmt(transfer.amount)} (${transfer.type}) vers le compte ${target?.name || 'Trésorerie'}`
+      description: `Approbation du transfert de caisse de ${fmt(transfer.amount)} (${transfer.type}) → ${target?.name || 'Trésorerie'}. Double transaction exécutée.`
     })
 
     toast.success(
       'Fonds Encaissés en Trésorerie !',
-      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité.`
+      `Le versement de ${fmt(transfer.amount)} a été approuvé et crédité dans ${target?.name || 'Trésorerie'}.`
     )
   }
 
-  // Rejeter une demande
+  // Rejeter une demande — libère le montant bloqué
   const handleRejectTransfer = async (transferId: string) => {
-    const updatedTransfers: PendingTransfer[] = pendingTransfers.map((t) =>
-      t.id === transferId ? { ...t, status: 'REJECTED' } : t
-    )
-    setPendingTransfers(updatedTransfers)
+    setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId))
+    setAllTransfersHistory((prev) => prev.map((t) => t.id === transferId ? { ...t, status: 'REJECTED' } : t))
 
     if (company?.id) {
       try {
         await supabase
           .from('treasury_transfers')
-          .update({ status: 'REJECTED' })
+          .update({ status: 'REJECTED', rejected_at: new Date().toISOString() })
           .eq('id', transferId)
       } catch (e) {}
     }
+
+    // Libérer le montant côté caisse_mouvements
+    try {
+      await supabase
+        .from('caisse_mouvements')
+        .update({ statut: 'refuse', updated_at: new Date().toISOString() })
+        .eq('source_id', transferId)
+        .eq('type', 'retrait_tresorerie')
+    } catch (_) {}
+
+    // Mettre à jour demandes_retrait
+    try {
+      await supabase
+        .from('demandes_retrait')
+        .update({ statut: 'refuse', updated_at: new Date().toISOString() })
+        .eq('id', transferId)
+    } catch (_) {}
 
     await logAuditEvent({
       companyId: company?.id,
@@ -296,10 +427,10 @@ export const TresoreriePage: React.FC = () => {
       action: 'REJET_TRANSFERT_CAISSE',
       module: 'TRESORERIE',
       sector: currentSectorSlug.toUpperCase(),
-      description: `Rejet de la demande de transfert de caisse réf: ${transferId}`
+      description: `Rejet de la demande de transfert de caisse réf: ${transferId}. Montant libéré.`
     })
 
-    toast.info('Demande rejetée', 'Le caissier a été notifié.')
+    toast.info('Demande rejetée', 'Le montant bloqué a été libéré. Le caissier a été notifié.')
   }
 
   // Totaux calculés à partir des comptes réels
@@ -460,6 +591,71 @@ export const TresoreriePage: React.FC = () => {
                           Rejeter
                         </button>
                       </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Historique Complet des Retraits Caisse ────────────────────────────── */}
+      {allTransfersHistory.length > 0 && (
+        <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+          <div className="p-5 border-b border-slate-100 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <ArrowRightLeft className="w-5 h-5 text-indigo-600" />
+              <h3 className="text-sm font-bold text-slate-800">
+                Historique des Retraits Caisse ({allTransfersHistory.length})
+              </h3>
+            </div>
+            <span className="text-xs text-slate-400">Virements internes Caisse → Trésorerie</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-100">
+                <tr>
+                  <th className="p-3">Demandeur</th>
+                  <th className="p-3">Date / Heure</th>
+                  <th className="p-3 text-center">Canal</th>
+                  <th className="p-3 text-right">Montant</th>
+                  <th className="p-3">Motif</th>
+                  <th className="p-3 text-center">Statut</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 font-mono">
+                {allTransfersHistory.map((transfer) => (
+                  <tr key={transfer.id} className="hover:bg-slate-50/60 transition">
+                    <td className="p-3 font-sans font-bold text-slate-800">{transfer.requested_by}</td>
+                    <td className="p-3 font-sans text-slate-500">
+                      {new Date(transfer.created_at).toLocaleString('fr-BJ', {
+                        day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit'
+                      })}
+                    </td>
+                    <td className="p-3 text-center font-sans">
+                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                        transfer.type === 'Espèces' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {transfer.type === 'Espèces' ? '💵 Espèces' : '📱 MoMo'}
+                      </span>
+                    </td>
+                    <td className="p-3 text-right font-black text-slate-900">{fmt(transfer.amount)}</td>
+                    <td className="p-3 font-sans text-slate-600 max-w-[150px] truncate">{transfer.motif}</td>
+                    <td className="p-3 text-center font-sans">
+                      {transfer.status === 'APPROVED' ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 justify-center">
+                          <CheckCircle2 className="w-3 h-3" /> Validé
+                        </span>
+                      ) : transfer.status === 'REJECTED' ? (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                          ✗ Refusé
+                        </span>
+                      ) : (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                          ⏳ En attente
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}

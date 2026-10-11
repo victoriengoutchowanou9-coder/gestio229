@@ -185,9 +185,76 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const userRole = ((user?.role || '') as string).toLowerCase()
   const isAdminOrManager = ['admin', 'administrateur', 'super_admin', 'dirigeant', 'gerant', 'patron'].includes(userRole)
 
-  // Saisie ouverture
+  // Saisie ouverture (calculée automatiquement - non modifiable par l'utilisateur)
   const [openInputCash, setOpenInputCash] = useState<number>(0)
   const [openInputMomo, setOpenInputMomo] = useState<number>(0)
+
+  // Calcul automatique des fonds initiaux dès l'ouverture du modal (PARTIE 1)
+  useEffect(() => {
+    if (!showOpenModal) return
+    const compId = currentCompanyId || company?.id
+    const secId = secteurActif?.id
+    if (!compId) return
+    ;(async () => {
+      // 1. Espèces : dernière clôture du tiroir (secteur), sinon Coffre-Fort trésorerie
+      let initCash = 0
+      try {
+        const { data: lastClo } = await supabase
+          .from('clotures_caisse')
+          .select('fond_reel_especes, fond_reel, fond_especes_apres, especes_cloture')
+          .eq('company_id', compId)
+          .eq('secteur_id', secId)
+          .order('date_cloture', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+        if (lastClo) {
+          initCash = Number(lastClo.fond_reel_especes ?? lastClo.fond_reel ?? lastClo.fond_especes_apres ?? lastClo.especes_cloture ?? 0)
+        }
+      } catch (_) {}
+      // Fallback : solde Coffre-Fort trésorerie (vault)
+      if (initCash === 0) {
+        try {
+          const { data: vault } = await supabase
+            .from('treasury_accounts')
+            .select('balance')
+            .eq('company_id', compId)
+            .eq('type', 'vault')
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle()
+          if (vault) initCash = Number(vault.balance ?? 0)
+        } catch (_) {}
+      }
+      setOpenInputCash(initCash)
+
+      // 2. MoMo : solde du compte Caisse MoMo marchand (mobile_money)
+      let initMomo = 0
+      try {
+        const { data: momoAcc } = await supabase
+          .from('treasury_accounts')
+          .select('balance')
+          .eq('company_id', compId)
+          .eq('type', 'mobile_money')
+          .order('created_at', { ascending: true })
+          .limit(1)
+          .maybeSingle()
+        if (momoAcc) initMomo = Number(momoAcc.balance ?? 0)
+      } catch (_) {}
+      // Fallback : fond_actuel_momo de la table fonds_actuels
+      if (initMomo === 0 && secId) {
+        try {
+          const { data: fa } = await supabase
+            .from('fonds_actuels')
+            .select('fond_actuel_momo')
+            .eq('company_id', compId)
+            .eq('secteur_id', secId)
+            .maybeSingle()
+          if (fa) initMomo = Number(fa.fond_actuel_momo ?? 0)
+        } catch (_) {}
+      }
+      setOpenInputMomo(initMomo)
+    })()
+  }, [showOpenModal, currentCompanyId, company?.id, secteurActif?.id])
 
   // Saisie clôture
   const [closingPhysicalCash, setClosingPhysicalCash] = useState<number>(0)
@@ -1269,6 +1336,9 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   }
 
   // ─── Action : Envoyer une Demande vers Trésorerie ───────────────────────────
+  // RÈGLE CRITIQUE : Un retrait caisse → trésorerie est un VIREMENT INTERNE.
+  // Il ne doit PAS être enregistré comme une 'depense' dans caisse_mouvements.
+  // Il doit être statut 'en_attente' jusqu'à validation admin (double transaction).
   const handleSendWithdrawalRequest = async (req: { type: string; amount: number; reason: string }) => {
     const newReq = {
       id: `req-${Date.now()}`,
@@ -1278,7 +1348,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       amount: req.amount,
       motif: req.reason,
       sector_slug: currentSectorSlug,
-      status: 'EN_ATTENTE' // En attente, Acceptée, Refusée, Exécutée
+      status: 'EN_ATTENTE' // En attente de validation admin — aucune déduction encore
     }
 
     const updated = [newReq, ...pendingRequests]
@@ -1286,30 +1356,38 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
     if (currentCompanyId) {
       const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id) ? user.id : null
+      const modeP = req.type === 'MoMo' ? 'momo' : 'especes'
+
+      // 1. Enregistrer dans demandes_retrait (statut en_attente — pas encore exécuté)
       try {
         await supabase.from('demandes_retrait').insert({
           company_id: currentCompanyId,
           secteur_id: secteurActif.id || null,
           caisse_id: cashRegisterId || caisseActive.id || null,
-          mode_paiement: req.type === 'MoMo' ? 'momo' : 'especes',
+          mode_paiement: modeP,
           montant: req.amount,
           motif: req.reason,
-          statut: 'en_attente',
-          created_by: validUserId
+          statut: 'en_attente', // Attend validation admin
+          created_by: validUserId,
+          demandeur_nom: user?.full_name || 'Caissier',
+          created_at: new Date().toISOString()
         })
       } catch (_) {}
 
+      // 2. Enregistrer dans treasury_transfers (pour la TresoreriePage admin)
       try {
         await supabase.from('treasury_transfers').insert({
           company_id: currentCompanyId,
           sector_slug: currentSectorSlug,
           requested_by: user?.full_name || 'Caissier',
-          type: req.type,
+          type: req.type, // 'Espèces' ou 'MoMo'
           amount: req.amount,
           motif: req.reason,
-          status: 'EN_ATTENTE'
+          status: 'EN_ATTENTE',
+          created_at: new Date().toISOString()
         })
       } catch (e) {
+        // Fallback audit_logs si treasury_transfers n'existe pas encore
         try {
           await supabase.from('audit_logs').insert({
             company_id: currentCompanyId,
@@ -1321,11 +1399,33 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           })
         } catch (err) {}
       }
+
+      // 3. Enregistrer dans caisse_mouvements avec type 'retrait_tresorerie' (JAMAIS 'depense')
+      //    Statut = 'en_attente' jusqu'à validation admin — c'est un virement interne non une dépense
+      try {
+        await supabase.from('caisse_mouvements').insert({
+          company_id: currentCompanyId,
+          sector_slug: currentSectorSlug,
+          caisse_id: cashRegisterId || caisseActive?.id || null,
+          type: 'retrait_tresorerie', // VIREMENT INTERNE — PAS une dépense
+          sens: 'sortie_vers_tresorerie',
+          montant: req.amount,
+          montant_especes: modeP === 'especes' ? req.amount : 0,
+          montant_momo: modeP === 'momo' ? req.amount : 0,
+          motif: `Demande de virement vers Trésorerie — ${req.reason}`,
+          source_module: 'caisse_retrait',
+          source_id: newReq.id,
+          user_name: user?.full_name || 'Caissier',
+          user_id: validUserId,
+          statut: 'en_attente', // Bloqué visuellement — pas encore comptabilisé dans le fond
+          created_at: new Date().toISOString()
+        })
+      } catch (_) {}
     }
 
     toast.success(
       'Demande envoyée vers la Trésorerie',
-      `Demande de versement de ${fmt(req.amount)} (${req.type}) soumise à validation.`
+      `Demande de versement de ${fmt(req.amount)} (${req.type}) soumise à validation admin. Montant bloqué en attente.`
     )
     loadCaisseData()
   }
@@ -2086,34 +2186,41 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           <form onSubmit={handleOpenCaisse} className="space-y-4 text-xs">
             <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 text-emerald-900">
               <p className="font-medium">
-                Saisissez les fonds initiaux disponibles au démarrage de la journée dans le tiroir et sur le compte MoMo.
+                Les fonds initiaux sont calculés automatiquement. La caisse démarre avec le solde de la dernière clôture.
               </p>
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Fond Initial Espèces (Tiroir) *</label>
-              <input
-                type="number"
-                required
-                min="0"
-                value={openInputCash}
-                onChange={(e) => setOpenInputCash(Number(e.target.value))}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-sm font-bold"
-              />
-              <p className="text-[10px] text-slate-400 mt-1">Laissez 0 si vous commencez sans fond de caisse.</p>
+              <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-slate-400" />
+                Fond Initial Espèces (Tiroir)
+              </label>
+              <div className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl font-mono text-sm font-bold text-slate-600 flex items-center justify-between cursor-not-allowed select-none">
+                <span>{fmt(openInputCash)}</span>
+                <Lock className="w-4 h-4 text-slate-400" />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Calculé automatiquement : dernier solde de clôture du tiroir, sinon solde du Coffre-Fort.
+              </p>
             </div>
 
             <div>
-              <label className="block font-bold text-slate-700 mb-1">Fond Initial Mobile Money MoMo *</label>
-              <input
-                type="number"
-                required
-                min="0"
-                value={openInputMomo}
-                onChange={(e) => setOpenInputMomo(Number(e.target.value))}
-                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono text-sm font-bold"
-              />
-              <p className="text-[10px] text-slate-400 mt-1">Solde de départ sur le numéro marchand.</p>
+              <label className="block font-bold text-slate-700 mb-1 flex items-center gap-1.5">
+                <Lock className="w-3.5 h-3.5 text-slate-400" />
+                Fond Initial Mobile Money MoMo
+              </label>
+              <div className="w-full p-2.5 bg-slate-100 border border-slate-200 rounded-xl font-mono text-sm font-bold text-slate-600 flex items-center justify-between cursor-not-allowed select-none">
+                <span>{fmt(openInputMomo)}</span>
+                <Lock className="w-4 h-4 text-slate-400" />
+              </div>
+              <p className="text-[10px] text-slate-400 mt-1">
+                Calculé automatiquement : solde actuel du compte Caisse MoMo marchand.
+              </p>
+            </div>
+
+            <div className="p-2.5 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-[10px] font-medium flex items-start gap-2">
+              <Shield className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-amber-600" />
+              <span>Montants verrouillés, calculés automatiquement. Contactez l'admin en cas d'erreur.</span>
             </div>
 
             <div className="flex gap-2 pt-3 border-t border-slate-100">
