@@ -1014,16 +1014,26 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             </div>
 
             {/* MARGE NETTE DU JOUR */}
-            <div className={`p-4 rounded-xl border ${
-              darkMode ? 'bg-slate-950/60 border-emerald-500/20' : 'bg-emerald-50/50 border-emerald-200'
+            <div className={`p-4 rounded-xl border transition-colors ${
+              dayTotals.totalNetMargin >= 0
+                ? darkMode ? 'bg-slate-950/60 border-emerald-500/20' : 'bg-emerald-50/50 border-emerald-200'
+                : darkMode ? 'bg-slate-950/60 border-rose-500/30' : 'bg-rose-50/50 border-rose-200'
             }`}>
-              <span className="text-[11px] font-bold text-emerald-500 uppercase tracking-wider block mb-1">
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                dayTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
+              }`}>
                 MARGE NETTE DU JOUR
               </span>
-              <div className="text-2xl font-black text-emerald-500 tracking-tight">
+              <div className={`text-2xl font-black tracking-tight ${
+                dayTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
+              }`}>
                 {fmt(dayTotals.totalNetMargin)}
               </div>
-              <div className="text-xs text-emerald-600 font-semibold mt-0.5">F CFA</div>
+              <div className={`text-xs font-semibold mt-0.5 ${
+                dayTotals.totalNetMargin >= 0 ? 'text-emerald-600' : 'text-rose-600'
+              }`}>
+                F CFA {dayTotals.totalNetMargin < 0 ? '(Déficit)' : '(Bénéfice)'}
+              </div>
             </div>
           </div>
         </div>
@@ -1083,16 +1093,26 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             </div>
 
             {/* MARGE NETTE DU MOIS */}
-            <div className={`p-4 rounded-xl border ${
-              darkMode ? 'bg-slate-950/60 border-emerald-500/30' : 'bg-emerald-50/50 border-emerald-200'
+            <div className={`p-4 rounded-xl border transition-colors ${
+              monthTotals.totalNetMargin >= 0
+                ? darkMode ? 'bg-slate-950/60 border-emerald-500/30' : 'bg-emerald-50/50 border-emerald-200'
+                : darkMode ? 'bg-slate-950/60 border-rose-500/30' : 'bg-rose-50/50 border-rose-200'
             }`}>
-              <span className="text-[11px] font-bold text-emerald-500 uppercase tracking-wider block mb-1">
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                monthTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
+              }`}>
                 MARGE NETTE DU MOIS
               </span>
-              <div className="text-2xl font-black text-emerald-500 tracking-tight">
+              <div className={`text-2xl font-black tracking-tight ${
+                monthTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
+              }`}>
                 {fmt(monthTotals.totalNetMargin)}
               </div>
-              <div className="text-xs text-emerald-600 font-semibold mt-0.5">F CFA</div>
+              <div className={`text-xs font-semibold mt-0.5 ${
+                monthTotals.totalNetMargin >= 0 ? 'text-emerald-600' : 'text-rose-600'
+              }`}>
+                F CFA {monthTotals.totalNetMargin < 0 ? '(Déficit)' : '(Bénéfice)'}
+              </div>
             </div>
           </div>
         </div>
@@ -1202,8 +1222,10 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
                       darkMode ? 'border-slate-800/80' : 'border-slate-200'
                     }`}>
-                      <span className="font-semibold text-emerald-500">Marge nette :</span>
-                      <span className="font-mono font-black text-emerald-500">{fmt(act.netMargin)} F CFA</span>
+                      <span className={`font-semibold ${act.netMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
+                      <span className={`font-mono font-black ${act.netMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {fmt(act.netMargin)} F CFA {act.netMargin < 0 ? '(Déficit)' : ''}
+                      </span>
                     </div>
                   </div>
                 </div>

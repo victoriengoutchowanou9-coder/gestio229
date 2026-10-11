@@ -1305,7 +1305,11 @@ export const SyscohadaPage: React.FC = () => {
                 <span>- Achats de Marchandises (601)</span>
                 <span className="text-rose-600">- {fmt(totalAchatsHt)}</span>
               </div>
-              <div className="flex justify-between p-2.5 bg-emerald-50 rounded-xl font-black text-emerald-900">
+              <div className={`flex justify-between p-2.5 rounded-xl font-black ${
+                totalVentesHt - totalAchatsHt >= 0
+                  ? 'bg-emerald-50 text-emerald-900'
+                  : 'bg-rose-50 text-rose-900'
+              }`}>
                 <span>= MARGE COMMERCIALE BRUTE</span>
                 <span>{fmt(totalVentesHt - totalAchatsHt)}</span>
               </div>

@@ -197,10 +197,11 @@ export async function fetchHubFinancialMetrics(
           : Math.round((totalTTC / 1.18) * 100) / 100;
 
         let margin = 0;
-        if (typeof item.gross_margin === 'number' && item.gross_margin > 0) {
+        if (typeof item.gross_margin === 'number') {
           margin = item.gross_margin;
-        } else if (Number(item.total_cost) > 0 && subtotalHT >= Number(item.total_cost)) {
-          margin = Math.max(0, subtotalHT - Number(item.total_cost));
+        } else if (Number(item.total_cost) > 0) {
+          // Marge brute réelle = Ventes HT - Coût d'achat réel (peut être négative en cas de vente à perte)
+          margin = Math.round((subtotalHT - Number(item.total_cost)) * 100) / 100;
         } else {
           margin = Math.round(subtotalHT * 0.15 * 100) / 100;
         }
@@ -260,12 +261,12 @@ export async function fetchHubFinancialMetrics(
 
         if (isToday) {
           card.dayExpenses += montant;
-          card.dayNetMargin = Math.max(0, card.dayNetMargin - montant);
+          card.dayNetMargin = card.dayNetMargin - montant;
         }
 
         if (isThisMonth) {
           card.monthExpenses += montant;
-          card.monthNetMargin = Math.max(0, card.monthNetMargin - montant);
+          card.monthNetMargin = card.monthNetMargin - montant;
         }
       }
     } else {
@@ -300,11 +301,11 @@ export async function fetchHubFinancialMetrics(
 
           if (isToday) {
             card.dayExpenses += montant;
-            card.dayNetMargin = Math.max(0, card.dayNetMargin - montant);
+            card.dayNetMargin = card.dayNetMargin - montant;
           }
           if (isThisMonth) {
             card.monthExpenses += montant;
-            card.monthNetMargin = Math.max(0, card.monthNetMargin - montant);
+            card.monthNetMargin = card.monthNetMargin - montant;
           }
         }
       }
@@ -346,10 +347,10 @@ export async function fetchHubFinancialMetrics(
       depenses_jour: rpcTotals.depenses_jour > 0 ? rpcTotals.depenses_jour : calculatedTotals.depenses_jour,
       depenses_mois: rpcTotals.depenses_mois > 0 ? rpcTotals.depenses_mois : calculatedTotals.depenses_mois,
       marge_jour: rpcTotals.depenses_jour === 0 && calculatedTotals.depenses_jour > 0
-        ? Math.max(0, (rpcTotals.ca_jour || calculatedTotals.ca_jour) - calculatedTotals.depenses_jour)
+        ? ((rpcTotals.ca_jour || calculatedTotals.ca_jour) - calculatedTotals.depenses_jour)
         : (rpcTotals.marge_jour || calculatedTotals.marge_jour),
       marge_mois: rpcTotals.depenses_mois === 0 && calculatedTotals.depenses_mois > 0
-        ? Math.max(0, (rpcTotals.ca_mois || calculatedTotals.ca_mois) - calculatedTotals.depenses_mois)
+        ? ((rpcTotals.ca_mois || calculatedTotals.ca_mois) - calculatedTotals.depenses_mois)
         : (rpcTotals.marge_mois || calculatedTotals.marge_mois),
     };
   }

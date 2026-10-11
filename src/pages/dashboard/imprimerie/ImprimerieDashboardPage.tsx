@@ -211,8 +211,9 @@ export const ImprimerieDashboardPage: React.FC = () => {
         </div>
 
         <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
-          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Marge Brute</p>
-          <p className="text-lg font-black text-emerald-600 mt-1">{margeBruteMois.toLocaleString('fr-FR')} F</p>
+          <p className={`text-lg font-black mt-1 ${margeBruteMois >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+            {margeBruteMois.toLocaleString('fr-FR')} F
+          </p>
           <p className="text-[10px] text-slate-400 mt-0.5">Taux : {tauxMargeMois.toFixed(1)}%</p>
         </div>
 

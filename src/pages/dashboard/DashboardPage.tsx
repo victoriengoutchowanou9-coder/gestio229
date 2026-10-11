@@ -396,7 +396,7 @@ export const DashboardPage: React.FC = () => {
               <DollarSign className="w-5 h-5" />
             </div>
           </div>
-          <p className="text-xl font-black text-teal-700 font-mono">
+          <p className={`text-xl font-black font-mono ${resumeActivite.marge_brute >= 0 ? 'text-teal-700' : 'text-rose-600'}`}>
             {fmt(resumeActivite.marge_brute)}
           </p>
           <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">

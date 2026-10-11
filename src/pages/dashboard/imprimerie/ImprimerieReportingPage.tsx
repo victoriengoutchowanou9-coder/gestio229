@@ -694,8 +694,12 @@ export const ImprimerieReportingPage: React.FC = () => {
 
             <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
               <p className="font-bold uppercase text-slate-400">Marge Brute Réelle</p>
-              <p className="text-lg font-black text-emerald-700 mt-1">{margeBruteTotal.toLocaleString('fr-FR')} F</p>
-              <p className="text-[10px] text-emerald-600 font-bold">Taux : {tauxMargeMoyen.toFixed(1)}%</p>
+              <p className={`text-lg font-black mt-1 ${margeBruteTotal >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
+                {margeBruteTotal.toLocaleString('fr-FR')} F
+              </p>
+              <p className={`text-[10px] font-bold ${margeBruteTotal >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                Taux : {tauxMargeMoyen.toFixed(1)}% {margeBruteTotal < 0 ? '(Déficit)' : ''}
+              </p>
             </div>
 
             <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs">
