@@ -367,6 +367,7 @@ export const ReportingPage: React.FC = () => {
     return products.map((prod: any) => {
       const meta = prod.sector_meta || {}
       const defaultSell = Number(prod.selling_price || prod.selling_price_ttc || prod.unit_price_ttc || meta.price_vente_uv_ttc || 0)
+      const unitSale = defaultSell ?? 0
 
       let costPrice = Number(prod.cost_price || prod.purchase_price || meta.price_achat_ht || 0)
       // Ajustement si le produit a un conditionnement gros/détail (ex: coef 20 pour Tonne vers sacs)
