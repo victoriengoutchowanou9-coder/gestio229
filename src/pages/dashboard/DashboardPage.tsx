@@ -20,6 +20,7 @@ import { fetchResumeActivite } from '../../lib/supabaseTenant'
 import { getAllAvoirs, FactureAvoirRecord } from '../../services/factureAvoirService'
 import { getActiveSectorSlug, getActiveSectorMeta, filterItemsForSector } from '../../lib/sectorClient'
 import { getCotonouDates, extractCotonouDate } from '../../services/hubFinancialService'
+import { calculateStockValuation } from '../../lib/stockCalcul'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -122,13 +123,8 @@ export const DashboardPage: React.FC = () => {
       const prods = prodData || []
       setActiveProductsCount(prods.length)
 
-      const stockVal = prods.reduce((sum: number, p: any) => {
-        const qtyMagasin = Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
-        const qtyVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
-        const cost = Number(p.cost_price || p.purchase_price || 0)
-        return sum + (qtyMagasin + qtyVente) * cost
-      }, 0)
-      setTotalProductsValue(stockVal)
+      const valuation = calculateStockValuation(prods)
+      setTotalProductsValue(valuation.totalStockValAchat)
 
       // 3. Total créances clients exigibles (isolées strictement par company_id et sector_slug)
       const { data: custData } = await supabaseTenant('customers')

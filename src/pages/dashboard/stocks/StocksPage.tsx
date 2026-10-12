@@ -20,6 +20,14 @@ import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorCl
 import { NewProductModal, StockSheetModal, ModalPortal } from '../../../components/modals'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
+import {
+  calculateStockValuation,
+  getProductValuationDetails,
+  calcValeurStockMagasinAchat,
+  calcValeurStockVente,
+  calcValorisationTotaleAchatProduit,
+  calcValorisationTotaleVenteProduit
+} from '../../../lib/stockCalcul'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -776,50 +784,40 @@ export const StocksPage: React.FC = () => {
 
   const dailyStockData: DailyStockRow[] = useMemo(() => {
     return products.map((p) => {
-      const final = p.stock_magasin + p.stock_vente
+      const details = getProductValuationDetails(p)
       return {
         productId: p.id,
         code: p.code,
         name: p.name,
         unit: p.unit,
-        stockInitial: final, // Réel sans simulation artificielle
+        stockInitial: details.stockTotalUv, // Réel sans simulation artificielle
         entrees: 0,
         sorties: 0,
-        stockFinal: final,
-        valeurAchat: Math.round(final * p.cost_price),
-        valeurVente: Math.round(final * p.selling_price)
+        stockFinal: details.stockTotalUv,
+        valeurAchat: details.valorisationTotaleAchat,
+        valeurVente: details.valorisationTotaleVente
       }
     })
   }, [products])
 
   // =============================================================================
-  // AUDIT & FORMULES FINANCIÈRES GESTION DES STOCKS & VALORISATION :
-  // 1. Stock restant total par article = Stock Magasin (UCD) + Stock Rayon Vente (UV)
-  // 2. Conversion conditionnement :
-  //    - Magasin -> Vente : Stock_Vente_Ajouté = Quantité_Magasin * Coeff_Conversion
-  //    - Vente -> Magasin : Stock_Magasin_Ajouté = Quantité_Vente / Coeff_Conversion
-  // 3. Valorisation d'achat du Stock :
-  //    - Valeur Magasin au Coût d'Achat = Somme(stock_magasin * prix_achat_unitaire)
-  //    - Valeur Vente au Coût d'Achat = Somme(stock_vente * prix_achat_unitaire)
-  //    - Valeur Globale Achat = Valeur Magasin Achat + Valeur Vente Achat
-  // 4. Valorisation Potentielle de Vente (Chiffre d'Affaires projeté) :
-  //    - Valeur Rayon Vente = Somme(stock_vente * prix_vente_unitaire_TTC)
-  // 5. Inventaire Physique & Écarts :
-  //    - Écart Quantité = Stock_Physique_Dénombré - Stock_Théorique
-  //    - Valeur de l'Écart = Écart Quantité * Coût d'Achat Unitaire
+  // SOURCE UNIQUE DE CALCUL DES STOCKS & VALORISATION (lib/stockCalcul.ts) :
+  // 1. Stock Magasin Achat = stock_magasin * prix_achat_ucd
+  // 2. Stock Vente Commercial = stock_vente * prix_vente_ttc (Ne jamais utiliser prix_achat)
+  // 3. Valorisation Totale Achat = (stock_magasin * prix_achat_ucd) + (stock_vente * prix_achat_uv)
+  // 4. Valorisation Totale Vente = (stock_magasin_converti_en_uv + stock_vente) * prix_vente_ttc
   // =============================================================================
-
-  // Stock Magasin : quantité et valeur au prix d'achat
-  const totalMagasinQty = products.reduce((sum, p) => sum + (p.stock_magasin || 0), 0)
-  const totalMagasinValAchat = products.reduce((sum, p) => sum + (p.cost_price || 0) * (p.stock_magasin || 0), 0)
-
-  // Stock Vente : quantité, valeur au prix d'achat et valeur au prix de vente
-  const totalVenteQty = products.reduce((sum, p) => sum + (p.stock_vente || 0), 0)
-  const totalVenteValAchat = products.reduce((sum, p) => sum + (p.cost_price || 0) * (p.stock_vente || 0), 0)
-  const totalVenteValVente = products.reduce((sum, p) => sum + (p.selling_price || 0) * (p.stock_vente || 0), 0)
-
-  // Valeur Globale
-  const totalStockValAchat = totalMagasinValAchat + totalVenteValAchat
+  const stockValuation = useMemo(() => calculateStockValuation(products), [products])
+  const {
+    totalMagasinQty,
+    totalVenteQty,
+    totalStockUv,
+    totalMagasinValAchat,
+    totalVenteValVente,
+    totalVenteValAchat,
+    totalStockValAchat,
+    totalStockValVente
+  } = stockValuation
 
   const filteredProducts = products.filter(
     (p) =>
@@ -886,9 +884,9 @@ export const StocksPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── KPIs Stocks : Séparation Magasin (UCD) et Vente (UV) avec Valorisation ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        {/* Stock Magasin */}
+      {/* ── KPIs Stocks : 4 Cartes Harmonisé (Magasin UCD, Vente UV, Total Achat, Total Vente) ── */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        {/* Carte 1 : Stock Magasin (Réserve UCD) */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block mb-0.5">
@@ -904,13 +902,13 @@ export const StocksPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Stock Vente */}
+        {/* Carte 2 : Stock Vente (Rayon POS UV) - Valeur Commerciale Vente TTC */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block mb-0.5">
               Stock Vente (Rayon POS UV)
             </span>
-            <p className="text-xl font-black text-emerald-800 font-mono">{fmt(totalVenteValAchat)}</p>
+            <p className="text-xl font-black text-emerald-800 font-mono">{fmt(totalVenteValVente)}</p>
             <span className="text-[10px] text-slate-500 font-medium">
               Valeur Vente : <strong className="text-emerald-700">{fmt(totalVenteValVente)}</strong> ({totalVenteQty} UV)
             </span>
@@ -920,7 +918,7 @@ export const StocksPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Valeur Globale Réelle */}
+        {/* Carte 3 : Valorisation Totale Achat */}
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block mb-0.5">
@@ -928,11 +926,27 @@ export const StocksPage: React.FC = () => {
             </span>
             <p className="text-xl font-black text-slate-900 font-mono">{fmt(totalStockValAchat)}</p>
             <span className="text-[10px] text-slate-500 font-medium">
-              {products.length} référence(s) en catalogue
+              Coût global : Magasin + Vente ({products.length} réf)
             </span>
           </div>
           <div className="w-10 h-10 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700">
             <Layers className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Carte 4 : NOUVELLE CARTE - VALORISATION TOTALE VENTE */}
+        <div className="bg-white rounded-2xl border border-emerald-200 bg-gradient-to-br from-white to-emerald-50/30 p-4 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block mb-0.5">
+              VALORISATION TOTALE VENTE
+            </span>
+            <p className="text-xl font-black text-emerald-900 font-mono">{fmt(totalStockValVente)}</p>
+            <span className="text-[10px] text-emerald-700 font-medium">
+              Valeur commerciale globale ({totalStockUv} UV total)
+            </span>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700">
+            <ArrowUpRight className="w-5 h-5" />
           </div>
         </div>
       </div>
@@ -995,12 +1009,12 @@ export const StocksPage: React.FC = () => {
                   <th className="p-2.5">Réf</th>
                   <th className="p-2.5">Désignation</th>
                   <th className="p-2.5">Unité</th>
-                  <th className="p-2.5 text-right">Prix d'achat TTC</th>
-                  <th className="p-2.5 text-right">Prix de Vente TTC</th>
+                  <th className="p-2.5 text-right">Prix d'Achat UCD</th>
+                  <th className="p-2.5 text-right">Prix de Vente UV TTC</th>
                   <th className="p-2.5 text-center bg-indigo-50/70 text-indigo-900">Stock Magasin (UCD)</th>
-                  <th className="p-2.5 text-right bg-indigo-50/40 text-indigo-900">Valeur Stock Magasin TTC</th>
+                  <th className="p-2.5 text-right bg-indigo-50/40 text-indigo-900">Valeur Magasin (Achat)</th>
                   <th className="p-2.5 text-center bg-emerald-50/70 text-emerald-900">Stock Vente (UV)</th>
-                  <th className="p-2.5 text-right bg-emerald-50/40 text-emerald-900">Valeur Stock Vente TTC</th>
+                  <th className="p-2.5 text-right bg-emerald-50/40 text-emerald-900">Valeur Vente (Commerciale)</th>
                   <th className="p-2.5 text-center">Actions</th>
                 </tr>
               </thead>
@@ -1013,11 +1027,7 @@ export const StocksPage: React.FC = () => {
                   </tr>
                 ) : (
                   filteredProducts.map((p) => {
-                    const ucdUnit = p.ucd || 'Carton'
-                    const uvUnit = p.uv || p.unit || 'Pièce'
-                    const coef = p.coef || 1
-                    const valeurMagasinTTC = p.stock_magasin * coef * p.cost_price
-                    const valeurVenteTTC = p.stock_vente * p.selling_price
+                    const details = getProductValuationDetails(p)
 
                     return (
                       <tr
@@ -1032,31 +1042,31 @@ export const StocksPage: React.FC = () => {
                             type="checkbox"
                             checked={selectedProductIds.includes(p.id)}
                             onChange={() => handleToggleSelectProduct(p.id)}
-                            disabled={transferDirection === 'magasin_to_vente' ? p.stock_magasin <= 0 : p.stock_vente <= 0}
+                            disabled={transferDirection === 'magasin_to_vente' ? details.stockMagasin <= 0 : details.stockVente <= 0}
                             title={
-                              (transferDirection === 'magasin_to_vente' ? p.stock_magasin <= 0 : p.stock_vente <= 0)
+                              (transferDirection === 'magasin_to_vente' ? details.stockMagasin <= 0 : details.stockVente <= 0)
                                 ? 'Stock source vide'
                                 : 'Sélectionner pour transfert'
                             }
                             className="rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer disabled:opacity-30"
                           />
                         </td>
-                        <td className="p-2.5 font-bold text-slate-900 font-mono">{p.code}</td>
-                        <td className="p-2.5 font-sans font-semibold text-slate-800">{p.name}</td>
-                        <td className="p-2.5 font-sans text-slate-500">{uvUnit}</td>
-                        <td className="p-2.5 text-right font-mono">{fmt(p.cost_price)}</td>
-                        <td className="p-2.5 text-right text-emerald-700 font-bold font-mono">{fmt(p.selling_price)}</td>
+                        <td className="p-2.5 font-bold text-slate-900 font-mono">{details.code}</td>
+                        <td className="p-2.5 font-sans font-semibold text-slate-800">{details.name}</td>
+                        <td className="p-2.5 font-sans text-slate-500">{details.uvUnit}</td>
+                        <td className="p-2.5 text-right font-mono">{fmt(details.prixAchatUcd)}</td>
+                        <td className="p-2.5 text-right text-emerald-700 font-bold font-mono">{fmt(details.prixVenteTtc)}</td>
                         <td className="p-2.5 text-center bg-indigo-50/30 font-black text-indigo-900 font-mono text-xs">
-                          {p.stock_magasin} {ucdUnit}
+                          {details.stockMagasin} {details.ucdUnit}
                         </td>
                         <td className="p-2.5 text-right bg-indigo-50/20 font-bold text-slate-700 font-mono">
-                          {fmt(valeurMagasinTTC)}
+                          {fmt(details.valeurStockMagasinAchat)}
                         </td>
                         <td className="p-2.5 text-center bg-emerald-50/30 font-black text-emerald-900 font-mono text-xs">
-                          {p.stock_vente} {uvUnit}
+                          {details.stockVente} {details.uvUnit}
                         </td>
                         <td className="p-2.5 text-right bg-emerald-50/20 font-bold text-emerald-700 font-mono">
-                          {fmt(valeurVenteTTC)}
+                          {fmt(details.valeurStockVente)}
                         </td>
                         <td className="p-2.5 text-center font-sans">
                           <div className="flex items-center justify-center gap-1">
@@ -1571,35 +1581,35 @@ export const StocksPage: React.FC = () => {
               <thead className="bg-slate-200 font-bold text-slate-800">
                 <tr>
                   <th className="p-2">Désignation</th>
-                  <th className="p-2 text-center">Magasin</th>
-                  <th className="p-2 text-center">Vente</th>
-                  <th className="p-2 text-right">PU Achat</th>
+                  <th className="p-2 text-center">Magasin (UCD)</th>
+                  <th className="p-2 text-center">Vente (UV)</th>
+                  <th className="p-2 text-right">PU Achat UCD</th>
+                  <th className="p-2 text-right">PU Vente UV</th>
                   <th className="p-2 text-right">Total Achat</th>
                   <th className="p-2 text-right">Total Vente</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 font-mono">
                 {products.map((p) => {
-                  const totalQty = p.stock_magasin + p.stock_vente
-                  const valAchat = totalQty * p.cost_price
-                  const valVente = totalQty * p.selling_price
+                  const details = getProductValuationDetails(p)
                   return (
                     <tr key={p.id}>
-                      <td className="p-2 font-sans font-medium text-slate-800">{p.name}</td>
-                      <td className="p-2 text-center">{p.stock_magasin}</td>
-                      <td className="p-2 text-center">{p.stock_vente}</td>
-                      <td className="p-2 text-right">{fmt(p.cost_price)}</td>
-                      <td className="p-2 text-right font-bold">{fmt(valAchat)}</td>
-                      <td className="p-2 text-right font-bold text-emerald-800">{fmt(valVente)}</td>
+                      <td className="p-2 font-sans font-medium text-slate-800">{details.name}</td>
+                      <td className="p-2 text-center">{details.stockMagasin} {details.ucdUnit}</td>
+                      <td className="p-2 text-center">{details.stockVente} {details.uvUnit}</td>
+                      <td className="p-2 text-right">{fmt(details.prixAchatUcd)}</td>
+                      <td className="p-2 text-right text-emerald-700">{fmt(details.prixVenteTtc)}</td>
+                      <td className="p-2 text-right font-bold">{fmt(details.valorisationTotaleAchat)}</td>
+                      <td className="p-2 text-right font-bold text-emerald-800">{fmt(details.valorisationTotaleVente)}</td>
                     </tr>
                   )
                 })}
               </tbody>
               <tfoot className="bg-slate-200 font-black text-slate-900 border-t-2 border-slate-400">
                 <tr>
-                  <td colSpan={4} className="p-2 text-right uppercase">Totaux Généraux :</td>
+                  <td colSpan={5} className="p-2 text-right uppercase">Totaux Généraux :</td>
                   <td className="p-2 text-right font-mono">{fmt(totalStockValAchat)}</td>
-                  <td className="p-2 text-right font-mono text-emerald-800">{fmt(totalVenteValVente + (totalMagasinQty * (products[0]?.selling_price || 0)))}</td>
+                  <td className="p-2 text-right font-mono text-emerald-800">{fmt(totalStockValVente)}</td>
                 </tr>
               </tfoot>
             </table>

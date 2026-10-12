@@ -21,6 +21,8 @@ import { useUIStore } from '../../../store/uiStore'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { calculateTaxFromTTC } from '../../../utils/tax'
 import { getAllAvoirs, FactureAvoirRecord } from '../../../services/factureAvoirService'
+import { calculateStockValuation } from '../../../lib/stockCalcul'
+import { computeOrderMargin, computeConsolidatedFinancials } from '../../../lib/financialCalcul'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -170,7 +172,12 @@ export const ReportingPage: React.FC = () => {
           customer_name: cName,
           customer_id: s.customer_id,
           status: s.status || meta.st || 'COMPLET',
-          lines: s.items || []
+          lines: (Array.isArray(s.items) && s.items.length > 0)
+            ? s.items
+            : (Array.isArray(meta?.lines) ? meta.lines : []),
+          total_cost: Number(s.total_cost) || 0,
+          gross_margin: typeof s.gross_margin === 'number' ? s.gross_margin : undefined,
+          notes: s.notes
         }
       })
 
@@ -324,75 +331,33 @@ export const ReportingPage: React.FC = () => {
     return (filteredExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
   }, [filteredExpenses])
 
-  // 3. Marge Brute réelle (Calculée sur le HT)
-  // Marge brute = Total Ventes HT - Total Coût d'Achat HT
-  // Si le taux de TVA entreprise est 18%, HT = TTC / 1.18
-  const defaultTva = company?.tva_default_rate ?? 18
-  const isTaxable = defaultTva > 0
-
-  const totalRevenueHT = useMemo(() => {
-    return filteredSales.reduce((sum, s) => {
-      if (s.total_ht && s.total_ht > 0) return sum + s.total_ht
-      const { ht } = calculateTaxFromTTC(Number(s.total_amount) || 0, isTaxable, 0)
-      return sum + ht
-    }, 0)
-  }, [filteredSales, isTaxable])
-
-  // Coût d'achat estimé des ventes (en appliquant la marge moyenne réelle du catalogue)
-  const averageMarginRate = useMemo(() => {
-    if (!products.length) return 0.25 // 25% par défaut si pas de catalogue
-    let totalCost = 0
-    let totalSelling = 0
-    products.forEach((p: any) => {
-      const meta = p.sector_meta || {}
-      const cost = Number(p.cost_price || p.purchase_price || meta.price_achat_ht || 0)
-      const sell = Number(p.selling_price || p.selling_price_ttc || p.unit_price_ttc || meta.price_vente_uv_ttc || 0)
-      if (cost > 0 && sell > 0) {
-        totalCost += cost
-        totalSelling += sell
-      }
+  // 3. Calculs financiers certifiés OHADA via le moteur unique lib/financialCalcul.ts
+  const financialSummary = useMemo(() => {
+    return computeConsolidatedFinancials({
+      sales: filteredSales as any[],
+      expenses: (filteredExpenses.length > 0 ? filteredExpenses : caisseDepenses) as any[],
+      avoirs: filteredAvoirs as any[],
+      sectorSlug: currentSectorSlug
     })
-    if (totalSelling > 0 && totalCost < totalSelling) {
-      return (totalSelling - totalCost) / totalSelling
-    }
-    return 0.25
-  }, [products])
+  }, [filteredSales, filteredExpenses, caisseDepenses, filteredAvoirs, currentSectorSlug])
 
-  const grossMargin = useMemo(() => {
-    // Marge brute sur HT
-    return Math.round(totalRevenueHT * averageMarginRate)
-  }, [totalRevenueHT, averageMarginRate])
+  const totalRevenueHT = financialSummary.netRevenueHT
+  const totalCogsHT = financialSummary.cogsHT
+  const grossMargin = financialSummary.grossMargin
 
-  // 4. Marge Nette = Marge Brute - Dépenses réelles de la période (Point 14)
-  const netMargin = grossMargin - totalExpenses
+  // 4. Marge Nette = Marge Brute - Dépenses réelles d'exploitation (Point 14 & OHADA)
+  const netMargin = financialSummary.netMargin
 
   // 5. Total Créances réelles non soldées (Point 14)
   const totalReceivables = useMemo(() => {
     return (customers || []).reduce((sum, c: any) => sum + (Number(c.current_debt ?? c.solde_creance ?? 0)), 0)
   }, [customers])
 
-  // 6. Total Stock réel valorisé au coût d'achat (Point 14)
-  const totalStockValue = useMemo(() => {
-    return (products || []).reduce((sum, p: any) => {
-      const meta = p.sector_meta || {}
-      const qty = Number(
-        p.current_stock ??
-        p.stock ??
-        p.stock_vente ??
-        meta.stock_vente ??
-        meta.stock_magasin ??
-        p.warehouse_stock ??
-        0
-      ) + Number(p.warehouse_stock ?? meta.stock_magasin ?? 0)
-      // Si meta.stock_vente et meta.stock_magasin sont tous deux présents, compter stock_vente + stock_magasin
-      const qtyReelle = (meta.stock_vente != null || meta.stock_magasin != null)
-        ? (Number(meta.stock_vente || 0) + Number(meta.stock_magasin || 0))
-        : qty
-
-      const cost = Number(p.cost_price ?? p.purchase_price ?? meta.price_achat_ht ?? meta.cout_achat ?? 0)
-      return sum + (qtyReelle * cost)
-    }, 0)
+  // 6. Total Stock réel valorisé (Source unique de calcul lib/stockCalcul.ts)
+  const stockValuation = useMemo(() => {
+    return calculateStockValuation(products || [])
   }, [products])
+  const totalStockValue = stockValuation.totalStockValAchat
 
   // ─── Table Marge par Produit (Exigence Point 7) ───────────────────────────
   // Formule officielle obligatoire :
@@ -439,14 +404,13 @@ export const ReportingPage: React.FC = () => {
       })
 
       const netQtySold = Math.max(0, realQtySold - qtyAvoiree)
-      const totalPurchases = realQtySold * costPrice
-      const totalSales = realQtySold > 0 ? realCaTTC : (realQtySold * defaultSell)
-      const unitSale = realQtySold > 0 ? Math.round(totalSales / realQtySold) : defaultSell
+      const totalPurchases = netQtySold * costPrice
+      const totalSales = netQtySold > 0 ? (unitSale * netQtySold) : 0
 
-      // Marge nette = (prix_vente - prix_achat) * quantité
-      const netMargin = (unitSale - costPrice) * realQtySold
+      // Marge brute = (prix_vente - prix_achat) * quantité vendue nette
+      const netMargin = (unitSale - costPrice) * netQtySold
 
-      // Taux de marge = (marge nette / (prix_achat * quantité)) * 100
+      // Taux de marge = (marge brute / (prix_achat * quantité)) * 100
       const marginRate = totalPurchases > 0
         ? ((netMargin / totalPurchases) * 100).toFixed(1)
         : (netMargin > 0 ? '100.0' : '0.0')
@@ -466,7 +430,7 @@ export const ReportingPage: React.FC = () => {
         marginRate
       }
     }).filter((p: any) => p.qtySold > 0 || products.length <= 25)
-  }, [products, filteredSales])
+  }, [products, filteredSales, filteredAvoirs])
 
   const periodDisplayLabel = useMemo(() => {
     if (periodPreset === 'today') return "Aujourd'hui"
@@ -609,8 +573,8 @@ export const ReportingPage: React.FC = () => {
           </div>
           <p className="text-2xl font-black text-indigo-700 font-mono">{fmt(grossMargin)}</p>
           <div className="mt-2 text-[11px] text-slate-500 flex justify-between border-t border-slate-100 pt-1.5">
-            <span>Base HT :</span>
-            <span className="font-mono">{fmt(totalRevenueHT)}</span>
+            <span>Coût d'achat (COGS) :</span>
+            <span className="font-mono text-slate-700 font-semibold">{totalCogsHT > 0 ? fmt(totalCogsHT) : '0 FCFA'}</span>
           </div>
         </div>
 
@@ -671,8 +635,8 @@ export const ReportingPage: React.FC = () => {
           </div>
           <p className="text-2xl font-black text-blue-700 font-mono">{fmt(totalStockValue)}</p>
           <div className="mt-2 text-[11px] text-slate-500 flex justify-between border-t border-slate-100 pt-1.5">
-            <span>Articles catalogués :</span>
-            <span>{products.length} référence(s)</span>
+            <span>Valeur Commerciale ({stockValuation.totalStockUv} UV) :</span>
+            <span className="font-bold text-emerald-700 font-mono">{fmt(stockValuation.totalStockValVente)}</span>
           </div>
         </div>
       </div>

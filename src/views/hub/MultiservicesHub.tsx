@@ -52,12 +52,16 @@ export interface ActivityEntry {
   isConfigured: boolean;
   // PARTIE 3 : Métriques du Jour (F CFA)
   revenue: number;             // CA DU JOUR
+  dayCogsHT?: number;          // COÛT D'ACHAT DU JOUR
+  dayGrossMargin?: number;     // MARGE BRUTE DU JOUR
   expenses: number;            // DÉPENSES DU JOUR
-  netMargin: number;           // MARGE NETTE DU JOUR
+  netMargin: number;           // MARGE NETTE DU JOUR (Marge brute - Dépenses)
   // PARTIE 4 : Métriques du Mois (F CFA)
   monthRevenue: number;        // CA DU MOIS
+  monthCogsHT?: number;        // COÛT D'ACHAT DU MOIS
+  monthGrossMargin?: number;   // MARGE BRUTE DU MOIS
   monthExpenses: number;       // DÉPENSES DU MOIS
-  monthNetMargin: number;      // MARGE NETTE DU MOIS
+  monthNetMargin: number;      // MARGE NETTE DU MOIS (Marge brute - Dépenses)
   archivedAt?: string;         // Date d'archivage (si statut = ARCHIVEE)
 }
 
@@ -480,19 +484,30 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           const card = result.sectors[normSlug] || result.sectors[act.sectorSlug] || {
             sector_slug: normSlug,
             dayRevenue: 0,
+            dayRevenueHT: 0,
+            dayCogsHT: 0,
+            dayGrossMargin: 0,
             dayExpenses: 0,
             dayNetMargin: 0,
             monthRevenue: 0,
+            monthRevenueHT: 0,
+            monthCogsHT: 0,
+            monthGrossMargin: 0,
             monthExpenses: 0,
             monthNetMargin: 0,
+            hasKnownCost: true,
           };
           return {
             ...act,
             // Métriques isolées strictement du jour et du mois pour ce secteur
             revenue: card.dayRevenue,
+            dayCogsHT: card.dayCogsHT,
+            dayGrossMargin: card.dayGrossMargin,
             expenses: card.dayExpenses,
             netMargin: card.dayNetMargin,
             monthRevenue: card.monthRevenue,
+            monthCogsHT: card.monthCogsHT,
+            monthGrossMargin: card.monthGrossMargin,
             monthExpenses: card.monthExpenses,
             monthNetMargin: card.monthNetMargin,
           };
@@ -543,12 +558,20 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   // ── CALCULS CONSOLIDÉS DU JOUR (PARTIE 3) & DU MOIS (PARTIE 4) ─────────────
   const dayTotals = useMemo(() => {
     const sumRevenue = activeActivities.reduce((a, s) => a + (s.revenue || 0), 0);
+    const sumGrossMargin = activeActivities.reduce((a, s) => a + (s.dayGrossMargin || 0), 0);
+    const sumCogs = activeActivities.reduce((a, s) => a + (s.dayCogsHT || 0), 0);
     const sumExpenses = activeActivities.reduce((a, s) => a + (s.expenses || 0), 0);
     const sumNetMargin = activeActivities.reduce((a, s) => a + (s.netMargin || 0), 0);
 
     const totalRevenue = hubTotals && typeof hubTotals.ca_jour === 'number'
       ? hubTotals.ca_jour
       : sumRevenue;
+    const totalGrossMargin = hubTotals && typeof hubTotals.marge_brute_jour === 'number'
+      ? hubTotals.marge_brute_jour
+      : sumGrossMargin;
+    const totalCogs = hubTotals && typeof hubTotals.cogs_jour_ht === 'number'
+      ? hubTotals.cogs_jour_ht
+      : sumCogs;
     const totalExpenses = hubTotals && typeof hubTotals.depenses_jour === 'number'
       ? hubTotals.depenses_jour
       : sumExpenses;
@@ -556,17 +579,25 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       ? hubTotals.marge_jour
       : sumNetMargin;
     const netMarginRate = totalRevenue > 0 ? (totalNetMargin / totalRevenue) * 100 : 0;
-    return { totalRevenue, totalExpenses, totalNetMargin, netMarginRate };
+    return { totalRevenue, totalGrossMargin, totalCogs, totalExpenses, totalNetMargin, netMarginRate };
   }, [activeActivities, hubTotals]);
 
   const monthTotals = useMemo(() => {
     const sumRevenue = activeActivities.reduce((a, s) => a + (s.monthRevenue || 0), 0);
+    const sumGrossMargin = activeActivities.reduce((a, s) => a + (s.monthGrossMargin || 0), 0);
+    const sumCogs = activeActivities.reduce((a, s) => a + (s.monthCogsHT || 0), 0);
     const sumExpenses = activeActivities.reduce((a, s) => a + (s.monthExpenses || 0), 0);
     const sumNetMargin = activeActivities.reduce((a, s) => a + (s.monthNetMargin || 0), 0);
 
     const totalRevenue = hubTotals && typeof hubTotals.ca_mois === 'number'
       ? hubTotals.ca_mois
       : sumRevenue;
+    const totalGrossMargin = hubTotals && typeof hubTotals.marge_brute_mois === 'number'
+      ? hubTotals.marge_brute_mois
+      : sumGrossMargin;
+    const totalCogs = hubTotals && typeof hubTotals.cogs_mois_ht === 'number'
+      ? hubTotals.cogs_mois_ht
+      : sumCogs;
     const totalExpenses = hubTotals && typeof hubTotals.depenses_mois === 'number'
       ? hubTotals.depenses_mois
       : sumExpenses;
@@ -574,7 +605,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       ? hubTotals.marge_mois
       : sumNetMargin;
     const netMarginRate = totalRevenue > 0 ? (totalNetMargin / totalRevenue) * 100 : 0;
-    return { totalRevenue, totalExpenses, totalNetMargin, netMarginRate };
+    return { totalRevenue, totalGrossMargin, totalCogs, totalExpenses, totalNetMargin, netMarginRate };
   }, [activeActivities, hubTotals]);
 
   // ── Actions : Ajout d'activité (PARTIE 6) ──────────────────────────────────
@@ -1021,11 +1052,22 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                 ? darkMode ? 'bg-slate-950/60 border-emerald-500/20' : 'bg-emerald-50/50 border-emerald-200'
                 : darkMode ? 'bg-slate-950/60 border-rose-500/30' : 'bg-rose-50/50 border-rose-200'
             }`}>
-              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
-                dayTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
-              }`}>
-                MARGE NETTE DU JOUR
-              </span>
+              <div className="flex items-center justify-between">
+                <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                  dayTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                }`}>
+                  MARGE NETTE DU JOUR
+                </span>
+                {dayTotals.netMarginRate !== 0 && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                    dayTotals.totalNetMargin >= 0
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-rose-500/20 text-rose-400'
+                  }`}>
+                    {dayTotals.netMarginRate.toFixed(1)}%
+                  </span>
+                )}
+              </div>
               <div className={`text-2xl font-black tracking-tight ${
                 dayTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
               }`}>
@@ -1034,7 +1076,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               <div className={`text-xs font-semibold mt-0.5 ${
                 dayTotals.totalNetMargin >= 0 ? 'text-emerald-600' : 'text-rose-600'
               }`}>
-                F CFA {dayTotals.totalNetMargin < 0 ? '(Déficit)' : '(Bénéfice)'}
+                F CFA {dayTotals.totalNetMargin < 0 ? '(Déficit)' : '(Bénéfice Réel)'}
               </div>
             </div>
           </div>
@@ -1061,8 +1103,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             </span>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            {/* CA DU MOIS */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {/* 1. CA DU MOIS */}
             <div className={`p-4 rounded-xl border ${
               darkMode ? 'bg-slate-950/60 border-slate-800/80' : 'bg-slate-50 border-slate-200'
             }`}>
@@ -1079,7 +1121,30 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               <div className="text-xs text-indigo-500 font-semibold mt-0.5">F CFA</div>
             </div>
 
-            {/* DÉPENSES DU MOIS */}
+            {/* 2. MARGE COMMERCIALE BRUTE */}
+            <div className={`p-4 rounded-xl border ${
+              darkMode ? 'bg-slate-950/60 border-indigo-500/20' : 'bg-indigo-50/50 border-indigo-200'
+            }`}>
+              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                darkMode ? 'text-indigo-400' : 'text-indigo-700'
+              }`}>
+                MARGE BRUTE (CA - COGS)
+              </span>
+              <div className={`text-2xl font-black tracking-tight ${
+                monthTotals.totalGrossMargin >= 0
+                  ? (darkMode ? 'text-indigo-300' : 'text-indigo-900')
+                  : 'text-rose-500'
+              }`}>
+                {fmt(monthTotals.totalGrossMargin)}
+              </div>
+              <div className={`text-[11px] font-medium mt-0.5 ${darkMode ? 'text-indigo-400/80' : 'text-indigo-600'}`}>
+                {monthTotals.totalCogs > 0
+                  ? `Coût d'achat : ${fmt(monthTotals.totalCogs)} F`
+                  : (monthTotals.totalGrossMargin > 0 ? "F CFA (Ventes sans achat)" : "Coût d'achat indisponible")}
+              </div>
+            </div>
+
+            {/* 3. DÉPENSES D'EXPLOITATION DU MOIS */}
             <div className={`p-4 rounded-xl border ${
               darkMode ? 'bg-slate-950/60 border-slate-800/80' : 'bg-slate-50 border-slate-200'
             }`}>
@@ -1091,20 +1156,31 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               <div className="text-2xl font-black text-rose-500 tracking-tight">
                 {fmt(monthTotals.totalExpenses)}
               </div>
-              <div className="text-xs text-rose-500 font-semibold mt-0.5">F CFA</div>
+              <div className="text-[11px] text-slate-400 font-medium mt-0.5">Charges d'exploitation</div>
             </div>
 
-            {/* MARGE NETTE DU MOIS */}
+            {/* 4. MARGE NETTE DU MOIS (BÉNÉFICE RÉEL) */}
             <div className={`p-4 rounded-xl border transition-colors ${
               monthTotals.totalNetMargin >= 0
                 ? darkMode ? 'bg-slate-950/60 border-emerald-500/30' : 'bg-emerald-50/50 border-emerald-200'
                 : darkMode ? 'bg-slate-950/60 border-rose-500/30' : 'bg-rose-50/50 border-rose-200'
             }`}>
-              <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
-                monthTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
-              }`}>
-                MARGE NETTE DU MOIS
-              </span>
+              <div className="flex items-center justify-between">
+                <span className={`text-[11px] font-bold uppercase tracking-wider block mb-1 ${
+                  monthTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
+                }`}>
+                  MARGE NETTE DU MOIS
+                </span>
+                {monthTotals.netMarginRate !== 0 && (
+                  <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                    monthTotals.totalNetMargin >= 0
+                      ? 'bg-emerald-500/20 text-emerald-400'
+                      : 'bg-rose-500/20 text-rose-400'
+                  }`}>
+                    {monthTotals.netMarginRate.toFixed(1)}%
+                  </span>
+                )}
+              </div>
               <div className={`text-2xl font-black tracking-tight ${
                 monthTotals.totalNetMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'
               }`}>
@@ -1113,7 +1189,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               <div className={`text-xs font-semibold mt-0.5 ${
                 monthTotals.totalNetMargin >= 0 ? 'text-emerald-600' : 'text-rose-600'
               }`}>
-                F CFA {monthTotals.totalNetMargin < 0 ? '(Déficit)' : '(Bénéfice)'}
+                F CFA {monthTotals.totalNetMargin < 0 ? '(Déficit)' : '(Bénéfice Réel)'}
               </div>
             </div>
           </div>

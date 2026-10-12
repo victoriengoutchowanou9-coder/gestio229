@@ -8,6 +8,7 @@
 import { supabase } from './supabase'
 import { isItemInSector, filterItemsForSector } from './sectorClient'
 import { ALL_SECTORS_CATALOG } from '../core/modules/moduleRegistry'
+import { computeOrderMargin } from './financialCalcul'
 
 export interface TenantScope {
   companyId: string
@@ -599,56 +600,16 @@ export async function fetchResumeActivite(
       let marge_brute = 0
 
       for (const item of sectorSales) {
-        const item_ca_ht = Number(item.subtotal_ht) > 0
-          ? Number(item.subtotal_ht)
-          : Math.round(((Number(item.total_amount) || 0) / 1.18) * 100) / 100
-
-        ca_ht += item_ca_ht
-
-        // Si gross_margin explicite et valide
-        if (typeof item.gross_margin === 'number' && item.gross_margin > 0 && item.gross_margin <= item_ca_ht) {
-          marge_brute += item.gross_margin
-          total_cost += (item_ca_ht - item.gross_margin)
-          continue
-        }
-
-        let item_cost = Number(item.total_cost) || 0
-
-        // Vérifier si le coût est aberrant (ex: coût de tonne 95k au lieu de sac 4k, item_cost >= item_ca_ht)
-        if (item_cost >= item_ca_ht || item_cost <= 0) {
-          let recoveredCost = 0
-          let hasParsed = false
-          try {
-            const pNotes = typeof item.notes === 'string' ? JSON.parse(item.notes) : item.notes
-            if (pNotes && Array.isArray(pNotes.lines) && pNotes.lines.length > 0) {
-              recoveredCost = pNotes.lines.reduce((acc: number, l: any) => {
-                const coef = Math.max(1, Number(l.product?.coef || 1))
-                const isTax = Boolean(l.product?.is_vat_subject ?? false)
-                const vRate = isTax ? Number(l.product?.vat_rate || 18) : 0
-                const rawCost = Number(l.product?.cost_price) || 0
-                const uvCostTTC = rawCost / coef
-                const uvCostHT = isTax ? (uvCostTTC / (1 + vRate / 100)) : uvCostTTC
-                return acc + (Number(l.qty || 1) * uvCostHT)
-              }, 0)
-              hasParsed = true
-            }
-          } catch (_) {}
-
-          if (hasParsed && recoveredCost > 0 && recoveredCost < item_ca_ht) {
-            item_cost = recoveredCost
-          } else {
-            // Clamping sécurisé pour les données historiques
-            item_cost = Math.round(item_ca_ht * 0.80 * 100) / 100
-          }
-        }
-
-        total_cost += item_cost
-        marge_brute += Math.max(0, item_ca_ht - item_cost)
+        const res = computeOrderMargin(item)
+        ca_ht += res.revenueHT
+        total_cost += res.cogsHT
+        marge_brute += res.grossMargin
       }
 
       return {
         ca_ht: Math.round(ca_ht * 100) / 100,
-        marge_brute: Math.round(marge_brute * 100) / 100
+        marge_brute: Math.round(marge_brute * 100) / 100,
+        total_cost: Math.round(total_cost * 100) / 100
       }
     }
 
@@ -1084,6 +1045,116 @@ export async function debitCoffreFort(
     } catch (_) {}
 
     return { success: true, newBalances: { ...current, solde_banque: newBanque } }
+  }
+}
+
+/**
+ * ─────────────────────────────────────────────────────────────────────────────
+ * CRÉDIT DU COFFRE-FORT PAR (company_id, sector_slug) LORS D'UN RETRAIT CAISSE
+ * Règle : Les retraits de caisse validés créditent le COFFRE-FORT :
+ * - especes => coffre_fort.solde_especes (+ synchro cash_registers si présent)
+ * - momo_marchand / momo => coffre_fort.solde_momo_marchand (+ synchro cash_registers si présent)
+ * Traçabilité dans caisse_mouvements et transactions avec destination = 'coffre_fort'.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export async function creditCoffreFort(
+  companyId: string,
+  sectorSlug: string,
+  mode: 'especes' | 'momo_marchand' | 'momo' | 'banque',
+  montant: number,
+  metadata?: {
+    motif?: string
+    source_id?: string
+    user_name?: string
+    user_id?: string
+  }
+): Promise<{ success: boolean; error?: string; newBalances?: any }> {
+  const cleanSlug = (sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
+  const current = await getCoffreFort(companyId, cleanSlug)
+  const isEspeces = mode === 'especes'
+  const isMomo = mode === 'momo_marchand' || mode === 'momo'
+
+  const newEspeces = isEspeces ? current.solde_especes + montant : current.solde_especes
+  const newMomo = isMomo ? current.solde_momo_marchand + montant : current.solde_momo_marchand
+  const newBanque = mode === 'banque' ? current.solde_banque + montant : current.solde_banque
+
+  // 1. Mettre à jour coffre_fort
+  try {
+    await supabase.from('coffre_fort').upsert({
+      company_id: companyId,
+      sector_slug: cleanSlug,
+      solde_especes: newEspeces,
+      solde_momo_marchand: newMomo,
+      solde_banque: newBanque,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'company_id,sector_slug' })
+  } catch (err: any) {
+    console.warn('[creditCoffreFort] Erreur upsert coffre_fort:', err)
+  }
+
+  // 2. Mise à jour de repli sur cash_registers
+  try {
+    const { data: regs } = await supabase
+      .from('cash_registers')
+      .select('id, current_cash_balance, current_momo_balance')
+      .eq('company_id', companyId)
+      .limit(1)
+    if (regs && regs[0]) {
+      const patch: any = {}
+      if (isEspeces) patch.current_cash_balance = newEspeces
+      if (isMomo) patch.current_momo_balance = newMomo
+      await supabase.from('cash_registers').update(patch).eq('id', regs[0].id)
+    }
+  } catch (_) {}
+
+  // 3. Traçabilité dans caisse_mouvements
+  try {
+    await supabase.from('caisse_mouvements').insert({
+      company_id: companyId,
+      sector_slug: cleanSlug,
+      type: isEspeces ? 'reception_coffre_especes' : 'reception_coffre_momo',
+      sens: 'entree',
+      montant: montant,
+      montant_especes: isEspeces ? montant : 0,
+      montant_momo: isMomo ? montant : 0,
+      motif: metadata?.motif || `Alimentation Coffre-Fort depuis caisse`,
+      source_module: 'retrait_caisse_confirmation',
+      source_id: metadata?.source_id,
+      statut: 'valide',
+      user_name: metadata?.user_name || 'Système',
+      user_id: metadata?.user_id,
+      created_at: new Date().toISOString()
+    })
+  } catch (_) {}
+
+  // 4. Traçabilité dans transactions avec destination = 'coffre_fort'
+  try {
+    await supabase.from('transactions').insert({
+      company_id: companyId,
+      sector_slug: cleanSlug,
+      type: 'transfert_caisse_coffre',
+      source: 'caisse',
+      destination: 'coffre_fort',
+      channel: isEspeces ? 'especes' : 'momo_marchand',
+      amount: montant,
+      montant: montant,
+      motif: metadata?.motif || `Transfert Caisse vers Coffre-Fort`,
+      status: 'CONFIRMED',
+      statut: 'valide',
+      reference_id: metadata?.source_id,
+      user_name: metadata?.user_name,
+      user_id: metadata?.user_id,
+      created_at: new Date().toISOString()
+    })
+  } catch (_) {}
+
+  return {
+    success: true,
+    newBalances: {
+      solde_especes: newEspeces,
+      solde_momo_marchand: newMomo,
+      solde_banque: newBanque
+    }
   }
 }
 

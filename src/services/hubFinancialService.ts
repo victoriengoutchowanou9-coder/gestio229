@@ -3,34 +3,54 @@
 // =============================================================================
 // Règle d'or : Fuseau horaire Africa/Porto-Novo (Bénin UTC+1)
 // - CA du jour : Ventes enregistrées STRICTEMENT à la date du jour (Cotonou)
-// - Dépenses du jour : Dépenses de la date du jour
-// - Marge nette du jour : Marge des ventes du jour (ou CA jour - Dépenses jour)
+// - Dépenses du jour : Dépenses de fonctionnement de la date du jour (hors trésorerie)
+// - Marge brute du jour : CA net HT - COGS (Coût réel des marchandises vendues)
+// - Marge nette du jour : Marge brute - Dépenses de fonctionnement du jour
 // - Synthèse du mois : Cumul du 1er jour au dernier jour du mois en cours
-// - Reset mensuel automatique : Quand le mois change, le cumul mensuel repart à 0
+// - INTERDICTION ABSOLUE : Ne jamais faire Marge = CA - Dépenses sans déduire le COGS !
 // =============================================================================
 
 import { supabase } from '../lib/supabase';
+import {
+  computeOrderMargin,
+  isTrueOperatingExpense,
+  safeNum,
+} from '../lib/financialCalcul';
 
 export interface SectorMetrics {
   sector_slug: string;
-  dayRevenue: number;     // CA DU JOUR
-  dayExpenses: number;    // DÉPENSES DU JOUR
-  dayNetMargin: number;   // MARGE NETTE DU JOUR
-  monthRevenue: number;   // CA DU MOIS
-  monthExpenses: number;  // DÉPENSES DU MOIS
-  monthNetMargin: number; // MARGE NETTE DU MOIS
+  dayRevenue: number;     // CA DU JOUR (TTC)
+  dayRevenueHT: number;   // CA DU JOUR (HT)
+  dayCogsHT: number;      // COÛT D'ACHAT DES VENTES DU JOUR
+  dayGrossMargin: number; // MARGE BRUTE DU JOUR
+  dayExpenses: number;    // DÉPENSES D'EXPLOITATION DU JOUR
+  dayNetMargin: number;   // MARGE NETTE DU JOUR (Marge brute - Dépenses)
+  monthRevenue: number;   // CA DU MOIS (TTC)
+  monthRevenueHT: number; // CA DU MOIS (HT)
+  monthCogsHT: number;    // COÛT D'ACHAT DES VENTES DU MOIS
+  monthGrossMargin: number; // MARGE BRUTE DU MOIS
+  monthExpenses: number;  // DÉPENSES D'EXPLOITATION DU MOIS
+  monthNetMargin: number; // MARGE NETTE DU MOIS (Marge brute - Dépenses)
+  hasKnownCost: boolean;
 }
 
 export interface HubFinancialTotals {
   date: string;
   ca_jour: number;
+  ca_jour_ht?: number;
+  cogs_jour_ht?: number;
+  marge_brute_jour?: number;
   depenses_jour: number;
-  marge_jour: number;
+  marge_jour: number; // Marge nette du jour
   ca_mois: number;
+  ca_mois_ht?: number;
+  cogs_mois_ht?: number;
+  marge_brute_mois?: number;
   depenses_mois: number;
-  marge_mois: number;
+  marge_mois: number; // Marge nette du mois (Marge brute - Dépenses)
   mois_debut: string;
   mois_fin: string;
+  taux_marge_nette_mois?: number;
 }
 
 export interface HubFinancialResult {
@@ -133,11 +153,18 @@ export async function fetchHubFinancialMetrics(
       sectorsMap[clean] = {
         sector_slug: clean,
         dayRevenue: 0,
+        dayRevenueHT: 0,
+        dayCogsHT: 0,
+        dayGrossMargin: 0,
         dayExpenses: 0,
         dayNetMargin: 0,
         monthRevenue: 0,
+        monthRevenueHT: 0,
+        monthCogsHT: 0,
+        monthGrossMargin: 0,
         monthExpenses: 0,
         monthNetMargin: 0,
+        hasKnownCost: true,
       };
     }
     return sectorsMap[clean];
@@ -164,14 +191,14 @@ export async function fetchHubFinancialMetrics(
       };
     }
   } catch (err) {
-    // Si la fonction n'est pas encore déployée dans la BDD Supabase, le fallback local prend le relais
+    // Si la fonction n'est pas encore déployée dans la BDD Supabase, le calcul direct prend le relais
   }
 
-  // 2. Récupérer les ventes sales_orders récentes pour calculer le détail par secteur
+  // 2. Récupérer les ventes sales_orders récentes pour calculer le détail exact par secteur
   try {
     const { data: salesList } = await supabase
       .from('sales_orders')
-      .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status')
+      .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status, notes')
       .eq('company_id', companyId)
       .gte('created_at', monthStartStr)
       .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
@@ -191,29 +218,24 @@ export async function fetchHubFinancialMetrics(
         const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'brasserie';
         const card = initSector(secSlug);
 
-        const totalTTC = Number(item.total_amount) || 0;
-        const subtotalHT = Number(item.subtotal_ht) > 0
-          ? Number(item.subtotal_ht)
-          : Math.round((totalTTC / 1.18) * 100) / 100;
-
-        let margin = 0;
-        if (typeof item.gross_margin === 'number') {
-          margin = item.gross_margin;
-        } else if (Number(item.total_cost) > 0) {
-          // Marge brute réelle = Ventes HT - Coût d'achat réel (peut être négative en cas de vente à perte)
-          margin = Math.round((subtotalHT - Number(item.total_cost)) * 100) / 100;
-        } else {
-          margin = Math.round(subtotalHT * 0.15 * 100) / 100;
+        // Utiliser la source unique de calcul de marge
+        const orderMargin = computeOrderMargin(item);
+        if (!orderMargin.hasKnownCost) {
+          card.hasKnownCost = false;
         }
 
         if (isToday) {
-          card.dayRevenue += totalTTC;
-          card.dayNetMargin += margin;
+          card.dayRevenue += orderMargin.revenueTTC;
+          card.dayRevenueHT += orderMargin.revenueHT;
+          card.dayCogsHT += orderMargin.cogsHT;
+          card.dayGrossMargin += orderMargin.grossMargin;
         }
 
         if (isThisMonth) {
-          card.monthRevenue += totalTTC;
-          card.monthNetMargin += margin;
+          card.monthRevenue += orderMargin.revenueTTC;
+          card.monthRevenueHT += orderMargin.revenueHT;
+          card.monthCogsHT += orderMargin.cogsHT;
+          card.monthGrossMargin += orderMargin.grossMargin;
         }
       }
     }
@@ -221,12 +243,12 @@ export async function fetchHubFinancialMetrics(
     console.warn('[HubFinancialService] Erreur lecture sales_orders:', sErr);
   }
 
-  // 3. Récupérer les dépenses réelles et les imputer aux secteurs et au cumul
-  // Priorité : table 'depenses', fallback : 'caisse_mouvements' (sens=debit / type=SORTIE)
+  // 3. Récupérer les dépenses réelles et les imputer aux secteurs
+  // Priorité : table 'depenses', fallback : 'caisse_mouvements' (avec filtrage trésorerie strict)
   try {
     const { data: depList } = await supabase
       .from('depenses')
-      .select('id, montant, date_depense, created_at, secteur_id')
+      .select('id, montant, date_depense, created_at, secteur_id, categorie, description')
       .eq('company_id', companyId)
       .gte('created_at', monthStartStr)
       .order('created_at', { ascending: false })
@@ -247,6 +269,8 @@ export async function fetchHubFinancialMetrics(
 
     if (depList && depList.length > 0) {
       for (const d of depList) {
+        if (!isTrueOperatingExpense(d)) continue;
+
         const dDate = extractCotonouDate(d.date_depense, d.created_at);
         if (!dDate) continue;
 
@@ -255,26 +279,23 @@ export async function fetchHubFinancialMetrics(
 
         if (!isToday && !isThisMonth) continue;
 
-        const montant = Number(d.montant) || 0;
+        const montant = safeNum(d.montant);
         const targetSlug = (d.secteur_id && uuidToSlug[d.secteur_id]) || 'general';
         const card = initSector(targetSlug);
 
         if (isToday) {
           card.dayExpenses += montant;
-          card.dayNetMargin = card.dayNetMargin - montant;
         }
 
         if (isThisMonth) {
           card.monthExpenses += montant;
-          card.monthNetMargin = card.monthNetMargin - montant;
         }
       }
     } else {
-      // ─── Fallback : lire caisse_mouvements (données réelles — 59+ lignes) ───
-      // Les dépenses réelles sont enregistrées avec sens='debit' ou type='SORTIE'
+      // ─── Fallback : lire caisse_mouvements (filtrage strict trésorerie & clôture) ───
       const { data: mvtList } = await supabase
         .from('caisse_mouvements')
-        .select('id, montant, created_at, sector_slug, sens, type, caisse_id')
+        .select('id, montant, created_at, sector_slug, sens, type, caisse_id, motif')
         .eq('company_id', companyId)
         .gte('created_at', monthStartStr)
         .order('created_at', { ascending: false })
@@ -282,11 +303,12 @@ export async function fetchHubFinancialMetrics(
 
       if (mvtList && mvtList.length > 0) {
         for (const m of mvtList) {
-          // Filtrer les sorties de caisse (dépenses d'exploitation et décaissements réels)
-          const isSortie =
-            (m.sens && ['debit', 'DEBIT', 'sortie', 'SORTIE'].includes(m.sens)) ||
-            (m.type && ['SORTIE', 'depense', 'DEPENSE', 'expense', 'cloture'].includes(m.type));
-          if (!isSortie) continue;
+          if (!isTrueOperatingExpense({
+            ...m,
+            description: m.motif,
+          })) {
+            continue;
+          }
 
           const dDate = extractCotonouDate(null, m.created_at);
           if (!dDate) continue;
@@ -295,17 +317,15 @@ export async function fetchHubFinancialMetrics(
           const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
           if (!isToday && !isThisMonth) continue;
 
-          const montant = Number(m.montant) || 0;
+          const montant = safeNum(m.montant);
           const targetSlug = (m.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
           const card = initSector(targetSlug);
 
           if (isToday) {
             card.dayExpenses += montant;
-            card.dayNetMargin = card.dayNetMargin - montant;
           }
           if (isThisMonth) {
             card.monthExpenses += montant;
-            card.monthNetMargin = card.monthNetMargin - montant;
           }
         }
       }
@@ -314,44 +334,103 @@ export async function fetchHubFinancialMetrics(
     console.warn('[HubFinancialService] Erreur lecture depenses:', dErr);
   }
 
-  // 4. Calculer les totaux consolidés
-  let calculatedTotals: HubFinancialTotals = {
-    date: todayStr,
-    ca_jour: 0,
-    depenses_jour: 0,
-    marge_jour: 0,
-    ca_mois: 0,
-    depenses_mois: 0,
-    marge_mois: 0,
-    mois_debut: monthStartStr,
-    mois_fin: monthEndStr,
-  };
-
+  // 4. Calculer la marge nette par secteur : Marge Nette = Marge Brute - Dépenses
   const sectorCards = Object.values(sectorsMap);
   for (const c of sectorCards) {
-    calculatedTotals.ca_jour += c.dayRevenue;
-    calculatedTotals.depenses_jour += c.dayExpenses;
-    calculatedTotals.marge_jour += c.dayNetMargin;
-    calculatedTotals.ca_mois += c.monthRevenue;
-    calculatedTotals.depenses_mois += c.monthExpenses;
-    calculatedTotals.marge_mois += c.monthNetMargin;
+    c.dayRevenue = Math.round(c.dayRevenue * 100) / 100;
+    c.dayRevenueHT = Math.round(c.dayRevenueHT * 100) / 100;
+    c.dayCogsHT = Math.round(c.dayCogsHT * 100) / 100;
+    c.dayGrossMargin = Math.round(c.dayGrossMargin * 100) / 100;
+    c.dayExpenses = Math.round(c.dayExpenses * 100) / 100;
+    c.dayNetMargin = Math.round((c.dayGrossMargin - c.dayExpenses) * 100) / 100;
+
+    c.monthRevenue = Math.round(c.monthRevenue * 100) / 100;
+    c.monthRevenueHT = Math.round(c.monthRevenueHT * 100) / 100;
+    c.monthCogsHT = Math.round(c.monthCogsHT * 100) / 100;
+    c.monthGrossMargin = Math.round(c.monthGrossMargin * 100) / 100;
+    c.monthExpenses = Math.round(c.monthExpenses * 100) / 100;
+    c.monthNetMargin = Math.round((c.monthGrossMargin - c.monthExpenses) * 100) / 100;
   }
 
-  // Utiliser RPC pour le CA si disponible, mais si RPC retourne 0 pour les dépenses
-  // alors que des dépenses réelles existent dans caisse_mouvements, injecter les vraies dépenses
+  // 5. Calculer les totaux consolidés globaux
+  let totalCaJour = 0;
+  let totalCaJourHT = 0;
+  let totalCogsJourHT = 0;
+  let totalMargeBruteJour = 0;
+  let totalDepensesJour = 0;
+
+  let totalCaMois = 0;
+  let totalCaMoisHT = 0;
+  let totalCogsMoisHT = 0;
+  let totalMargeBruteMois = 0;
+  let totalDepensesMois = 0;
+
+  for (const c of sectorCards) {
+    totalCaJour += c.dayRevenue;
+    totalCaJourHT += c.dayRevenueHT;
+    totalCogsJourHT += c.dayCogsHT;
+    totalMargeBruteJour += c.dayGrossMargin;
+    totalDepensesJour += c.dayExpenses;
+
+    totalCaMois += c.monthRevenue;
+    totalCaMoisHT += c.monthRevenueHT;
+    totalCogsMoisHT += c.monthCogsHT;
+    totalMargeBruteMois += c.monthGrossMargin;
+    totalDepensesMois += c.monthExpenses;
+  }
+
+  // Règle d'or : Marge nette = Marge brute - Dépenses
+  const totalMargeNetteJour = Math.round((totalMargeBruteJour - totalDepensesJour) * 100) / 100;
+  const totalMargeNetteMois = Math.round((totalMargeBruteMois - totalDepensesMois) * 100) / 100;
+
+  const tauxMargeNetteMois = totalCaMoisHT > 0
+    ? Math.round((totalMargeNetteMois / totalCaMoisHT) * 10000) / 100
+    : 0;
+
+  const calculatedTotals: HubFinancialTotals = {
+    date: todayStr,
+    ca_jour: Math.round(totalCaJour * 100) / 100,
+    ca_jour_ht: Math.round(totalCaJourHT * 100) / 100,
+    cogs_jour_ht: Math.round(totalCogsJourHT * 100) / 100,
+    marge_brute_jour: Math.round(totalMargeBruteJour * 100) / 100,
+    depenses_jour: Math.round(totalDepensesJour * 100) / 100,
+    marge_jour: totalMargeNetteJour,
+    ca_mois: Math.round(totalCaMois * 100) / 100,
+    ca_mois_ht: Math.round(totalCaMoisHT * 100) / 100,
+    cogs_mois_ht: Math.round(totalCogsMoisHT * 100) / 100,
+    marge_brute_mois: Math.round(totalMargeBruteMois * 100) / 100,
+    depenses_mois: Math.round(totalDepensesMois * 100) / 100,
+    marge_mois: totalMargeNetteMois,
+    mois_debut: monthStartStr,
+    mois_fin: monthEndStr,
+    taux_marge_nette_mois: tauxMargeNetteMois,
+  };
+
+  // Si une RPC existe et renvoie des totaux valides, s'assurer qu'elle n'applique JAMAIS ca - depenses
   let finalTotals = calculatedTotals;
   if (rpcTotals) {
+    const rpcMargeMoisIsErroneous = rpcTotals.marge_mois === (rpcTotals.ca_mois - rpcTotals.depenses_mois);
+    const resolvedDepensesMois = rpcTotals.depenses_mois > 0 ? rpcTotals.depenses_mois : calculatedTotals.depenses_mois;
+    const resolvedDepensesJour = rpcTotals.depenses_jour > 0 ? rpcTotals.depenses_jour : calculatedTotals.depenses_jour;
+
+    // Si la RPC a retourné l'ancienne formule erronée (CA - Dépenses), on force la vraie marge nette (Marge Brute - Dépenses)
+    const correctedMargeMois = (rpcTotals.marge_mois > 0 && !rpcMargeMoisIsErroneous)
+      ? (rpcTotals.marge_mois - resolvedDepensesMois)
+      : calculatedTotals.marge_mois;
+
+    const correctedMargeJour = (rpcTotals.marge_jour > 0 && rpcTotals.marge_jour !== (rpcTotals.ca_jour - rpcTotals.depenses_jour))
+      ? (rpcTotals.marge_jour - resolvedDepensesJour)
+      : calculatedTotals.marge_jour;
+
     finalTotals = {
-      ...rpcTotals,
-      // Si la RPC a retourné 0 dépenses alors que nos calculs ont trouvé des dépenses réelles
-      depenses_jour: rpcTotals.depenses_jour > 0 ? rpcTotals.depenses_jour : calculatedTotals.depenses_jour,
-      depenses_mois: rpcTotals.depenses_mois > 0 ? rpcTotals.depenses_mois : calculatedTotals.depenses_mois,
-      marge_jour: rpcTotals.depenses_jour === 0 && calculatedTotals.depenses_jour > 0
-        ? ((rpcTotals.ca_jour || calculatedTotals.ca_jour) - calculatedTotals.depenses_jour)
-        : (rpcTotals.marge_jour || calculatedTotals.marge_jour),
-      marge_mois: rpcTotals.depenses_mois === 0 && calculatedTotals.depenses_mois > 0
-        ? ((rpcTotals.ca_mois || calculatedTotals.ca_mois) - calculatedTotals.depenses_mois)
-        : (rpcTotals.marge_mois || calculatedTotals.marge_mois),
+      ...calculatedTotals,
+      ca_jour: rpcTotals.ca_jour > 0 ? rpcTotals.ca_jour : calculatedTotals.ca_jour,
+      ca_mois: rpcTotals.ca_mois > 0 ? rpcTotals.ca_mois : calculatedTotals.ca_mois,
+      depenses_jour: resolvedDepensesJour,
+      depenses_mois: resolvedDepensesMois,
+      marge_jour: correctedMargeJour,
+      marge_mois: correctedMargeMois,
+      taux_marge_nette_mois: calculatedTotals.taux_marge_nette_mois,
     };
   }
 

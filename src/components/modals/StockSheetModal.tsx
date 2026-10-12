@@ -1,6 +1,8 @@
-﻿import React, { useState } from 'react'
-import { FileText, Printer, X, Download } from 'lucide-react'
+import React, { useMemo } from 'react'
+import { FileText, Printer, X, Package, DollarSign, Layers, ArrowUpRight } from 'lucide-react'
 import ModalPortal from './ModalPortal'
+import { calculateStockValuation, getProductValuationDetails } from '../../lib/stockCalcul'
+import { formatFCFA } from '../../utils/tax'
 
 interface StockSheetModalProps {
   isOpen: boolean
@@ -8,8 +10,10 @@ interface StockSheetModalProps {
   products?: any[]
 }
 
+const fmt = (n: number) => formatFCFA(n)
+
 export const StockSheetModal: React.FC<StockSheetModalProps> = ({ isOpen, onClose, products = [] }) => {
-  const [selectedProduct, setSelectedProduct] = useState('all')
+  const valuation = useMemo(() => calculateStockValuation(products), [products])
 
   const handlePrint = () => {
     window.print()
@@ -51,26 +55,32 @@ export const StockSheetModal: React.FC<StockSheetModalProps> = ({ isOpen, onClos
               </div>
               <div className="text-right">
                 <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-lg font-bold">
-                  Double Valorisation Actif
+                  Double Valorisation Conforme
                 </span>
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3 my-3">
+            {/* Grille des 4 indicateurs harmonisés */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 my-3">
               <div className="bg-indigo-50/50 p-3 rounded-xl border border-indigo-100">
                 <span className="text-[10px] text-indigo-700 font-bold uppercase">Stock Magasin (UCD)</span>
-                <p className="text-lg font-black text-slate-900 font-mono">145 UCD</p>
-                <span className="text-[10px] text-slate-500">Valeur Achat : 2.175.000 FCFA</span>
+                <p className="text-lg font-black text-slate-900 font-mono">{fmt(valuation.totalMagasinValAchat)}</p>
+                <span className="text-[10px] text-slate-500">{valuation.totalMagasinQty} unités au coût d'achat</span>
               </div>
               <div className="bg-emerald-50/50 p-3 rounded-xl border border-emerald-100">
                 <span className="text-[10px] text-emerald-700 font-bold uppercase">Stock Vente Rayon (UV)</span>
-                <p className="text-lg font-black text-slate-900 font-mono">680 UV</p>
-                <span className="text-[10px] text-slate-500">Valeur Vente : 1.020.000 FCFA</span>
+                <p className="text-lg font-black text-slate-900 font-mono">{fmt(valuation.totalVenteValVente)}</p>
+                <span className="text-[10px] text-slate-500">{valuation.totalVenteQty} UV (valeur vente)</span>
               </div>
-              <div className="bg-amber-50/50 p-3 rounded-xl border border-amber-100">
-                <span className="text-[10px] text-amber-700 font-bold uppercase">Marge Brute Potentielle</span>
-                <p className="text-lg font-black text-amber-900 font-mono">+485.000 FCFA</p>
-                <span className="text-[10px] text-slate-500">Taux moyen : +28.5%</span>
+              <div className="bg-slate-100/70 p-3 rounded-xl border border-slate-200">
+                <span className="text-[10px] text-slate-700 font-bold uppercase">Valorisation Totale Achat</span>
+                <p className="text-lg font-black text-slate-900 font-mono">{fmt(valuation.totalStockValAchat)}</p>
+                <span className="text-[10px] text-slate-500">Coût immobilisé réel</span>
+              </div>
+              <div className="bg-emerald-100/60 p-3 rounded-xl border border-emerald-200">
+                <span className="text-[10px] text-emerald-800 font-bold uppercase">VALORISATION TOTALE VENTE</span>
+                <p className="text-lg font-black text-emerald-900 font-mono">{fmt(valuation.totalStockValVente)}</p>
+                <span className="text-[10px] text-emerald-700">{valuation.totalStockUv} UV commercialisables</span>
               </div>
             </div>
 
@@ -82,28 +92,46 @@ export const StockSheetModal: React.FC<StockSheetModalProps> = ({ isOpen, onClos
                     <th className="p-2.5">Désignation</th>
                     <th className="p-2.5 text-center">Magasin (UCD)</th>
                     <th className="p-2.5 text-center">Vente (UV)</th>
-                    <th className="p-2.5 text-right">Prix Achat</th>
-                    <th className="p-2.5 text-right">Prix Vente</th>
+                    <th className="p-2.5 text-right">PU Achat UCD</th>
+                    <th className="p-2.5 text-right">PU Vente UV</th>
+                    <th className="p-2.5 text-right">Total Achat</th>
+                    <th className="p-2.5 text-right">Total Vente</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono text-[11px]">
-                  <tr>
-                    <td className="p-2.5 font-bold text-slate-900">RIZ-001</td>
-                    <td className="p-2.5 font-sans">Riz Parfumé 50kg (Sac)</td>
-                    <td className="p-2.5 text-center">45 Sacs</td>
-                    <td className="p-2.5 text-center">120 Kg</td>
-                    <td className="p-2.5 text-right">24.500 FCFA</td>
-                    <td className="p-2.5 text-right text-emerald-700 font-bold">28.000 FCFA</td>
-                  </tr>
-                  <tr>
-                    <td className="p-2.5 font-bold text-slate-900">HUI-002</td>
-                    <td className="p-2.5 font-sans">Huile Végétale 20L (Bidon)</td>
-                    <td className="p-2.5 text-center">30 Bidons</td>
-                    <td className="p-2.5 text-center">85 Litres</td>
-                    <td className="p-2.5 text-right">18.000 FCFA</td>
-                    <td className="p-2.5 text-right text-emerald-700 font-bold">21.500 FCFA</td>
-                  </tr>
+                  {products.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="p-4 text-center text-slate-400 font-sans">
+                        Aucun article à afficher
+                      </td>
+                    </tr>
+                  ) : (
+                    products.map((p) => {
+                      const details = getProductValuationDetails(p)
+                      return (
+                        <tr key={p.id || details.code}>
+                          <td className="p-2.5 font-bold text-slate-900">{details.code}</td>
+                          <td className="p-2.5 font-sans">{details.name}</td>
+                          <td className="p-2.5 text-center">{details.stockMagasin} {details.ucdUnit}</td>
+                          <td className="p-2.5 text-center">{details.stockVente} {details.uvUnit}</td>
+                          <td className="p-2.5 text-right">{fmt(details.prixAchatUcd)}</td>
+                          <td className="p-2.5 text-right text-emerald-700 font-bold">{fmt(details.prixVenteTtc)}</td>
+                          <td className="p-2.5 text-right font-bold text-slate-700">{fmt(details.valorisationTotaleAchat)}</td>
+                          <td className="p-2.5 text-right font-bold text-emerald-800">{fmt(details.valorisationTotaleVente)}</td>
+                        </tr>
+                      )
+                    })
+                  )}
                 </tbody>
+                {products.length > 0 && (
+                  <tfoot className="bg-slate-100 font-black text-slate-900 border-t-2 border-slate-300 text-[11px]">
+                    <tr>
+                      <td colSpan={6} className="p-2.5 text-right uppercase">Totaux Généraux :</td>
+                      <td className="p-2.5 text-right font-mono">{fmt(valuation.totalStockValAchat)}</td>
+                      <td className="p-2.5 text-right font-mono text-emerald-800">{fmt(valuation.totalStockValVente)}</td>
+                    </tr>
+                  </tfoot>
+                )}
               </table>
             </div>
           </div>
