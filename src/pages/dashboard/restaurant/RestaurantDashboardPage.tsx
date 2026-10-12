@@ -22,19 +22,21 @@ export const RestaurantDashboardPage: React.FC = () => {
   const [kdsLignes, setKdsLignes] = useState<any[]>([])
   const [pertes, setPertes] = useState<any[]>([])
   const [serveurs, setServeurs] = useState<any[]>([])
+  const [sessionsServeurs, setSessionsServeurs] = useState<any[]>([])
   const [fiches, setFiches] = useState<any[]>([])
 
   const loadData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [tabRes, cmdRes, kdsRes, prtRes, srvRes, fchRes] = await Promise.all([
+      const [tabRes, cmdRes, kdsRes, prtRes, srvRes, fchRes, sessRes] = await Promise.all([
         supabaseTenant('restaurant_tables').select('*'),
         supabaseTenant('restaurant_commandes').select('*').order('created_at', { ascending: false }).limit(50),
         supabaseTenant('restaurant_commande_lignes').select('*').neq('statut_preparation', 'SERVI').limit(20),
         supabaseTenant('restaurant_pertes_gaspillage').select('*').order('date_constat', { ascending: false }).limit(10),
         supabaseTenant('restaurant_serveurs').select('*').order('total_ventes', { ascending: false }),
-        supabaseTenant('restaurant_fiches_techniques').select('*')
+        supabaseTenant('restaurant_fiches_techniques').select('*'),
+        supabaseTenant('restaurant_sessions_serveurs').select('*').order('created_at', { ascending: false }).limit(20)
       ])
 
       setTables(tabRes.data || [])
@@ -43,6 +45,7 @@ export const RestaurantDashboardPage: React.FC = () => {
       setPertes(prtRes.data || [])
       setServeurs(srvRes.data || [])
       setFiches(fchRes.data || [])
+      setSessionsServeurs(sessRes.data || [])
     } catch (err: any) {
       console.error('[RestaurantDashboard] Erreur chargement:', err.message)
       setTables([])
@@ -51,6 +54,7 @@ export const RestaurantDashboardPage: React.FC = () => {
       setPertes([])
       setServeurs([])
       setFiches([])
+      setSessionsServeurs([])
     } finally {
       setLoading(false)
     }
@@ -87,6 +91,14 @@ export const RestaurantDashboardPage: React.FC = () => {
       ? Math.max(0, Math.round(((totalCA - totalPertes) / totalCA) * 100))
       : 0
 
+    const totalSoldeServeuses = sessionsServeurs
+      .filter(s => s.statut === 'OUVERTE')
+      .reduce((acc, s) => acc + (Number(s.solde_restant_a_remettre) || 0), 0)
+
+    const totalBoissonsConfiees = sessionsServeurs
+      .filter(s => s.statut === 'OUVERTE')
+      .reduce((acc, s) => acc + (Number(s.total_boissons_confiees_ttc) || 0), 0)
+
     return {
       totalCA,
       nbCommandes,
@@ -98,9 +110,11 @@ export const RestaurantDashboardPage: React.FC = () => {
       totalPertes,
       coutMoyenPortion,
       margeGlobalePct,
-      nbPlatsConfigures: nbPlats
+      nbPlatsConfigures: nbPlats,
+      totalSoldeServeuses,
+      totalBoissonsConfiees
     }
-  }, [tables, commandes, pertes, fiches])
+  }, [tables, commandes, pertes, fiches, sessionsServeurs])
 
   return (
     <div className="space-y-6 animate-fadeIn">
@@ -199,16 +213,16 @@ export const RestaurantDashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Ratios Restauration Réels : Coût Matière, Commandes, Marge */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Ratios Restauration Réels & Suivi des Comptes Serveuses */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coût Matière Moyen / Portion</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coût Matière / Portion</span>
             <p className="text-2xl font-black text-orange-600 font-mono mt-0.5">
               {kpis.coutMoyenPortion > 0 ? fmt(kpis.coutMoyenPortion) : '0 FCFA'}
             </p>
             <p className="text-[11px] text-slate-500 mt-1">
-              {kpis.nbPlatsConfigures > 0 ? `${kpis.nbPlatsConfigures} recette(s) configurée(s)` : 'À définir dans Fiches & Recettes'}
+              {kpis.nbPlatsConfigures > 0 ? `${kpis.nbPlatsConfigures} recette(s) configurée(s)` : 'Dans Fiches & Recettes'}
             </p>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-orange-50 text-orange-600 flex items-center justify-center">
@@ -218,14 +232,29 @@ export const RestaurantDashboardPage: React.FC = () => {
 
         <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between">
           <div>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Commandes Clôturées</span>
-            <p className="text-2xl font-black text-blue-600 font-mono mt-0.5">{kpis.nbCommandes}</p>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Boissons Confiées Bar</span>
+            <p className="text-2xl font-black text-indigo-600 font-mono mt-0.5">{fmt(kpis.totalBoissonsConfiees)}</p>
             <p className="text-[11px] text-slate-500 mt-1">
-              {kpis.nbCommandes > 0 ? `Panier moyen : ${fmt(kpis.panierMoyen)}` : 'Aucune commande enregistrée'}
+              Valeur totale confiée aux serveuses
             </p>
           </div>
-          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center">
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
             <Wine className="w-6 h-6" />
+          </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Solde Dû par Serveuses</span>
+            <p className={clsx('text-2xl font-black font-mono mt-0.5', kpis.totalSoldeServeuses > 0 ? 'text-rose-600' : 'text-emerald-600')}>
+              {fmt(kpis.totalSoldeServeuses)}
+            </p>
+            <p className="text-[11px] text-slate-500 mt-1">
+              Versements restant à remettre au gérant
+            </p>
+          </div>
+          <div className="w-12 h-12 rounded-2xl bg-rose-50 text-rose-600 flex items-center justify-center">
+            <DollarSign className="w-6 h-6" />
           </div>
         </div>
 
@@ -234,7 +263,7 @@ export const RestaurantDashboardPage: React.FC = () => {
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Marge Brute Réalisée</span>
             <p className="text-2xl font-black text-emerald-600 font-mono mt-0.5">{kpis.margeGlobalePct} %</p>
             <p className="text-[11px] text-slate-500 mt-1">
-              {kpis.totalCA > 0 ? 'Calculée sur le CA réel et pertes' : 'En attente de ventes réelles'}
+              Calculée sur le CA réel et pertes
             </p>
           </div>
           <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center">

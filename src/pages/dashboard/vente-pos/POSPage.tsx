@@ -43,6 +43,7 @@ import {
 import clsx from 'clsx'
 import { StationFuelDispenser } from '../station/StationFuelDispenser'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
+import { destockerMatieresPlat } from '../../../services/restaurantService'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { isVraiCodeEmballage } from '../../../utils/emballages'
@@ -161,6 +162,9 @@ interface SaleRecord {
   status: 'COMPLET' | 'A_LIVRER' | 'AVOIR'
   lines: CartItem[]
   emballages_consignes?: { code: string; designation: string; sortie: number; retour: number; net_du: number }[]
+  table_numero?: string
+  couverts?: number
+  serveur_nom?: string
 }
 
 export const POSPage: React.FC = () => {
@@ -416,7 +420,7 @@ export const POSPage: React.FC = () => {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false)
   const [showAvoirModal, setShowAvoirModal] = useState(false)
   const [selectedSaleForAvoir, setSelectedSaleForAvoir] = useState<SaleRecord | null>(null)
-  const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4' | 'brasserie'>('factureA4')
+  const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4' | 'brasserie' | 'bon_cuisine'>('factureA4')
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
 
   // Modèle de données pour la facture Brasserie avec situation des emballages
@@ -1573,6 +1577,9 @@ export const POSPage: React.FC = () => {
     const cartFiscalSummarySnapshot = { ...cartFiscalSummary }
     const isDeferredSnapshot = isDeferred
     const activeCaisseSnapshot = activeCaisse ? { ...activeCaisse } : null
+    const restaurantTableSnapshot = restaurantTable
+    const restaurantCouvertsSnapshot = restaurantCouverts
+    const restaurantServeurSnapshot = restaurantServeur || 'Serveur de Salle'
 
     // Génération orderNum avant l'envoi réseau
     const rawSector = (secteurActif?.slug || currentSectorSlug || 'GEN').replace(/^sec-/, '')
@@ -1586,7 +1593,7 @@ export const POSPage: React.FC = () => {
     const randStr = Math.random().toString(36).substring(2, 6).toUpperCase()
     const timeStr = Date.now().toString().slice(-4)
     const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
-    const custName = selectedCustomerSnapshot ? selectedCustomerSnapshot.name : 'Client Comptoir'
+    const custName = selectedCustomerSnapshot ? selectedCustomerSnapshot.name : (isRestaurant && restaurantTableSnapshot ? `Table ${restaurantTableSnapshot}` : 'Client Comptoir')
 
     // ─── OPTIMISTIC UI : Vider le panier et mettre à jour l'historique instantanément ───
     clearCart()
@@ -1626,6 +1633,9 @@ export const POSPage: React.FC = () => {
       is_deferred: isDeferredSnapshot,
       status: isDeferredSnapshot ? 'A_LIVRER' : 'COMPLET',
       lines: cartSnapshot,
+      table_numero: restaurantTableSnapshot,
+      couverts: restaurantCouvertsSnapshot,
+      serveur_nom: restaurantServeurSnapshot,
       emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons')
         ? brasserieEmballageRowsSnapshot.map(e => ({ code: e.code, designation: e.designation, precedent: e.precedent, facture: e.facture, sortie: e.facture, rendus: e.rendus, retour: e.rendus, reste: e.reste, net_du: e.reste }))
         : undefined
@@ -1634,7 +1644,7 @@ export const POSPage: React.FC = () => {
     // Mise à jour locale immédiate : nouvelle ligne en haut de la liste
     setCurrentSale(optimisticSale)
     setSalesHistory(prev => [optimisticSale, ...prev.filter(s => s.id !== optimisticSale.id)])
-    setPrintFormat('factureA4')
+    setPrintFormat(isRestaurant ? 'ticket80' : 'factureA4')
     setShowInvoiceModal(true)
 
     // Déstockage local React immédiat
@@ -1663,6 +1673,9 @@ export const POSPage: React.FC = () => {
         const notesPayload = {
           sector_slug: currentSectorSlug, payments: paymentsList, customer_name: custName,
           customer_ifu: selectedCustomerSnapshot?.ifu_number || null, is_deferred: isDeferredSnapshot,
+          table_numero: restaurantTableSnapshot || null,
+          couverts: restaurantCouvertsSnapshot || 1,
+          serveur_nom: restaurantServeurSnapshot || null,
           total_exonere: cartFiscalSummarySnapshot.totalExonere, ancienne_dette_avant_facture: ancienneDetteEstim,
           montant_credit_actuel: creditActuel, montant_restant_du_global: montantRestantDuGlobalEstim,
           lines: cartSnapshot.map(c => ({ product: { id: c.product.id, code: c.product.code, name: c.product.name, unit: c.product.unit || c.product.uv || 'Pièce', cost_price: c.product.cost_price, selling_price: c.product.selling_price, is_vat_subject: c.product.is_vat_subject, vat_rate: c.product.vat_rate, is_aib_subject: c.product.is_aib_subject, aib_rate: c.product.aib_rate, coef: c.product.coef }, qty: c.qty, unitPrice: c.unitPrice, discount: c.discount })),
@@ -1889,6 +1902,91 @@ export const POSPage: React.FC = () => {
           })())
         }
 
+        // Opérations Restaurant (KDS, Déstockage Fiches Techniques, Affectation Table)
+        const restaurantOps: Promise<any>[] = []
+        if (isRestaurant) {
+          restaurantOps.push((async () => {
+            const compId = company?.id ?? companyId ?? ''
+            const numTable = restaurantTableSnapshot || 'COMPTOIR'
+            const srvNom = restaurantServeurSnapshot || 'Serveur'
+
+            // 1. Enregistrer dans restaurant_commandes
+            const { data: restCmd } = await supabase.from('restaurant_commandes').insert({
+              company_id: compId,
+              sector_slug: currentSectorSlug,
+              numero_commande: orderNum,
+              table_numero: numTable,
+              type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
+              serveur_nom: srvNom,
+              client_nom: custName,
+              statut: 'EN_PREPARATION',
+              statut_paiement: creditAmount >= totalNetTTCSnapshot ? 'EN_ATTENTE' : 'SOLDE',
+              total_ht: cartFiscalSummarySnapshot.ht,
+              total_tva: cartFiscalSummarySnapshot.tva,
+              total_aib: cartFiscalSummarySnapshot.aib,
+              total_ttc: totalNetTTCSnapshot,
+              total_paye: totalNetTTCSnapshot - creditAmount,
+              reste_a_payer: creditAmount,
+              mode_reglement: primaryMethod,
+              couverts: restaurantCouvertsSnapshot || 1,
+              heure_ouverture: new Date().toISOString()
+            }).select('id').maybeSingle()
+
+            const restCmdId = restCmd?.id || null
+
+            // 2. Insérer les lignes dans restaurant_commande_lignes pour affichage KDS direct
+            const kdsLignes = cartSnapshot.map(line => {
+              const catLower = ((line.product.category || line.product.category_name || '') as string).toLowerCase()
+              const nameLower = (line.product.name || '').toLowerCase()
+              const isDrink = catLower.includes('boisson') || catLower.includes('biere') || catLower.includes('vin') ||
+                catLower.includes('soda') || catLower.includes('bar') || catLower.includes('jus') ||
+                nameLower.includes('biere') || nameLower.includes('coca') || nameLower.includes('fanta') ||
+                nameLower.includes('castel') || nameLower.includes('youki') || nameLower.includes('guinness') ||
+                nameLower.includes('whisky') || nameLower.includes('eau ')
+              const destination = isDrink ? 'BAR' : 'CUISINE'
+
+              return {
+                company_id: compId,
+                sector_slug: currentSectorSlug,
+                commande_id: restCmdId,
+                commande_numero: orderNum,
+                table_numero: numTable,
+                serveur_nom: srvNom,
+                produit_id: line.product.id,
+                designation: line.product.name,
+                destination: destination,
+                quantite: line.qty,
+                prix_unitaire: line.unitPrice,
+                total_ligne: line.qty * line.unitPrice,
+                statut_preparation: 'NOUVEAU',
+                heure_commande: new Date().toISOString()
+              }
+            })
+
+            await supabase.from('restaurant_commande_lignes').insert(kdsLignes)
+
+            // 3. Déstockage automatique des matières premières de cuisine selon fiches techniques
+            for (const line of cartSnapshot) {
+              await destockerMatieresPlat({
+                company_id: compId,
+                order_id: savedDbSale.id,
+                order_number: orderNum,
+                plat_nom: line.product.name,
+                portion_qty: line.qty,
+                sector_slug: currentSectorSlug
+              })
+            }
+
+            // 4. Mettre à jour le statut de la table en 'OCCUPEE' si table sélectionnée
+            if (numTable && numTable !== 'COMPTOIR') {
+              await supabase.from('restaurant_tables')
+                .update({ statut: 'OCCUPEE', updated_at: new Date().toISOString() })
+                .eq('company_id', compId)
+                .eq('numero_table', numTable)
+            }
+          })())
+        }
+
         // Audit
         const auditOp = import('../../../services/auditService').then(({ logAuditEvent }) => logAuditEvent({
           companyId: company?.id ?? companyId ?? '',
@@ -1910,6 +2008,7 @@ export const POSPage: React.FC = () => {
           ...caisseOps,
           ...creditOps,
           ...emballageOps,
+          ...restaurantOps,
           auditOp,
         ])
       } catch (bgErr: any) {
@@ -3336,6 +3435,17 @@ export const POSPage: React.FC = () => {
               >
                 Ticket Caisse 80mm
               </button>
+              {isRestaurant && (
+                <button
+                  onClick={() => setPrintFormat('bon_cuisine')}
+                  className={clsx(
+                    'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm',
+                    printFormat === 'bon_cuisine' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-900 border border-rose-200 hover:bg-rose-100'
+                  )}
+                >
+                  <span>🍳</span> Bon Cuisine / Bar
+                </button>
+              )}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -3540,7 +3650,7 @@ export const POSPage: React.FC = () => {
                 <p>Pour tout renseignement, veuillez contacter la Direction de {company?.name}.</p>
               </div>
             </div>
-          ) : (
+          ) : printFormat === 'ticket80' ? (
             /* ── TICKET DE CAISSE 80MM STANDARD (SANS FAUX NUMÉROS FISCAUX) ── */
             <div className="mx-auto max-w-[80mm] p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl font-mono text-xs space-y-3">
               <div className="text-center space-y-1">
@@ -3561,6 +3671,11 @@ export const POSPage: React.FC = () => {
               <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-0.5 text-[11px]">
                 <p className="font-bold">Facture : {currentSale?.order_number}</p>
                 <p>Client : {currentSale?.customer_name}</p>
+                {currentSale?.table_numero && (
+                  <p className="font-black text-rose-700">
+                    Table : {currentSale.table_numero} {currentSale?.serveur_nom ? `• Serveur : ${currentSale.serveur_nom}` : ''}
+                  </p>
+                )}
               </div>
 
               <table className="w-full text-[11px]">
@@ -3626,6 +3741,71 @@ export const POSPage: React.FC = () => {
 
               <div className="text-center pt-2 border-t border-slate-200 text-[10px] text-slate-400">
                 <p>Merci pour votre visite !</p>
+              </div>
+            </div>
+          ) : (
+            /* ── BON DE PRÉPARATION CUISINE & BAR (SANS PRIX) ── */
+            <div id="bon-preparation-cuisine" className="p-6 bg-white border-2 border-dashed border-rose-300 rounded-2xl max-w-sm mx-auto font-mono text-xs space-y-4 shadow-sm text-slate-900">
+              <div className="text-center border-b-2 border-slate-900 pb-3">
+                <span className="bg-rose-600 text-white font-black text-xs px-3 py-1 rounded-full uppercase tracking-wider">
+                  BON DE PRÉPARATION
+                </span>
+                <div className="mt-2 text-2xl font-black text-slate-900">
+                  {currentSale?.table_numero ? `TABLE : ${currentSale.table_numero}` : 'COMPTOIR / EMPORTER'}
+                </div>
+                <div className="flex justify-between items-center text-[11px] font-bold text-slate-600 mt-2 px-1">
+                  <span>Serveur : {currentSale?.serveur_nom || 'Salle'}</span>
+                  <span>Couverts : {currentSale?.couverts || 1}</span>
+                </div>
+                <div className="flex justify-between text-[10px] text-slate-500 mt-1 px-1">
+                  <span>CMD : {currentSale?.order_number}</span>
+                  <span>{formatBeninDateTime(currentSale?.date)}</span>
+                </div>
+              </div>
+
+              {/* LIGNES ARTICLES À PRÉPARER (SANS PRIX) */}
+              <div className="space-y-3 py-2">
+                <div className="flex justify-between text-[11px] font-black uppercase text-slate-500 border-b pb-1">
+                  <span>QTE & ARTICLE</span>
+                  <span>POSTE</span>
+                </div>
+                {((currentSale?.lines || []) as CartItem[]).map((line, idx) => {
+                  const cat = ((line.product.category || line.product.category_name || '') as string).toLowerCase()
+                  const nom = (line.product.name || '').toLowerCase()
+                  const isDrink = cat.includes('boisson') || cat.includes('biere') || cat.includes('vin') ||
+                    cat.includes('soda') || cat.includes('bar') || nom.includes('biere') || nom.includes('coca') ||
+                    nom.includes('fanta') || nom.includes('castel') || nom.includes('guinness') || nom.includes('eau ')
+                  const destination = isDrink ? 'BAR' : 'CUISINE'
+
+                  return (
+                    <div key={idx} className="flex justify-between items-start border-b border-dashed border-slate-200 pb-2">
+                      <div className="flex items-start gap-2">
+                        <span className="font-black text-sm bg-slate-900 text-white px-2 py-0.5 rounded">
+                          {line.qty}x
+                        </span>
+                        <div>
+                          <p className="font-black text-xs text-slate-900 leading-tight">
+                            {line.product.name}
+                          </p>
+                          {line.product.unit && (
+                            <p className="text-[10px] text-slate-500">{line.product.unit}</p>
+                          )}
+                        </div>
+                      </div>
+                      <span className={clsx(
+                        'text-[10px] font-black px-2 py-0.5 rounded uppercase',
+                        destination === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800'
+                      )}>
+                        {destination}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="border-t-2 border-slate-900 pt-3 text-center text-[10px] text-slate-500">
+                <p className="font-bold">ORDRE DE PRÉPARATION INTERNE</p>
+                <p>À remettre impérativement au chef de cuisine ou barman</p>
               </div>
             </div>
           )}
