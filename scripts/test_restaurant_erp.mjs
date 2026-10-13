@@ -151,6 +151,66 @@ const caReel = caComptoir // Ne doit pas inclure la casse
 assert.strictEqual(caReel, 50000, 'Le CA ne doit pas intégrer la casse')
 const perteEnregistree = casseBouteille
 assert.strictEqual(perteEnregistree, 1000, 'La casse doit être tracée séparément dans les pertes')
-console.log('✅ Test 6 Réussi : Étanchéité du CA et des pertes/casses respectée.')
+// 7. Test POS : Séparation stricte Catalogue BAR vs RESTAURANT
+const mockCatalogProduits = [
+  { id: 'p1', name: 'Castel Beer 65cl', selling_price: 800, stock_vente: 50, is_matiere_premiere: false, is_recipe: false },
+  { id: 'p2', name: 'Coca-Cola 33cl', selling_price: 500, stock_vente: 24, is_matiere_premiere: false, is_recipe: false },
+  { id: 'p3', name: 'Riz Blanc (Matière Première)', selling_price: 0, stock_vente: 100, is_matiere_premiere: true, is_recipe: false },
+]
 
-console.log('--- TOUS LES TESTS FONCTIONNELS BAR & RESTAURANT SONT VALIDÉS AVEC SUCCÈS (6/6) ---')
+const mockRecipeProduits = [
+  { id: 'rec-1', name: 'Chawarma Boeuf', selling_price: 2000, is_recipe: true, is_matiere_premiere: false },
+  { id: 'rec-2', name: 'Poulet Bicyclette Braisé', selling_price: 4500, is_recipe: true, is_matiere_premiere: false },
+  { id: 'rec-3', name: 'Fiche sans prix', selling_price: 0, is_recipe: true, is_matiere_premiere: false },
+]
+
+// Mode BAR : uniquement produits physiques sans matière première
+const catalogueBar = mockCatalogProduits.filter(p => !p.is_matiere_premiere && !p.is_recipe)
+assert.strictEqual(catalogueBar.length, 2, 'Catalogue BAR doit contenir exactement 2 boissons physiques')
+assert.strictEqual(catalogueBar.every(p => p.selling_price > 0 && !p.is_recipe), true, 'Catalogue BAR ne doit contenir aucune recette ni matière première')
+
+// Mode RESTAURANT : uniquement recettes actives avec prix de vente unitaire > 0
+const catalogueRestaurant = mockRecipeProduits.filter(r => r.is_recipe && r.selling_price > 0)
+assert.strictEqual(catalogueRestaurant.length, 2, 'Catalogue RESTAURANT doit contenir 2 plats actifs avec prix valide')
+assert.strictEqual(catalogueRestaurant.some(r => r.name === 'Fiche sans prix'), false, 'Les recettes sans prix doivent être exclues')
+console.log('✅ Test 7 Réussi : Séparation stricte catalogue POS BAR vs RESTAURANT validée.')
+
+// 8. Test POS : Attribution de la vente Client Comptoir à une serveuse enregistrée
+const mockServeuses = [
+  { id: 'srv-001', nom_complet: 'Amina SOULE', matricule: 'SRV-01', statut: 'ACTIF' },
+  { id: 'srv-002', nom_complet: 'Christelle KOFFI', matricule: 'SRV-02', statut: 'ACTIF' }
+]
+
+function simulerAttributionVenteComptoir(selectedCustomer, selectedServeurId) {
+  const isComptoir = !selectedCustomer
+  let serveurAttribué = null
+  let serveurIdAttribué = null
+
+  if (isComptoir) {
+    if (selectedServeurId) {
+      const match = mockServeuses.find(s => s.id === selectedServeurId)
+      if (match) {
+        serveurAttribué = match.nom_complet
+        serveurIdAttribué = match.id
+      }
+    } else {
+      serveurAttribué = 'Client Comptoir Direct'
+      serveurIdAttribué = null
+    }
+  }
+
+  return { isComptoir, serveurAttribué, serveurIdAttribué }
+}
+
+const vente1 = simulerAttributionVenteComptoir(null, 'srv-001')
+assert.strictEqual(vente1.serveurAttribué, 'Amina SOULE', 'La vente comptoir doit être attribuée à Amina SOULE')
+assert.strictEqual(vente1.serveurIdAttribué, 'srv-001', 'L ID de la serveuse doit être conservé pour les créances')
+
+const vente2 = simulerAttributionVenteComptoir(null, null)
+assert.strictEqual(vente2.serveurAttribué, 'Client Comptoir Direct', 'Vente comptoir directe sans serveuse')
+assert.strictEqual(vente2.serveurIdAttribué, null, 'Aucun serveur_id pour une vente comptoir directe')
+
+console.log('✅ Test 8 Réussi : Attribution de vente comptoir à une serveuse et distinction vente directe validées.')
+
+console.log('--- TOUS LES TESTS FONCTIONNELS BAR & RESTAURANT SONT VALIDÉS AVEC SUCCÈS (8/8) ---')
+

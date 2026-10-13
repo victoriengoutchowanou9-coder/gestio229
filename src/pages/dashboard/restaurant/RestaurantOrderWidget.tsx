@@ -51,7 +51,7 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
       try {
         const [tabRes, srvRes] = await Promise.all([
           supabaseTenant('restaurant_tables').select('numero_table, nom, zone, statut'),
-          supabaseTenant('restaurant_serveurs').select('nom_complet, role').eq('statut', 'ACTIF')
+          supabaseTenant('restaurant_serveurs').select('id, matricule, nom_complet, role').eq('statut', 'ACTIF')
         ])
         if (tabRes.data) setTablesList(tabRes.data)
         if (srvRes.data) setServeursList(srvRes.data)
@@ -86,15 +86,15 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
 
         {/* Sélecteurs Circuit, Table, Couverts et Serveur */}
         <div className="flex flex-wrap items-center gap-2">
-          {/* Circuit BAR ou CUISINE */}
+          {/* Mode de Vente BAR ou RESTAURANT */}
           {setCircuit && (
             <div className="flex items-center gap-1 bg-slate-800/90 p-1 rounded-xl border border-slate-700">
               <button
                 type="button"
                 onClick={() => setCircuit('BAR')}
                 className={clsx(
-                  'px-3 py-1 rounded-lg text-xs font-black transition flex items-center gap-1',
-                  circuit === 'BAR' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  'px-3.5 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 shadow-sm',
+                  circuit === 'BAR' ? 'bg-rose-600 text-white shadow-rose-600/30' : 'text-slate-400 hover:text-white'
                 )}
               >
                 <span>🍾</span> BAR
@@ -103,11 +103,11 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
                 type="button"
                 onClick={() => setCircuit('CUISINE')}
                 className={clsx(
-                  'px-3 py-1 rounded-lg text-xs font-black transition flex items-center gap-1',
-                  circuit === 'CUISINE' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                  'px-3.5 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 shadow-sm',
+                  circuit === 'CUISINE' ? 'bg-rose-600 text-white shadow-rose-600/30' : 'text-slate-400 hover:text-white'
                 )}
               >
-                <span>🍳</span> CUISINE
+                <span>🍽️</span> RESTAURANT
               </button>
             </div>
           )}
@@ -165,8 +165,8 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
             >
               <option value="Serveur de Salle" className="bg-slate-900 text-white">Serveur de Salle</option>
               {serveursList.map(s => (
-                <option key={s.nom_complet} value={s.nom_complet} className="bg-slate-900 text-white">
-                  {s.nom_complet}
+                <option key={s.id || s.nom_complet} value={s.nom_complet} className="bg-slate-900 text-white">
+                  {s.nom_complet} {s.matricule ? `(${s.matricule})` : ''}
                 </option>
               ))}
             </select>

@@ -104,6 +104,8 @@ interface Product {
   category?: { name: string }
   batch_pricing?: BatchPricingConfig
   sector_meta?: any
+  is_recipe?: boolean
+  recipe_id?: string
 }
 
 interface Customer {
@@ -184,6 +186,9 @@ export const POSPage: React.FC = () => {
   const [restaurantTable, setRestaurantTable] = useState('')
   const [restaurantCouverts, setRestaurantCouverts] = useState(1)
   const [restaurantServeur, setRestaurantServeur] = useState('')
+  const [restaurantServeurId, setRestaurantServeurId] = useState<string>('')
+  const [restaurantServeursList, setRestaurantServeursList] = useState<any[]>([])
+  const [recipeProducts, setRecipeProducts] = useState<Product[]>([])
   const [pendingOrders, setPendingOrders] = useState<any[]>([])
   const location = useLocation()
 
@@ -650,7 +655,80 @@ export const POSPage: React.FC = () => {
       console.warn('[POSPage] Erreur récupération clients:', custErr)
     }
 
-    // 3. Charger les types d'emballages si secteur Brasserie (isolé)
+    // 3. Charger les fiches techniques (Recettes Restaurant) et les serveuses
+    if (isRestaurant) {
+      try {
+        const [fichesRes, srvRes] = await Promise.all([
+          supabaseTenant('restaurant_fiches_techniques').select('*').order('plat_nom'),
+          supabaseTenant('restaurant_serveurs').select('id, matricule, nom_complet, role, telephone').eq('statut', 'ACTIF').order('nom_complet')
+        ])
+
+        if (srvRes.data) {
+          setRestaurantServeursList(srvRes.data)
+        }
+
+        if (fichesRes.data && fichesRes.data.length > 0) {
+          // Regrouper par plat_nom pour générer les articles virtuels de recettes
+          const mapRecettes: Record<string, { id: string; name: string; prix_vente: number; cout_matiere: number; ingredientsCount: number }> = {}
+          fichesRes.data.forEach((f: any) => {
+            const pNom = (f.plat_nom || '').trim()
+            if (!pNom) return
+            if (!mapRecettes[pNom]) {
+              mapRecettes[pNom] = {
+                id: f.id,
+                name: pNom,
+                prix_vente: Number(f.prix_vente_unitaire) || 0,
+                cout_matiere: 0,
+                ingredientsCount: 0
+              }
+            }
+            if (Number(f.prix_vente_unitaire) > 0 && mapRecettes[pNom].prix_vente === 0) {
+              mapRecettes[pNom].prix_vente = Number(f.prix_vente_unitaire)
+            }
+            mapRecettes[pNom].cout_matiere += Number(f.cout_matiere_ligne) || 0
+            mapRecettes[pNom].ingredientsCount += 1
+          })
+
+          const mappedRecipes: Product[] = Object.values(mapRecettes).map((r, idx) => {
+            // Trouver si un produit correspondant existe dans products pour récupérer le prix s'il n'est pas renseigné
+            const matchedP = (rawProds || []).find((p: any) => p.name?.trim().toLowerCase() === r.name.toLowerCase())
+            const finalPrice = r.prix_vente > 0 ? r.prix_vente : (Number(matchedP?.selling_price) || Math.round((r.cout_matiere * 2.85) / 500) * 500)
+
+            return {
+              id: matchedP ? matchedP.id : `recette-${r.id || idx}`,
+              recipe_id: r.id,
+              is_recipe: true,
+              code: matchedP ? matchedP.code : `REC-${(idx + 1).toString().padStart(3, '0')}`,
+              name: r.name,
+              unit: matchedP?.unit || 'Portion',
+              uv: matchedP?.uv || matchedP?.unit || 'Portion',
+              ucd: matchedP?.ucd || 'Portion',
+              selling_price: finalPrice,
+              cost_price: r.cout_matiere,
+              stock_vente: 999, // Produit préparé à la commande selon matières de cuisine
+              stock_magasin: 0,
+              coef: 1,
+              is_taxable: false,
+              is_vat_subject: false,
+              tva_rate: 0,
+              vat_rate: 0,
+              is_aib_subject: false,
+              aib_rate: 0,
+              category: { name: 'Cuisine & Recettes' },
+              sector_meta: { restaurant_circuit: 'CUISINE', is_recipe: true }
+            }
+          })
+
+          setRecipeProducts(mappedRecipes)
+        } else {
+          setRecipeProducts([])
+        }
+      } catch (err: any) {
+        console.warn('[POSPage] Erreur chargement recettes/serveurs:', err.message)
+      }
+    }
+
+    // 4. Charger les types d'emballages si secteur Brasserie (isolé)
     if (currentSectorSlug === 'brasserie') {
       const cId = company?.id ?? companyId ?? ''
       try {
@@ -832,6 +910,17 @@ export const POSPage: React.FC = () => {
   // ─── Gestion de la Modale Détail Produit & Contrôle Strict Double Stock ─────
 
   const handleOpenProductDetail = (product: Product) => {
+    // Si recette restaurant : vérifier simplement que le prix de vente est valide
+    if (product.is_recipe) {
+      if (Number(product.selling_price) <= 0) {
+        toast.error('Prix non défini', `La recette "${product.name}" n'a pas de prix de vente valide.`)
+        return
+      }
+      setSelectedProductForDetail(product)
+      setDetailQty(1)
+      return
+    }
+
     const stockVente = Number(product.stock_vente ?? product.sector_meta?.stock_vente ?? 0)
     const stockMagasin = Number(product.stock_magasin ?? product.sector_meta?.stock_magasin ?? 0)
     const unitMagasin = product.ucd || product.sector_meta?.ucd || 'Carton'
@@ -864,17 +953,25 @@ export const POSPage: React.FC = () => {
       return
     }
 
-    const stockVente = Number(selectedProductForDetail.stock_vente ?? selectedProductForDetail.sector_meta?.stock_vente ?? 0)
-    const unitVente = selectedProductForDetail.uv || selectedProductForDetail.sector_meta?.uv || selectedProductForDetail.unit || 'Pièce'
-    const existing = cart.find((i) => i.product.id === selectedProductForDetail.id)
-    const currentInCart = existing ? existing.qty : 0
+    // Si produit recette : autoriser l'ajout (déstockage des ingrédients Cuisine à la validation de la vente)
+    if (selectedProductForDetail.is_recipe) {
+      if (Number(selectedProductForDetail.selling_price) <= 0) {
+        toast.error('Prix invalide', 'Cette recette n\'a pas de prix de vente configuré.')
+        return
+      }
+    } else {
+      const stockVente = Number(selectedProductForDetail.stock_vente ?? selectedProductForDetail.sector_meta?.stock_vente ?? 0)
+      const unitVente = selectedProductForDetail.uv || selectedProductForDetail.sector_meta?.uv || selectedProductForDetail.unit || 'Pièce'
+      const existing = cart.find((i) => i.product.id === selectedProductForDetail.id)
+      const currentInCart = existing ? existing.qty : 0
 
-    if (currentInCart + qty > stockVente) {
-      toast.error(
-        'Stock vente insuffisant',
-        `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + qty} ${unitVente}. Veuillez effectuer un transfert depuis le magasin.`
-      )
-      return
+      if (currentInCart + qty > stockVente) {
+        toast.error(
+          'Stock vente insuffisant',
+          `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + qty} ${unitVente}. Veuillez effectuer un transfert depuis le magasin.`
+        )
+        return
+      }
     }
 
     const isBrasserie = currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons'
@@ -998,36 +1095,44 @@ export const POSPage: React.FC = () => {
   }
 
   const handleDirectAddToCart = (item: { product: any; qty: number; unitPrice: number; discount: number }) => {
-    const stockVente = Number(item.product.stock_vente ?? item.product.sector_meta?.stock_vente ?? 0)
-    const stockMagasin = Number(item.product.stock_magasin ?? item.product.sector_meta?.stock_magasin ?? 0)
-    const unitMagasin = item.product.ucd || item.product.sector_meta?.ucd || 'Carton'
-    const unitVente = item.product.uv || item.product.sector_meta?.uv || item.product.unit || 'Pièce'
-
-    if (stockVente <= 0) {
-      if (canTransferStock) {
-        toast.error(
-          `Stock vente épuisé : ${item.product.name}`,
-          `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
-        )
-        setTransfertProduct(item.product)
-      } else {
-        toast.error(
-          `Stock vente épuisé : ${item.product.name}`,
-          `Cet article est en rupture en vente. Veuillez demander un transfert au Gestionnaire.`
-        )
+    // Si produit recette : autoriser l'ajout (consommation cuisine lors de la validation effective)
+    if (item.product.is_recipe) {
+      if (Number(item.product.selling_price) <= 0) {
+        toast.error('Prix non configuré', `La recette "${item.product.name}" n'a pas de prix de vente valide.`)
+        return
       }
-      return
-    }
+    } else {
+      const stockVente = Number(item.product.stock_vente ?? item.product.sector_meta?.stock_vente ?? 0)
+      const stockMagasin = Number(item.product.stock_magasin ?? item.product.sector_meta?.stock_magasin ?? 0)
+      const unitMagasin = item.product.ucd || item.product.sector_meta?.ucd || 'Carton'
+      const unitVente = item.product.uv || item.product.sector_meta?.uv || item.product.unit || 'Pièce'
 
-    const existing = cart.find((i) => i.product.id === item.product.id)
-    const currentInCart = existing ? existing.qty : 0
+      if (stockVente <= 0) {
+        if (canTransferStock) {
+          toast.error(
+            `Stock vente épuisé : ${item.product.name}`,
+            `Magasin : ${stockMagasin} ${unitMagasin} disponible(s). Transfert obligatoire avant la vente.`
+          )
+          setTransfertProduct(item.product)
+        } else {
+          toast.error(
+            `Stock vente épuisé : ${item.product.name}`,
+            `Cet article est en rupture en vente. Veuillez demander un transfert au Gestionnaire.`
+          )
+        }
+        return
+      }
 
-    if (currentInCart + item.qty > stockVente) {
-      toast.error(
-        'Stock vente insuffisant',
-        `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + item.qty} ${unitVente}.`
-      )
-      return
+      const existing = cart.find((i) => i.product.id === item.product.id)
+      const currentInCart = existing ? existing.qty : 0
+
+      if (currentInCart + item.qty > stockVente) {
+        toast.error(
+          'Stock vente insuffisant',
+          `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + item.qty} ${unitVente}.`
+        )
+        return
+      }
     }
 
     const isBrasserie = currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons'
@@ -1582,6 +1687,7 @@ export const POSPage: React.FC = () => {
     const restaurantTableSnapshot = restaurantTable
     const restaurantCouvertsSnapshot = restaurantCouverts
     const restaurantServeurSnapshot = restaurantServeur || 'Serveur de Salle'
+    const restaurantServeurIdSnapshot = restaurantServeurId || null
 
     // Génération orderNum avant l'envoi réseau
     const rawSector = (secteurActif?.slug || currentSectorSlug || 'GEN').replace(/^sec-/, '')
@@ -1678,6 +1784,7 @@ export const POSPage: React.FC = () => {
           table_numero: restaurantTableSnapshot || null,
           couverts: restaurantCouvertsSnapshot || 1,
           serveur_nom: restaurantServeurSnapshot || null,
+          serveur_id: restaurantServeurIdSnapshot || null,
           total_exonere: cartFiscalSummarySnapshot.totalExonere, ancienne_dette_avant_facture: ancienneDetteEstim,
           montant_credit_actuel: creditActuel, montant_restant_du_global: montantRestantDuGlobalEstim,
           lines: cartSnapshot.map(c => ({ product: { id: c.product.id, code: c.product.code, name: c.product.name, unit: c.product.unit || c.product.uv || 'Pièce', cost_price: c.product.cost_price, selling_price: c.product.selling_price, is_vat_subject: c.product.is_vat_subject, vat_rate: c.product.vat_rate, is_aib_subject: c.product.is_aib_subject, aib_rate: c.product.aib_rate, coef: c.product.coef }, qty: c.qty, unitPrice: c.unitPrice, discount: c.discount })),
@@ -1751,8 +1858,9 @@ export const POSPage: React.FC = () => {
           }
         })
 
-        // Mouvements de stock en un seul lot (Batch Insert)
-        const stockMovementsPayload = cartSnapshot.map(line => {
+        // Mouvements de stock en un seul lot (uniquement pour les articles physiques, pas les fiches recettes déstockées en matières premières)
+        const physicalCartItems = cartSnapshot.filter(line => !line.product.is_recipe)
+        const stockMovementsPayload = physicalCartItems.map(line => {
           const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
           const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
           const lineCoef = Math.max(1, Number(line.product.coef || line.product.sector_meta?.coef || 1))
@@ -1777,8 +1885,8 @@ export const POSPage: React.FC = () => {
           }
         })
 
-        // Mises à jour des produits en stock
-        const productUpdates = cartSnapshot.map(line => {
+        // Mises à jour des produits physiques en stock
+        const productUpdates = physicalCartItems.map(line => {
           const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
           const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
           const currentMeta = line.product.sector_meta || {}
@@ -1920,6 +2028,7 @@ export const POSPage: React.FC = () => {
               table_numero: numTable,
               type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
               serveur_nom: srvNom,
+              serveur_id: restaurantServeurIdSnapshot,
               client_nom: custName,
               statut: 'EN_PREPARATION',
               statut_paiement: creditAmount >= totalNetTTCSnapshot ? 'EN_ATTENTE' : 'SOLDE',
@@ -1992,6 +2101,7 @@ export const POSPage: React.FC = () => {
               order_id: savedDbSale.id,
               order_number: orderNum,
               serveur_nom: srvNom,
+              serveur_id: restaurantServeurIdSnapshot,
               circuit: restaurantCircuit,
               montant_initial: totalNetTTCSnapshot,
               montant_paye: totalNetTTCSnapshot - creditAmount,
@@ -2232,24 +2342,44 @@ export const POSPage: React.FC = () => {
     }
   }
 
-  // Filtrages (Avec séparation stricte des circuits BAR et CUISINE en mode Restaurant)
-  const filteredProducts = products.filter((p) => {
-    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
-      return false
+  // Filtrages : Mode BAR (stock réel) et Mode RESTAURANT (fiches recettes actives)
+  const filteredProducts = useMemo(() => {
+    if (!isRestaurant) {
+      return products.filter((p) => {
+        if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
+          return false
+        }
+        return true
+      })
     }
-    if (isRestaurant) {
+
+    // Mode RESTAURANT : Afficher les plats et recettes enregistrées dans Fiche et Recette
+    if (restaurantCircuit === 'CUISINE') {
+      const activeRecipes = recipeProducts.filter(p => Number(p.selling_price) > 0)
+      return activeRecipes.filter((p) => {
+        if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
+          return false
+        }
+        return true
+      })
+    }
+
+    // Mode BAR : Afficher uniquement les boissons et produits disponibles dans le stock de vente existant
+    return products.filter((p) => {
+      if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
+        return false
+      }
+      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
+      if (isMatiere) return false // Ne jamais vendre de matière première brute
+
       const cat = ((p.category?.name || p.category || (p as any).category_name || '') as string).toLowerCase()
       const nom = (p.name || '').toLowerCase()
-      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
       const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (
-        (cat.includes('boisson') || cat.includes('biere') || cat.includes('vin') || cat.includes('bar') || nom.includes('biere') || nom.includes('coca') || nom.includes('fanta') || nom.includes('eau ')) ? 'BAR' : 'CUISINE'
+        (cat.includes('boisson') || cat.includes('biere') || cat.includes('vin') || cat.includes('bar') || nom.includes('biere') || nom.includes('coca') || nom.includes('fanta') || nom.includes('eau ') || nom.includes('jus')) ? 'BAR' : 'CUISINE'
       )
-      // Ne jamais vendre les matières premières brutes directement en plat
-      if (isMatiere) return false
-      return restaurantCircuit === 'CUISINE' ? pCircuit === 'CUISINE' : pCircuit === 'BAR'
-    }
-    return true
-  })
+      return pCircuit === 'BAR'
+    })
+  }, [products, recipeProducts, search, isRestaurant, restaurantCircuit])
 
   const filteredHistory = salesHistory.filter(
     (s) =>
@@ -2449,6 +2579,45 @@ export const POSPage: React.FC = () => {
                 <RefreshCw className={clsx('w-4 h-4 text-slate-500', loading && 'animate-spin')} />
               </button>
 
+              {/* Sélecteur de mode de vente BAR / RESTAURANT */}
+              {isRestaurant && (
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl border border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => setRestaurantCircuit('BAR')}
+                    className={clsx(
+                      'px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5',
+                      restaurantCircuit === 'BAR'
+                        ? 'bg-rose-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    )}
+                    title="Vente de boissons et produits en stock direct"
+                  >
+                    <span>🍾</span>
+                    <span>BAR</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setRestaurantCircuit('CUISINE')}
+                    className={clsx(
+                      'px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5',
+                      restaurantCircuit === 'CUISINE'
+                        ? 'bg-rose-600 text-white shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+                    )}
+                    title="Vente de plats et boissons enregistrés dans Fiche et Recette"
+                  >
+                    <span>🍽️</span>
+                    <span>RESTAURANT</span>
+                    {recipeProducts.length > 0 && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-white/20">
+                        {recipeProducts.length}
+                      </span>
+                    )}
+                  </button>
+                </div>
+              )}
+
               {/* Bouton bascule Panier (Permet d'agrandir le catalogue à 100% ou de rouvrir le panier) */}
               <button
                 type="button"
@@ -2503,49 +2672,59 @@ export const POSPage: React.FC = () => {
                           : 'bg-white hover:bg-emerald-50/40 border-slate-200 hover:border-emerald-400'
                       )}
                     >
-                      {/* En-tête : Référence + Double Stock (Vente & Magasin) */}
+                      {/* En-tête : Référence + Stock (Vente & Magasin) ou Badge Recette */}
                       <div>
                         <div className="flex items-center justify-between gap-1.5 mb-1.5">
                           <span className="text-[10px] font-mono font-bold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
                             {p.code}
                           </span>
-                          <span
-                            className={clsx(
-                              'text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-0.5',
-                              stockVente <= 0
-                                ? 'bg-rose-100 text-rose-800 border border-rose-200'
-                                : stockVente < 5
-                                ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                                : 'bg-emerald-100 text-emerald-800'
-                            )}
-                            title={`Stock disponible vente directe : ${stockVente} ${unitVente}`}
-                          >
-                            Vente : {stockVente} {unitVente}
-                          </span>
+                          {p.is_recipe ? (
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-800 flex items-center gap-0.5">
+                              🍽️ Recette
+                            </span>
+                          ) : (
+                            <span
+                              className={clsx(
+                                'text-[10px] font-black px-2 py-0.5 rounded-full flex items-center gap-0.5',
+                                stockVente <= 0
+                                  ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                                  : stockVente < 5
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                                  : 'bg-emerald-100 text-emerald-800'
+                              )}
+                              title={`Stock disponible vente directe : ${stockVente} ${unitVente}`}
+                            >
+                              Vente : {stockVente} {unitVente}
+                            </span>
+                          )}
                         </div>
 
                         {/* Vignette Produit avec Photo ou Icône et Nom */}
                         <div className="flex items-start gap-2.5 my-1">
                           <div className={clsx(
                             'w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0 transition',
-                            stockVente <= 0
+                            p.is_recipe
+                              ? 'bg-rose-50 text-rose-600 group-hover:bg-rose-100'
+                              : stockVente <= 0
                               ? 'bg-rose-50 text-rose-600'
                               : 'bg-slate-100 group-hover:bg-emerald-100/60 text-slate-600 group-hover:text-emerald-700'
                           )}>
-                            <Layers className="w-5 h-5" />
+                            {p.is_recipe ? <span>🍳</span> : <Layers className="w-5 h-5" />}
                           </div>
                           <p className="font-bold text-xs text-slate-900 group-hover:text-emerald-700 line-clamp-2 leading-tight">
                             {p.name}
                           </p>
                         </div>
 
-                        {/* Stock Magasin disponible */}
-                        <div className="text-[10px] text-slate-500 flex items-center justify-between mt-1 bg-slate-100/80 px-2 py-1 rounded-lg border border-slate-200 font-medium">
-                          <span className="flex items-center gap-1">
-                            <Package className="w-3 h-3 text-indigo-600" /> Magasin :
-                          </span>
-                          <span className="font-bold text-indigo-700 font-mono">{stockMagasin} {unitMagasin}</span>
-                        </div>
+                        {/* Stock Magasin disponible (uniquement pour les produits stockés du Bar) */}
+                        {!p.is_recipe && (
+                          <div className="text-[10px] text-slate-500 flex items-center justify-between mt-1 bg-slate-100/80 px-2 py-1 rounded-lg border border-slate-200 font-medium">
+                            <span className="flex items-center gap-1">
+                              <Package className="w-3 h-3 text-indigo-600" /> Magasin :
+                            </span>
+                            <span className="font-bold text-indigo-700 font-mono">{stockMagasin} {unitMagasin}</span>
+                          </div>
+                        )}
                       </div>
 
                       {/* Tarification : Prix unitaire détail & Prix de gros */}
@@ -2561,8 +2740,8 @@ export const POSPage: React.FC = () => {
                           </div>
                         )}
 
-                        {/* Overlay / Action si Rupture Stock Vente */}
-                        {stockVente <= 0 && (
+                        {/* Overlay / Action si Rupture Stock Vente (produits physiques Bar uniquement) */}
+                        {!p.is_recipe && stockVente <= 0 && (
                           <div className="pt-2">
                             {canTransferStock ? (
                               <button
@@ -2634,7 +2813,7 @@ export const POSPage: React.FC = () => {
 
               {/* Corps Défilable Interne : Client, Articles, Totaux Fiscaux, Règlements */}
               <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 text-xs">
-                {/* 1. Sélection Client & Vente Différée */}
+                {/* 1. Sélection Client & Attribution Serveuse (Comptoir) */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
                   <div className="flex items-center gap-2">
                     <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
@@ -2653,6 +2832,57 @@ export const POSPage: React.FC = () => {
                       ))}
                     </select>
                   </div>
+
+                  {/* Si vente Client Comptoir en mode Restaurant : Attribution de la vente à une Serveuse */}
+                  {isRestaurant && !selectedCustomerId && (
+                    <div className="pt-1.5 border-t border-slate-200/60 space-y-1.5 animate-fadeIn">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] font-black text-rose-950 uppercase tracking-wider flex items-center gap-1">
+                          <span>🍸</span> Attribution Vente Comptoir :
+                        </label>
+                        <span className={clsx(
+                          "text-[10px] font-bold px-2 py-0.5 rounded-full",
+                          restaurantServeur && restaurantServeur !== 'Client Comptoir Direct'
+                            ? "bg-rose-100 text-rose-800 font-mono"
+                            : "bg-slate-200 text-slate-600"
+                        )}>
+                          {restaurantServeur && restaurantServeur !== 'Client Comptoir Direct'
+                            ? `Serveuse : ${restaurantServeur}`
+                            : 'Vente directe comptoir'}
+                        </span>
+                      </div>
+
+                      {restaurantServeursList.length === 0 ? (
+                        <div className="p-2 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-800">
+                          ℹ️ Aucune serveuse enregistrée. Rendez-vous dans <strong>« Serveurs & Personnel »</strong> pour ajouter vos serveuses.
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5">
+                          <select
+                            value={restaurantServeurId || ''}
+                            onChange={(e) => {
+                              const sId = e.target.value
+                              setRestaurantServeurId(sId)
+                              const matched = restaurantServeursList.find(s => s.id === sId)
+                              if (matched) {
+                                setRestaurantServeur(matched.nom_complet)
+                              } else {
+                                setRestaurantServeur('Client Comptoir Direct')
+                              }
+                            }}
+                            className="w-full text-xs border border-rose-200 rounded-xl p-2 bg-white font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                          >
+                            <option value="">-- Vente Directe Comptoir (Sans serveuse) --</option>
+                            {restaurantServeursList.map((srv) => (
+                              <option key={srv.id} value={srv.id}>
+                                💁‍♀️ {srv.nom_complet} {srv.matricule ? `[Matricule : ${srv.matricule}]` : ''} {srv.telephone ? `— ${srv.telephone}` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {selectedCustomer && selectedCustomer.discount_eligible && (selectedCustomer.discount_rate || 0) > 0 && (
                     <div className="flex items-center gap-1.5 text-[10px] font-bold text-amber-800 bg-amber-50 px-2 py-1 rounded-xl border border-amber-200">
