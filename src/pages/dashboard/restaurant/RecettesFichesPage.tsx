@@ -95,7 +95,7 @@ export const RecettesFichesPage: React.FC = () => {
   // Formulaire Création Multi-ingrédients & Prix de vente
   const [dishNameInput, setDishNameInput] = useState('')
   const [dishNotes, setDishNotes] = useState('')
-  const [dishSellingPrice, setDishSellingPrice] = useState<number>(0)
+  const [dishSellingPrice, setDishSellingPrice] = useState<string>('')
   const [ingredientsList, setIngredientsList] = useState<IngredientDraft[]>([])
   const [savingRecipe, setSavingRecipe] = useState(false)
 
@@ -114,7 +114,7 @@ export const RecettesFichesPage: React.FC = () => {
   const [editCostU, setEditCostU] = useState<number>(0)
   const [isAddingIngredientToExisting, setIsAddingIngredientToExisting] = useState(false)
   const [editingSellingPrice, setEditingSellingPrice] = useState(false)
-  const [tempDetailSellingPrice, setTempDetailSellingPrice] = useState<number>(0)
+  const [tempDetailSellingPrice, setTempDetailSellingPrice] = useState<string>('')
 
   // 1. Charger les fiches techniques
   const loadFiches = useCallback(async () => {
@@ -336,7 +336,7 @@ export const RecettesFichesPage: React.FC = () => {
       setShowAddModal(false)
       setDishNameInput('')
       setDishNotes('')
-      setDishSellingPrice(0)
+      setDishSellingPrice('')
       setIngredientsList([])
       setCurrentSelectedProductId('')
       setCurrentCustomIngName('')
@@ -421,7 +421,8 @@ export const RecettesFichesPage: React.FC = () => {
     setIsAddingIngredientToExisting(false)
     setEditingSellingPrice(false)
     const pData = platsGroupes[platNom]
-    setTempDetailSellingPrice(pData ? pData.prixVenteUnitaire : 0)
+    const currentPrice = pData ? pData.prixVenteUnitaire : 0
+    setTempDetailSellingPrice(currentPrice > 0 ? String(currentPrice) : '')
     setShowDetailModal(true)
   }
 
@@ -1035,13 +1036,15 @@ export const RecettesFichesPage: React.FC = () => {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                   <div>
                     <input
-                      type="number"
-                      min="0"
-                      step="50"
-                      placeholder="Ex: 500, 2500, 4000..."
-                      value={dishSellingPrice || ''}
-                      onChange={e => setDishSellingPrice(Number(e.target.value))}
-                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono font-black text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="0"
+                      value={dishSellingPrice}
+                      onChange={e => {
+                        const val = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
+                        setDishSellingPrice(val)
+                      }}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono font-black text-gray-900 placeholder:text-gray-400 focus:ring-2 focus:ring-rose-500 outline-none"
                     />
                     <span className="text-[10px] text-slate-400 mt-1 block">
                       Renseignez le prix de vente unitaire TTC facturé au client.
@@ -1053,7 +1056,7 @@ export const RecettesFichesPage: React.FC = () => {
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => setDishSellingPrice(Math.round((totalDraftCost * 2.85) / 500) * 500)}
+                        onClick={() => setDishSellingPrice(String(Math.round((totalDraftCost * 2.85) / 500) * 500))}
                         className="px-3 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
                       >
                         <Sparkles className="w-3.5 h-3.5 text-rose-600" />
@@ -1234,16 +1237,19 @@ export const RecettesFichesPage: React.FC = () => {
                     {editingSellingPrice ? (
                       <div className="mt-1 flex items-center gap-1.5">
                         <input
-                          type="number"
-                          min="0"
-                          step="50"
+                          type="text"
+                          inputMode="numeric"
+                          placeholder="0"
                           value={tempDetailSellingPrice}
-                          onChange={e => setTempDetailSellingPrice(Number(e.target.value))}
-                          className="w-24 px-2 py-1 bg-white border border-rose-300 rounded font-mono font-bold text-xs"
+                          onChange={e => {
+                            const val = e.target.value.replace(/[^0-9]/g, '').replace(/^0+(?=\d)/, '')
+                            setTempDetailSellingPrice(val)
+                          }}
+                          className="w-24 px-2 py-1 bg-white border border-rose-300 rounded font-mono font-bold text-xs text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-1 focus:ring-rose-500"
                         />
                         <button
                           onClick={() => handleUpdateDetailSellingPrice(activeDetailData.plat)}
-                          className="px-2 py-1 bg-rose-600 text-white rounded text-[11px] font-bold"
+                          className="px-2 py-1 bg-rose-600 text-white rounded text-[11px] font-bold hover:bg-rose-700 transition"
                         >
                           OK
                         </button>

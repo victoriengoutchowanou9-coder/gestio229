@@ -14,3 +14,6 @@ COMMENT ON COLUMN public.restaurant_fiches_techniques.prix_vente_unitaire IS
 
 -- Index pour recherche rapide et cohérence financière
 CREATE INDEX IF NOT EXISTS idx_rest_fiches_plat_comp ON public.restaurant_fiches_techniques(company_id, plat_nom);
+
+-- Recharger immédiatement le cache du schéma PostgREST de Supabase
+NOTIFY pgrst, 'reload schema';
