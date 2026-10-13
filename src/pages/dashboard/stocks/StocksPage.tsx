@@ -253,10 +253,10 @@ export const StocksPage: React.FC = () => {
     fetchHistory()
   }, [company?.id])
 
-  // Synchroniser la grille d'inventaire quand les produits réels changent
+  // Synchroniser la grille d'inventaire quand les produits du secteur actif changent
   useEffect(() => {
     setInventoryList(
-      products.map((p) => {
+      displayedProducts.map((p) => {
         const totalTheo = p.stock_magasin + p.stock_vente
         return {
           productId: p.id,
@@ -271,7 +271,7 @@ export const StocksPage: React.FC = () => {
         }
       })
     )
-  }, [products])
+  }, [displayedProducts])
 
   // ─── Chargement Activité Période pour la Fiche Journalière ──────────────
   const loadPeriodActivity = useCallback(async () => {
@@ -782,10 +782,9 @@ export const StocksPage: React.FC = () => {
     }
   }
 
-  // ─── Fiche Journalière de Stock ───────────────────────────────────────────
-
+  // ─── Fiche Journalière de Stock (filtrée par circuit sélectionné) ──────────────
   const dailyStockData: DailyStockRow[] = useMemo(() => {
-    return products.map((p) => {
+    return displayedProducts.map((p) => {
       const details = getProductValuationDetails(p)
       return {
         productId: p.id,
@@ -800,7 +799,16 @@ export const StocksPage: React.FC = () => {
         valeurVente: details.valorisationTotaleVente
       }
     })
-  }, [products])
+  }, [displayedProducts])
+
+  const displayedProducts = useMemo(() => {
+    if (!isRestaurant) return products
+    return products.filter(p => {
+      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
+      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
+      return circuitStock === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
+    })
+  }, [products, isRestaurant, circuitStock])
 
   // =============================================================================
   // SOURCE UNIQUE DE CALCUL DES STOCKS & VALORISATION (lib/stockCalcul.ts) :
@@ -808,8 +816,9 @@ export const StocksPage: React.FC = () => {
   // 2. Stock Vente Commercial = stock_vente * prix_vente_ttc (Ne jamais utiliser prix_achat)
   // 3. Valorisation Totale Achat = (stock_magasin * prix_achat_ucd) + (stock_vente * prix_achat_uv)
   // 4. Valorisation Totale Vente = (stock_magasin_converti_en_uv + stock_vente) * prix_vente_ttc
+  // Calcul strictement sectoriel (BAR séparé de CUISINE en CHR)
   // =============================================================================
-  const stockValuation = useMemo(() => calculateStockValuation(products), [products])
+  const stockValuation = useMemo(() => calculateStockValuation(displayedProducts), [displayedProducts])
   const {
     totalMagasinQty,
     totalVenteQty,
@@ -820,15 +829,6 @@ export const StocksPage: React.FC = () => {
     totalStockValAchat,
     totalStockValVente
   } = stockValuation
-
-  const displayedProducts = useMemo(() => {
-    if (!isRestaurant) return products
-    return products.filter(p => {
-      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
-      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
-      return circuitStock === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
-    })
-  }, [products, isRestaurant, circuitStock])
 
   const filteredProducts = displayedProducts.filter(
     (p) =>
@@ -2034,6 +2034,7 @@ export const StocksPage: React.FC = () => {
       <NewProductModal
         isOpen={showNewProductModal}
         onClose={() => setShowNewProductModal(false)}
+        defaultCircuit={isRestaurant ? circuitStock : undefined}
         onSuccess={(savedProduct: any) => {
           if (savedProduct) {
             setProducts((prev) => [
@@ -2063,7 +2064,7 @@ export const StocksPage: React.FC = () => {
       <StockSheetModal
         isOpen={showStockSheetModal}
         onClose={() => setShowStockSheetModal(false)}
-        products={products}
+        products={displayedProducts}
       />
     </div>
   )

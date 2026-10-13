@@ -27,6 +27,7 @@ interface NewProductModalProps {
   isOpen: boolean
   onClose: () => void
   onSuccess?: (product: any) => void
+  defaultCircuit?: 'BAR' | 'CUISINE'
 }
 
 // Unités UCD (Stockage / Gros)
@@ -43,18 +44,27 @@ export const UV_UNITS = [
   'Pelote', 'Douzaine', 'Sachet', 'Gramme', 'Portion'
 ]
 
-export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess }) => {
+export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess, defaultCircuit }) => {
   const { company } = useAuthStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
+
+  const isRestaurant = sectorSlug === 'restaurant' || sectorSlug === 'bar-restaurant-maquis' || sectorSlug === 'bar' || sectorSlug === 'maquis' || sectorSlug === 'fastfood'
+  const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>(defaultCircuit || 'BAR')
+
+  useEffect(() => {
+    if (defaultCircuit) {
+      setRestaurantCircuit(defaultCircuit)
+    }
+  }, [defaultCircuit])
 
   // Formulaire Produit sans valeurs fictives (vides ou 0 réels)
   const [form, setForm] = useState({
     code: '', // Vide au départ, généré automatiquement à l'enregistrement si non saisi
     name: '',
-    category: 'Alimentation & Boissons',
-    ucd: 'Carton',
+    category: defaultCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : 'Alimentation & Boissons',
+    ucd: defaultCircuit === 'CUISINE' ? 'Sac' : 'Carton',
     packaging: 'Standard',
-    uv: 'Pièce',
+    uv: defaultCircuit === 'CUISINE' ? 'Kg' : 'Pièce',
     coef: 1,
     // Prix saisis DIRECTEMENT en TTC
     priceAchatUcdTtc: 0,
@@ -257,9 +267,12 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         : null
 
       const activeSectorSlug = getActiveSectorSlug()
+      const isMatierePrem = isRestaurant && restaurantCircuit === 'CUISINE'
       const sectorMeta = {
         sector_slug: activeSectorSlug,
         sector: activeSectorSlug,
+        restaurant_circuit: isRestaurant ? restaurantCircuit : undefined,
+        is_matiere_premiere: isMatierePrem,
         ucd: form.ucd,
         packaging: form.packaging,
         uv: form.uv,
@@ -300,8 +313,12 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         is_taxable: form.isVatSubject,
         tva_rate: form.isVatSubject ? form.vatRate : 0,
         min_stock_alert: 5,
+        stock_magasin: parsedMagasin,
+        stock_vente: parsedVente,
         sector_slug: activeSectorSlug,
         secteur_slug: activeSectorSlug,
+        restaurant_circuit: isRestaurant ? restaurantCircuit : undefined,
+        is_matiere_premiere: isMatierePrem,
         sector_meta: sectorMeta,
         is_active: true,
       }
@@ -459,6 +476,63 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                 <strong>Règle Fiscale GESTIO 229 :</strong> Les prix doivent être renseignés en <strong>TTC</strong>. Le système calcule automatiquement le montant HT et la TVA selon le paramétrage fiscal du produit. L'AIB est calculé exclusivement sur le montant HT.
               </p>
             </div>
+
+            {/* Sélecteur de Secteur / Circuit CHR obligatoire */}
+            {isRestaurant && (
+              <div className="bg-gradient-to-r from-slate-900 via-rose-950 to-slate-900 p-3.5 rounded-2xl border border-rose-800/40 text-white flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-md">
+                <div>
+                  <h4 className="font-black text-xs text-white flex items-center gap-1.5">
+                    <span>🏢 Destination du Produit :</span>
+                    <span className="bg-rose-500 text-white text-[10px] font-mono px-2 py-0.5 rounded-full uppercase">
+                      Stock {restaurantCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : 'Boisson Bar'}
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-slate-300">
+                    {restaurantCircuit === 'CUISINE'
+                      ? 'Ce produit sera stocké en Cuisine et disponible dans les fiches techniques & recettes'
+                      : 'Ce produit sera stocké au Bar et disponible à la vente directe au POS'}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5 bg-slate-950/70 p-1 rounded-xl border border-slate-800 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRestaurantCircuit('BAR')
+                      setForm(prev => ({
+                        ...prev,
+                        category: prev.category === 'Matières Premières Cuisine' ? 'Alimentation & Boissons' : prev.category,
+                        uv: prev.uv === 'Kg' ? 'Pièce' : prev.uv
+                      }))
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${
+                      restaurantCircuit === 'BAR'
+                        ? 'bg-rose-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    🍺 Stock Boisson BAR
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRestaurantCircuit('CUISINE')
+                      setForm(prev => ({
+                        ...prev,
+                        category: prev.category === 'Alimentation & Boissons' ? 'Matières Premières Cuisine' : prev.category,
+                        uv: prev.uv === 'Pièce' ? 'Kg' : prev.uv
+                      }))
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-black transition flex items-center gap-1.5 ${
+                      restaurantCircuit === 'CUISINE'
+                        ? 'bg-rose-600 text-white shadow-sm'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    🥩 Stock Matières CUISINE
+                  </button>
+                </div>
+              </div>
+            )}
 
             {/* SECTION 1: IDENTIFICATION */}
             <div className="bg-slate-50 dark:bg-slate-800/60 p-3.5 rounded-2xl border border-slate-200 dark:border-slate-700 space-y-3">

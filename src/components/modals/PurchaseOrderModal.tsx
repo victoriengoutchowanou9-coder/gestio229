@@ -18,6 +18,7 @@ interface PurchaseOrderModalProps {
   onClose: () => void
   onSuccess?: (order: any) => void
   sectorSlug?: string
+  circuit?: 'BAR' | 'CUISINE'
 }
 
 interface OrderItemRow {
@@ -32,7 +33,7 @@ interface OrderItemRow {
   imageUrl?: string
 }
 
-export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess, sectorSlug }) => {
+export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess, sectorSlug, circuit }) => {
   const { company, user } = useAuthStore()
 
   const demandeurFullName = user?.full_name || user?.name || user?.username || 'Responsable Appro'
@@ -92,6 +93,16 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         filteredPData = rawProducts
       }
 
+      // Si secteur Restaurant, filtrer strictement les produits par circuit (BAR vs CUISINE)
+      const isResto = activeSector === 'restaurant' || activeSector === 'bar-restaurant-maquis' || activeSector === 'bar' || activeSector === 'maquis' || activeSector === 'fastfood'
+      if (isResto && circuit) {
+        filteredPData = filteredPData.filter((p: any) => {
+          const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || p.is_matiere_premiere)
+          const pCircuit = p.sector_meta?.restaurant_circuit || p.restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
+          return circuit === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
+        })
+      }
+
       const mappedSuppliers = filteredSData.map((s: any) => ({
         id: s.id,
         name: s.company_name || s.name,
@@ -139,7 +150,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     }
 
     fetchResources()
-  }, [company?.id, isOpen, sectorSlug])
+  }, [company?.id, isOpen, sectorSlug, circuit])
 
   // Création fournisseur à la volée
   const handleCreateSupplierInline = async (e: React.FormEvent) => {
@@ -326,6 +337,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       supplierId: selectedSupplierId,
       supplierName: selectedSupplier?.name || 'Fournisseur',
       sector_slug: getActiveSectorSlug(),
+      circuit: circuit || undefined,
       totalTtc: totalBcTtc,
       items: orderItems,
       // Champs de compatibilité racine pour premier article

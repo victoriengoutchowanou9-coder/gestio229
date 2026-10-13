@@ -144,6 +144,18 @@ export const RestaurantDashboardPage: React.FC = () => {
             <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />
           </button>
           <Link
+            to={`/app/${sectorSlug}/stocks`}
+            className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 border border-white/10"
+          >
+            <span>📦</span> Stocks Bar & Cuisine
+          </Link>
+          <Link
+            to={`/app/${sectorSlug}/recettes`}
+            className="px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-2xl text-xs font-bold transition flex items-center gap-1.5 border border-white/10"
+          >
+            <span>📖</span> Fiches Recettes
+          </Link>
+          <Link
             to={`/app/${sectorSlug}/tables`}
             className="px-4 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-black shadow-lg shadow-rose-600/30 transition flex items-center gap-2"
           >

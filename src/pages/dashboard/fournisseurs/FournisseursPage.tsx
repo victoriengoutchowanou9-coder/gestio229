@@ -71,6 +71,7 @@ interface PurchaseOrder {
   unitPriceUcd: number
   totalTtc: number
   status: BCStatus
+  circuit?: 'BAR' | 'CUISINE'
   signatures: {
     magasinier: string
     gerant?: string
@@ -98,6 +99,7 @@ interface ReceptionRecord {
   qtyReceived: number
   ecart: number
   status: 'CONFORME' | 'NON_CONFORME'
+  circuit?: 'BAR' | 'CUISINE'
   notes?: string
   items?: ReceptionRecordItem[]
 }
@@ -107,6 +109,9 @@ export const FournisseursPage: React.FC = () => {
   const { toast } = useUIStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
   const currentSectorSlug = sectorSlug
+
+  const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
+  const [circuitFournisseur, setCircuitFournisseur] = useState<'BAR' | 'CUISINE'>('BAR')
 
   const [activeTab, setActiveTab] = useState<'bc' | 'reception' | 'fournisseurs'>('bc')
 
@@ -183,25 +188,36 @@ export const FournisseursPage: React.FC = () => {
       setSuppliers(mappedSuppliers)
 
       if (poData && !poErr) {
-        const mappedPo: PurchaseOrder[] = sectorPo.map((p: any) => ({
-          id: p.id,
-          reference: p.order_number || `BC-${p.id.slice(0, 6)}`,
-          date: p.created_at || new Date().toISOString(),
-          supplierId: p.supplier_id,
-          supplierName: p.supplier_name || 'Fournisseur',
-          productId: p.product_id || '',
-          productName: p.product_name || 'Marchandise',
-          ucdUnit: p.unit || 'UCD',
-          qtyOrderedUcd: Number(p.quantity) || 1,
-          unitPriceUcd: Number(p.unit_price) || 0,
-          totalTtc: Number(p.total_amount) || 0,
-          status: (p.status?.toUpperCase() as any) || 'COMMANDE',
-          signatures: {
-            magasinier: p.created_by_name || 'Magasinier',
-            gerant: p.validated_by_name || ''
-          },
-          items: p.items || undefined
-        }))
+        const mappedPo: PurchaseOrder[] = sectorPo.map((p: any) => {
+          let detectedCircuit: 'BAR' | 'CUISINE' | undefined = undefined
+          if (p.circuit) detectedCircuit = p.circuit
+          else if (p.sector_meta?.circuit) detectedCircuit = p.sector_meta.circuit
+          else if (p.notes && typeof p.notes === 'string') {
+            if (p.notes.includes('[CUISINE]') || p.notes.includes('Circuit: CUISINE')) detectedCircuit = 'CUISINE'
+            else if (p.notes.includes('[BAR]') || p.notes.includes('Circuit: BAR')) detectedCircuit = 'BAR'
+          }
+
+          return {
+            id: p.id,
+            reference: p.order_number || `BC-${p.id.slice(0, 6)}`,
+            date: p.created_at || new Date().toISOString(),
+            supplierId: p.supplier_id,
+            supplierName: p.supplier_name || 'Fournisseur',
+            productId: p.product_id || '',
+            productName: p.product_name || 'Marchandise',
+            ucdUnit: p.unit || 'UCD',
+            qtyOrderedUcd: Number(p.quantity) || 1,
+            unitPriceUcd: Number(p.unit_price) || 0,
+            totalTtc: Number(p.total_amount) || 0,
+            status: (p.status?.toUpperCase() as any) || 'COMMANDE',
+            circuit: detectedCircuit,
+            signatures: {
+              magasinier: p.created_by_name || 'Magasinier',
+              gerant: p.validated_by_name || ''
+            },
+            items: p.items || undefined
+          }
+        })
         setPurchaseOrders(mappedPo)
       }
     } catch (err: any) {
@@ -662,10 +678,76 @@ export const FournisseursPage: React.FC = () => {
       (s.city && s.city.toLowerCase().includes(search.toLowerCase()))
   )
 
+  // Filtrage des Bons de Commande et Réceptions par Circuit (BAR vs CUISINE)
+  const displayedPurchaseOrders = useMemo(() => {
+    if (!isRestaurant) return purchaseOrders
+    return purchaseOrders.filter(po => {
+      if (!po.circuit) return true // BC commun ou hérité
+      return po.circuit === circuitFournisseur
+    })
+  }, [purchaseOrders, isRestaurant, circuitFournisseur])
+
+  const displayedReceptions = useMemo(() => {
+    if (!isRestaurant) return receptions
+    return receptions.filter(r => {
+      if (!r.circuit) return true
+      return r.circuit === circuitFournisseur
+    })
+  }, [receptions, isRestaurant, circuitFournisseur])
+
   const totalSupplierDebt = suppliers.reduce((sum, s) => sum + (s.current_payable || s.current_debt || 0), 0)
 
   return (
     <div className="space-y-4">
+      {/* ── Sélecteur de Circuit CHR Obligatoire : [ BAR ] et [ CUISINE ] ── */}
+      {isRestaurant && (
+        <div className="bg-gradient-to-r from-slate-900 via-rose-950 to-slate-900 p-4 rounded-3xl shadow-lg border border-rose-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-white">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center font-bold">
+              📦
+            </span>
+            <div>
+              <h3 className="font-black text-sm text-white flex items-center gap-2">
+                Achats & Commandes Fournisseurs CHR
+                <span className="bg-rose-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full font-mono uppercase">
+                  Secteur {circuitFournisseur}
+                </span>
+              </h3>
+              <p className="text-xs text-slate-300">
+                {circuitFournisseur === 'BAR'
+                  ? 'Gestion des achats de boissons, fûts et consommables Bar — Entrée directe au Stock Boisson Bar'
+                  : 'Gestion des approvisionnements en viandes, légumes, épices et matières premières Cuisine — Entrée au Stock Cuisine'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-950/60 p-1.5 rounded-2xl border border-slate-800">
+            <button
+              onClick={() => setCircuitFournisseur('BAR')}
+              className={clsx(
+                'px-5 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 shadow-sm',
+                circuitFournisseur === 'BAR'
+                  ? 'bg-rose-600 text-white shadow-rose-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              )}
+            >
+              <span>🍺</span> Achats BAR
+            </button>
+            <button
+              onClick={() => setCircuitFournisseur('CUISINE')}
+              className={clsx(
+                'px-5 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 shadow-sm',
+                circuitFournisseur === 'CUISINE'
+                  ? 'bg-rose-600 text-white shadow-rose-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              )}
+            >
+              <span>🥩</span> Achats CUISINE
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── En-tête & Onglets ───────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
         <div>
@@ -822,14 +904,14 @@ export const FournisseursPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {purchaseOrders.length === 0 ? (
+                {displayedPurchaseOrders.length === 0 ? (
                   <tr>
                     <td colSpan={7} className="p-8 text-center text-slate-400 font-sans">
-                      Aucun bon de commande créé. Cliquez sur "+ Créer un Bon de Commande".
+                      Aucun bon de commande trouvé pour ce secteur. Cliquez sur "+ Créer un Bon de Commande".
                     </td>
                   </tr>
                 ) : (
-                  purchaseOrders.map((po) => (
+                  displayedPurchaseOrders.map((po) => (
                     <tr key={po.id} className="hover:bg-slate-50/80 transition font-sans">
                       <td className="p-3 font-mono font-bold text-indigo-900">{po.reference}</td>
                       <td className="p-3 text-slate-500 font-mono">
@@ -968,14 +1050,14 @@ export const FournisseursPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-mono">
-                {receptions.length === 0 ? (
+                {displayedReceptions.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="p-8 text-center text-slate-400 font-sans">
-                      Aucune réception de marchandise enregistrée.
+                      Aucune réception de marchandise enregistrée pour ce secteur.
                     </td>
                   </tr>
                 ) : (
-                  receptions.map((r) => (
+                  displayedReceptions.map((r) => (
                     <tr key={r.id} className="hover:bg-slate-50/80 transition font-sans">
                       <td className="p-3 font-mono font-bold text-slate-900">{r.blRef}</td>
                       <td className="p-3 font-mono text-indigo-700">{r.bcReference}</td>
@@ -1541,6 +1623,7 @@ export const FournisseursPage: React.FC = () => {
         onClose={() => setShowPoModal(false)}
         onSuccess={handleCreatePoSuccess}
         sectorSlug={currentSectorSlug}
+        circuit={isRestaurant ? circuitFournisseur : undefined}
       />
       <ReceiveBlModal
         isOpen={showReceiveModal}

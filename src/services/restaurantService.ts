@@ -140,6 +140,58 @@ export async function destockerMatieresPlat(params: {
         coutTotal += totalCoutLigne
         count++
 
+        // Déstockage réel de la matière première dans products (stock_vente cuisine)
+        try {
+          const { data: matchedProducts } = await supabase
+            .from('products')
+            .select('id, name, unit, uv, stock_vente, stock_magasin, sector_meta, restaurant_circuit, is_matiere_premiere')
+            .eq('company_id', company_id)
+            .ilike('name', ing.ingredient_nom.trim())
+
+          // Trouver le produit cuisine correspondant
+          const prod = (matchedProducts && matchedProducts.length > 0)
+            ? (matchedProducts.find((p: any) => p.restaurant_circuit === 'CUISINE' || p.sector_meta?.restaurant_circuit === 'CUISINE' || p.is_matiere_premiere || p.sector_meta?.is_matiere_premiere) || matchedProducts[0])
+            : null
+
+          if (prod) {
+            // Conversion d'unité si nécessaire
+            const storageUnit = prod.unit || prod.uv || ing.unite || 'kg'
+            const ingUnit = ing.unite || 'kg'
+            let convFactor = 1
+
+            const sU = storageUnit.toLowerCase().trim()
+            const iU = ingUnit.toLowerCase().trim()
+            if (sU !== iU) {
+              if ((sU === 'kg' || sU === 'kilo') && iU === 'g') convFactor = 0.001
+              else if (iU === 'kg' && (sU === 'g')) convFactor = 1000
+              else if ((sU === 'l' || sU === 'litre') && iU === 'ml') convFactor = 0.001
+              else if ((sU === 'l' || sU === 'litre') && iU === 'cl') convFactor = 0.01
+              else if (iU === 'l' && (sU === 'cl')) convFactor = 100
+              else if (iU === 'l' && (sU === 'ml')) convFactor = 1000
+            }
+
+            const qteStockADeduire = Math.round((qteTotale * convFactor) * 1000) / 1000
+            const currentStockVente = Number(prod.stock_vente ?? prod.sector_meta?.stock_vente ?? 0)
+            const newStockVente = Math.max(0, Math.round((currentStockVente - qteStockADeduire) * 1000) / 1000)
+            const currentMeta = prod.sector_meta || {}
+            const updatedMeta = { ...currentMeta, stock_vente: newStockVente }
+
+            let updRes = await supabase
+              .from('products')
+              .update({ stock_vente: newStockVente, sector_meta: updatedMeta })
+              .eq('id', prod.id)
+
+            if (updRes.error && updRes.error.code === 'PGRST204') {
+              await supabase
+                .from('products')
+                .update({ sector_meta: updatedMeta })
+                .eq('id', prod.id)
+            }
+          }
+        } catch (stockErr) {
+          console.warn('[RestaurantService] Erreur mise à jour stock produit cuisine:', stockErr)
+        }
+
         // Tracer le mouvement de stock
         await supabase.from('stock_movements').insert({
           company_id,
@@ -148,7 +200,7 @@ export async function destockerMatieresPlat(params: {
           reference_id: order_id || null,
           reference_number: order_number,
           quantity: -qteTotale,
-          notes: `Consommation recette ${plat_nom} (x${portion_qty}) : ${ing.ingredient_nom}`
+          notes: `Consommation recette ${plat_nom} (x${portion_qty}) : ${ing.ingredient_nom} (${qteTotale} ${ing.unite || 'portion'})`
         })
       }
     }

@@ -1891,7 +1891,7 @@ export const POSPage: React.FC = () => {
           const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
           const currentMeta = line.product.sector_meta || {}
           const updatedMeta = { ...currentMeta, stock_vente: newStockVente }
-          return supabase.from('products').update({ sector_meta: updatedMeta }).eq('id', line.product.id)
+          return supabase.from('products').update({ stock_vente: newStockVente, sector_meta: updatedMeta }).eq('id', line.product.id)
         })
 
         // Mouvements de caisse
