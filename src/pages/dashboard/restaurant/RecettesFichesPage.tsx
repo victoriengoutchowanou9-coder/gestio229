@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   BookOpen, Plus, RefreshCw, Scale, DollarSign, PieChart,
   Percent, Trash2, Edit3, ChevronRight, X, AlertCircle, Sparkles,
-  Search, Eye, CheckCircle2, AlertTriangle, Layers, Info, ChefHat
+  Search, Eye, CheckCircle2, AlertTriangle, Layers, Info, ChefHat,
+  TrendingUp, TrendingDown, ArrowUpRight
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
@@ -12,7 +13,6 @@ import clsx from 'clsx'
 const fmt = (n: number) => formatFCFA(n)
 
 // Définition des unités supportées et facteurs de conversion par rapport à l'unité de base de stockage
-// Base poids = kg, Base volume = L, Base unitaire = pièce
 const UNIT_OPTIONS = [
   { value: 'kg', label: 'kg (Kilogramme)', baseType: 'weight', factorToBase: 1 },
   { value: 'g', label: 'g (Gramme)', baseType: 'weight', factorToBase: 0.001 },
@@ -57,6 +57,7 @@ interface CuisineProduct {
   name: string
   unit: string
   cost_price: number
+  selling_price?: number
   stock_dispo: number
   restaurant_circuit?: string
   is_matiere_premiere?: boolean
@@ -91,9 +92,10 @@ export const RecettesFichesPage: React.FC = () => {
   const [showDetailModal, setShowDetailModal] = useState(false)
   const [activePlatDetail, setActivePlatDetail] = useState<string | null>(null)
 
-  // Formulaire Création Multi-ingrédients
+  // Formulaire Création Multi-ingrédients & Prix de vente
   const [dishNameInput, setDishNameInput] = useState('')
   const [dishNotes, setDishNotes] = useState('')
+  const [dishSellingPrice, setDishSellingPrice] = useState<number>(0)
   const [ingredientsList, setIngredientsList] = useState<IngredientDraft[]>([])
   const [savingRecipe, setSavingRecipe] = useState(false)
 
@@ -111,6 +113,8 @@ export const RecettesFichesPage: React.FC = () => {
   const [editUnit, setEditUnit] = useState<string>('kg')
   const [editCostU, setEditCostU] = useState<number>(0)
   const [isAddingIngredientToExisting, setIsAddingIngredientToExisting] = useState(false)
+  const [editingSellingPrice, setEditingSellingPrice] = useState(false)
+  const [tempDetailSellingPrice, setTempDetailSellingPrice] = useState<number>(0)
 
   // 1. Charger les fiches techniques
   const loadFiches = useCallback(async () => {
@@ -131,12 +135,12 @@ export const RecettesFichesPage: React.FC = () => {
     }
   }, [companyId, supabaseTenant])
 
-  // 2. Charger les matières premières Cuisine du stock réel
+  // 2. Charger les matières premières Cuisine du stock réel et catalogue produits
   const loadStockCuisine = useCallback(async () => {
     if (!companyId) return
     try {
       const { data, error } = await supabaseTenant('products')
-        .select('id, code, name, unit, cost_price, stock_vente, stock_magasin, sector_meta, restaurant_circuit, is_matiere_premiere')
+        .select('id, code, name, unit, cost_price, selling_price, stock_vente, stock_magasin, sector_meta, restaurant_circuit, is_matiere_premiere')
         .order('name')
 
       if (error) throw error
@@ -151,6 +155,7 @@ export const RecettesFichesPage: React.FC = () => {
             name: p.name,
             unit: p.unit || 'kg',
             cost_price: Number(p.cost_price) || 0,
+            selling_price: Number(p.selling_price) || 0,
             stock_dispo: stockDispo,
             restaurant_circuit: pCircuit,
             is_matiere_premiere: isMatiere
@@ -251,12 +256,43 @@ export const RecettesFichesPage: React.FC = () => {
     setIngredientsList(prev => prev.filter(r => r.tempId !== tempId))
   }
 
-  // Coût total de la recette en cours
+  // Coût total matières premières de la recette en cours de création
   const totalDraftCost = useMemo(() => {
     return ingredientsList.reduce((acc, row) => acc + (row.cout_ligne || 0), 0)
   }, [ingredientsList])
 
-  // Enregistrer le plat complet avec tous ses ingrédients
+  // Marge brute unitaire du brouillon en cours de création
+  const draftMargin = useMemo(() => {
+    return Number(dishSellingPrice || 0) - totalDraftCost
+  }, [dishSellingPrice, totalDraftCost])
+
+  // Taux de marge sur coût matière (draft) : (Marge ÷ Coût) * 100
+  const draftTauxMargeSurCout = useMemo(() => {
+    if (totalDraftCost <= 0) return 0
+    return ((draftMargin / totalDraftCost) * 100)
+  }, [draftMargin, totalDraftCost])
+
+  // Taux de marque (draft) : (Marge ÷ Prix de vente) * 100
+  const draftTauxMarque = useMemo(() => {
+    const pv = Number(dishSellingPrice || 0)
+    if (pv <= 0) return 0
+    return ((draftMargin / pv) * 100)
+  }, [draftMargin, dishSellingPrice])
+
+  // Synchroniser le prix de vente unitaire dans le catalogue products (POS)
+  const syncProductSellingPrice = async (platNom: string, price: number) => {
+    if (!companyId || price <= 0) return
+    try {
+      const match = allProducts.find(p => p.name.trim().toLowerCase() === platNom.trim().toLowerCase())
+      if (match) {
+        await supabaseTenant('products').update({ selling_price: price }).eq('id', match.id)
+      }
+    } catch (err: any) {
+      console.warn('[Recettes] Synchronisation produit POS:', err.message)
+    }
+  }
+
+  // Enregistrer le plat complet avec tous ses ingrédients et son prix de vente unitaire
   const handleSaveFullRecipe = async (e: React.FormEvent) => {
     e.preventDefault()
     const pNom = dishNameInput.trim()
@@ -268,6 +304,7 @@ export const RecettesFichesPage: React.FC = () => {
       toast.error('Aucun ingrédient', 'Veuillez ajouter au moins une matière première à la recette.')
       return
     }
+    const finalPrixVente = Number(dishSellingPrice) || 0
 
     setSavingRecipe(true)
     try {
@@ -276,23 +313,30 @@ export const RecettesFichesPage: React.FC = () => {
         ingredient_nom: row.ingredient_nom,
         quantite_necessaire: Number(row.quantite_necessaire),
         unite: row.unite,
-        cout_unitaire: Number(row.cout_unitaire_dosed), // Coût cohérent avec l'unité dosée pour la déduction POS
+        cout_unitaire: Number(row.cout_unitaire_dosed),
         cout_matiere_ligne: Math.round(row.cout_ligne),
+        prix_vente_unitaire: finalPrixVente,
         notes: dishNotes ? dishNotes.trim() : undefined
       }))
 
       const { error } = await supabaseTenant('restaurant_fiches_techniques').insert(recordsToInsert)
       if (error) throw error
 
+      // Synchroniser le prix de vente dans le catalogue products pour le POS
+      if (finalPrixVente > 0) {
+        await syncProductSellingPrice(pNom, finalPrixVente)
+      }
+
       toast.success(
         'Fiche technique enregistrée',
-        `Recette ${pNom} enregistrée avec succès (${ingredientsList.length} ingrédients, total ${fmt(totalDraftCost)}).`
+        `Recette ${pNom} enregistrée (Coût: ${fmt(totalDraftCost)} | Prix: ${fmt(finalPrixVente)} | Marge: ${fmt(finalPrixVente - totalDraftCost)}).`
       )
 
       // Réinitialisation
       setShowAddModal(false)
       setDishNameInput('')
       setDishNotes('')
+      setDishSellingPrice(0)
       setIngredientsList([])
       setCurrentSelectedProductId('')
       setCurrentCustomIngName('')
@@ -300,6 +344,7 @@ export const RecettesFichesPage: React.FC = () => {
       setCurrentUnitCost(0)
 
       await loadFiches()
+      await loadStockCuisine()
     } catch (err: any) {
       toast.error('Erreur enregistrement', err.message)
     } finally {
@@ -307,29 +352,65 @@ export const RecettesFichesPage: React.FC = () => {
     }
   }
 
-  // Regroupement par plat pour la synthèse et le Food Cost
+  // Regroupement par plat avec calcul des indicateurs financiers complets
   const platsGroupes = useMemo(() => {
-    const map: Record<string, { plat: string; ingredients: any[]; coutTotal: number; prixVenteEstime: number }> = {}
+    const map: Record<string, {
+      plat: string
+      ingredients: any[]
+      coutTotal: number
+      prixVenteUnitaire: number
+      margeBruteUnitaire: number
+      tauxMargeSurCout: number
+      tauxMarque: number
+      isPerteBrute: boolean
+    }> = {}
+
     fiches.forEach(f => {
       if (!map[f.plat_nom]) {
+        // Chercher le prix de vente défini dans la fiche ou dans le catalogue products
+        const fichePrice = Number(f.prix_vente_unitaire) || 0
+        const matchedProd = allProducts.find(p => p.name.trim().toLowerCase() === f.plat_nom.trim().toLowerCase())
+        const resolvedPrice = fichePrice > 0 ? fichePrice : (matchedProd?.selling_price || 0)
+
         map[f.plat_nom] = {
           plat: f.plat_nom,
           ingredients: [],
           coutTotal: 0,
-          prixVenteEstime: 0
+          prixVenteUnitaire: resolvedPrice,
+          margeBruteUnitaire: 0,
+          tauxMargeSurCout: 0,
+          tauxMarque: 0,
+          isPerteBrute: false
         }
       }
+
+      // Si une ligne ultérieure a un prix renseigné, l'adopter
+      if (Number(f.prix_vente_unitaire) > 0 && map[f.plat_nom].prixVenteUnitaire === 0) {
+        map[f.plat_nom].prixVenteUnitaire = Number(f.prix_vente_unitaire)
+      }
+
       map[f.plat_nom].ingredients.push(f)
       map[f.plat_nom].coutTotal += Number(f.cout_matiere_ligne) || 0
     })
 
     Object.values(map).forEach(p => {
-      // Prix de vente conseillé en restauration : coefficient 2.8 à 3.0 arrondi
-      p.prixVenteEstime = Math.round((p.coutTotal * 2.85) / 500) * 500
+      // Si aucun prix de vente n'a été spécifié par le gérant, proposer un prix basé sur 35% Food Cost (coeff 2.85)
+      if (p.prixVenteUnitaire <= 0 && p.coutTotal > 0) {
+        p.prixVenteUnitaire = Math.round((p.coutTotal * 2.85) / 500) * 500
+      }
+
+      p.margeBruteUnitaire = p.prixVenteUnitaire - p.coutTotal
+      p.isPerteBrute = p.margeBruteUnitaire < 0
+
+      // Taux de marge sur coût matière : (Marge / Coût) * 100
+      p.tauxMargeSurCout = p.coutTotal > 0 ? (p.margeBruteUnitaire / p.coutTotal) * 100 : 0
+
+      // Taux de marque : (Marge / Prix de vente) * 100
+      p.tauxMarque = p.prixVenteUnitaire > 0 ? (p.margeBruteUnitaire / p.prixVenteUnitaire) * 100 : 0
     })
 
     return map
-  }, [fiches])
+  }, [fiches, allProducts])
 
   const platsList = useMemo(() => ['Tous', ...Object.keys(platsGroupes)], [platsGroupes])
 
@@ -338,7 +419,38 @@ export const RecettesFichesPage: React.FC = () => {
     setActivePlatDetail(platNom)
     setEditingRowId(null)
     setIsAddingIngredientToExisting(false)
+    setEditingSellingPrice(false)
+    const pData = platsGroupes[platNom]
+    setTempDetailSellingPrice(pData ? pData.prixVenteUnitaire : 0)
     setShowDetailModal(true)
+  }
+
+  // Sauvegarder la modification du prix de vente unitaire depuis la modale Détails
+  const handleUpdateDetailSellingPrice = async (platNom: string) => {
+    const newPrice = Number(tempDetailSellingPrice) || 0
+    if (newPrice < 0) {
+      toast.error('Prix invalide', 'Le prix de vente ne peut pas être négatif.')
+      return
+    }
+
+    try {
+      // Mettre à jour toutes les lignes de ce plat dans restaurant_fiches_techniques
+      const { error } = await supabaseTenant('restaurant_fiches_techniques')
+        .update({ prix_vente_unitaire: newPrice })
+        .eq('plat_nom', platNom)
+
+      if (error) throw error
+
+      // Synchroniser le catalogue de vente (POS)
+      await syncProductSellingPrice(platNom, newPrice)
+
+      toast.success('Prix de vente mis à jour', `Nouveau prix pour ${platNom} : ${fmt(newPrice)}. Marges recalculées instantanément.`)
+      setEditingSellingPrice(false)
+      await loadFiches()
+      await loadStockCuisine()
+    } catch (err: any) {
+      toast.error('Erreur', err.message)
+    }
   }
 
   // Supprimer une ligne d'ingrédient spécifique
@@ -420,6 +532,9 @@ export const RecettesFichesPage: React.FC = () => {
     const stockCost = matchedProd ? matchedProd.cost_price : currentUnitCost
     const { unitCostForChosenUnit, totalLineCost } = computeLineCost(currentQty, currentUnit, storageUnit, stockCost)
 
+    const currentPlatObj = platsGroupes[platNom]
+    const pVente = currentPlatObj ? currentPlatObj.prixVenteUnitaire : 0
+
     try {
       const { error } = await supabaseTenant('restaurant_fiches_techniques').insert({
         plat_nom: platNom,
@@ -427,7 +542,8 @@ export const RecettesFichesPage: React.FC = () => {
         quantite_necessaire: Number(currentQty),
         unite: currentUnit,
         cout_unitaire: Number(unitCostForChosenUnit),
-        cout_matiere_ligne: Math.round(totalLineCost)
+        cout_matiere_ligne: Math.round(totalLineCost),
+        prix_vente_unitaire: pVente
       })
 
       if (error) throw error
@@ -453,10 +569,10 @@ export const RecettesFichesPage: React.FC = () => {
         <div>
           <h1 className="text-2xl font-black text-slate-900 flex items-center gap-2.5">
             <BookOpen className="w-6 h-6 text-rose-600" />
-            Fiches Techniques & Coût Matière
+            Fiches Techniques & Marge Unitaire
           </h1>
           <p className="text-xs text-slate-500 mt-1">
-            Recettes, association de matières premières du stock Cuisine, calcul automatique du Food Cost et rentabilité
+            Recettes, décomposition des matières premières, prix de vente unitaire, marge brute et taux de marque
           </p>
         </div>
 
@@ -472,6 +588,7 @@ export const RecettesFichesPage: React.FC = () => {
             onClick={() => {
               setDishNameInput('')
               setDishNotes('')
+              setDishSellingPrice(0)
               setIngredientsList([])
               setCurrentSelectedProductId('')
               setCurrentCustomIngName('')
@@ -500,12 +617,12 @@ export const RecettesFichesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Cartes Synthèse Rentabilité par Plat */}
+      {/* Cartes Synthèse Rentabilité et Marge par Plat */}
       {fiches.length === 0 ? (
         <div className="bg-white rounded-3xl border border-dashed border-slate-300 p-12 text-center">
           <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
           <h3 className="text-base font-bold text-slate-700">Aucune fiche technique enregistrée</h3>
-          <p className="text-xs text-slate-400 mt-1 mb-4">Créez votre première recette pour associer les ingrédients Cuisine et calculer votre Food Cost exact.</p>
+          <p className="text-xs text-slate-400 mt-1 mb-4">Créez votre première recette pour associer les ingrédients Cuisine et calculer votre Food Cost et marge exacte.</p>
           <button
             onClick={() => setShowAddModal(true)}
             className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition inline-flex items-center gap-1.5 shadow-sm"
@@ -516,11 +633,14 @@ export const RecettesFichesPage: React.FC = () => {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {Object.values(platsGroupes).map(p => {
-            const foodCostPct = p.prixVenteEstime > 0 ? ((p.coutTotal / p.prixVenteEstime) * 100).toFixed(1) : '0'
-            const margeBrute = p.prixVenteEstime - p.coutTotal
-
             return (
-              <div key={p.plat} className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm flex flex-col justify-between hover:border-rose-200 transition">
+              <div
+                key={p.plat}
+                className={clsx(
+                  "bg-white p-5 rounded-3xl border shadow-sm flex flex-col justify-between transition",
+                  p.isPerteBrute ? "border-rose-300 bg-rose-50/20" : "border-slate-200 hover:border-rose-200"
+                )}
+              >
                 <div>
                   <div className="flex items-center justify-between mb-3">
                     <h3 className="font-black text-slate-900 text-sm flex items-center gap-1.5">
@@ -528,7 +648,7 @@ export const RecettesFichesPage: React.FC = () => {
                       {p.plat}
                     </h3>
                     <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
-                      {p.ingredients.length} ingrédient(s)
+                      {p.ingredients.length} matière(s)
                     </span>
                   </div>
 
@@ -538,21 +658,27 @@ export const RecettesFichesPage: React.FC = () => {
                       <strong className="text-slate-900 font-mono font-bold">{fmt(p.coutTotal)}</strong>
                     </div>
                     <div className="flex items-center justify-between text-slate-500">
-                      <span>Prix Vente Conseillé :</span>
-                      <strong className="text-rose-600 font-mono font-bold">{fmt(p.prixVenteEstime)}</strong>
+                      <span>Prix Vente Unitaire :</span>
+                      <strong className="text-rose-600 font-mono font-bold">{fmt(p.prixVenteUnitaire)}</strong>
                     </div>
                     <div className="flex items-center justify-between text-slate-500">
-                      <span>Marge Brute Estimée :</span>
-                      <strong className="text-emerald-600 font-mono font-bold">{fmt(margeBrute)}</strong>
+                      <span>Marge Brute Unitaire :</span>
+                      <strong className={clsx('font-mono font-black', p.isPerteBrute ? 'text-rose-600' : 'text-emerald-600')}>
+                        {fmt(p.margeBruteUnitaire)}
+                        {p.isPerteBrute && ' (PERTE)'}
+                      </strong>
                     </div>
                   </div>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
                   <div className="flex items-center gap-1.5">
-                    <span className="font-bold text-slate-400">Ratio :</span>
-                    <span className="px-2 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold font-mono">
-                      {foodCostPct} % Food Cost
+                    <span className="font-bold text-slate-400">Taux Marque :</span>
+                    <span className={clsx(
+                      "px-2 py-0.5 rounded-lg font-bold font-mono text-[11px]",
+                      p.isPerteBrute ? "bg-rose-100 text-rose-700" : "bg-emerald-50 text-emerald-700"
+                    )}>
+                      {p.tauxMarque.toFixed(1)} %
                     </span>
                   </div>
                   <button
@@ -568,12 +694,12 @@ export const RecettesFichesPage: React.FC = () => {
         </div>
       )}
 
-      {/* Tableau détaillé des fiches techniques */}
+      {/* Tableau détaillé de décomposition des recettes */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Layers className="w-4 h-4 text-rose-600" />
-            <h3 className="font-black text-slate-900 text-sm">Décomposition Détaillée des Recettes</h3>
+            <h3 className="font-black text-slate-900 text-sm">Décomposition Détaillée des Recettes & Marges</h3>
           </div>
           <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none">
             {platsList.map(pl => (
@@ -600,60 +726,77 @@ export const RecettesFichesPage: React.FC = () => {
                 <th className="py-3 px-4 text-center">Quantité Dosée</th>
                 <th className="py-3 px-4 text-right">Coût Unitaire Dosé</th>
                 <th className="py-3 px-4 text-right">Coût Ligne</th>
+                <th className="py-3 px-4 text-right">Prix Vente Plat</th>
+                <th className="py-3 px-4 text-right">Marge Brute Plat</th>
                 <th className="py-3 px-4 text-center">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {fiches
                 .filter(f => selectedPlat === 'Tous' || f.plat_nom === selectedPlat)
-                .map((f) => (
-                  <tr key={f.id} className="hover:bg-slate-50/60 transition group">
-                    <td className="py-3 px-4 font-black text-slate-900">
-                      <div className="flex items-center gap-2">
-                        <span>{f.plat_nom}</span>
-                        <button
-                          onClick={() => handleOpenDetailModal(f.plat_nom)}
-                          className="opacity-0 group-hover:opacity-100 transition p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-900"
-                          title="Voir la recette complète"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 font-semibold text-slate-700">{f.ingredient_nom}</td>
-                    <td className="py-3 px-4 text-center font-mono font-bold text-slate-600">
-                      {f.quantite_necessaire} {f.unite}
-                    </td>
-                    <td className="py-3 px-4 text-right font-mono text-slate-500">{fmt(f.cout_unitaire)}</td>
-                    <td className="py-3 px-4 text-right font-mono font-black text-rose-600">
-                      {fmt(f.cout_matiere_ligne)}
-                    </td>
-                    <td className="py-3 px-4 text-center">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          onClick={() => handleOpenDetailModal(f.plat_nom)}
-                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[11px] flex items-center gap-1 transition"
-                        >
-                          <Eye className="w-3 h-3" /> Détails
-                        </button>
-                        <button
-                          onClick={() => handleDeleteIngredientRow(f.id, f.ingredient_nom)}
-                          className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition"
-                          title="Supprimer cet ingrédient"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                .map((f) => {
+                  const platInfo = platsGroupes[f.plat_nom]
+                  const pv = platInfo ? platInfo.prixVenteUnitaire : 0
+                  const mb = platInfo ? platInfo.margeBruteUnitaire : 0
+                  const isPerte = mb < 0
+
+                  return (
+                    <tr key={f.id} className="hover:bg-slate-50/60 transition group">
+                      <td className="py-3 px-4 font-black text-slate-900">
+                        <div className="flex items-center gap-2">
+                          <span>{f.plat_nom}</span>
+                          <button
+                            onClick={() => handleOpenDetailModal(f.plat_nom)}
+                            className="opacity-0 group-hover:opacity-100 transition p-1 hover:bg-slate-200 rounded text-slate-500 hover:text-slate-900"
+                            title="Voir la recette complète"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                      <td className="py-3 px-4 font-semibold text-slate-700">{f.ingredient_nom}</td>
+                      <td className="py-3 px-4 text-center font-mono font-bold text-slate-600">
+                        {f.quantite_necessaire} {f.unite}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono text-slate-500">{fmt(f.cout_unitaire)}</td>
+                      <td className="py-3 px-4 text-right font-mono font-black text-rose-600">
+                        {fmt(f.cout_matiere_ligne)}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
+                        {fmt(pv)}
+                      </td>
+                      <td className="py-3 px-4 text-right font-mono font-black">
+                        <span className={clsx(isPerte ? 'text-rose-600 bg-rose-50 px-2 py-0.5 rounded' : 'text-emerald-600')}>
+                          {fmt(mb)}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          <button
+                            onClick={() => handleOpenDetailModal(f.plat_nom)}
+                            className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg text-[11px] flex items-center gap-1 transition"
+                          >
+                            <Eye className="w-3 h-3" /> Détails
+                          </button>
+                          <button
+                            onClick={() => handleDeleteIngredientRow(f.id, f.ingredient_nom)}
+                            className="p-1 hover:bg-rose-50 text-slate-400 hover:text-rose-600 rounded-lg transition"
+                            title="Supprimer cet ingrédient"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
             </tbody>
           </table>
         </div>
       </div>
 
       {/* ========================================================================= */}
-      {/* MODAL 1 : CRÉATION AVANCÉE MULTI-INGRÉDIENTS AVEC STOCK CUISINE RÉEL     */}
+      {/* MODAL 1 : CRÉATION MULTI-INGRÉDIENTS + PRIX DE VENTE & MARGE EN DIRECT   */}
       {/* ========================================================================= */}
       {showAddModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -667,7 +810,7 @@ export const RecettesFichesPage: React.FC = () => {
                 </div>
                 <div>
                   <h3 className="font-black text-slate-900 text-base">Nouvelle Fiche Technique / Recette</h3>
-                  <p className="text-xs text-slate-500">Associez les matières premières réelles du stock Cuisine à votre plat</p>
+                  <p className="text-xs text-slate-500">Associez les matières premières réelles et fixez le prix de vente unitaire</p>
                 </div>
               </div>
               <button onClick={() => setShowAddModal(false)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400">
@@ -884,19 +1027,101 @@ export const RecettesFichesPage: React.FC = () => {
                 )}
               </div>
 
-              {/* Synthèse Coût Total Recette */}
-              {ingredientsList.length > 0 && (
-                <div className="bg-gradient-to-r from-slate-900 to-rose-950 p-4 rounded-2xl text-white flex items-center justify-between">
+              {/* Étape 4 : Prix de vente unitaire et calcul automatique de la marge brute */}
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200/80 space-y-3">
+                <label className="text-xs font-black text-slate-900 uppercase tracking-wider block">
+                  4. Prix de Vente Unitaire (FCFA)
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
                   <div>
-                    <span className="text-[11px] font-bold text-rose-300 uppercase tracking-wider block">Coût Total des Matières Premières</span>
-                    <p className="text-xl font-black font-mono text-white mt-0.5">{fmt(totalDraftCost)}</p>
+                    <input
+                      type="number"
+                      min="0"
+                      step="50"
+                      placeholder="Ex: 500, 2500, 4000..."
+                      value={dishSellingPrice || ''}
+                      onChange={e => setDishSellingPrice(Number(e.target.value))}
+                      className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono font-black text-slate-900 focus:ring-2 focus:ring-rose-500 outline-none"
+                    />
+                    <span className="text-[10px] text-slate-400 mt-1 block">
+                      Renseignez le prix de vente unitaire TTC facturé au client.
+                    </span>
                   </div>
-                  <div className="text-right">
-                    <span className="text-[11px] font-bold text-slate-300 block">Prix Vente Suggéré (Food Cost 35%) :</span>
-                    <strong className="text-base font-black font-mono text-emerald-400">
-                      {fmt(Math.round((totalDraftCost * 2.85) / 500) * 500)}
-                    </strong>
+
+                  {/* Bouton de suggestion rapide (Food Cost 35%) */}
+                  {totalDraftCost > 0 && (
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setDishSellingPrice(Math.round((totalDraftCost * 2.85) / 500) * 500)}
+                        className="px-3 py-2 bg-white hover:bg-slate-100 border border-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-rose-600" />
+                        Suggérer : {fmt(Math.round((totalDraftCost * 2.85) / 500) * 500)}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Synthèse Financière : Coût total, Prix de vente et Marge brute unitaire */}
+              {ingredientsList.length > 0 && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="bg-slate-900 text-white p-3.5 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                        Coût Matière Total
+                      </span>
+                      <p className="text-lg font-black font-mono mt-0.5">{fmt(totalDraftCost)}</p>
+                    </div>
+
+                    <div className="bg-slate-900 text-white p-3.5 rounded-2xl">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                        Prix de Vente Unitaire
+                      </span>
+                      <p className="text-lg font-black font-mono text-rose-300 mt-0.5">
+                        {fmt(dishSellingPrice || 0)}
+                      </p>
+                    </div>
+
+                    <div className={clsx(
+                      "p-3.5 rounded-2xl text-white transition",
+                      draftMargin < 0 ? "bg-rose-700" : "bg-emerald-700"
+                    )}>
+                      <span className="text-[10px] font-bold uppercase tracking-wider block text-white/80">
+                        Marge Brute Unitaire
+                      </span>
+                      <p className="text-lg font-black font-mono mt-0.5">
+                        {fmt(draftMargin)}
+                      </p>
+                    </div>
                   </div>
+
+                  {/* Signalement en cas de perte brute */}
+                  {draftMargin < 0 && (
+                    <div className="p-3 bg-rose-100 border border-rose-300 rounded-xl flex items-center gap-2 text-rose-900 text-xs font-bold animate-pulse">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>
+                        Attention : Perte brute unitaire de {fmt(Math.abs(draftMargin))}. Le prix de vente ({fmt(dishSellingPrice)}) est inférieur au coût des matières premières ({fmt(totalDraftCost)}).
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Ratios : Taux de marge sur coût & Taux de marque */}
+                  {dishSellingPrice > 0 && totalDraftCost > 0 && (
+                    <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between text-xs text-slate-600">
+                      <div>
+                        <span className="font-bold">Taux de marge sur coût matière : </span>
+                        <strong className="font-mono text-slate-900">{draftTauxMargeSurCout.toFixed(1)} %</strong>
+                        <span className="text-[10px] text-slate-400 ml-1">(Marge ÷ Coût)</span>
+                      </div>
+                      <div>
+                        <span className="font-bold">Taux de marque : </span>
+                        <strong className="font-mono text-slate-900">{draftTauxMarque.toFixed(1)} %</strong>
+                        <span className="text-[10px] text-slate-400 ml-1">(Marge ÷ Prix Vente)</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -937,7 +1162,7 @@ export const RecettesFichesPage: React.FC = () => {
       )}
 
       {/* ========================================================================= */}
-      {/* MODAL 2 : DÉTAILS, CONSULTATION, ÉDITION ET SUPPRESSION D'UNE RECETTE     */}
+      {/* MODAL 2 : DÉTAILS, CONSULTATION, ÉDITION DES PRIX ET SUPPRESSION          */}
       {/* ========================================================================= */}
       {showDetailModal && activeDetailData && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
@@ -953,11 +1178,11 @@ export const RecettesFichesPage: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <h3 className="font-black text-slate-900 text-lg">{activeDetailData.plat}</h3>
                     <span className="text-[10px] font-black px-2 py-0.5 rounded-full bg-rose-100 text-rose-800">
-                      {activeDetailData.ingredients.length} ingrédient(s)
+                      {activeDetailData.ingredients.length} matière(s) première(s)
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
-                    Décomposition unitaire des matières premières, calcul des marges et édition
+                    Décomposition unitaire, prix de vente, marge brute, taux de marque et édition
                   </p>
                 </div>
               </div>
@@ -977,29 +1202,121 @@ export const RecettesFichesPage: React.FC = () => {
             </div>
 
             <div className="overflow-y-auto pr-1 space-y-5 flex-1">
-              {/* Synthèse Financière du Plat */}
+              {/* Synthèse Financière Détaillée */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {/* 1. Coût total des matières premières */}
                 <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Coût Matière Total</span>
-                  <p className="text-lg font-black font-mono text-slate-900 mt-1">{fmt(activeDetailData.coutTotal)}</p>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Prix Vente Recommandé</span>
-                  <p className="text-lg font-black font-mono text-rose-600 mt-1">{fmt(activeDetailData.prixVenteEstime)}</p>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
-                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Marge Brute Estimée</span>
-                  <p className="text-lg font-black font-mono text-emerald-600 mt-1">
-                    {fmt(activeDetailData.prixVenteEstime - activeDetailData.coutTotal)}
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                    Coût Matière Total
+                  </span>
+                  <p className="text-lg font-black font-mono text-slate-900 mt-1">
+                    {fmt(activeDetailData.coutTotal)}
                   </p>
                 </div>
+
+                {/* 2. Prix de vente unitaire (avec bouton de modification rapide) */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                        Prix Vente Unitaire
+                      </span>
+                      {!editingSellingPrice && (
+                        <button
+                          onClick={() => setEditingSellingPrice(true)}
+                          className="text-[11px] font-bold text-rose-600 hover:text-rose-700 flex items-center gap-1"
+                        >
+                          <Edit3 className="w-3 h-3" /> Modifier
+                        </button>
+                      )}
+                    </div>
+
+                    {editingSellingPrice ? (
+                      <div className="mt-1 flex items-center gap-1.5">
+                        <input
+                          type="number"
+                          min="0"
+                          step="50"
+                          value={tempDetailSellingPrice}
+                          onChange={e => setTempDetailSellingPrice(Number(e.target.value))}
+                          className="w-24 px-2 py-1 bg-white border border-rose-300 rounded font-mono font-bold text-xs"
+                        />
+                        <button
+                          onClick={() => handleUpdateDetailSellingPrice(activeDetailData.plat)}
+                          className="px-2 py-1 bg-rose-600 text-white rounded text-[11px] font-bold"
+                        >
+                          OK
+                        </button>
+                        <button
+                          onClick={() => setEditingSellingPrice(false)}
+                          className="px-2 py-1 bg-slate-200 text-slate-700 rounded text-[11px] font-bold"
+                        >
+                          X
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-lg font-black font-mono text-rose-600 mt-1">
+                        {fmt(activeDetailData.prixVenteUnitaire)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* 3. Marge brute unitaire */}
+                <div className={clsx(
+                  "p-4 rounded-2xl border flex flex-col justify-between",
+                  activeDetailData.isPerteBrute ? "bg-rose-50 border-rose-200 text-rose-900" : "bg-emerald-50 border-emerald-200 text-emerald-950"
+                )}>
+                  <div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider block opacity-75">
+                      Marge Brute Unitaire
+                    </span>
+                    <p className="text-lg font-black font-mono mt-1">
+                      {fmt(activeDetailData.margeBruteUnitaire)}
+                      {activeDetailData.isPerteBrute && ' (PERTE)'}
+                    </p>
+                  </div>
+                </div>
               </div>
+
+              {/* Ratios : Taux de marge sur coût matière & Taux de marque */}
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div>
+                  <span className="text-slate-500 font-bold">Taux de marge sur coût : </span>
+                  <strong className="font-mono text-slate-900 font-black">
+                    {activeDetailData.tauxMargeSurCout.toFixed(1)} %
+                  </strong>
+                  <span className="text-[10px] text-slate-400 ml-1">
+                    ((Marge brute ÷ Coût total) × 100)
+                  </span>
+                </div>
+
+                <div>
+                  <span className="text-slate-500 font-bold">Taux de marque : </span>
+                  <strong className="font-mono text-slate-900 font-black">
+                    {activeDetailData.tauxMarque.toFixed(1)} %
+                  </strong>
+                  <span className="text-[10px] text-slate-400 ml-1">
+                    ((Marge brute ÷ Prix vente) × 100)
+                  </span>
+                </div>
+              </div>
+
+              {/* Avertissement Perte Brute si applicable */}
+              {activeDetailData.isPerteBrute && (
+                <div className="p-3 bg-rose-100 border border-rose-300 rounded-xl flex items-center gap-2 text-rose-900 text-xs font-bold animate-pulse">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>
+                    Alerte Perte Brute : Cette recette est vendue à perte ({fmt(activeDetailData.margeBruteUnitaire)} par unité). Augmentez le prix de vente ou ajustez le grammage des matières premières.
+                  </span>
+                </div>
+              )}
 
               {/* Tableau des Ingrédients avec actions d'Édition et Suppression */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider">
-                    Liste des Matières Premières & Doses
+                    Liste des Matières Premières & Doses ({activeDetailData.ingredients.length})
                   </h4>
                   <button
                     onClick={() => {
@@ -1192,7 +1509,7 @@ export const RecettesFichesPage: React.FC = () => {
             {/* Footer Modal Détails */}
             <div className="pt-3 flex items-center justify-between border-t border-slate-100 shrink-0">
               <span className="text-xs text-slate-400 flex items-center gap-1">
-                <Info className="w-3.5 h-3.5" /> Déstockage automatique appliqué lors des ventes au POS
+                <Info className="w-3.5 h-3.5" /> Prix de vente et déstockage synchronisés avec les ventes POS
               </span>
               <button
                 type="button"

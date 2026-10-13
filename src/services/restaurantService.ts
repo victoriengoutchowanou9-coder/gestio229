@@ -20,6 +20,7 @@ export interface FicheTechniqueItem {
   unite: string
   cout_unitaire: number
   cout_matiere_ligne?: number
+  prix_vente_unitaire?: number
   notes?: string
 }
 

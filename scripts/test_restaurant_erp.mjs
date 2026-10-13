@@ -38,7 +38,24 @@ assert.strictEqual(margeBruteUnitaire, 1275, 'La marge brute sur le chawarma doi
 
 const ratioFoodCost = Math.round((foodCostUnitaire / prixVenteChawarmaTTC) * 100)
 assert.strictEqual(ratioFoodCost, 36, 'Le Food Cost ratio doit être de ~36% (standard CHR)')
-console.log('✅ Test 1 Réussi : Fiche technique Chawarma, Food Cost (725 FCFA) et Marge Brute (1 275 FCFA) validés.')
+
+// Test 1.B : Exemple du prompt (Coût: 150 FCFA, Prix: 500 FCFA => Marge: 350 FCFA)
+const coutMatiereExemple = 150
+const prixVenteExemple = 500
+const margeBruteExemple = prixVenteExemple - coutMatiereExemple
+assert.strictEqual(margeBruteExemple, 350, 'La marge brute unitaire doit être de 350 FCFA (500 - 150)')
+const tauxMargeSurCout = ((margeBruteExemple / coutMatiereExemple) * 100).toFixed(1)
+assert.strictEqual(tauxMargeSurCout, '233.3', 'Le taux de marge sur coût doit être de 233.3%')
+const tauxMarque = ((margeBruteExemple / prixVenteExemple) * 100).toFixed(1)
+assert.strictEqual(tauxMarque, '70.0', 'Le taux de marque doit être de 70.0%')
+
+// Test 1.C : Alerte Perte Brute si Prix < Coût
+const prixVentePerte = 120
+const margePerte = prixVentePerte - coutMatiereExemple
+assert.strictEqual(margePerte, -30, 'La marge doit être négative (-30 FCFA) pour signaler une perte')
+assert.strictEqual(margePerte < 0, true, 'Perte brute unitaire détectée')
+
+console.log('✅ Test 1 Réussi : Fiche technique Chawarma, Food Cost (725 FCFA), Prix & Marge unitaire (350 FCFA) et Taux de marque (70%) validés.')
 
 // 2. Simulation Déstockage Idempotent (Vente de 3 portions)
 const portionQty = 3
