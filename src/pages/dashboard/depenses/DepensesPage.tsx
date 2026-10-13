@@ -8,6 +8,7 @@ import {
   Receipt, Plus, Search, Calendar, Tag, RefreshCw, X, ArrowDownRight,
   Filter, CheckCircle2, DollarSign, AlertCircle, AlertTriangle, Building2, Wallet
 } from 'lucide-react'
+import clsx from 'clsx'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'

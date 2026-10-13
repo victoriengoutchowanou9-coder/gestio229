@@ -292,12 +292,49 @@ export const RecettesFichesPage: React.FC = () => {
   }, [draftMargin, dishSellingPrice])
 
   // Synchroniser le prix de vente unitaire dans le catalogue products (POS)
-  const syncProductSellingPrice = async (platNom: string, price: number) => {
+  // Synchroniser le prix de vente unitaire dans le catalogue products (POS)
+  const syncProductSellingPrice = async (platNom: string, price: number, costPrice: number = 0) => {
     if (!companyId || price <= 0) return
     try {
       const match = allProducts.find(p => p.name.trim().toLowerCase() === platNom.trim().toLowerCase())
       if (match) {
-        await supabaseTenant('products').update({ selling_price: price }).eq('id', match.id)
+        await supabaseTenant('products').update({
+          selling_price: price,
+          cost_price: costPrice > 0 ? costPrice : match.cost_price,
+          restaurant_circuit: 'CUISINE',
+          is_matiere_premiere: false,
+          sector_meta: {
+            ...(match as any).sector_meta,
+            restaurant_circuit: 'CUISINE',
+            is_matiere_premiere: false,
+            is_recipe: true
+          }
+        }).eq('id', match.id)
+      } else {
+        const autoCode = `PLAT-${Date.now().toString().slice(-4)}`
+        await supabaseTenant('products').insert({
+          company_id: companyId,
+          code: autoCode,
+          name: platNom.trim(),
+          unit: 'Portion',
+          uv: 'Portion',
+          ucd: 'Portion',
+          cost_price: costPrice,
+          selling_price: price,
+          stock_vente: 999,
+          stock_magasin: 0,
+          sector_slug: 'restaurant',
+          secteur_slug: 'restaurant',
+          restaurant_circuit: 'CUISINE',
+          is_matiere_premiere: false,
+          is_active: true,
+          category: { name: 'Cuisine & Plats' },
+          sector_meta: {
+            restaurant_circuit: 'CUISINE',
+            is_matiere_premiere: false,
+            is_recipe: true
+          }
+        })
       }
     } catch (err: any) {
       console.warn('[Recettes] Synchronisation produit POS:', err.message)
@@ -336,7 +373,7 @@ export const RecettesFichesPage: React.FC = () => {
 
       // Synchroniser le prix de vente dans le catalogue products pour le POS
       if (finalPrixVente > 0) {
-        await syncProductSellingPrice(pNom, finalPrixVente)
+        await syncProductSellingPrice(pNom, finalPrixVente, totalDraftCost)
       }
 
       toast.success(
@@ -455,7 +492,7 @@ export const RecettesFichesPage: React.FC = () => {
       if (error) throw error
 
       // Synchroniser le catalogue de vente (POS)
-      await syncProductSellingPrice(platNom, newPrice)
+      await syncProductSellingPrice(platNom, newPrice, platsGroupes[platNom]?.coutTotal || 0)
 
       toast.success('Prix de vente mis à jour', `Nouveau prix pour ${platNom} : ${fmt(newPrice)}. Marges recalculées instantanément.`)
       setEditingSellingPrice(false)

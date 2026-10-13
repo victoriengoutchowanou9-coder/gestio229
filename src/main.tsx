@@ -28,33 +28,37 @@ if (typeof window !== 'undefined') {
   // ── 2. Version check : détection de nouveau déploiement Vercel ───────────
   // À chaque déploiement, __APP_VERSION__ est un nouveau timestamp unique.
   // Si la version stockée ≠ version courante → nouveau build détecté →
-  // on vide les caches et on reload une fois proprement.
+  // on vide les caches, on désenregistre le SW et on reload une seule fois proprement avec délai 3s.
   try {
     const STORED_VERSION_KEY = 'gestio229_app_version'
-    const RELOAD_VERSION_KEY = 'gestio229_version_reload'
+    const RELOAD_GUARD_KEY = 'gestio229_chunk_reload_done'
     const storedVersion = localStorage.getItem(STORED_VERSION_KEY)
     const currentVersion = __APP_VERSION__
 
     if (storedVersion && storedVersion !== currentVersion) {
-      const alreadyReloaded = sessionStorage.getItem(RELOAD_VERSION_KEY) === '1'
+      const alreadyReloaded = sessionStorage.getItem(RELOAD_GUARD_KEY) === '1'
       if (!alreadyReloaded) {
-        console.info(`[GESTIO 229] Nouveau déploiement détecté (${storedVersion} → ${currentVersion}) — rechargement…`)
-        sessionStorage.setItem(RELOAD_VERSION_KEY, '1')
+        console.info(`[GESTIO 229] Nouveau déploiement détecté (${storedVersion} → ${currentVersion}) — rechargement dans 3s…`)
+        sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
         localStorage.setItem(STORED_VERSION_KEY, currentVersion)
-        // Vider le cache SW si possible avant de recharger
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then((regs) => {
+            regs.forEach((r) => r.unregister())
+          }).catch(() => {})
+        }
         if ('caches' in window) {
           caches.keys().then((names) => names.forEach((n) => caches.delete(n))).catch(() => {})
         }
-        window.location.href = window.location.pathname + '?t=' + Date.now()
+        setTimeout(() => {
+          window.location.href = window.location.pathname + '?t=' + Date.now()
+        }, 3000)
       }
     } else {
-      // Première visite ou version identique : enregistrer / maintenir la version
       localStorage.setItem(STORED_VERSION_KEY, currentVersion)
-      sessionStorage.removeItem(RELOAD_VERSION_KEY)
     }
   } catch (_) {}
 
-  // ── 3. Filet de sécurité global : chunk error + TDZ error → reload auto ──
+  // ── 3. Filet de sécurité global : chunk error + TDZ error → reload auto unique ──
   const isAutoReloadableError = (msg: string) =>
     msg.includes('dynamically imported module') ||
     msg.includes('Failed to fetch') ||
@@ -65,35 +69,44 @@ if (typeof window !== 'undefined') {
     msg.includes('error loading dynamically imported module') ||
     (msg.includes('Cannot access') && msg.includes('before initialization'))
 
+  const handleSafeAutoReload = (reason: string) => {
+    const RELOAD_GUARD_KEY = 'gestio229_chunk_reload_done'
+    const alreadyReloaded = sessionStorage.getItem(RELOAD_GUARD_KEY) === '1'
+    if (alreadyReloaded) {
+      console.warn('[GESTIO 229] Rechargement automatique déjà exécuté une fois. Boucle bloquée :', reason)
+      return
+    }
+    console.warn('[GESTIO 229] Incident post-déploiement détecté — purge SW & cache, rechargement unique dans 3s…', reason)
+    sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
+    try {
+      localStorage.removeItem('gestio229_app_version')
+    } catch (_) {}
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((r) => r.unregister())
+      }).catch(() => {})
+    }
+    if ('caches' in window) {
+      window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+    }
+    setTimeout(() => {
+      window.location.href = window.location.pathname + '?t=' + Date.now()
+    }, 3000)
+  }
+
   window.addEventListener('unhandledrejection', (event) => {
     const reason = event.reason
     const msg = reason instanceof Error ? reason.message : String(reason ?? '')
     if (isAutoReloadableError(msg)) {
       event.preventDefault()
-      const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
-      if (!alreadyReloaded) {
-        console.warn('[GESTIO 229] Erreur auto-réparable interceptée (unhandledrejection) — rechargement…', msg)
-        sessionStorage.setItem('gestio229_chunk_reload', '1')
-        if ('caches' in window) {
-          window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
-        }
-        window.location.href = window.location.pathname + '?t=' + Date.now()
-      }
+      handleSafeAutoReload(`unhandledrejection: ${msg}`)
     }
   })
 
   window.addEventListener('error', (event) => {
     const msg = (event?.error?.message || event?.message || '')
     if (msg.includes('Cannot access') && msg.includes('before initialization')) {
-      const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
-      if (!alreadyReloaded) {
-        console.warn('[GESTIO 229] Erreur TDZ globale interceptée (error) — purge + rechargement…', msg)
-        sessionStorage.setItem('gestio229_chunk_reload', '1')
-        if ('caches' in window) {
-          window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
-        }
-        window.location.href = window.location.pathname + '?t=' + Date.now()
-      }
+      handleSafeAutoReload(`error TDZ: ${msg}`)
     }
   })
 

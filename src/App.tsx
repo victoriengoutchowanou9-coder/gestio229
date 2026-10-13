@@ -101,6 +101,7 @@ const ReservationsPage        = safeLazy(() => import('./pages/dashboard/restaur
 const PertesGaspillagePage    = safeLazy(() => import('./pages/dashboard/restaurant/PertesGaspillagePage'))
 const ServeursPersonnelPage   = safeLazy(() => import('./pages/dashboard/restaurant/ServeursPersonnelPage'))
 const EvenementsPage          = safeLazy(() => import('./pages/dashboard/restaurant/EvenementsPage'))
+const RestaurantReportingPage = safeLazy(() => import('./pages/dashboard/restaurant/RestaurantReportingPage'))
 // Hôtel
 const ChambresHotelPage      = mod('chambres_reservations')
 const HousekeepingPage       = mod('housekeeping')
@@ -279,12 +280,15 @@ const SectorAwareStocks: React.FC = () => {
   return <StocksPage />
 }
 
-// ─── Reporting conditionnel (Spécialisé Rentabilité par Prestation Imprimerie) ────
+// ─── Reporting conditionnel (Spécialisé Rentabilité par Prestation Imprimerie & CHR Bar/Resto) ────
 const SectorAwareReporting: React.FC = () => {
   const { sectorSlug } = useTenant()
   const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
   if (clean === 'imprimerie' || clean === 'impression') {
     return <ImprimerieReportingPage />
+  }
+  if (clean === 'restaurant' || clean === 'bar-restaurant-maquis' || clean === 'bar' || clean === 'maquis' || clean === 'fastfood') {
+    return <RestaurantReportingPage />
   }
   return <ReportingPage />
 }

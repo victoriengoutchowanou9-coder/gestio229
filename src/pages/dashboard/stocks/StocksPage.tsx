@@ -98,6 +98,16 @@ export const StocksPage: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
+  // Produits filtrés selon le secteur et circuit (BAR vs CUISINE)
+  const displayedProducts = useMemo(() => {
+    if (!isRestaurant) return products
+    return products.filter((p) => {
+      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
+      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
+      return circuitStock === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
+    })
+  }, [products, isRestaurant, circuitStock])
+
   // Modals
   const [showNewProductModal, setShowNewProductModal] = useState(false)
   const [showStockSheetModal, setShowStockSheetModal] = useState(false)
@@ -800,15 +810,6 @@ export const StocksPage: React.FC = () => {
       }
     })
   }, [displayedProducts])
-
-  const displayedProducts = useMemo(() => {
-    if (!isRestaurant) return products
-    return products.filter(p => {
-      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
-      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
-      return circuitStock === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
-    })
-  }, [products, isRestaurant, circuitStock])
 
   // =============================================================================
   // SOURCE UNIQUE DE CALCUL DES STOCKS & VALORISATION (lib/stockCalcul.ts) :

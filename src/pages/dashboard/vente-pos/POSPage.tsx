@@ -10,7 +10,8 @@ import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
-  ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft, Tag
+  ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft, Tag,
+  CheckCircle2, Wine, ChefHat, Edit3, XCircle
 } from 'lucide-react'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
@@ -435,6 +436,24 @@ export const POSPage: React.FC = () => {
   const [inactiveSeconds, setInactiveSeconds] = useState<number>(0)
   const [showInactivityWarning, setShowInactivityWarning] = useState<boolean>(false)
 
+  // Workflow de validation Restaurant 4 minutes (Exigence Section 6)
+  const [pendingRestoOrder, setPendingRestoOrder] = useState<{
+    orderNumber: string
+    expiresAt: string
+    items: CartItem[]
+    totalTtc: number
+    totalHt: number
+    serveurNom: string
+    tableNumero: string
+    circuit: 'BAR' | 'CUISINE'
+    clientNom: string
+  } | null>(null)
+  const [pendingCountdownSeconds, setPendingCountdownSeconds] = useState<number>(240)
+  const [showPendingRestoModal, setShowPendingRestoModal] = useState<boolean>(false)
+  const [showCancelPrompt, setShowCancelPrompt] = useState<boolean>(false)
+  const [cancelMotif, setCancelMotif] = useState<string>('')
+  const [isFinalizingPending, setIsFinalizingPending] = useState<boolean>(false)
+
   // Modèle de données pour la facture Brasserie avec situation des emballages
   const factureBrasserieData: FactureBrasserieData | null = useMemo(() => {
     if (!currentSale) return null
@@ -546,6 +565,7 @@ export const POSPage: React.FC = () => {
     }
 
     // 1. Récupération robuste des produits (avec Cache LocalStorage 5 min pour affichage instantané)
+    let rawProds: any[] = []
     try {
       const cacheKey = `prods_${companyId}_${currentSectorSlug}`
       const cached = getCachedData<Product[]>(cacheKey)
@@ -553,7 +573,6 @@ export const POSPage: React.FC = () => {
         setProducts(cached)
       }
 
-      let rawProds: any[] = []
       const { data, error: prodsError } = await supabaseTenant('products')
         .select('*, category:product_categories(name)')
         .neq('is_active', false)
@@ -1444,6 +1463,129 @@ export const POSPage: React.FC = () => {
     return () => clearInterval(interval)
   }, [cart.length, lastCartActivity, showInactivityWarning])
 
+  // Compte à rebours 4 minutes Restaurant & Finalisation automatique (Section 6)
+  useEffect(() => {
+    if (!pendingRestoOrder?.expiresAt) return
+
+    const interval = setInterval(() => {
+      const remaining = Math.max(0, Math.floor((new Date(pendingRestoOrder.expiresAt).getTime() - Date.now()) / 1000))
+      setPendingCountdownSeconds(remaining)
+
+      if (remaining <= 0) {
+        clearInterval(interval)
+        handleFinalizePendingOrder(pendingRestoOrder)
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [pendingRestoOrder])
+
+  // Mécanisme de récupération en arrière-plan des commandes expirées (> 4 min)
+  useEffect(() => {
+    if (!isRestaurant || !companyId) return
+    const runRecovery = async () => {
+      try {
+        const { traiterCommandesExpirees } = await import('../../../services/restaurantService')
+        await traiterCommandesExpirees(companyId)
+      } catch (_) {}
+    }
+    runRecovery()
+    const timer = setInterval(runRecovery, 30000)
+    return () => clearInterval(timer)
+  }, [isRestaurant, companyId])
+
+  const handleFinalizePendingOrder = async (orderObj?: typeof pendingRestoOrder) => {
+    const target = orderObj || pendingRestoOrder
+    if (!target || !companyId || isFinalizingPending) return
+    setIsFinalizingPending(true)
+    try {
+      const { finaliserCommandeRestaurant } = await import('../../../services/restaurantService')
+      const res = await finaliserCommandeRestaurant({
+        company_id: companyId,
+        order_number: target.orderNumber,
+        circuit: target.circuit,
+        serveur_nom: target.serveurNom,
+        items: target.items.map(c => ({
+          produit_id: c.product.id,
+          designation: c.product.name,
+          quantite: c.qty,
+          prix_unitaire: c.unitPrice,
+          is_consigne: Boolean(c.product.sector_meta?.is_consigne)
+        })),
+        total_ttc: target.totalTtc
+      })
+
+      if (res.success) {
+        toast.success('Commande finalisée avec succès', `N° ${target.orderNumber} confirmée. Déstockage et KDS transmis.`)
+        const finalizedSale: SaleRecord = {
+          id: `sale-${target.orderNumber}`,
+          order_number: target.orderNumber,
+          date: new Date().toISOString(),
+          customer_name: target.clientNom,
+          total_amount: target.totalTtc,
+          total_ht: target.totalHt,
+          total_tva: 0,
+          total_aib: 0,
+          amount_paid: 0,
+          credit_amount: target.totalTtc,
+          payments: [{ method: 'credit', amount: target.totalTtc }],
+          is_deferred: false,
+          status: 'COMPLET',
+          lines: target.items,
+          table_numero: target.tableNumero,
+          serveur_nom: target.serveurNom
+        }
+        setCurrentSale(finalizedSale)
+        setSalesHistory(prev => [finalizedSale, ...prev.filter(s => s.order_number !== target.orderNumber)])
+        setPrintFormat('ticket80_double')
+        setShowInvoiceModal(true)
+        setShowPendingRestoModal(false)
+        setPendingRestoOrder(null)
+      } else {
+        toast.error('Erreur de finalisation', res.error || 'Impossible de finaliser la commande.')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err.message)
+    } finally {
+      setIsFinalizingPending(false)
+    }
+  }
+
+  const handleCancelPendingOrder = async () => {
+    if (!pendingRestoOrder || !companyId) return
+    if (!cancelMotif.trim()) {
+      toast.error('Motif obligatoire', 'Veuillez saisir le motif d annulation de la commande.')
+      return
+    }
+    try {
+      const { annulerCommandeEnAttente } = await import('../../../services/restaurantService')
+      const res = await annulerCommandeEnAttente({
+        company_id: companyId,
+        order_number: pendingRestoOrder.orderNumber,
+        motif_annulation: cancelMotif.trim(),
+        annule_par: user?.full_name || 'Gérant'
+      })
+      if (res.success) {
+        toast.success('Commande annulée', `N° ${pendingRestoOrder.orderNumber} a été annulée. Aucun déstockage ni créance n ont été créés.`)
+        setShowPendingRestoModal(false)
+        setShowCancelPrompt(false)
+        setCancelMotif('')
+        setPendingRestoOrder(null)
+      } else {
+        toast.error('Erreur', res.error || 'Impossible d annuler la commande.')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err.message)
+    }
+  }
+
+  const handleReopenPendingOrderForEdit = () => {
+    if (!pendingRestoOrder) return
+    setCart([...pendingRestoOrder.items])
+    setShowPendingRestoModal(false)
+    toast.info('Commande rouverte', `Les articles de ${pendingRestoOrder.orderNumber} ont été replacés dans le panier. Ajustez les quantités et revalidez.`)
+  }
+
   // ─── Gestion des Modes de Paiement (Panier & Checkout Intégré) ──────────────
 
   // Synchronisation des montants lors des variations du Total TTC
@@ -1723,6 +1865,14 @@ export const POSPage: React.FC = () => {
       return
     }
 
+    // Contrôle serveuse obligatoire en mode restaurant
+    if (isRestaurant && (!restaurantServeur || !restaurantServeur.trim() || restaurantServeur === 'Client Comptoir Direct')) {
+      if (restaurantServeursList.length > 0 && !restaurantServeurId) {
+        toast.error('Serveuse obligatoire', 'Veuillez sélectionner la serveuse responsable de cette commande.')
+        return
+      }
+    }
+
     // ─── VERROUILLAGE IMMÉDIAT (Anti-Double-Clic & Spinner) ─────────────────
     setPaying(true)
 
@@ -1758,6 +1908,60 @@ export const POSPage: React.FC = () => {
     const timeStr = Date.now().toString().slice(-4)
     const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
     const custName = selectedCustomerSnapshot ? selectedCustomerSnapshot.name : (isRestaurant && restaurantTableSnapshot ? `Table ${restaurantTableSnapshot}` : 'Client Comptoir')
+
+    // ─── WORKFLOW RESTAURANT : COMMANDE EN ATTENTE 4 MINUTES (0 DÉSTOCKAGE, 0 DETTE) ───
+    if (isRestaurant) {
+      try {
+        const { creerCommandeEnAttente } = await import('../../../services/restaurantService')
+        const expiresAt = new Date(Date.now() + 240 * 1000).toISOString()
+        const waitRes = await creerCommandeEnAttente({
+          company_id: company?.id ?? companyId ?? '',
+          order_number: orderNum,
+          circuit: restaurantCircuit,
+          table_numero: restaurantTableSnapshot || 'Comptoir',
+          couverts: restaurantCouvertsSnapshot || 1,
+          serveur_nom: restaurantServeurSnapshot,
+          serveur_id: restaurantServeurIdSnapshot,
+          items: cartSnapshot.map(c => ({
+            produit_id: c.product.id,
+            designation: c.product.name,
+            quantite: c.qty,
+            prix_unitaire: c.unitPrice,
+            is_consigne: Boolean(c.product.sector_meta?.is_consigne)
+          })),
+          total_ht: cartFiscalSummarySnapshot.ht,
+          total_ttc: totalNetTTCSnapshot
+        })
+
+        if (!waitRes.success) {
+          setPaying(false)
+          toast.error('Erreur commande restaurant', waitRes.error || 'Impossible d\'enregistrer la commande en attente.')
+          return
+        }
+
+        setPendingRestoOrder({
+          orderNumber: orderNum,
+          expiresAt,
+          items: cartSnapshot,
+          totalTtc: totalNetTTCSnapshot,
+          totalHt: cartFiscalSummarySnapshot.ht,
+          serveurNom: restaurantServeurSnapshot,
+          tableNumero: restaurantTableSnapshot || 'Comptoir',
+          circuit: restaurantCircuit,
+          clientNom: custName
+        })
+        setPendingCountdownSeconds(240)
+        setShowPendingRestoModal(true)
+        clearCart()
+        setPaying(false)
+        toast.info('Commande en attente (4 min)', `Commande ${orderNum} enregistrée. Aucun déstockage ni créance pendant 4 minutes.`)
+        return
+      } catch (err: any) {
+        setPaying(false)
+        toast.error('Erreur', err.message)
+        return
+      }
+    }
 
     // ─── OPTIMISTIC UI : Vider le panier et mettre à jour l'historique instantanément ───
     clearCart()
@@ -2612,6 +2816,28 @@ export const POSPage: React.FC = () => {
             />
           )}
 
+          {/* Bannière Commande en attente (4 min) active */}
+          {pendingRestoOrder && !showPendingRestoModal && (
+            <div className="bg-gradient-to-r from-amber-500 to-amber-600 text-white px-4 py-2.5 rounded-2xl shadow-md flex items-center justify-between mb-3 border border-amber-400/40 animate-pulse">
+              <div className="flex items-center gap-2.5 text-xs font-bold">
+                <Clock className="w-4 h-4 text-amber-100" />
+                <span>Commande en attente : <strong className="font-mono">{pendingRestoOrder.orderNumber}</strong> ({pendingRestoOrder.circuit} • {pendingRestoOrder.serveurNom})</span>
+                <span className="bg-white/20 px-2 py-0.5 rounded-full font-mono text-[11px] font-black">
+                  ⏱️ {Math.floor(pendingCountdownSeconds / 60)}:{(pendingCountdownSeconds % 60).toString().padStart(2, '0')}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPendingRestoModal(true)}
+                  className="bg-white text-amber-800 hover:bg-amber-50 px-3 py-1 rounded-xl text-xs font-black transition shadow-sm"
+                >
+                  Gérer / Finaliser / Annuler
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* ── VUE 1 : POINT DE VENTE (CATALOGUE & PANIER INTÉGRÉ GLISSANT À DROITE) ── */}
           <div className="flex flex-col lg:flex-row gap-4 items-start relative">
           {/* CATALOGUE GAUCHE */}
@@ -3126,62 +3352,66 @@ export const POSPage: React.FC = () => {
 
                 {/* 3. Récapitulatif Sous-total, TVA, Total TTC & AIB */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5">
-                  <div className="flex justify-between text-slate-600 text-[11px]">
-                    <span>Sous-total HT :</span>
-                    <span className="font-mono font-bold">{fmt(cartFiscalSummary.ht)}</span>
-                  </div>
-                  <div className="flex justify-between text-slate-600 text-[11px]">
-                    <span>TVA (18%) :</span>
-                    <span className="font-mono font-bold">{fmt(cartFiscalSummary.tva)}</span>
-                  </div>
+                  {!isRestaurant && (
+                    <>
+                      <div className="flex justify-between text-slate-600 text-[11px]">
+                        <span>Sous-total HT :</span>
+                        <span className="font-mono font-bold">{fmt(cartFiscalSummary.ht)}</span>
+                      </div>
+                      <div className="flex justify-between text-slate-600 text-[11px]">
+                        <span>TVA (18%) :</span>
+                        <span className="font-mono font-bold">{fmt(cartFiscalSummary.tva)}</span>
+                      </div>
 
-                  {/* Ligne AIB calculée */}
-                  {cartFiscalSummary.aib > 0 && (
-                    <div className="flex justify-between text-amber-800 bg-amber-50/80 px-2 py-1 rounded-lg border border-amber-200 text-[11px]">
-                      <span className="font-bold flex items-center gap-1">
-                        AIB ({cartFiscalSummary.aibRate}% sur HT) :
-                      </span>
-                      <span className="font-mono font-bold">{fmt(cartFiscalSummary.aib)}</span>
-                    </div>
-                  )}
-
-                  {/* Case à cocher pour activer/désactiver l'AIB sur le panier si non défini sur les articles */}
-                  {!cartFiscalSummary.hasProductWithAib && (
-                    <div className="pt-1 flex items-center justify-between text-[11px] text-slate-600 border-t border-dashed border-slate-200">
-                      <label className="flex items-center gap-1.5 cursor-pointer font-medium hover:text-amber-800">
-                        <input
-                          type="checkbox"
-                          checked={applyAibCart}
-                          onChange={(e) => setApplyAibCart(e.target.checked)}
-                          className="w-3.5 h-3.5 accent-amber-600 rounded cursor-pointer"
-                        />
-                        <span>Appliquer AIB sur cette vente</span>
-                      </label>
-                      {applyAibCart && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            type="button"
-                            onClick={() => setCartAibRate(1)}
-                            className={clsx(
-                              'px-1.5 py-0.5 rounded text-[10px] font-bold transition',
-                              cartAibRate === 1 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                            )}
-                          >
-                            1%
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setCartAibRate(5)}
-                            className={clsx(
-                              'px-1.5 py-0.5 rounded text-[10px] font-bold transition',
-                              cartAibRate === 5 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
-                            )}
-                          >
-                            5%
-                          </button>
+                      {/* Ligne AIB calculée */}
+                      {cartFiscalSummary.aib > 0 && (
+                        <div className="flex justify-between text-amber-800 bg-amber-50/80 px-2 py-1 rounded-lg border border-amber-200 text-[11px]">
+                          <span className="font-bold flex items-center gap-1">
+                            AIB ({cartFiscalSummary.aibRate}% sur HT) :
+                          </span>
+                          <span className="font-mono font-bold">{fmt(cartFiscalSummary.aib)}</span>
                         </div>
                       )}
-                    </div>
+
+                      {/* Case à cocher pour activer/désactiver l'AIB sur le panier si non défini sur les articles */}
+                      {!cartFiscalSummary.hasProductWithAib && (
+                        <div className="pt-1 flex items-center justify-between text-[11px] text-slate-600 border-t border-dashed border-slate-200">
+                          <label className="flex items-center gap-1.5 cursor-pointer font-medium hover:text-amber-800">
+                            <input
+                              type="checkbox"
+                              checked={applyAibCart}
+                              onChange={(e) => setApplyAibCart(e.target.checked)}
+                              className="w-3.5 h-3.5 accent-amber-600 rounded cursor-pointer"
+                            />
+                            <span>Appliquer AIB sur cette vente</span>
+                          </label>
+                          {applyAibCart && (
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => setCartAibRate(1)}
+                                className={clsx(
+                                  'px-1.5 py-0.5 rounded text-[10px] font-bold transition',
+                                  cartAibRate === 1 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                                )}
+                              >
+                                1%
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setCartAibRate(5)}
+                                className={clsx(
+                                  'px-1.5 py-0.5 rounded text-[10px] font-bold transition',
+                                  cartAibRate === 5 ? 'bg-amber-600 text-white' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'
+                                )}
+                              >
+                                5%
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </>
                   )}
 
                   {isRestaurant && (subtotalBarTTC > 0 && subtotalCuisineTTC > 0) && (
@@ -3783,6 +4013,156 @@ export const POSPage: React.FC = () => {
         </ModalPortal>
       )}
 
+
+      {/* ── MODALE WORKFLOW 4 MINUTES RESTAURANT & CONFIRMATION (POINT 6 & 8) ── */}
+      <ModalPortal isOpen={showPendingRestoModal && !!pendingRestoOrder} onClose={() => setShowPendingRestoModal(false)} id="modal-resto-pending">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-xl w-full border border-slate-200 max-h-[92vh] overflow-y-auto space-y-5 animate-fadeIn">
+          {/* En-tête avec compte à rebours */}
+          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/10 text-amber-600 flex items-center justify-center">
+                <Clock className="w-5 h-5 animate-spin" style={{ animationDuration: '6s' }} />
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-900">Validation Commande Restaurant</h3>
+                <p className="text-xs text-slate-500 font-mono">Réf : {pendingRestoOrder?.orderNumber}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-2xl font-black font-mono text-amber-600">
+                {Math.floor(pendingCountdownSeconds / 60)}:{(pendingCountdownSeconds % 60).toString().padStart(2, '0')}
+              </div>
+              <span className="text-[10px] text-slate-400 uppercase font-bold tracking-wider">Temps restant</span>
+            </div>
+          </div>
+
+          {/* Alerte informative de grâce */}
+          <div className="bg-amber-50 border border-amber-200 rounded-2xl p-3.5 flex items-start gap-2.5">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-900 leading-relaxed">
+              <strong>Période de grâce de 4 minutes active :</strong> Aucun déstockage ni dette serveuse n'a encore été imputé. Durant ce délai, vous pouvez modifier les articles ou annuler la commande sans impacter les stocks.
+            </div>
+          </div>
+
+          {/* Détails de la commande */}
+          <div className="grid grid-cols-3 gap-2 bg-slate-50 p-3 rounded-2xl border border-slate-200 text-xs">
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Poste / Circuit</span>
+              <span className="font-black text-slate-800">{pendingRestoOrder?.circuit === 'BAR' ? '🍷 BAR' : '🍳 CUISINE'}</span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Serveur(se)</span>
+              <span className="font-black text-slate-800 truncate block">{pendingRestoOrder?.serveurNom}</span>
+            </div>
+            <div>
+              <span className="text-slate-400 block text-[10px] uppercase font-bold">Emplacement</span>
+              <span className="font-black text-slate-800">{pendingRestoOrder?.tableNumero ? `Table ${pendingRestoOrder.tableNumero}` : 'Comptoir'}</span>
+            </div>
+          </div>
+
+          {/* Liste des articles */}
+          <div className="border border-slate-200 rounded-2xl overflow-hidden">
+            <div className="bg-slate-50 px-3 py-2 text-[10px] font-black uppercase text-slate-500 border-b border-slate-200 flex justify-between">
+              <span>Articles commandés ({pendingRestoOrder?.items.length})</span>
+              <span>Montant</span>
+            </div>
+            <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
+              {pendingRestoOrder?.items.map((item, idx) => (
+                <div key={idx} className="px-3 py-2 text-xs flex justify-between items-center">
+                  <div>
+                    <span className="font-bold text-slate-800">{item.product.name}</span>
+                    <span className="text-slate-400 block text-[11px] font-mono">{item.qty} × {fmt(item.unitPrice)}</span>
+                  </div>
+                  <span className="font-mono font-bold text-slate-900">{fmt(item.qty * item.unitPrice)}</span>
+                </div>
+              ))}
+            </div>
+            <div className="bg-slate-50 px-3 py-2.5 border-t border-slate-200 flex justify-between items-center font-black">
+              <span className="text-xs text-slate-700">Total Commande TTC :</span>
+              <span className="text-sm font-mono text-emerald-600">{fmt(pendingRestoOrder?.totalTtc || 0)}</span>
+            </div>
+          </div>
+
+          {/* Formulaire d'annulation avec motif */}
+          {showCancelPrompt ? (
+            <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center gap-2 text-rose-800 text-xs font-black">
+                <XCircle className="w-4 h-4" /> Motif d'annulation obligatoire
+              </div>
+              <input
+                type="text"
+                placeholder="Ex : Erreur de table, client parti, changement de plat..."
+                value={cancelMotif}
+                onChange={(e) => setCancelMotif(e.target.value)}
+                className="w-full px-3 py-2 border border-rose-300 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-rose-500 bg-white"
+              />
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowCancelPrompt(false)}
+                  className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-xl text-xs font-bold transition"
+                >
+                  Revenir
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCancelPendingOrder}
+                  className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black transition shadow-sm"
+                >
+                  Confirmer Annulation (0 Déstockage)
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Boutons d'actions */
+            <div className="space-y-2 pt-2">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={handleReopenPendingOrderForEdit}
+                  className="w-full py-2.5 px-3 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+                >
+                  <Edit3 className="w-4 h-4" /> Modifier la commande
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowCancelPrompt(true)}
+                  className="w-full py-2.5 px-3 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5"
+                >
+                  <Trash2 className="w-4 h-4" /> Annuler la commande
+                </button>
+              </div>
+
+              <button
+                type="button"
+                disabled={isFinalizingPending}
+                onClick={() => handleFinalizePendingOrder(pendingRestoOrder)}
+                className="w-full py-3 px-4 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-lg"
+              >
+                {isFinalizingPending ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" /> Finalisation et déstockage en cours...
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 className="w-4 h-4" /> Confirmer & Finaliser maintenant (Déstockage & KDS)
+                  </>
+                )}
+              </button>
+
+              <div className="text-center pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowPendingRestoModal(false)}
+                  className="text-[11px] text-slate-400 hover:text-slate-600 transition"
+                >
+                  Laisser s'écouler en arrière-plan (auto-finalisation à 0:00)
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </ModalPortal>
 
       {/* ── MODAL 3 : FACTURE COMMERCIALE STANDARD GESTIO 229 (AUCUN FAUX E-MECEF) */}
       <ModalPortal isOpen={showInvoiceModal && !!currentSale} onClose={() => setShowInvoiceModal(false)} id="modal-invoice-standard">

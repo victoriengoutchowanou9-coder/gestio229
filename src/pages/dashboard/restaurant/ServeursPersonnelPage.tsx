@@ -38,6 +38,12 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [presences, setPresences] = useState<any[]>([])
   const [plaintes, setPlaintes] = useState<any[]>([])
   const [creances, setCreances] = useState<any[]>([])
+  const [reglements, setReglements] = useState<any[]>([])
+  const [commandesList, setCommandesList] = useState<any[]>([])
+  const [staffModalTab, setStaffModalTab] = useState<'COMMANDES' | 'PAIEMENTS' | 'HISTORIQUE' | 'BOUTEILLES' | 'ANNULATIONS' | 'SESSIONS'>('COMMANDES')
+  const [selectedCreanceForBottles, setSelectedCreanceForBottles] = useState<any | null>(null)
+  const [bottleReturnQty, setBottleReturnQty] = useState<number>(1)
+  const [showBottleReturnModal, setShowBottleReturnModal] = useState<boolean>(false)
   const [selectedCreanceToPay, setSelectedCreanceToPay] = useState<any | null>(null)
   const [paiementMontant, setPaiementMontant] = useState<number>(0)
   const [paiementMode, setPaiementMode] = useState<string>('ESPECES')
@@ -124,14 +130,16 @@ export const ServeursPersonnelPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [srvRes, sessRes, confRes, vmtRes, presRes, pltRes, creanceRes] = await Promise.all([
+      const [srvRes, sessRes, confRes, vmtRes, presRes, pltRes, creanceRes, reglRes, cmdRes] = await Promise.all([
         supabaseTenant('restaurant_serveurs').select('*').order('nom_complet'),
         supabaseTenant('restaurant_sessions_serveurs').select('*').order('created_at', { ascending: false }).limit(50),
         supabaseTenant('restaurant_boissons_confiees').select('*').order('created_at', { ascending: false }).limit(100),
         supabaseTenant('restaurant_versements_serveurs').select('*').order('date_versement', { ascending: false }).limit(100),
         supabaseTenant('restaurant_presences').select('*').order('date_presence', { ascending: false }).limit(50),
         supabaseTenant('restaurant_plaintes_incidents').select('*').order('created_at', { ascending: false }).limit(50),
-        supabaseTenant('restaurant_creances_serveuses').select('*').order('date_creation', { ascending: false }).limit(100)
+        supabaseTenant('restaurant_creances_serveuses').select('*').order('date_creation', { ascending: false }).limit(100),
+        supabaseTenant('restaurant_reglements_serveuses').select('*').order('date_reglement', { ascending: false }).limit(100),
+        supabaseTenant('restaurant_commandes').select('*').order('created_at', { ascending: false }).limit(100)
       ])
 
       setPersonnel(srvRes.data || [])
@@ -141,6 +149,8 @@ export const ServeursPersonnelPage: React.FC = () => {
       setPresences(presRes.data || [])
       setPlaintes(pltRes.data || [])
       setCreances(creanceRes.data || [])
+      setReglements(reglRes.data || [])
+      setCommandesList(cmdRes.data || [])
 
       if (selectedSession) {
         const updated = (sessRes.data || []).find((s: any) => s.id === selectedSession.id)
@@ -1555,54 +1565,138 @@ export const ServeursPersonnelPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Tableau des commandes et créances */}
-                  <div className="space-y-3">
-                    <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">Commandes & Produits Imputés</h4>
-                    <div className="border border-slate-200 rounded-2xl overflow-hidden">
-                      <table className="w-full text-xs text-left">
-                        <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
-                          <tr>
-                            <th className="p-3">Date & Commande</th>
-                            <th className="p-3">Circuit</th>
-                            <th className="p-3 text-right">Montant Initial</th>
-                            <th className="p-3 text-right">Payé</th>
-                            <th className="p-3 text-right">Solde Dû</th>
-                            <th className="p-3 text-center">Consignes</th>
-                            <th className="p-3 text-center">Statut</th>
-                            <th className="p-3 text-right">Action</th>
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-100">
-                          {staffCreances.map((c: any) => {
-                            const btlsRestantes = Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0))
-                            return (
-                              <tr key={c.id} className="hover:bg-slate-50/50">
-                                <td className="p-3 font-mono font-bold text-slate-900">
-                                  {c.order_number}
-                                  <span className="text-[10px] text-slate-400 block font-normal">{new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}</span>
-                                </td>
-                                <td className="p-3">
-                                  <span className={clsx('px-2 py-0.5 rounded text-[10px] font-black', c.circuit === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800')}>
-                                    {c.circuit}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-right font-mono text-slate-600">{fmt(c.montant_initial)}</td>
-                                <td className="p-3 text-right font-mono font-bold text-emerald-600">{fmt(c.montant_paye)}</td>
-                                <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(c.solde_restant)}</td>
-                                <td className="p-3 text-center font-mono">
-                                  {c.consignes_bouteilles_dues > 0 ? (
-                                    <span className="text-amber-800 font-bold text-[10px] bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
-                                      {btlsRestantes} / {c.consignes_bouteilles_dues}
+                  {/* Sélecteur des 6 Sous-onglets Spécialisés (Point 9 des spécifications) */}
+                  <div className="flex border-b border-slate-200 overflow-x-auto gap-1 pb-1">
+                    <button
+                      onClick={() => setStaffModalTab('COMMANDES')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'COMMANDES'
+                          ? 'bg-rose-500 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <FileText className="w-4 h-4" /> 1. Commandes en cours
+                    </button>
+                    <button
+                      onClick={() => setStaffModalTab('PAIEMENTS')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'PAIEMENTS'
+                          ? 'bg-emerald-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <Wallet className="w-4 h-4" /> 2. Règlements Reçus
+                    </button>
+                    <button
+                      onClick={() => setStaffModalTab('HISTORIQUE')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'HISTORIQUE'
+                          ? 'bg-blue-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <CheckCircle2 className="w-4 h-4" /> 3. Ventes Soldées
+                    </button>
+                    <button
+                      onClick={() => setStaffModalTab('BOUTEILLES')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'BOUTEILLES'
+                          ? 'bg-amber-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <Wine className="w-4 h-4" /> 4. Retours Bouteilles
+                    </button>
+                    <button
+                      onClick={() => setStaffModalTab('ANNULATIONS')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'ANNULATIONS'
+                          ? 'bg-slate-800 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <RotateCcw className="w-4 h-4" /> 5. Annulations (4 min)
+                    </button>
+                    <button
+                      onClick={() => setStaffModalTab('SESSIONS')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'SESSIONS'
+                          ? 'bg-purple-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <Clock className="w-4 h-4" /> 6. Sessions & Clôture
+                    </button>
+                  </div>
+
+                  {/* ── SOUS-ONGLET 1 : COMMANDES & PRODUITS EN COURS (BAR / CUISINE SÉPARÉS) ── */}
+                  {staffModalTab === 'COMMANDES' && (
+                    <div className="space-y-4">
+                      {/* Séparation BAR et CUISINE */}
+                      <div className="flex justify-between items-center">
+                        <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">
+                          Commandes en cours avec solde restant ({staffCreances.filter(c => Number(c.solde_restant || 0) > 0).length})
+                        </h4>
+                        <div className="flex gap-2">
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800">
+                            BAR : {fmt(totalBarDu)}
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-100 text-orange-800">
+                            CUISINE : {fmt(totalCuisineDu)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                            <tr>
+                              <th className="p-3">Date & Commande</th>
+                              <th className="p-3">Poste / Circuit</th>
+                              <th className="p-3 text-right">Montant Initial</th>
+                              <th className="p-3 text-right">Déjà Payé</th>
+                              <th className="p-3 text-right">Solde Dû</th>
+                              <th className="p-3 text-center">Consignes</th>
+                              <th className="p-3 text-center">Statut</th>
+                              <th className="p-3 text-right">Action</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {staffCreances.filter(c => Number(c.solde_restant || 0) > 0).map((c: any) => {
+                              const btlsRestantes = Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0))
+                              return (
+                                <tr key={c.id} className="hover:bg-slate-50/50">
+                                  <td className="p-3 font-mono font-bold text-slate-900">
+                                    {c.order_number}
+                                    <span className="text-[10px] text-slate-400 block font-normal">{new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}</span>
+                                  </td>
+                                  <td className="p-3">
+                                    <span className={clsx('px-2 py-0.5 rounded text-[10px] font-black', c.circuit === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800')}>
+                                      {c.circuit === 'CUISINE' ? '🍳 CUISINE' : '🍷 BAR'}
                                     </span>
-                                  ) : '-'}
-                                </td>
-                                <td className="p-3 text-center">
-                                  <span className={clsx('px-2 py-0.5 rounded-full text-[10px] font-black uppercase', c.statut === 'PAYE' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800')}>
-                                    {c.statut}
-                                  </span>
-                                </td>
-                                <td className="p-3 text-right">
-                                  {c.solde_restant > 0 && (
+                                  </td>
+                                  <td className="p-3 text-right font-mono text-slate-600">{fmt(c.montant_initial)}</td>
+                                  <td className="p-3 text-right font-mono font-bold text-emerald-600">{fmt(c.montant_paye)}</td>
+                                  <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(c.solde_restant)}</td>
+                                  <td className="p-3 text-center font-mono">
+                                    {c.consignes_bouteilles_dues > 0 ? (
+                                      <span className="text-amber-800 font-bold text-[10px] bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                                        {btlsRestantes} / {c.consignes_bouteilles_dues}
+                                      </span>
+                                    ) : '-'}
+                                  </td>
+                                  <td className="p-3 text-center">
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-rose-100 text-rose-800">
+                                      {c.statut}
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-right">
                                     <button
                                       onClick={() => {
                                         setSelectedCreanceToPay(c)
@@ -1613,20 +1707,404 @@ export const ServeursPersonnelPage: React.FC = () => {
                                     >
                                       Payer
                                     </button>
-                                  )}
+                                  </td>
+                                </tr>
+                              )
+                            })}
+                            {staffCreances.filter(c => Number(c.solde_restant || 0) > 0).length === 0 && (
+                              <tr>
+                                <td colSpan={8} className="p-8 text-center text-slate-400">
+                                  Toutes les commandes en cours sont intégralement soldées pour cette serveuse.
                                 </td>
                               </tr>
-                            )
-                          })}
-                          {staffCreances.length === 0 && (
-                            <tr>
-                              <td colSpan={8} className="p-8 text-center text-slate-400">Aucune commande ou créance enregistrée pour cette serveuse.</td>
-                            </tr>
-                          )}
-                        </tbody>
-                      </table>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
                     </div>
-                  </div>
+                  )}
+
+                  {/* ── SOUS-ONGLET 2 : HISTORIQUE DES RÈGLEMENTS REÇUS ── */}
+                  {staffModalTab === 'PAIEMENTS' && (
+                    <div className="space-y-4">
+                      {(() => {
+                        const staffReglements = reglements.filter(r => r.serveur_nom === selectedStaffDetail.nom_complet)
+                        const totalEncaisse = staffReglements.reduce((acc, r) => acc + Number(r.montant || 0), 0)
+                        return (
+                          <>
+                            <div className="flex justify-between items-center">
+                              <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">
+                                Règlements enregistrés ({staffReglements.length})
+                              </h4>
+                              <span className="text-xs font-black text-emerald-700 bg-emerald-50 px-3 py-1 rounded-xl border border-emerald-200">
+                                Total Encaissé : {fmt(totalEncaisse)}
+                              </span>
+                            </div>
+
+                            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                                  <tr>
+                                    <th className="p-3">Date Règlement</th>
+                                    <th className="p-3">Référence Reçu</th>
+                                    <th className="p-3">Mode de Règlement</th>
+                                    <th className="p-3 text-right">Montant Encaissé</th>
+                                    <th className="p-3 text-right">Encaissé Par</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {staffReglements.map((r: any) => (
+                                    <tr key={r.id} className="hover:bg-slate-50/50">
+                                      <td className="p-3 font-mono text-slate-600">
+                                        {new Date(r.date_reglement).toLocaleString('fr-BJ', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', year: 'numeric' })}
+                                      </td>
+                                      <td className="p-3 font-mono font-bold text-slate-900">{r.reference || '-'}</td>
+                                      <td className="p-3 font-bold text-slate-700">
+                                        <span className="bg-slate-100 px-2 py-0.5 rounded text-[10px]">
+                                          {r.mode_reglement}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-right font-mono font-black text-emerald-600">{fmt(r.montant)}</td>
+                                      <td className="p-3 text-right text-slate-500">{r.recu_par || 'Gérant'}</td>
+                                    </tr>
+                                  ))}
+                                  {staffReglements.length === 0 && (
+                                    <tr>
+                                      <td colSpan={5} className="p-8 text-center text-slate-400">
+                                        Aucun règlement spécifique enregistré pour le moment.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  )}
+
+                  {/* ── SOUS-ONGLET 3 : HISTORIQUE DES VENTES SOLDÉES ── */}
+                  {staffModalTab === 'HISTORIQUE' && (
+                    <div className="space-y-4">
+                      {(() => {
+                        const payees = staffCreances.filter(c => c.statut === 'PAYE')
+                        return (
+                          <>
+                            <div className="flex justify-between items-center">
+                              <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">
+                                Ventes Soldées & Archivées ({payees.length})
+                              </h4>
+                            </div>
+
+                            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                                  <tr>
+                                    <th className="p-3">Date</th>
+                                    <th className="p-3">N° Commande</th>
+                                    <th className="p-3">Circuit</th>
+                                    <th className="p-3 text-right">Montant Total</th>
+                                    <th className="p-3 text-right">Total Payé</th>
+                                    <th className="p-3 text-center">Statut</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {payees.map((c: any) => (
+                                    <tr key={c.id} className="hover:bg-slate-50/50">
+                                      <td className="p-3 font-mono text-slate-500">
+                                        {new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
+                                      </td>
+                                      <td className="p-3 font-mono font-bold text-slate-900">{c.order_number}</td>
+                                      <td className="p-3">
+                                        <span className={clsx('px-2 py-0.5 rounded text-[10px] font-black', c.circuit === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800')}>
+                                          {c.circuit}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-right font-mono text-slate-700">{fmt(c.montant_initial)}</td>
+                                      <td className="p-3 text-right font-mono font-bold text-emerald-600">{fmt(c.montant_paye)}</td>
+                                      <td className="p-3 text-center">
+                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800">
+                                          SOLDÉ
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  {payees.length === 0 && (
+                                    <tr>
+                                      <td colSpan={6} className="p-8 text-center text-slate-400">
+                                        Aucune commande totalement soldée pour l'instant.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  )}
+
+                  {/* ── SOUS-ONGLET 4 : RETOURS DE BOUTEILLES CONSIGNÉES ── */}
+                  {staffModalTab === 'BOUTEILLES' && (
+                    <div className="space-y-4">
+                      {(() => {
+                        const avecBtls = staffCreances.filter(c => Number(c.consignes_bouteilles_dues || 0) > 0)
+                        return (
+                          <>
+                            <div className="flex justify-between items-center">
+                              <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">
+                                Suivi des Bouteilles Consignées ({avecBtls.length} commandes)
+                              </h4>
+                              <span className="text-xs font-black text-amber-900 bg-amber-50 px-3 py-1 rounded-xl border border-amber-200">
+                                Bouteilles Dues : {totalBouteillesDues} btls
+                              </span>
+                            </div>
+
+                            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                                  <tr>
+                                    <th className="p-3">Commande</th>
+                                    <th className="p-3">Date</th>
+                                    <th className="p-3 text-center">Bouteilles Sorties</th>
+                                    <th className="p-3 text-center">Bouteilles Rendues</th>
+                                    <th className="p-3 text-center">Solde à Rendre</th>
+                                    <th className="p-3 text-right">Action</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {avecBtls.map((c: any) => {
+                                    const btlsRestantes = Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0))
+                                    return (
+                                      <tr key={c.id} className="hover:bg-slate-50/50">
+                                        <td className="p-3 font-mono font-bold text-slate-900">{c.order_number}</td>
+                                        <td className="p-3 text-slate-500 text-[11px]">
+                                          {new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
+                                        </td>
+                                        <td className="p-3 text-center font-mono font-bold text-slate-800">{c.consignes_bouteilles_dues}</td>
+                                        <td className="p-3 text-center font-mono font-bold text-emerald-600">{c.consignes_bouteilles_rendues || 0}</td>
+                                        <td className="p-3 text-center font-mono font-black text-amber-900">
+                                          {btlsRestantes > 0 ? (
+                                            <span className="bg-amber-100 px-2 py-0.5 rounded-full text-[10px]">
+                                              {btlsRestantes} btls
+                                            </span>
+                                          ) : (
+                                            <span className="text-emerald-600 font-bold">✓ Rendu</span>
+                                          )}
+                                        </td>
+                                        <td className="p-3 text-right">
+                                          {btlsRestantes > 0 && (
+                                            <button
+                                              onClick={() => {
+                                                setSelectedCreanceForBottles(c)
+                                                setBottleReturnQty(1)
+                                                setShowBottleReturnModal(true)
+                                              }}
+                                              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition shadow-sm"
+                                            >
+                                              Enregistrer Retour
+                                            </button>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    )
+                                  })}
+                                  {avecBtls.length === 0 && (
+                                    <tr>
+                                      <td colSpan={6} className="p-8 text-center text-slate-400">
+                                        Aucune consigne de bouteille associée à cette serveuse.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  )}
+
+                  {/* ── SOUS-ONGLET 5 : ANNULATIONS ET CORRECTIONS (DÉLAI 4 MIN) ── */}
+                  {staffModalTab === 'ANNULATIONS' && (
+                    <div className="space-y-4">
+                      {(() => {
+                        const cancelled = commandesList.filter(
+                          (cmd: any) =>
+                            (cmd.serveur_nom === selectedStaffDetail.nom_complet || cmd.serveur_id === selectedStaffDetail.id) &&
+                            cmd.validation_status === 'ANNULE'
+                        )
+                        return (
+                          <>
+                            <div className="flex justify-between items-center">
+                              <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">
+                                Commandes Annulées ({cancelled.length})
+                              </h4>
+                              <span className="text-[10px] font-bold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-lg">
+                                Règle d'or : 0 déstockage & 0 créance
+                              </span>
+                            </div>
+
+                            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                              <table className="w-full text-xs text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                                  <tr>
+                                    <th className="p-3">Date Annulation</th>
+                                    <th className="p-3">N° Commande</th>
+                                    <th className="p-3">Circuit</th>
+                                    <th className="p-3 text-right">Montant Annulé</th>
+                                    <th className="p-3">Motif d'Annulation</th>
+                                    <th className="p-3 text-right">Annulé Par</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {cancelled.map((cmd: any) => (
+                                    <tr key={cmd.id} className="hover:bg-slate-50/50">
+                                      <td className="p-3 font-mono text-slate-500">
+                                        {new Date(cmd.cancelled_at || cmd.updated_at || cmd.created_at).toLocaleString('fr-BJ', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit' })}
+                                      </td>
+                                      <td className="p-3 font-mono font-bold text-slate-900">{cmd.numero_commande}</td>
+                                      <td className="p-3">
+                                        <span className="px-2 py-0.5 rounded text-[10px] font-black bg-slate-200 text-slate-800">
+                                          {cmd.circuit || 'BAR'}
+                                        </span>
+                                      </td>
+                                      <td className="p-3 text-right font-mono font-bold text-slate-600">{fmt(cmd.total_ttc || 0)}</td>
+                                      <td className="p-3 text-rose-700 font-medium italic">{cmd.motif_annulation || 'Annulation avant 4 minutes'}</td>
+                                      <td className="p-3 text-right text-slate-500">{cmd.annule_par || 'Gérant'}</td>
+                                    </tr>
+                                  ))}
+                                  {cancelled.length === 0 && (
+                                    <tr>
+                                      <td colSpan={6} className="p-8 text-center text-slate-400">
+                                        Aucune commande annulée pour cette serveuse.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </>
+                        )
+                      })()}
+                    </div>
+                  )}
+
+                  {/* ── SOUS-ONGLET 6 : SITUATION DU COMPTE & SESSIONS ── */}
+                  {staffModalTab === 'SESSIONS' && (
+                    <div className="space-y-4">
+                      {(() => {
+                        const activeSession = sessions.find(s => s.serveur_nom === selectedStaffDetail.nom_complet && s.statut === 'OUVERTE')
+                        const closedSessions = sessions.filter(s => s.serveur_nom === selectedStaffDetail.nom_complet && s.statut !== 'OUVERTE')
+                        return (
+                          <div className="space-y-4">
+                            {/* Session active */}
+                            {activeSession ? (
+                              <div className="bg-purple-50 border border-purple-200 rounded-2xl p-4 space-y-3">
+                                <div className="flex justify-between items-center">
+                                  <div className="flex items-center gap-2">
+                                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-ping" />
+                                    <h4 className="font-black text-xs text-purple-950 uppercase">Session Active en cours</h4>
+                                  </div>
+                                  <span className="text-[10px] font-bold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-md">
+                                    Ouverte à {activeSession.heure_ouverture || '--:--'}
+                                  </span>
+                                </div>
+
+                                <div className="grid grid-cols-4 gap-2 text-xs">
+                                  <div className="bg-white p-2.5 rounded-xl border border-purple-100">
+                                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Fonds Initial</span>
+                                    <span className="font-black font-mono text-slate-800">{fmt(activeSession.fonds_initial || 0)}</span>
+                                  </div>
+                                  <div className="bg-white p-2.5 rounded-xl border border-purple-100">
+                                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Total Confié</span>
+                                    <span className="font-black font-mono text-purple-700">{fmt(activeSession.total_boissons_confiees_ttc || 0)}</span>
+                                  </div>
+                                  <div className="bg-white p-2.5 rounded-xl border border-purple-100">
+                                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Total Versé</span>
+                                    <span className="font-black font-mono text-emerald-600">{fmt(activeSession.total_versements_recus || 0)}</span>
+                                  </div>
+                                  <div className="bg-white p-2.5 rounded-xl border border-purple-100">
+                                    <span className="text-[10px] text-slate-400 block uppercase font-bold">Reste à Remettre</span>
+                                    <span className="font-black font-mono text-rose-600">{fmt(activeSession.solde_restant_a_remettre || 0)}</span>
+                                  </div>
+                                </div>
+
+                                <div className="pt-2 flex justify-end">
+                                  <button
+                                    onClick={() => {
+                                      setSelectedSession(activeSession)
+                                      setShowClotureModal(true)
+                                    }}
+                                    className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-black transition shadow-sm flex items-center gap-1.5"
+                                  >
+                                    <Check className="w-4 h-4" /> Clôturer cette session de service
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl text-xs text-slate-600 flex justify-between items-center">
+                                <span>Aucune session active ouverte pour cette serveuse aujourd'hui.</span>
+                                <button
+                                  onClick={() => {
+                                    setSessionForm({
+                                      serveur_nom: selectedStaffDetail.nom_complet,
+                                      fonds_initial: 0,
+                                      notes: ''
+                                    })
+                                    setShowSessionModal(true)
+                                  }}
+                                  className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold transition"
+                                >
+                                  Ouvrir une session
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Historique des sessions fermées */}
+                            <div className="space-y-2">
+                              <h5 className="font-black text-xs text-slate-800 uppercase tracking-wider">Sessions Précédentes Clôturées</h5>
+                              <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                                <table className="w-full text-xs text-left">
+                                  <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                                    <tr>
+                                      <th className="p-2.5">Date</th>
+                                      <th className="p-2.5 text-right">Ventes Déclarées</th>
+                                      <th className="p-2.5 text-right">Versements</th>
+                                      <th className="p-2.5 text-right">Écart Financier</th>
+                                      <th className="p-2.5 text-center">Statut</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {closedSessions.map((s: any) => (
+                                      <tr key={s.id} className="hover:bg-slate-50/50">
+                                        <td className="p-2.5 font-mono text-slate-600">{s.date_session}</td>
+                                        <td className="p-2.5 text-right font-mono text-slate-800">{fmt(s.total_ventes_declarees_ttc || 0)}</td>
+                                        <td className="p-2.5 text-right font-mono text-emerald-600 font-bold">{fmt(s.total_versements_recus || 0)}</td>
+                                        <td className="p-2.5 text-right font-mono font-black text-rose-600">{fmt(s.ecart_financier || 0)}</td>
+                                        <td className="p-2.5 text-center">
+                                          <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-slate-100 text-slate-700">
+                                            {s.statut}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                    {closedSessions.length === 0 && (
+                                      <tr>
+                                        <td colSpan={5} className="p-6 text-center text-slate-400">Aucune session précédente enregistrée.</td>
+                                      </tr>
+                                    )}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  )}
                 </div>
               )
             })()}
@@ -1699,6 +2177,64 @@ export const ServeursPersonnelPage: React.FC = () => {
                   className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md"
                 >
                   Confirmer Encaissement
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODALE RETOUR DE BOUTEILLES CONSIGNÉES */}
+      {showBottleReturnModal && selectedCreanceForBottles && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-black text-sm text-slate-900">Enregistrer un Retour de Bouteilles</h3>
+              <button onClick={() => setShowBottleReturnModal(false)} className="text-slate-400 p-1"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-3">
+              <div className="p-3 bg-amber-50 rounded-2xl text-xs space-y-1 border border-amber-200">
+                <p><strong>Serveuse :</strong> {selectedCreanceForBottles.serveur_nom}</p>
+                <p><strong>Commande :</strong> {selectedCreanceForBottles.order_number}</p>
+                <p><strong>Bouteilles sorties :</strong> {selectedCreanceForBottles.consignes_bouteilles_dues}</p>
+                <p><strong>Déjà rendues :</strong> {selectedCreanceForBottles.consignes_bouteilles_rendues || 0}</p>
+                <p><strong>Reste à rendre :</strong> <span className="text-amber-900 font-black font-mono">
+                  {Math.max(0, (Number(selectedCreanceForBottles.consignes_bouteilles_dues) || 0) - (Number(selectedCreanceForBottles.consignes_bouteilles_rendues) || 0))} btls
+                </span></p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Nombre de bouteilles retournées *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={Math.max(1, (Number(selectedCreanceForBottles.consignes_bouteilles_dues) || 0) - (Number(selectedCreanceForBottles.consignes_bouteilles_rendues) || 0))}
+                  value={bottleReturnQty}
+                  onChange={e => setBottleReturnQty(Math.max(1, Number(e.target.value)))}
+                  className="w-full px-3 py-2 border rounded-xl text-sm font-black font-mono"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t">
+                <button onClick={() => setShowBottleReturnModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
+                <button
+                  onClick={async () => {
+                    const { enregistrerRetourBouteilles } = await import('../../../services/restaurantService')
+                    const res = await enregistrerRetourBouteilles({
+                      creance_id: selectedCreanceForBottles.id,
+                      qte_rendue: bottleReturnQty
+                    })
+                    if (res.success) {
+                      toast.success('Retour enregistré', `${bottleReturnQty} bouteille(s) retournée(s). Reste dû : ${res.resteDu}`)
+                      setShowBottleReturnModal(false)
+                      loadAllData()
+                    } else {
+                      toast.error('Erreur', 'Impossible d enregistrer le retour de bouteilles.')
+                    }
+                  }}
+                  className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black shadow-md"
+                >
+                  Confirmer le Retour
                 </button>
               </div>
             </div>

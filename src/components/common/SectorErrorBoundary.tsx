@@ -18,6 +18,8 @@ interface State {
   error: Error | null
   errorInfo: ErrorInfo | null
   isChunkError: boolean
+  isAutoReloading: boolean
+  countdown: number
 }
 
 /** Détecte si une erreur est causée par un chunk JS introuvable (post-déploiement) */
@@ -49,11 +51,15 @@ function detectTDZError(err: Error | null): boolean {
 }
 
 export class SectorErrorBoundary extends Component<Props, State> {
+  private countdownTimer: any = null
+
   public state: State = {
     hasError: false,
     error: null,
     errorInfo: null,
     isChunkError: false,
+    isAutoReloading: false,
+    countdown: 3,
   }
 
   public static getDerivedStateFromError(error: Error): State {
@@ -62,6 +68,8 @@ export class SectorErrorBoundary extends Component<Props, State> {
       error,
       errorInfo: null,
       isChunkError: detectChunkError(error) || detectTDZError(error),
+      isAutoReloading: false,
+      countdown: 3,
     }
   }
 
@@ -72,33 +80,76 @@ export class SectorErrorBoundary extends Component<Props, State> {
     // ── Auto-reload si chunk error ou TDZ error (post-déploiement) ──────
     const isAutoRecoverable = detectChunkError(error) || detectTDZError(error)
     if (isAutoRecoverable) {
-      const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload') === '1'
-      if (!alreadyReloaded) {
-        console.warn('[SectorErrorBoundary] Incident auto-réparable (Chunk ou TDZ) — purge cache + rechargement immédiat…')
-        sessionStorage.setItem('gestio229_chunk_reload', '1')
-        sessionStorage.removeItem('chunk_retry')
-        localStorage.removeItem('gestio229_app_version')
-        if ('caches' in window) {
-          window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+      // 1. Désenregistrer le Service Worker & vider le cache au chargement en cas d'erreur
+      if (typeof window !== 'undefined') {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then((regs) => {
+            regs.forEach((r) => r.unregister())
+          }).catch(() => {})
         }
-        setTimeout(() => {
-          window.location.href = window.location.pathname + '?t=' + Date.now()
-        }, 500)
+        if ('caches' in window) {
+          window.caches.keys().then((names) => {
+            names.forEach((n) => window.caches.delete(n))
+          }).catch(() => {})
+        }
+        try {
+          localStorage.removeItem('gestio229_app_version')
+        } catch (_) {}
       }
+
+      // 2. Garde anti-boucle stricte : ne recharger automatiquement QU'UNE SEULE FOIS
+      const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload_done') === '1'
+      if (!alreadyReloaded) {
+        console.warn('[SectorErrorBoundary] Incident post-déploiement détecté — rechargement automatique unique dans 3 secondes…')
+        sessionStorage.setItem('gestio229_chunk_reload_done', '1')
+        this.setState({ isAutoReloading: true, countdown: 3 })
+
+        this.countdownTimer = setInterval(() => {
+          this.setState((prev) => {
+            if (prev.countdown <= 1) {
+              if (this.countdownTimer) clearInterval(this.countdownTimer)
+              window.location.href = window.location.pathname + '?t=' + Date.now()
+              return { countdown: 0, isAutoReloading: false }
+            }
+            return { countdown: prev.countdown - 1 }
+          })
+        }, 1000)
+      } else {
+        // Déjà rechargé : NE JAMAIS RECHARGER EN BOUCLE
+        console.warn('[SectorErrorBoundary] Rechargement automatique déjà exécuté une fois. Boucle bloquée, affichage des boutons manuels.')
+        this.setState({ isAutoReloading: false, countdown: 0 })
+      }
+    }
+  }
+
+  public componentWillUnmount() {
+    if (this.countdownTimer) {
+      clearInterval(this.countdownTimer)
     }
   }
 
   /** Hard reload avec cache-bust & purge — bypass navigateur et SW */
   private handleReload = () => {
-    sessionStorage.clear()
-    localStorage.removeItem('gestio229_app_version')
+    if (this.countdownTimer) clearInterval(this.countdownTimer)
+    sessionStorage.removeItem('gestio229_chunk_reload_done')
+    try {
+      localStorage.removeItem('gestio229_app_version')
+    } catch (_) {}
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then((regs) => {
+        regs.forEach((r) => r.unregister())
+      }).catch(() => {})
+    }
     if ('caches' in window) {
-      window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
+      window.caches.keys().then((names) => {
+        names.forEach((n) => window.caches.delete(n))
+      }).catch(() => {})
     }
     window.location.href = window.location.pathname + '?t=' + Date.now()
   }
 
   private handleGoHub = () => {
+    if (this.countdownTimer) clearInterval(this.countdownTimer)
     window.location.href = '/hub'
   }
 
@@ -108,20 +159,46 @@ export class SectorErrorBoundary extends Component<Props, State> {
         ? this.props.sectorSlug.charAt(0).toUpperCase() + this.props.sectorSlug.slice(1)
         : 'Sous-Logiciel'
 
-      // Si c'est une chunk error, on affiche un message d'attente pendant le reload auto
+      // Si c'est une chunk error, on affiche un message d'attente avec compte à rebours 3s et bouton manuel
       if (this.state.isChunkError) {
         return (
           <div className="min-h-[70vh] flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-900">
-            <div className="max-w-lg w-full bg-white dark:bg-slate-800 rounded-3xl shadow-xl border border-amber-200 dark:border-amber-900/60 p-8 text-center">
+            <div className="max-w-lg w-full bg-white dark:bg-slate-800 rounded-3xl shadow-xl border border-amber-200 dark:border-amber-900/60 p-8 text-center animate-in fade-in zoom-in-95 duration-200">
               <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-4 shadow-sm">
-                <RotateCcw className="w-8 h-8 animate-spin" />
+                <RotateCcw className={`w-8 h-8 ${this.state.isAutoReloading ? 'animate-spin' : ''}`} />
               </div>
               <h2 className="text-xl font-black text-slate-800 dark:text-slate-100 mb-2">
                 Nouveau déploiement détecté
               </h2>
-              <p className="text-slate-500 dark:text-slate-400 text-sm">
-                Mise à jour en cours... Rechargement automatique de l'application.
-              </p>
+              {this.state.isAutoReloading ? (
+                <p className="text-slate-600 dark:text-slate-300 text-sm mb-6">
+                  Mise à jour en cours... Rechargement automatique de l'application dans <strong>{this.state.countdown}s</strong>.
+                </p>
+              ) : (
+                <p className="text-slate-600 dark:text-slate-300 text-sm mb-6">
+                  Une mise à jour a été déployée. Cliquez sur le bouton ci-dessous pour recharger les nouveaux composants.
+                </p>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-3 justify-center">
+                <button
+                  type="button"
+                  onClick={this.handleReload}
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition cursor-pointer"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  Recharger manuellement
+                </button>
+
+                <button
+                  type="button"
+                  onClick={this.handleGoHub}
+                  className="inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm transition cursor-pointer"
+                >
+                  <Home className="w-4 h-4" />
+                  Retourner au HUB
+                </button>
+              </div>
             </div>
           </div>
         )

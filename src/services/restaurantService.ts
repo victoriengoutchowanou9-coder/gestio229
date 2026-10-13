@@ -2,15 +2,18 @@
 // GESTIO 229 SaaS — Service Spécialisé Bar, Restaurant, Maquis & Fast-Food
 // =============================================================================
 // Règles métier :
-// 1. Déstockage automatique des matières premières de cuisine selon fiches techniques
-// 2. Gestion des comptes serveuses : boissons confiées, retours, ventes, solde
-// 3. Versements successifs au gérant avec calcul du solde restant et protection double-clic
-// 4. Clôtures de session avec constat des écarts
-// 5. Envoi direct des commandes vers KDS Cuisine & Bar
-// 6. Registre d'assiduité / présence et gestion confidentielle des plaintes
+// 1. Déstockage automatique & idempotent des matières premières selon fiches techniques
+// 2. Gestion stricte et indépendante des stocks BAR et CUISINE
+// 3. Workflow de validation avec délai de 4 minutes, modification, annulation et finalisation automatique
+// 4. Comptes serveuses : boissons confiées, retours, créances, solde et règlements reliés à la caisse
+// 5. Clôtures de sessions serveuses avec rapprochement et constat des écarts
+// 6. Envoi direct et suivi KDS Cuisine & Bar
+// 7. Suivi rigoureux des emballages consignés
 // =============================================================================
 
 import { supabase } from '../lib/supabase'
+import { enregistrerMouvementCaisse } from './caisseSectorService'
+import { enregistrerEntreeCaisse } from './caisseDepensesService'
 
 export interface FicheTechniqueItem {
   id?: string
@@ -80,6 +83,9 @@ export interface VersementServeur {
   commentaire?: string
 }
 
+const isValidUUID = (u?: string | null): boolean =>
+  Boolean(u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u))
+
 /**
  * 1. Déstockage atomique & idempotent des matières premières pour un plat ou commande
  */
@@ -124,7 +130,7 @@ export async function destockerMatieresPlat(params: {
         .insert({
           company_id,
           idempotency_key: idempotencyKey,
-          order_id,
+          order_id: isValidUUID(order_id) ? order_id : null,
           order_number,
           plat_nom,
           portion_qty,
@@ -144,7 +150,7 @@ export async function destockerMatieresPlat(params: {
         try {
           const { data: matchedProducts } = await supabase
             .from('products')
-            .select('id, name, unit, uv, stock_vente, stock_magasin, sector_meta, restaurant_circuit, is_matiere_premiere')
+            .select('id, name, unit, uv, ucd, coef, stock_vente, stock_magasin, sector_meta, restaurant_circuit, is_matiere_premiere')
             .eq('company_id', company_id)
             .ilike('name', ing.ingredient_nom.trim())
 
@@ -154,20 +160,22 @@ export async function destockerMatieresPlat(params: {
             : null
 
           if (prod) {
-            // Conversion d'unité si nécessaire
-            const storageUnit = prod.unit || prod.uv || ing.unite || 'kg'
-            const ingUnit = ing.unite || 'kg'
+            // Facteur de conversion d'unité
+            const storageUnit = (prod.uv || prod.unit || ing.unite || 'kg').toLowerCase().trim()
+            const ingUnit = (ing.unite || 'kg').toLowerCase().trim()
             let convFactor = 1
 
-            const sU = storageUnit.toLowerCase().trim()
-            const iU = ingUnit.toLowerCase().trim()
-            if (sU !== iU) {
-              if ((sU === 'kg' || sU === 'kilo') && iU === 'g') convFactor = 0.001
-              else if (iU === 'kg' && (sU === 'g')) convFactor = 1000
-              else if ((sU === 'l' || sU === 'litre') && iU === 'ml') convFactor = 0.001
-              else if ((sU === 'l' || sU === 'litre') && iU === 'cl') convFactor = 0.01
-              else if (iU === 'l' && (sU === 'cl')) convFactor = 100
-              else if (iU === 'l' && (sU === 'ml')) convFactor = 1000
+            if (storageUnit !== ingUnit) {
+              if ((storageUnit === 'kg' || storageUnit === 'kilo') && ingUnit === 'g') convFactor = 0.001
+              else if (ingUnit === 'kg' && (storageUnit === 'g')) convFactor = 1000
+              else if ((storageUnit === 'kg' || storageUnit === 'kilo') && ingUnit === 'mg') convFactor = 0.000001
+              else if (ingUnit === 'mg' && storageUnit === 'g') convFactor = 0.001
+              else if ((storageUnit === 'l' || storageUnit === 'litre') && ingUnit === 'ml') convFactor = 0.001
+              else if ((storageUnit === 'l' || storageUnit === 'litre') && ingUnit === 'cl') convFactor = 0.01
+              else if (ingUnit === 'l' && (storageUnit === 'cl')) convFactor = 100
+              else if (ingUnit === 'l' && (storageUnit === 'ml')) convFactor = 1000
+              else if (storageUnit === 'cl' && ingUnit === 'ml') convFactor = 0.1
+              else if (storageUnit === 'ml' && ingUnit === 'cl') convFactor = 10
             }
 
             const qteStockADeduire = Math.round((qteTotale * convFactor) * 1000) / 1000
@@ -197,7 +205,7 @@ export async function destockerMatieresPlat(params: {
           company_id,
           sector_slug,
           reference_type: 'consommation_recette',
-          reference_id: order_id || null,
+          reference_id: isValidUUID(order_id) ? order_id : null,
           reference_number: order_number,
           quantity: -qteTotale,
           notes: `Consommation recette ${plat_nom} (x${portion_qty}) : ${ing.ingredient_nom} (${qteTotale} ${ing.unite || 'portion'})`
@@ -235,7 +243,6 @@ export async function attribuerBoissonServeuse(params: BoissonConfiee): Promise<
   const totalValeur = Math.round(qte_remise * prix_vente_unitaire)
 
   try {
-    // 1. Ajouter la ligne dans restaurant_boissons_confiees
     const { error: insErr } = await supabase
       .from('restaurant_boissons_confiees')
       .insert({
@@ -260,7 +267,6 @@ export async function attribuerBoissonServeuse(params: BoissonConfiee): Promise<
 
     if (insErr) throw insErr
 
-    // 2. Mettre à jour le cumul de la session de la serveuse
     const { data: sess } = await supabase
       .from('restaurant_sessions_serveurs')
       .select('total_boissons_confiees_ttc, solde_restant_a_remettre')
@@ -315,7 +321,6 @@ export async function enregistrerVersementServeur(params: {
   }
 
   try {
-    // 1. Lire le solde actuel de la session
     const { data: sess, error: sErr } = await supabase
       .from('restaurant_sessions_serveurs')
       .select('*')
@@ -329,7 +334,6 @@ export async function enregistrerVersementServeur(params: {
     const totalVersements = (Number(sess.total_versements_recus) || 0) + montant
     const ref = `VMT-${Date.now().toString().slice(-6)}`
 
-    // 2. Insérer le versement
     const { error: vErr } = await supabase
       .from('restaurant_versements_serveurs')
       .insert({
@@ -348,7 +352,6 @@ export async function enregistrerVersementServeur(params: {
 
     if (vErr) throw vErr
 
-    // 3. Mettre à jour la session
     await supabase
       .from('restaurant_sessions_serveurs')
       .update({
@@ -357,6 +360,23 @@ export async function enregistrerVersementServeur(params: {
         updated_at: new Date().toISOString()
       })
       .eq('id', session_id)
+
+    // Intégrer également à la caisse principale de l'établissement
+    try {
+      await enregistrerMouvementCaisse({
+        company_id,
+        sector_slug: 'restaurant',
+        caisse_id: null,
+        type: 'entree',
+        sens: 'entree',
+        montant_especes: mode_reglement === 'ESPECES' ? montant : 0,
+        montant_momo: ['MTN_MOMO', 'MOOV_MONEY'].includes(mode_reglement) ? montant : 0,
+        source_module: 'restaurant_serveurs',
+        source_id: ref,
+        motif: `Versement session serveuse ${serveur_nom} (${ref})`,
+        user_name: recu_par
+      })
+    } catch (_) {}
 
     return { success: true, soldeApres, reference: ref }
   } catch (err: any) {
@@ -407,6 +427,7 @@ export async function cloturerSessionServeuse(params: {
 
 /**
  * 5. Régler une créance de serveuse (Paiement total ou partiel)
+ * RÈGLE D'OR : Relié directement à la caisse de l'établissement (Caisse & Clôtures Service)
  */
 export async function payerCreanceServeuse(params: {
   company_id: string
@@ -415,8 +436,10 @@ export async function payerCreanceServeuse(params: {
   montant: number
   mode_reglement: string
   recu_par: string
+  caisse_session_id?: string
+  caisse_id?: string
 }): Promise<{ success: boolean; soldeRestant: number; nouveauStatut: string }> {
-  const { company_id, creance_id, serveur_nom, montant, mode_reglement, recu_par } = params
+  const { company_id, creance_id, serveur_nom, montant, mode_reglement, recu_par, caisse_session_id, caisse_id } = params
 
   try {
     const { data: c, error: cErr } = await supabase
@@ -429,8 +452,9 @@ export async function payerCreanceServeuse(params: {
 
     const soldeActuel = Number(c.solde_restant) || 0
     const dejaPaye = Number(c.montant_paye) || 0
-    const nouveauPaye = dejaPaye + montant
-    const nouveauSolde = Math.max(0, soldeActuel - montant)
+    const montantEffectif = Math.min(soldeActuel, Math.max(0, montant))
+    const nouveauPaye = dejaPaye + montantEffectif
+    const nouveauSolde = Math.max(0, soldeActuel - montantEffectif)
     const nouveauStatut = nouveauSolde === 0 ? 'PAYE' : 'PARTIEL'
 
     // 1. Mettre à jour la créance
@@ -450,14 +474,58 @@ export async function payerCreanceServeuse(params: {
       company_id,
       creance_id,
       serveur_nom,
-      montant,
+      montant: montantEffectif,
       mode_reglement,
       reference: ref,
       recu_par,
       date_reglement: new Date().toISOString()
     })
 
-    // 3. Mettre à jour la session serveuse si liée
+    // 3. Alimenter la Caisse principale (Caisse & Clôtures Service)
+    try {
+      const isCash = mode_reglement === 'ESPECES'
+      const isMomo = ['MTN_MOMO', 'MOOV_MONEY', 'MOMO'].includes(mode_reglement)
+      await enregistrerMouvementCaisse({
+        company_id,
+        sector_slug: 'restaurant',
+        caisse_id: caisse_id || null,
+        caisse_session_id: caisse_session_id || null,
+        type: 'entree',
+        sens: 'entree',
+        montant_especes: isCash ? montantEffectif : 0,
+        montant_momo: isMomo ? montantEffectif : 0,
+        source_module: 'restaurant_serveurs',
+        source_id: ref,
+        motif: `Règlement créance ${c.order_number || ''} par ${serveur_nom} (${ref})`,
+        user_name: recu_par
+      })
+
+      if (isCash) {
+        await enregistrerEntreeCaisse({
+          company_id,
+          secteur_id: 'restaurant',
+          caisse_id: caisse_id || null,
+          montant: montantEffectif,
+          mode_paiement: 'espece',
+          source: 'CREANCE_SERVEUSE',
+          reference_id: creance_id
+        })
+      } else if (isMomo) {
+        await enregistrerEntreeCaisse({
+          company_id,
+          secteur_id: 'restaurant',
+          caisse_id: caisse_id || null,
+          montant: montantEffectif,
+          mode_paiement: 'mtn_momo',
+          source: 'CREANCE_SERVEUSE',
+          reference_id: creance_id
+        })
+      }
+    } catch (caisseErr) {
+      console.warn('[RestaurantService] Notice liaison caisse:', caisseErr)
+    }
+
+    // 4. Mettre à jour la session serveuse si liée
     if (c.session_id) {
       const { data: sess } = await supabase
         .from('restaurant_sessions_serveurs')
@@ -469,8 +537,8 @@ export async function payerCreanceServeuse(params: {
         await supabase
           .from('restaurant_sessions_serveurs')
           .update({
-            total_versements_recus: (Number(sess.total_versements_recus) || 0) + montant,
-            solde_restant_a_remettre: Math.max(0, (Number(sess.solde_restant_a_remettre) || 0) - montant),
+            total_versements_recus: (Number(sess.total_versements_recus) || 0) + montantEffectif,
+            solde_restant_a_remettre: Math.max(0, (Number(sess.solde_restant_a_remettre) || 0) - montantEffectif),
             updated_at: new Date().toISOString()
           })
           .eq('id', c.session_id)
@@ -555,7 +623,6 @@ export async function enregistrerRetourEmballageSession(params: {
   const ref = `RET-EMB-${Date.now().toString().slice(-6)}`
 
   try {
-    // 1. Mettre à jour restaurant_boissons_confiees si boisson_id spécifié
     let reste = 0
     if (boisson_id) {
       const { data: b } = await supabase
@@ -581,7 +648,6 @@ export async function enregistrerRetourEmballageSession(params: {
       }
     }
 
-    // 2. Insérer le log de retour d'emballages
     try {
       await supabase.from('restaurant_retours_emballages').insert({
         company_id,
@@ -595,9 +661,7 @@ export async function enregistrerRetourEmballageSession(params: {
         notes,
         created_at: new Date().toISOString()
       })
-    } catch (_) {
-      // Ignorer si la table spécifique n'existe pas encore
-    }
+    } catch (_) {}
 
     return { success: true, resteEmballages: reste, reference: ref }
   } catch (err: any) {
@@ -607,106 +671,531 @@ export async function enregistrerRetourEmballageSession(params: {
 }
 
 /**
- * 7. Finaliser atomiquement une commande restaurant après le délai de 4 minutes
+ * 7. WORKFLOW DE VALIDATION AVEC DÉLAI DE 4 MINUTES
+ * Étape 1 & 2 : Créer la commande au statut 'EN_ATTENTE_CONFIRMATION' avec compte à rebours de 4 minutes
+ * ZÉRO déstockage définitif et ZÉRO créance définitive à cette étape.
  */
-export async function finaliserCommandeRestaurant(params: {
+export async function creerCommandeEnAttente(params: {
   company_id: string
-  order_id: string
+  sector_slug?: string
   order_number: string
   circuit: 'BAR' | 'CUISINE'
   serveur_nom: string
+  serveur_id?: string
+  table_numero?: string
+  couverts?: number
+  client_nom?: string
+  client_id?: string
   items: Array<{
+    produit_id: string
+    code?: string
+    designation: string
+    quantite: number
+    prix_unitaire: number
+    is_consigne?: boolean
+    is_recipe?: boolean
+    cost_price?: number
+  }>
+  total_ttc: number
+  total_ht?: number
+  total_tva?: number
+  total_aib?: number
+  created_by_name?: string
+}): Promise<{ success: boolean; order_id?: string; expires_at: string; error?: string }> {
+  const {
+    company_id,
+    sector_slug = 'restaurant',
+    order_number,
+    circuit,
+    serveur_nom,
+    serveur_id,
+    table_numero,
+    couverts,
+    client_nom,
+    client_id,
+    items,
+    total_ttc,
+    total_ht,
+    total_tva,
+    total_aib,
+    created_by_name
+  } = params
+
+  if (!company_id || !order_number || !items.length || total_ttc <= 0) {
+    return { success: false, expires_at: '', error: 'Données de commande invalides.' }
+  }
+
+  const expires_at = new Date(Date.now() + 4 * 60 * 1000).toISOString()
+  const numTable = table_numero || 'COMPTOIR'
+
+  try {
+    const payload = {
+      company_id,
+      sector_slug,
+      numero_commande: order_number,
+      table_numero: numTable,
+      type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
+      serveur_nom,
+      client_nom: client_nom || 'Client Comptoir',
+      circuit,
+      statut: 'EN_ATTENTE',
+      validation_status: 'EN_ATTENTE_CONFIRMATION',
+      confirmation_expires_at: expires_at,
+      created_by_name: created_by_name || 'Caissier',
+      total_ht: total_ht || total_ttc,
+      total_tva: total_tva || 0,
+      total_aib: total_aib || 0,
+      total_ttc,
+      total_paye: 0,
+      reste_a_payer: total_ttc,
+      couverts: couverts || 1,
+      notes: JSON.stringify({
+        items,
+        client_id,
+        created_by_name,
+        serveur_id,
+        circuit
+      }),
+      heure_ouverture: new Date().toISOString()
+    }
+
+    const { data, error } = await supabase
+      .from('restaurant_commandes')
+      .insert(payload)
+      .select('id')
+      .single()
+
+    if (error) throw error
+
+    return { success: true, order_id: data?.id, expires_at }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur création commande en attente:', err.message)
+    return { success: false, expires_at: '', error: err.message }
+  }
+}
+
+/**
+ * 7.b Modifier une commande en attente de confirmation
+ * Le délai de 4 minutes repart uniquement si une modification est enregistrée et confirmée.
+ */
+export async function modifierCommandeEnAttente(params: {
+  company_id: string
+  order_number: string
+  circuit?: 'BAR' | 'CUISINE'
+  serveur_nom?: string
+  table_numero?: string
+  couverts?: number
+  items: Array<any>
+  total_ttc: number
+  total_ht?: number
+}): Promise<{ success: boolean; new_expires_at: string; error?: string }> {
+  const { company_id, order_number, circuit, serveur_nom, table_numero, couverts, items, total_ttc, total_ht } = params
+
+  const new_expires_at = new Date(Date.now() + 4 * 60 * 1000).toISOString()
+
+  try {
+    const { data: cmd } = await supabase
+      .from('restaurant_commandes')
+      .select('notes')
+      .eq('company_id', company_id)
+      .eq('numero_commande', order_number)
+      .single()
+
+    let prevNotesObj: any = {}
+    try {
+      if (cmd?.notes) prevNotesObj = JSON.parse(cmd.notes)
+    } catch (_) {}
+
+    const updatedNotes = JSON.stringify({
+      ...prevNotesObj,
+      items,
+      circuit: circuit || prevNotesObj.circuit
+    })
+
+    const updates: any = {
+      total_ttc,
+      total_ht: total_ht || total_ttc,
+      reste_a_payer: total_ttc,
+      confirmation_expires_at: new_expires_at,
+      notes: updatedNotes,
+      updated_at: new Date().toISOString()
+    }
+    if (circuit) updates.circuit = circuit
+    if (serveur_nom) updates.serveur_nom = serveur_nom
+    if (table_numero) updates.table_numero = table_numero
+    if (couverts) updates.couverts = couverts
+
+    const { error } = await supabase
+      .from('restaurant_commandes')
+      .update(updates)
+      .eq('company_id', company_id)
+      .eq('numero_commande', order_number)
+      .eq('validation_status', 'EN_ATTENTE_CONFIRMATION')
+
+    if (error) throw error
+
+    return { success: true, new_expires_at }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur modification commande:', err.message)
+    return { success: false, new_expires_at: '', error: err.message }
+  }
+}
+
+/**
+ * 7.c Annuler une commande en attente
+ * Une commande annulée ne produit ni sortie définitive de stock, ni créance définitive, ni encaissement.
+ */
+export async function annulerCommandeEnAttente(params: {
+  company_id: string
+  order_number: string
+  motif_annulation: string
+  annule_par: string
+}): Promise<{ success: boolean; error?: string }> {
+  const { company_id, order_number, motif_annulation, annule_par } = params
+
+  try {
+    const { error } = await supabase
+      .from('restaurant_commandes')
+      .update({
+        validation_status: 'ANNULE',
+        statut: 'ANNULEE',
+        cancelled_at: new Date().toISOString(),
+        motif_annulation,
+        annule_par,
+        updated_at: new Date().toISOString()
+      })
+      .eq('company_id', company_id)
+      .eq('numero_commande', order_number)
+
+    if (error) throw error
+
+    // Journaliser l'audit
+    try {
+      const { logAuditEvent } = await import('./auditService')
+      await logAuditEvent({
+        companyId: company_id,
+        module: 'RESTAURANT_POS',
+        action: 'ANNULATION_COMMANDE',
+        description: `Annulation de la commande ${order_number} par ${annule_par}. Motif: ${motif_annulation}`,
+        entityName: 'restaurant_commandes',
+        entityId: order_number
+      })
+    } catch (_) {}
+
+    return { success: true }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur annulation commande:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * 7.d Finaliser atomiquement une commande restaurant (soit après 4 min, soit validation immédiate)
+ * Idempotent, vérifie les stocks, déstocke exactement selon le circuit, crée créance et KDS.
+ */
+export async function finaliserCommandeRestaurant(params: {
+  company_id: string
+  order_number: string
+  order_id?: string
+  circuit?: 'BAR' | 'CUISINE'
+  serveur_nom?: string
+  items?: Array<{
     produit_id: string
     designation: string
     quantite: number
     prix_unitaire: number
     is_consigne?: boolean
   }>
-  total_ttc: number
-}): Promise<{ success: boolean }> {
-  const { company_id, order_id, order_number, circuit, serveur_nom, items, total_ttc } = params
+  total_ttc?: number
+}): Promise<{ success: boolean; alreadyFinalized?: boolean; error?: string }> {
+  const { company_id, order_number } = params
 
   try {
-    // 1. Déstockage atomique & fiches techniques
-    if (circuit === 'CUISINE') {
-      for (const item of items) {
-        await destockerMatieresPlat({
+    // 1. Lire la commande en base pour garantir l'idempotence
+    const { data: cmd, error: cErr } = await supabase
+      .from('restaurant_commandes')
+      .select('*')
+      .eq('company_id', company_id)
+      .eq('numero_commande', order_number)
+      .maybeSingle()
+
+    if (cErr) throw cErr
+
+    // Si déjà confirmée, idempotent -> succès direct
+    if (cmd && cmd.validation_status === 'CONFIRME') {
+      return { success: true, alreadyFinalized: true }
+    }
+    if (cmd && cmd.validation_status === 'ANNULE') {
+      return { success: false, error: 'Cette commande a été annulée.' }
+    }
+
+    // Récupérer les items depuis params ou notes
+    let parsedItems: any[] = params.items || []
+    let resolvedCircuit: 'BAR' | 'CUISINE' = params.circuit || (cmd?.circuit as any) || 'BAR'
+    let srvNom = params.serveur_nom || cmd?.serveur_nom || 'Serveur'
+    let resolvedTotalTTC = params.total_ttc || Number(cmd?.total_ttc) || 0
+    let numTable = cmd?.table_numero || 'COMPTOIR'
+    let clientNom = cmd?.client_nom || 'Client Comptoir'
+
+    if ((!parsedItems || parsedItems.length === 0) && cmd?.notes) {
+      try {
+        const obj = JSON.parse(cmd.notes)
+        if (obj.items && Array.isArray(obj.items)) {
+          parsedItems = obj.items
+        }
+        if (obj.circuit) resolvedCircuit = obj.circuit
+      } catch (_) {}
+    }
+
+    if (!parsedItems || parsedItems.length === 0) {
+      throw new Error('Aucun article trouvé dans la commande.')
+    }
+
+    // 2. Déstockage atomique selon le circuit
+    let coutMatiereTotal = 0
+    for (const item of parsedItems) {
+      const itNom = item.designation || item.name || 'Produit'
+      const itQty = Number(item.quantite || item.qty || 1)
+
+      if (resolvedCircuit === 'CUISINE' || item.is_recipe) {
+        // Circuit CUISINE : Déstocker les matières premières de la fiche technique
+        const destockRes = await destockerMatieresPlat({
           company_id,
-          order_id,
+          order_id: isValidUUID(params.order_id || cmd?.id) ? (params.order_id || cmd?.id) : undefined,
           order_number,
-          plat_nom: item.designation,
-          portion_qty: item.quantite,
+          plat_nom: itNom,
+          portion_qty: itQty,
           sector_slug: 'restaurant'
         })
-      }
-    } else {
-      // Pour le BAR : Déstocker les boissons
-      for (const item of items) {
+        coutMatiereTotal += destockRes.coutTotalMatiere
+      } else {
+        // Circuit BAR : Déstocker la boisson directement depuis products
         if (item.produit_id) {
           const { data: prod } = await supabase
             .from('products')
-            .select('stock_vente, sector_meta')
+            .select('id, cost_price, stock_vente, sector_meta')
             .eq('id', item.produit_id)
-            .single()
+            .maybeSingle()
 
           if (prod) {
             const currentStock = Number(prod.stock_vente ?? prod.sector_meta?.stock_vente ?? 0)
-            const newStock = Math.max(0, currentStock - item.quantite)
+            const newStock = Math.max(0, Math.round((currentStock - itQty) * 1000) / 1000)
             await supabase
               .from('products')
               .update({
                 stock_vente: newStock,
                 sector_meta: { ...(prod.sector_meta || {}), stock_vente: newStock }
               })
-              .eq('id', item.produit_id)
+              .eq('id', prod.id)
 
             await supabase.from('stock_movements').insert({
               company_id,
               sector_slug: 'restaurant',
-              product_id: item.produit_id,
+              product_id: prod.id,
               reference_type: 'VENTE_BAR',
               reference_number: order_number,
-              quantity: -item.quantite,
-              notes: `Vente BAR ${order_number} (${serveur_nom})`
+              quantity: -itQty,
+              notes: `Vente BAR ${order_number} (${srvNom})`
             })
+            coutMatiereTotal += (Number(prod.cost_price) || 0) * itQty
           }
         }
       }
     }
 
-    // 2. Créer la créance serveuse
-    const nbBouteillesConsignees = items.reduce((acc, it) => acc + (it.is_consigne ? it.quantite : 0), 0)
+    // 3. Suivi des bouteilles consignées
+    const nbBouteillesConsignees = parsedItems.reduce((acc, it) => {
+      const nom = (it.designation || it.name || '').toLowerCase()
+      const isCons = Boolean(it.is_consigne) || nom.includes('castel') || nom.includes('beaufort') || nom.includes('guinness') || nom.includes('youki') || nom.includes('biere')
+      return acc + (isCons ? Number(it.quantite || it.qty || 0) : 0)
+    }, 0)
+
+    // 4. Rattacher à la session de service de la serveuse (ou en ouvrir une)
+    let session_id: string | null = null
+    const { data: openSessions } = await supabase
+      .from('restaurant_sessions_serveurs')
+      .select('id, total_boissons_confiees_ttc, total_ventes_declarees_ttc, solde_restant_a_remettre')
+      .eq('company_id', company_id)
+      .eq('serveur_nom', srvNom)
+      .eq('statut', 'OUVERTE')
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    if (openSessions && openSessions.length > 0) {
+      session_id = openSessions[0].id
+      const prevVentes = Number(openSessions[0].total_ventes_declarees_ttc) || 0
+      const prevSolde = Number(openSessions[0].solde_restant_a_remettre) || 0
+      await supabase
+        .from('restaurant_sessions_serveurs')
+        .update({
+          total_ventes_declarees_ttc: prevVentes + resolvedTotalTTC,
+          solde_restant_a_remettre: prevSolde + resolvedTotalTTC,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', session_id)
+    } else {
+      // Créer automatiquement une session de service individuelle pour cette serveuse
+      const { data: newSess } = await supabase
+        .from('restaurant_sessions_serveurs')
+        .insert({
+          company_id,
+          sector_slug: 'restaurant',
+          serveur_nom: srvNom,
+          date_session: new Date().toISOString().split('T')[0],
+          heure_ouverture: new Date().toISOString(),
+          fonds_initial: 0,
+          statut: 'OUVERTE',
+          total_boissons_confiees_ttc: 0,
+          total_ventes_declarees_ttc: resolvedTotalTTC,
+          total_versements_recus: 0,
+          solde_restant_a_remettre: resolvedTotalTTC,
+          ecart_financier: 0
+        })
+        .select('id')
+        .maybeSingle()
+      if (newSess) session_id = newSess.id
+    }
+
+    // 5. Créer la créance serveuse
     await supabase.from('restaurant_creances_serveuses').insert({
       company_id,
-      order_id,
+      session_id,
+      order_id: isValidUUID(cmd?.id) ? cmd?.id : null,
       order_number,
-      serveur_nom,
-      circuit,
-      montant_initial: total_ttc,
+      serveur_nom: srvNom,
+      circuit: resolvedCircuit,
+      montant_initial: resolvedTotalTTC,
       montant_paye: 0,
-      solde_restant: total_ttc,
+      solde_restant: resolvedTotalTTC,
       statut: 'NON_PAYE',
       consignes_bouteilles_dues: nbBouteillesConsignees,
       consignes_bouteilles_rendues: 0,
-      details: items,
+      details: parsedItems,
       date_creation: new Date().toISOString()
     })
 
-    // 3. Mettre à jour le statut de la commande en CONFIRME
+    // 6. Transmettre au KDS Cuisine & Bar
+    const kdsRows = parsedItems.map(item => {
+      const itNom = item.designation || item.name || 'Article'
+      const itQty = Number(item.quantite || item.qty || 1)
+      const itPrice = Number(item.prix_unitaire || item.unitPrice || 0)
+      const isDrink = resolvedCircuit === 'BAR' || (!item.is_recipe && (itNom.toLowerCase().includes('biere') || itNom.toLowerCase().includes('coca') || itNom.toLowerCase().includes('eau ')))
+      return {
+        company_id,
+        sector_slug: 'restaurant',
+        commande_id: isValidUUID(cmd?.id) ? cmd?.id : null,
+        commande_numero: order_number,
+        table_numero: numTable,
+        serveur_nom: srvNom,
+        produit_id: item.produit_id || null,
+        designation: itNom,
+        destination: isDrink ? 'BAR' : 'CUISINE',
+        quantite: itQty,
+        prix_unitaire: itPrice,
+        total_ligne: itQty * itPrice,
+        statut_preparation: 'NOUVEAU',
+        heure_commande: new Date().toISOString()
+      }
+    })
+    await supabase.from('restaurant_commande_lignes').insert(kdsRows)
+
+    // 7. Enregistrer dans sales_orders pour cohérence globale
+    const salePayload = {
+      company_id,
+      order_number,
+      order_type: 'pos_direct',
+      order_date: new Date().toISOString().split('T')[0],
+      subtotal_ht: resolvedTotalTTC,
+      tva_amount: 0,
+      aib_amount: 0,
+      total_amount: resolvedTotalTTC,
+      total_cost: coutMatiereTotal,
+      paid_amount: 0,
+      credit_amount: resolvedTotalTTC,
+      payment_status: 'credit',
+      payment_method: 'credit_serveuse',
+      customer_name: `${srvNom} (${numTable})`,
+      status: 'COMPLET',
+      sector_slug: 'restaurant',
+      notes: JSON.stringify({
+        restaurant_circuit: resolvedCircuit,
+        serveur_nom: srvNom,
+        table_numero: numTable,
+        lines: parsedItems
+      })
+    }
+    const { data: dbSale } = await supabase.from('sales_orders').insert(salePayload).select('id').maybeSingle()
+
+    if (dbSale?.id) {
+      const orderLines = parsedItems.map(it => ({
+        order_id: dbSale.id,
+        product_id: it.produit_id || null,
+        product_name: it.designation || it.name || 'Article',
+        quantity: Number(it.quantite || it.qty || 1),
+        unit_price: Number(it.prix_unitaire || it.unitPrice || 0),
+        total_ttc: Number(it.quantite || it.qty || 1) * Number(it.prix_unitaire || it.unitPrice || 0),
+        company_id,
+        sector_slug: 'restaurant'
+      }))
+      await supabase.from('sales_order_items').insert(orderLines)
+    }
+
+    // 8. Mettre à jour le statut de la commande restaurant en CONFIRME
     await supabase
       .from('restaurant_commandes')
       .update({
         validation_status: 'CONFIRME',
-        confirmed_at: new Date().toISOString(),
         statut: 'EN_PREPARATION',
+        confirmed_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       })
+      .eq('company_id', company_id)
       .eq('numero_commande', order_number)
 
+    // 9. Si table de salle, marquer comme OCCUPEE
+    if (numTable && numTable !== 'COMPTOIR') {
+      await supabase.from('restaurant_tables')
+        .update({ statut: 'OCCUPEE', updated_at: new Date().toISOString() })
+        .eq('company_id', company_id)
+        .eq('numero_table', numTable)
+    }
+
     return { success: true }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur finalisation commande:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * 7.e Mécanisme de récupération et traitement automatique des commandes expirées (> 4 min)
+ * Fonctionne côté serveur ou à l'ouverture de l'application sans dépendre d'un minuteur navigateur ouvert.
+ */
+export async function traiterCommandesExpirees(company_id: string): Promise<number> {
+  if (!company_id) return 0
+  const nowIso = new Date().toISOString()
+  try {
+    const { data: expiredList, error } = await supabase
+      .from('restaurant_commandes')
+      .select('numero_commande')
+      .eq('company_id', company_id)
+      .eq('validation_status', 'EN_ATTENTE_CONFIRMATION')
+      .lte('confirmation_expires_at', nowIso)
+
+    if (error || !expiredList || expiredList.length === 0) return 0
+
+    let count = 0
+    for (const cmd of expiredList) {
+      const res = await finaliserCommandeRestaurant({
+        company_id,
+        order_number: cmd.numero_commande
+      })
+      if (res.success) count++
+    }
+    return count
   } catch (err) {
-    console.error('[RestaurantService] Erreur finalisation commande:', err)
-    return { success: false }
+    console.warn('[RestaurantService] Notice traitement commandes expirées:', err)
+    return 0
   }
 }
 
@@ -718,5 +1207,9 @@ export default {
   payerCreanceServeuse,
   enregistrerRetourBouteilles,
   enregistrerRetourEmballageSession,
+  creerCommandeEnAttente,
+  modifierCommandeEnAttente,
+  annulerCommandeEnAttente,
   finaliserCommandeRestaurant,
+  traiterCommandesExpirees
 }

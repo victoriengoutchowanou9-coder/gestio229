@@ -2,7 +2,7 @@
 // GESTIO 229 ERP — Service Worker PWA (Offline Shell & Caching)
 // =============================================================================
 
-const CACHE_NAME = 'gestio229-pwa-v3.0.1';
+const CACHE_NAME = 'gestio229-pwa-v3.0.2';
 const PRECACHE_ASSETS = [
   '/',
   '/index.html',
@@ -73,7 +73,24 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // 3. Fichiers statiques (images, icônes, CSS, JS) : Stale-While-Revalidate
+  // 3. Chunks JS & bundles Vite : Network-First systématique
+  // Évite d'exécuter d'anciens chunks mis en cache pointant vers des hashes inexistants post-déploiement
+  if (url.pathname.endsWith('.js') || url.pathname.includes('/assets/')) {
+    event.respondWith(
+      fetch(request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const clone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          }
+          return networkResponse;
+        })
+        .catch(() => caches.match(request))
+    );
+    return;
+  }
+
+  // 4. Médias & assets statiques (images, polices) : Stale-While-Revalidate
   event.respondWith(
     caches.match(request).then((cachedResponse) => {
       const fetchPromise = fetch(request)

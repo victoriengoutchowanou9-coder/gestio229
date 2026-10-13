@@ -14,7 +14,7 @@
 import { lazy } from 'react'
 
 // Clé sessionStorage pour la garde anti-boucle
-const RELOAD_KEY = 'gestio229_chunk_reload'
+const RELOAD_KEY = 'gestio229_chunk_reload_done'
 
 /**
  * Détecte si une erreur est liée à un import dynamique échoué
@@ -36,8 +36,8 @@ function isChunkError(err: unknown): boolean {
 /**
  * Wrapper autour de React.lazy qui :
  * 1. Catch les erreurs de chunk échoué (après nouveau déploiement)
- * 2. Effectue un hard reload UNE seule fois (anti-boucle via sessionStorage)
- * 3. Si déjà reloadé et toujours en erreur, laisse l'ErrorBoundary prendre la main
+ * 2. Effectue un reload UNE SEULE FOIS avec 3s de délai (garde anti-boucle stricte)
+ * 3. En cas d'échec persistant, laisse l'ErrorBoundary prendre la main sans boucler
  *
  * Usage : remplace React.lazy(() => import('./MonPage')) par
  *         safeLazy(() => import('./MonPage'))
@@ -48,19 +48,34 @@ export function safeLazy<T extends React.ComponentType<any>>(
   return lazy((): Promise<{ default: T }> => {
     return importFn().catch((err: unknown) => {
       if (isChunkError(err)) {
+        // Nettoyage caches & SW
+        if (typeof window !== 'undefined') {
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.getRegistrations().then((regs) => {
+              regs.forEach((r) => r.unregister())
+            }).catch(() => {})
+          }
+          if ('caches' in window) {
+            window.caches.keys().then((names) => {
+              names.forEach((n) => window.caches.delete(n))
+            }).catch(() => {})
+          }
+          try {
+            localStorage.removeItem('gestio229_app_version')
+          } catch (_) {}
+        }
+
         const alreadyReloaded = sessionStorage.getItem(RELOAD_KEY) === '1'
         if (!alreadyReloaded) {
-          console.warn('[safeLazy] Chunk introuvable (nouveau déploiement détecté) — rechargement automatique…', err)
+          console.warn('[safeLazy] Chunk manquant post-déploiement — rechargement unique programmé dans 3 secondes…', err)
           sessionStorage.setItem(RELOAD_KEY, '1')
-          // Hard reload avec cache-bust pour forcer le téléchargement du nouveau bundle
-          window.location.href = window.location.pathname + '?t=' + Date.now()
-          // Retourner une promesse qui ne se résout jamais (le reload va couper l'exécution)
+          setTimeout(() => {
+            window.location.href = window.location.pathname + '?t=' + Date.now()
+          }, 3000)
           return new Promise(() => {}) as Promise<{ default: T }>
         } else {
-          // Déjà reloadé — on nettoie le flag et on laisse l'erreur remonter
-          // vers l'ErrorBoundary pour affichage gracieux
-          sessionStorage.removeItem(RELOAD_KEY)
-          console.error('[safeLazy] Échec persistant après rechargement :', err)
+          // Déjà rechargé une fois : NE PAS RECHARGER EN BOUCLE, laisser l'ErrorBoundary gérer
+          console.error('[safeLazy] Échec persistant après rechargement initial. Pas de boucle :', err)
         }
       }
       throw err
