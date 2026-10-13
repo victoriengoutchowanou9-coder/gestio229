@@ -3,7 +3,7 @@ import {
   Users, Plus, RefreshCw, Award, Percent, DollarSign,
   Phone, UserCheck, Shield, ChevronRight, X, Search,
   Wine, Wallet, ArrowDownRight, CheckCircle2, Clock,
-  AlertTriangle, FileText, Check, ShieldAlert
+  AlertTriangle, FileText, Check, ShieldAlert, RotateCcw, Package
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
@@ -13,6 +13,7 @@ import {
   attribuerBoissonServeuse,
   enregistrerVersementServeur,
   cloturerSessionServeuse,
+  enregistrerRetourEmballageSession,
   ServeurSession,
   BoissonConfiee,
   VersementServeur
@@ -42,12 +43,14 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [paiementMode, setPaiementMode] = useState<string>('ESPECES')
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [filterSessionStatut, setFilterSessionStatut] = useState<'ALL' | 'OUVERTE' | 'CLOTUREE'>('OUVERTE')
 
   // Modales
   const [showMemberModal, setShowMemberModal] = useState(false)
   const [showSessionModal, setShowSessionModal] = useState(false)
   const [showRemiseModal, setShowRemiseModal] = useState(false)
   const [showVersementModal, setShowVersementModal] = useState(false)
+  const [showRetourEmballageModal, setShowRetourEmballageModal] = useState(false)
   const [showClotureModal, setShowClotureModal] = useState(false)
   const [showPresenceModal, setShowPresenceModal] = useState(false)
   const [showPlainteModal, setShowPlainteModal] = useState(false)
@@ -85,6 +88,15 @@ export const ServeursPersonnelPage: React.FC = () => {
     montant: 20000,
     mode_reglement: 'ESPECES' as const,
     commentaire: ''
+  })
+
+  const [retourEmballageForm, setRetourEmballageForm] = useState({
+    boisson_id: '',
+    format_bouteille: '12T' as '12T' | '20T' | '24T' | 'BOUTEILLE_65CL' | 'BOUTEILLE_50CL' | 'EAU_MINERALE' | 'AUTRE',
+    designation: '',
+    qte_rendue: 1,
+    max_rendable: 1,
+    notes: ''
   })
 
   const [clotureForm, setClotureForm] = useState({
@@ -251,6 +263,50 @@ export const ServeursPersonnelPage: React.FC = () => {
     }
   }
 
+  const detectFormatBouteille = (nom: string): '12T' | '20T' | '24T' | 'BOUTEILLE_65CL' | 'BOUTEILLE_50CL' | 'EAU_MINERALE' | 'AUTRE' => {
+    const n = (nom || '').toLowerCase()
+    if (n.includes('eau') || n.includes('posso') || n.includes('fifa')) return 'EAU_MINERALE'
+    if (n.includes('12t') || n.includes('12 t') || n.includes('casier 12')) return '12T'
+    if (n.includes('20t') || n.includes('20 t') || n.includes('casier 20')) return '20T'
+    if (n.includes('24t') || n.includes('24 t') || n.includes('casier 24')) return '24T'
+    if (n.includes('65cl') || n.includes('65 cl') || n.includes('60cl')) return 'BOUTEILLE_65CL'
+    if (n.includes('50cl') || n.includes('33cl') || n.includes('50 cl')) return 'BOUTEILLE_50CL'
+    return 'BOUTEILLE_65CL'
+  }
+
+  const handleRetourEmballage = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedSession || retourEmballageForm.qte_rendue <= 0) return
+
+    if (retourEmballageForm.max_rendable > 0 && retourEmballageForm.qte_rendue > retourEmballageForm.max_rendable) {
+      toast.warning('Quantité excessive', `Le nombre d'emballages à rendre ne peut pas excéder ${retourEmballageForm.max_rendable}.`)
+      return
+    }
+
+    const res = await enregistrerRetourEmballageSession({
+      company_id: companyId,
+      session_id: selectedSession.id,
+      serveur_nom: selectedSession.serveur_nom,
+      boisson_id: retourEmballageForm.boisson_id || undefined,
+      format_bouteille: retourEmballageForm.format_bouteille,
+      designation: retourEmballageForm.designation,
+      qte_rendue: Number(retourEmballageForm.qte_rendue),
+      receptionne_par: user?.user_metadata?.full_name || user?.email || 'Gérant Bar',
+      notes: retourEmballageForm.notes
+    })
+
+    if (res.success) {
+      toast.success(
+        'Retour d’emballages enregistré',
+        `${retourEmballageForm.qte_rendue} emballages enregistrés pour ${selectedSession.serveur_nom}. (Aucune modification du stock de boisson pleine liquide)`
+      )
+      setShowRetourEmballageModal(false)
+      loadAllData()
+    } else {
+      toast.error('Erreur', 'Impossible d’enregistrer le retour d’emballages.')
+    }
+  }
+
   const handleCloture = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedSession) return
@@ -409,60 +465,98 @@ export const ServeursPersonnelPage: React.FC = () => {
       {/* ── ONGLET 1 : SESSIONS SERVEUSES, BOISSONS CONFIÉES & VERSEMENTS ── */}
       {activeTab === 'SESSIONS_BAR' && (
         <div className="space-y-6">
-          {/* Liste des sessions actives */}
+          {/* Filtre sessions : Actives vs Historique clôturé */}
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setFilterSessionStatut('OUVERTE')}
+              className={clsx(
+                'px-3.5 py-1.5 rounded-xl text-xs font-black transition',
+                filterSessionStatut === 'OUVERTE' ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              )}
+            >
+              Sessions Ouvertes ({sessions.filter(s => s.statut === 'OUVERTE').length})
+            </button>
+            <button
+              onClick={() => setFilterSessionStatut('CLOTUREE')}
+              className={clsx(
+                'px-3.5 py-1.5 rounded-xl text-xs font-black transition',
+                filterSessionStatut === 'CLOTUREE' ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              )}
+            >
+              Historique Clôturées ({sessions.filter(s => s.statut === 'CLOTUREE').length})
+            </button>
+            <button
+              onClick={() => setFilterSessionStatut('ALL')}
+              className={clsx(
+                'px-3.5 py-1.5 rounded-xl text-xs font-black transition',
+                filterSessionStatut === 'ALL' ? 'bg-slate-900 text-white shadow-sm' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              )}
+            >
+              Toutes ({sessions.length})
+            </button>
+          </div>
+
+          {/* Liste des sessions */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {sessions.map(s => {
-              const isSelected = selectedSession?.id === s.id
-              const isCloturee = s.statut === 'CLOTUREE'
+            {sessions
+              .filter(s => filterSessionStatut === 'ALL' || s.statut === filterSessionStatut)
+              .map(s => {
+                const isSelected = selectedSession?.id === s.id
+                const isCloturee = s.statut === 'CLOTUREE'
 
-              return (
-                <div
-                  key={s.id}
-                  onClick={() => setSelectedSession(s)}
-                  className={clsx(
-                    'p-5 rounded-3xl border cursor-pointer transition-all flex flex-col justify-between shadow-sm',
-                    isSelected ? 'ring-2 ring-rose-500 bg-rose-50/20 border-rose-300' : 'bg-white border-slate-200 hover:border-slate-300'
-                  )}
-                >
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-black text-slate-900 text-sm flex items-center gap-1.5">
-                        <Wine className="w-4 h-4 text-rose-600" />
-                        {s.serveur_nom}
-                      </span>
-                      <span className={clsx(
-                        'text-[10px] font-black px-2 py-0.5 rounded-full uppercase',
-                        isCloturee ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-800'
-                      )}>
-                        {s.statut}
-                      </span>
+                return (
+                  <div
+                    key={s.id}
+                    onClick={() => setSelectedSession(s)}
+                    className={clsx(
+                      'p-5 rounded-3xl border cursor-pointer transition-all flex flex-col justify-between shadow-sm',
+                      isSelected ? 'ring-2 ring-rose-500 bg-rose-50/20 border-rose-300' : 'bg-white border-slate-200 hover:border-slate-300'
+                    )}
+                  >
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-black text-slate-900 text-sm flex items-center gap-1.5">
+                          <Wine className="w-4 h-4 text-rose-600" />
+                          {s.serveur_nom}
+                        </span>
+                        <span className={clsx(
+                          'text-[10px] font-black px-2 py-0.5 rounded-full uppercase',
+                          isCloturee ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-800'
+                        )}>
+                          {s.statut}
+                        </span>
+                      </div>
+
+                      <div className="space-y-1.5 text-xs">
+                        <div className="flex justify-between text-slate-500">
+                          <span>Boissons Confiées :</span>
+                          <strong className="text-slate-900 font-mono">{fmt(s.total_boissons_confiees_ttc)}</strong>
+                        </div>
+                        <div className="flex justify-between text-slate-500">
+                          <span>Total Versé au Gérant :</span>
+                          <strong className="text-emerald-600 font-mono">{fmt(s.total_versements_recus)}</strong>
+                        </div>
+                        <div className="flex justify-between text-slate-700 font-bold border-t border-slate-100 pt-1.5">
+                          <span>Solde Dû par Serveuse :</span>
+                          <strong className={clsx('font-mono font-black', s.solde_restant_a_remettre > 0 ? 'text-rose-600' : 'text-emerald-600')}>
+                            {fmt(s.solde_restant_a_remettre)}
+                          </strong>
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="space-y-1.5 text-xs">
-                      <div className="flex justify-between text-slate-500">
-                        <span>Boissons Confiées :</span>
-                        <strong className="text-slate-900 font-mono">{fmt(s.total_boissons_confiees_ttc)}</strong>
-                      </div>
-                      <div className="flex justify-between text-slate-500">
-                        <span>Total Versé au Gérant :</span>
-                        <strong className="text-emerald-600 font-mono">{fmt(s.total_versements_recus)}</strong>
-                      </div>
-                      <div className="flex justify-between text-slate-700 font-bold border-t border-slate-100 pt-1.5">
-                        <span>Solde Dû par Serveuse :</span>
-                        <strong className={clsx('font-mono font-black', s.solde_restant_a_remettre > 0 ? 'text-rose-600' : 'text-emerald-600')}>
-                          {fmt(s.solde_restant_a_remettre)}
-                        </strong>
-                      </div>
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">Date : {s.date_session}</span>
+                      <span className="text-rose-600 font-bold">Sélectionner →</span>
                     </div>
                   </div>
-
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                    <span className="text-slate-400">Date : {s.date_session}</span>
-                    <span className="text-rose-600 font-bold">Sélectionner →</span>
-                  </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            {sessions.filter(s => filterSessionStatut === 'ALL' || s.statut === filterSessionStatut).length === 0 && (
+              <div className="col-span-3 p-8 text-center bg-white rounded-3xl border border-dashed border-slate-200 text-slate-400 text-xs">
+                Aucune session trouvée pour ce filtre.
+              </div>
+            )}
           </div>
 
           {/* Détail de la session sélectionnée */}
@@ -472,7 +566,7 @@ export const ServeursPersonnelPage: React.FC = () => {
                 <div>
                   <div className="flex items-center gap-2">
                     <h3 className="text-lg font-black text-slate-900">
-                      Compte Bar : {selectedSession.serveur_nom}
+                      Compte Serveuse : {selectedSession.serveur_nom}
                     </h3>
                     <span className={clsx(
                       'text-xs font-bold px-2 py-0.5 rounded-full',
@@ -483,26 +577,47 @@ export const ServeursPersonnelPage: React.FC = () => {
                   </div>
                   <p className="text-xs text-slate-400 mt-0.5">
                     Ouverte le {new Date(selectedSession.heure_ouverture).toLocaleDateString('fr-FR')} • Fonds initial : {fmt(selectedSession.fonds_initial)}
+                    {selectedSession.heure_cloture && ` • Clôturée le ${new Date(selectedSession.heure_cloture).toLocaleDateString('fr-FR')}`}
                   </p>
                 </div>
 
                 {selectedSession.statut === 'OUVERTE' && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center flex-wrap gap-2">
                     <button
                       onClick={() => setShowRemiseModal(true)}
-                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm"
+                      className="px-3.5 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
                     >
                       <Plus className="w-3.5 h-3.5" /> Remettre Boissons
                     </button>
                     <button
+                      onClick={() => {
+                        const items = boissonsConfiees.filter(b => b.session_id === selectedSession.id)
+                        const firstItem = items[0]
+                        const fmtDetected = firstItem ? detectFormatBouteille(firstItem.produit_nom) : '12T'
+                        const maxR = firstItem ? Math.max(0, Number(firstItem.qte_remise || 0) - Number(firstItem.qte_retournee || 0)) : 10
+                        setRetourEmballageForm({
+                          boisson_id: firstItem?.id || '',
+                          format_bouteille: fmtDetected,
+                          designation: firstItem?.produit_nom || 'Bouteilles Bar',
+                          qte_rendue: Math.min(maxR, 1),
+                          max_rendable: maxR,
+                          notes: ''
+                        })
+                        setShowRetourEmballageModal(true)
+                      }}
+                      className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" /> Retour Emballage
+                    </button>
+                    <button
                       onClick={() => setShowVersementModal(true)}
-                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm"
+                      className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
                     >
                       <DollarSign className="w-3.5 h-3.5" /> Encaisser Versement
                     </button>
                     <button
                       onClick={() => setShowClotureModal(true)}
-                      className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm"
+                      className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" /> Clôturer Session
                     </button>
@@ -510,54 +625,116 @@ export const ServeursPersonnelPage: React.FC = () => {
                 )}
               </div>
 
-              {/* 2 Grilles : Boissons confiées & Versements reçus */}
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Boissons confiées */}
-                <div className="space-y-3">
-                  <h4 className="text-xs font-black uppercase text-slate-700 tracking-wider flex items-center gap-2">
-                    <Wine className="w-4 h-4 text-rose-600" />
-                    Articles & Boissons Confiés
+              {/* TABLEAU DE SUIVI DES BOUTEILLES & EMBALLAGES PAR SERVEUSE (EXIGENCE PAGES 5-8) */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-black uppercase text-slate-800 tracking-wider flex items-center gap-2">
+                    <Package className="w-4 h-4 text-amber-600" />
+                    Tableau de Suivi des Bouteilles, Eaux & Emballages
                   </h4>
-
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden">
-                    <table className="w-full text-xs text-left">
-                      <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">
-                        <tr>
-                          <th className="p-3">Boisson</th>
-                          <th className="p-3 text-center">Qté Remise</th>
-                          <th className="p-3 text-right">Prix Unit.</th>
-                          <th className="p-3 text-right">Total Dû</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {boissonsConfiees
-                          .filter(b => b.session_id === selectedSession.id)
-                          .map((b, i) => (
-                            <tr key={i} className="hover:bg-slate-50/60">
-                              <td className="p-3 font-bold text-slate-900">{b.produit_nom}</td>
-                              <td className="p-3 text-center font-mono font-bold text-slate-700">{b.qte_remise}</td>
-                              <td className="p-3 text-right font-mono text-slate-500">{fmt(b.prix_vente_unitaire)}</td>
-                              <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(b.total_valeur_remise)}</td>
-                            </tr>
-                          ))}
-                        {boissonsConfiees.filter(b => b.session_id === selectedSession.id).length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="p-6 text-center text-slate-400">Aucune boisson remise sur cette session.</td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
+                  <span className="text-[11px] text-slate-500 font-bold">
+                    Formats gérés : Casier 12T, 20T, 24T, Bouteilles 65cl, Eaux
+                  </span>
                 </div>
 
-                {/* Versements successifs */}
+                <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-50 text-slate-600 font-black text-[10px] uppercase border-b border-slate-200">
+                      <tr>
+                        <th className="p-3">Bouteille / Eau</th>
+                        <th className="p-3 text-center">Format</th>
+                        <th className="p-3 text-center">Qté Remise</th>
+                        <th className="p-3 text-right">Prix Unit.</th>
+                        <th className="p-3 text-right">Total Dû</th>
+                        <th className="p-3 text-center">Sorties</th>
+                        <th className="p-3 text-center">Rendus</th>
+                        <th className="p-3 text-center text-amber-900 font-black">À Retourner</th>
+                        <th className="p-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {boissonsConfiees
+                        .filter(b => b.session_id === selectedSession.id)
+                        .map((b, i) => {
+                          const formatBtl = detectFormatBouteille(b.produit_nom)
+                          const totalSorties = Number(b.qte_remise || 0)
+                          const rendus = Number(b.qte_retournee || 0)
+                          const aRetourner = Math.max(0, totalSorties - rendus)
+
+                          return (
+                            <tr key={i} className="hover:bg-slate-50/60 transition">
+                              <td className="p-3 font-black text-slate-900">{b.produit_nom}</td>
+                              <td className="p-3 text-center">
+                                <span className={clsx(
+                                  'text-[10px] font-black px-2 py-0.5 rounded-full',
+                                  formatBtl === '12T' ? 'bg-amber-100 text-amber-800' :
+                                  formatBtl === '20T' ? 'bg-blue-100 text-blue-800' :
+                                  formatBtl === '24T' ? 'bg-purple-100 text-purple-800' :
+                                  formatBtl === 'EAU_MINERALE' ? 'bg-cyan-100 text-cyan-800' :
+                                  'bg-slate-100 text-slate-700'
+                                )}>
+                                  {formatBtl}
+                                </span>
+                              </td>
+                              <td className="p-3 text-center font-mono font-bold text-slate-700">{b.qte_remise}</td>
+                              <td className="p-3 text-right font-mono text-slate-600">{fmt(b.prix_vente_unitaire)}</td>
+                              <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(b.total_valeur_remise)}</td>
+                              <td className="p-3 text-center font-mono font-bold text-slate-800">{totalSorties}</td>
+                              <td className="p-3 text-center font-mono font-bold text-emerald-600">{rendus}</td>
+                              <td className="p-3 text-center font-mono font-black text-amber-700">
+                                {aRetourner > 0 ? (
+                                  <span className="bg-amber-100 text-amber-900 px-2 py-0.5 rounded-full font-bold">
+                                    {aRetourner}
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-600 font-bold">Soldé (0)</span>
+                                )}
+                              </td>
+                              <td className="p-3 text-right">
+                                {selectedSession.statut === 'OUVERTE' && aRetourner > 0 && (
+                                  <button
+                                    onClick={() => {
+                                      setRetourEmballageForm({
+                                        boisson_id: b.id || '',
+                                        format_bouteille: formatBtl,
+                                        designation: b.produit_nom,
+                                        qte_rendue: 1,
+                                        max_rendable: aRetourner,
+                                        notes: ''
+                                      })
+                                      setShowRetourEmballageModal(true)
+                                    }}
+                                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-[11px] font-bold shadow-sm transition"
+                                  >
+                                    Retourner
+                                  </button>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      {boissonsConfiees.filter(b => b.session_id === selectedSession.id).length === 0 && (
+                        <tr>
+                          <td colSpan={9} className="p-6 text-center text-slate-400">
+                            Aucune boisson remise sur cette session.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* GRILLES : Versements & Commandes avec séparation Bar / Cuisine */}
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Versements successifs au gérant */}
                 <div className="space-y-3">
                   <h4 className="text-xs font-black uppercase text-slate-700 tracking-wider flex items-center gap-2">
                     <Wallet className="w-4 h-4 text-emerald-600" />
-                    Versements Successifs Effectués au Gérant
+                    Versements Effectués au Gérant
                   </h4>
 
-                  <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
                     <table className="w-full text-xs text-left">
                       <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">
                         <tr>
@@ -589,6 +766,68 @@ export const ServeursPersonnelPage: React.FC = () => {
                     </table>
                   </div>
                 </div>
+
+                {/* Commandes prises ou servies par cette serveuse */}
+                {(() => {
+                  const sessionCreances = creances.filter(c => c.serveur_nom === selectedSession.serveur_nom)
+                  const subtotalBar = sessionCreances.filter(c => c.circuit === 'BAR').reduce((sum, c) => sum + (Number(c.montant_initial) || 0), 0)
+                  const subtotalCuisine = sessionCreances.filter(c => c.circuit === 'CUISINE').reduce((sum, c) => sum + (Number(c.montant_initial) || 0), 0)
+                  const totalOrders = subtotalBar + subtotalCuisine
+
+                  return (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <h4 className="text-xs font-black uppercase text-slate-700 tracking-wider flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-indigo-600" />
+                          Commandes & Additions Servies
+                        </h4>
+                        <div className="flex items-center gap-2 text-[10px] font-bold">
+                          <span className="text-blue-600">Bar : {fmt(subtotalBar)}</span>
+                          <span>•</span>
+                          <span className="text-orange-600">Cuisine : {fmt(subtotalCuisine)}</span>
+                        </div>
+                      </div>
+
+                      <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">
+                            <tr>
+                              <th className="p-3">Commande</th>
+                              <th className="p-3 text-center">Circuit</th>
+                              <th className="p-3 text-right">Total TTC</th>
+                              <th className="p-3 text-right">Reste Dû</th>
+                              <th className="p-3 text-center">Statut</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {sessionCreances.map((c, i) => (
+                              <tr key={i} className="hover:bg-slate-50/60">
+                                <td className="p-3 font-mono font-bold text-slate-900">{c.order_number}</td>
+                                <td className="p-3 text-center">
+                                  <span className={clsx('px-2 py-0.5 rounded text-[10px] font-black', c.circuit === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800')}>
+                                    {c.circuit}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-right font-mono font-bold text-slate-700">{fmt(c.montant_initial)}</td>
+                                <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(c.solde_restant)}</td>
+                                <td className="p-3 text-center">
+                                  <span className={clsx('px-2 py-0.5 rounded-full text-[10px] font-black', c.statut === 'PAYE' ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800')}>
+                                    {c.statut}
+                                  </span>
+                                </td>
+                              </tr>
+                            ))}
+                            {sessionCreances.length === 0 && (
+                              <tr>
+                                <td colSpan={5} className="p-6 text-center text-slate-400">Aucune commande associée à cette serveuse.</td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
             </div>
           )}
@@ -846,6 +1085,90 @@ export const ServeursPersonnelPage: React.FC = () => {
         </div>
       )}
 
+      {/* ── MODALE 2.b : RETOUR D'EMBALLAGES / BOUTEILLES (EXIGENCE PAGES 5-8) ── */}
+      {showRetourEmballageModal && selectedSession && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center">
+                  <RotateCcw className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 text-sm">Retour d'Emballages / Bouteilles Vides</h3>
+                  <p className="text-[10px] text-slate-400">Serveuse : {selectedSession.serveur_nom}</p>
+                </div>
+              </div>
+              <button onClick={() => setShowRetourEmballageModal(false)}><X className="w-5 h-5 text-slate-400" /></button>
+            </div>
+
+            <form onSubmit={handleRetourEmballage} className="space-y-3.5">
+              <div className="p-3 bg-amber-50/80 rounded-2xl border border-amber-200 text-xs text-amber-900 space-y-1">
+                <div className="flex justify-between font-bold">
+                  <span>Article :</span>
+                  <span>{retourEmballageForm.designation || 'Bouteilles retournées'}</span>
+                </div>
+                {retourEmballageForm.max_rendable > 0 && (
+                  <div className="flex justify-between font-bold text-amber-800">
+                    <span>Emballages en attente de retour :</span>
+                    <span className="font-mono">{retourEmballageForm.max_rendable}</span>
+                  </div>
+                )}
+                <p className="text-[10px] text-amber-700 pt-1 border-t border-amber-200">
+                  🛡️ <strong>Règle d'or :</strong> L'emballage vide n'est pas une boisson pleine. Ce retour n'augmente jamais le stock de boisson liquide.
+                </p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Format de l'emballage *</label>
+                <select
+                  value={retourEmballageForm.format_bouteille}
+                  onChange={e => setRetourEmballageForm({ ...retourEmballageForm, format_bouteille: e.target.value as any })}
+                  className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none"
+                >
+                  <option value="12T">Casier 12 Trous (12T)</option>
+                  <option value="20T">Casier 20 Trous (20T)</option>
+                  <option value="24T">Casier 24 Trous (24T)</option>
+                  <option value="BOUTEILLE_65CL">Bouteille Verre 65cl (Unité)</option>
+                  <option value="BOUTEILLE_50CL">Bouteille Verre 50cl / 33cl (Unité)</option>
+                  <option value="EAU_MINERALE">Bouteille Eau Minérale</option>
+                  <option value="AUTRE">Autre Format</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Quantité d'emballages retournés *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={retourEmballageForm.max_rendable > 0 ? retourEmballageForm.max_rendable : undefined}
+                  required
+                  value={retourEmballageForm.qte_rendue}
+                  onChange={e => setRetourEmballageForm({ ...retourEmballageForm, qte_rendue: Math.max(1, Number(e.target.value)) })}
+                  className="w-full px-3 py-2 border rounded-xl text-sm font-black font-mono text-amber-900 outline-none focus:ring-2 focus:ring-amber-500"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Notes / Observations</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Casier complet rendu au comptoir..."
+                  value={retourEmballageForm.notes}
+                  onChange={e => setRetourEmballageForm({ ...retourEmballageForm, notes: e.target.value })}
+                  className="w-full px-3 py-2 border rounded-xl text-xs outline-none"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t">
+                <button type="button" onClick={() => setShowRetourEmballageModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
+                <button type="submit" className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-black shadow-md">Valider Retour Emballage</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {/* ── MODALE 3 : VERSEMENT SUCCESSIF AU GÉRANT ── */}
       {showVersementModal && selectedSession && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
@@ -894,44 +1217,71 @@ export const ServeursPersonnelPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── MODALE 4 : CLÔTURE DE SESSION ── */}
+      {/* ── MODALE 4 : CLÔTURE DE SESSION AVEC BILAN DÉTAILLÉ ── */}
       {showClotureModal && selectedSession && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-black text-slate-900 text-base">Clôturer Définitivement la Session</h3>
+              <div>
+                <h3 className="font-black text-slate-900 text-base">Clôturer Définitivement la Session</h3>
+                <p className="text-[11px] text-slate-400">Serveuse : {selectedSession.serveur_nom}</p>
+              </div>
               <button onClick={() => setShowClotureModal(false)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
             <form onSubmit={handleCloture} className="space-y-3.5">
-              <div className="p-4 bg-rose-50 rounded-2xl border border-rose-200 text-xs space-y-1.5">
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2">
                 <div className="flex justify-between font-bold text-slate-700">
                   <span>Total Boissons Confiées :</span>
                   <span className="font-mono">{fmt(selectedSession.total_boissons_confiees_ttc)}</span>
                 </div>
                 <div className="flex justify-between font-bold text-slate-700">
-                  <span>Total Versé :</span>
-                  <span className="font-mono text-emerald-600">{fmt(selectedSession.total_versements_recus)}</span>
+                  <span>Fonds Initial Remis :</span>
+                  <span className="font-mono">{fmt(selectedSession.fonds_initial)}</span>
                 </div>
-                <div className="flex justify-between font-black text-rose-900 border-t border-rose-200 pt-1.5">
-                  <span>Écart / Solde Non Réglé :</span>
+                <div className="flex justify-between font-bold text-emerald-700">
+                  <span>Total Versements Encaissés :</span>
+                  <span className="font-mono font-black">{fmt(selectedSession.total_versements_recus)}</span>
+                </div>
+                <div className={clsx(
+                  'flex justify-between font-black pt-2 border-t text-sm',
+                  selectedSession.solde_restant_a_remettre > 0 ? 'text-rose-600 border-rose-200' : 'text-emerald-700 border-slate-200'
+                )}>
+                  <span>{selectedSession.solde_restant_a_remettre > 0 ? 'Écart / Reste Dû Non Versé :' : 'Session Équilibrée :'}</span>
                   <span className="font-mono">{fmt(selectedSession.solde_restant_a_remettre)}</span>
                 </div>
               </div>
 
+              {selectedSession.solde_restant_a_remettre > 0 && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-800 space-y-1">
+                  <p className="font-black flex items-center gap-1">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+                    Écart constaté sur la session
+                  </p>
+                  <p>
+                    Le solde de {fmt(selectedSession.solde_restant_a_remettre)} reste dû par {selectedSession.serveur_nom}. La session sera archivée avec cet écart financier et imputée à ses créances.
+                  </p>
+                </div>
+              )}
+
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Justification / Motif de l'écart (le cas échéant)</label>
+                <label className="text-xs font-bold text-slate-700 block mb-1">
+                  Justification / Motif de clôture {selectedSession.solde_restant_a_remettre > 0 && '*'}
+                </label>
                 <textarea
                   rows={2}
-                  placeholder="Ex: Reste 3 bouteilles en caisse frigo, ou dette client..."
+                  required={selectedSession.solde_restant_a_remettre > 0}
+                  placeholder="Ex: Reste 3 boissons en vitrine, fin de service normal..."
                   value={clotureForm.justification_ecart}
                   onChange={e => setClotureForm({ ...clotureForm, justification_ecart: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-xl text-xs outline-none"
+                  className="w-full px-3 py-2 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-500"
                 />
               </div>
 
               <div className="pt-3 flex justify-end gap-2 border-t">
                 <button type="button" onClick={() => setShowClotureModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
-                <button type="submit" className="px-4 py-2 bg-rose-600 text-white rounded-xl text-xs font-black shadow-md">Confirmer Clôture</button>
+                <button type="submit" className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md">
+                  Confirmer Clôture Définitive
+                </button>
               </div>
             </form>
           </div>

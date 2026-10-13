@@ -107,7 +107,7 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
                   circuit === 'CUISINE' ? 'bg-rose-600 text-white shadow-rose-600/30' : 'text-slate-400 hover:text-white'
                 )}
               >
-                <span>🍽️</span> RESTAURANT
+                <span>🍽️</span> RESTAURANT / MAQUIS
               </button>
             </div>
           )}

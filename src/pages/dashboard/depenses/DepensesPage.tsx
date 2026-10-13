@@ -44,6 +44,9 @@ export interface Expense {
   created_by?: string
   created_at?: string
   user_name?: string
+  secteur_imputation?: 'BAR' | 'CUISINE' | 'RESTAURANT' | 'COMMUN'
+  ventilation_bar_pct?: number
+  ventilation_cuisine_pct?: number
 }
 
 export const CATEGORIES = [
@@ -85,14 +88,18 @@ export const DepensesPage: React.FC = () => {
   const [endDate, setEndDate] = useState<string>('')
   const [selectedCategory, setSelectedCategory] = useState<string>('all')
   const [selectedUser, setSelectedUser] = useState<string>('all')
+  const [selectedSectorImputation, setSelectedSectorImputation] = useState<string>('all')
 
-  // Formulaire d'enregistrement
+  // Formulaire d'enregistrement avec ventilation Bar / Cuisine
   const [form, setForm] = useState({
     categorie: CATEGORIES[0],
     description: '',
     montant: 0 as any,
     mode_paiement: 'espece' as 'espece' | 'mtn_momo' | 'moov' | 'banque' | 'orange_money',
     date_depense: new Date().toISOString().split('T')[0],
+    secteur_imputation: 'COMMUN' as 'BAR' | 'CUISINE' | 'RESTAURANT' | 'COMMUN',
+    ventilation_bar_pct: 50,
+    ventilation_cuisine_pct: 50,
     notes: ''
   })
 
@@ -163,10 +170,30 @@ export const DepensesPage: React.FC = () => {
         .eq('company_id', companyId)
         .order('created_at', { ascending: false })
 
+      const parseSectorImputation = (notesStr?: string): {
+        secteur: 'BAR' | 'CUISINE' | 'RESTAURANT' | 'COMMUN'
+        barPct: number
+        cuisinePct: number
+      } => {
+        const str = (notesStr || '').toUpperCase()
+        if (str.includes('[SECTEUR:BAR]')) return { secteur: 'BAR', barPct: 100, cuisinePct: 0 }
+        if (str.includes('[SECTEUR:CUISINE]')) return { secteur: 'CUISINE', barPct: 0, cuisinePct: 100 }
+        if (str.includes('[SECTEUR:RESTAURANT]')) return { secteur: 'RESTAURANT', barPct: 50, cuisinePct: 50 }
+        if (str.includes('[SECTEUR:COMMUN')) {
+          const match = str.match(/\[SECTEUR:COMMUN:(\d+)\/(\d+)\]/)
+          if (match) {
+            return { secteur: 'COMMUN', barPct: Number(match[1]), cuisinePct: Number(match[2]) }
+          }
+          return { secteur: 'COMMUN', barPct: 50, cuisinePct: 50 }
+        }
+        return { secteur: 'COMMUN', barPct: 50, cuisinePct: 50 }
+      }
+
       const combined: Expense[] = []
 
       if (!depErr && depList && depList.length > 0) {
         depList.forEach((d: any) => {
+          const sec = parseSectorImputation(d.description || d.notes)
           combined.push({
             id: d.id,
             expense_number: `DEP-${d.id.slice(0, 6)}`,
@@ -183,7 +210,10 @@ export const DepensesPage: React.FC = () => {
             fond_apres: d.fond_apres,
             created_by: d.created_by,
             created_at: d.created_at,
-            user_name: d.created_by ? userMap.get(d.created_by) || 'Utilisateur' : 'Non précisé'
+            user_name: d.created_by ? userMap.get(d.created_by) || 'Utilisateur' : 'Non précisé',
+            secteur_imputation: sec.secteur,
+            ventilation_bar_pct: sec.barPct,
+            ventilation_cuisine_pct: sec.cuisinePct
           })
         })
       }
@@ -192,6 +222,7 @@ export const DepensesPage: React.FC = () => {
         const sectorExps = filterItemsForSector(expList, sectorSlug || secteurActif?.slug)
         sectorExps.forEach((exp: any) => {
           if (!combined.some((c) => c.id === exp.id)) {
+            const sec = parseSectorImputation(exp.notes || exp.title || exp.beneficiary)
             combined.push({
               id: exp.id,
               expense_number: exp.expense_number || `DEP-${exp.id.slice(0, 6)}`,
@@ -206,7 +237,10 @@ export const DepensesPage: React.FC = () => {
               expense_date: exp.expense_date || (exp.created_at ? exp.created_at.split('T')[0] : ''),
               created_by: exp.created_by,
               created_at: exp.created_at,
-              user_name: exp.created_by ? userMap.get(exp.created_by) || 'Utilisateur' : 'Non précisé'
+              user_name: exp.created_by ? userMap.get(exp.created_by) || 'Utilisateur' : 'Non précisé',
+              secteur_imputation: sec.secteur,
+              ventilation_bar_pct: sec.barPct,
+              ventilation_cuisine_pct: sec.cuisinePct
             })
           }
         })
@@ -237,6 +271,11 @@ export const DepensesPage: React.FC = () => {
     setSaving(true)
     try {
       const desc = form.description.trim() || form.categorie
+      const ventilationTag = form.secteur_imputation === 'COMMUN'
+        ? `[SECTEUR:COMMUN:${form.ventilation_bar_pct}/${form.ventilation_cuisine_pct}]`
+        : `[SECTEUR:${form.secteur_imputation}]`
+
+      const enrichedNotes = `${form.notes.trim() ? form.notes.trim() + ' ' : ''}${ventilationTag} (Date: ${form.date_depense})`
 
       // Appel de la fonction de création de dépense
       const res = await enregistrerDepenseCaisse({
@@ -244,7 +283,7 @@ export const DepensesPage: React.FC = () => {
         secteur_id: secteurActif.id,
         caisse_id: caisseActive?.id || null,
         categorie: form.categorie,
-        description: desc,
+        description: `${desc} ${ventilationTag}`,
         montant: numAmount,
         mode_paiement: form.mode_paiement,
         user_id: user?.id || null,
@@ -267,7 +306,7 @@ export const DepensesPage: React.FC = () => {
           beneficiary: desc,
           amount: numAmount,
           payment_method: form.mode_paiement === 'espece' ? 'especes' : form.mode_paiement,
-          notes: form.notes.trim() ? `${form.notes.trim()} (Date: ${form.date_depense})` : `Date: ${form.date_depense}`,
+          notes: enrichedNotes,
           created_by: user?.id || null
         })
       } catch (_) {}
@@ -322,6 +361,10 @@ export const DepensesPage: React.FC = () => {
   // Filtrage Réactif
   const filteredExpenses = useMemo(() => {
     return expenses.filter((e) => {
+      if (selectedSectorImputation !== 'all' && e.secteur_imputation !== selectedSectorImputation) {
+        return false
+      }
+
       if (search.trim()) {
         const q = search.toLowerCase()
         const matchTitle = (e.title || e.description || '').toLowerCase().includes(q)
@@ -343,7 +386,7 @@ export const DepensesPage: React.FC = () => {
 
       return true
     })
-  }, [expenses, search, selectedCategory, selectedUser, startDate, endDate])
+  }, [expenses, search, selectedCategory, selectedUser, selectedSectorImputation, startDate, endDate])
 
   const totalFilteredExpenses = useMemo(() => {
     return filteredExpenses.reduce((sum, e) => sum + (Number(e.amount || e.montant) || 0), 0)
@@ -354,6 +397,7 @@ export const DepensesPage: React.FC = () => {
     setEndDate('')
     setSelectedCategory('all')
     setSelectedUser('all')
+    setSelectedSectorImputation('all')
     setSearch('')
   }
 
@@ -417,7 +461,7 @@ export const DepensesPage: React.FC = () => {
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-xs">
           <div>
             <label className="block text-slate-500 dark:text-slate-400 font-bold mb-1">Du (Date Début)</label>
             <input
@@ -451,6 +495,21 @@ export const DepensesPage: React.FC = () => {
                   {cat}
                 </option>
               ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-slate-500 dark:text-slate-400 font-bold mb-1">Secteur / Imputation</label>
+            <select
+              value={selectedSectorImputation}
+              onChange={(e) => setSelectedSectorImputation(e.target.value)}
+              className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-xs font-medium text-slate-800 dark:text-slate-100"
+            >
+              <option value="all">Tous les secteurs</option>
+              <option value="BAR">🍾 Bar</option>
+              <option value="CUISINE">🍽️ Cuisine</option>
+              <option value="RESTAURANT">🏠 Salle / Restaurant</option>
+              <option value="COMMUN">⚖️ Dépenses Communes</option>
             </select>
           </div>
 
@@ -512,6 +571,7 @@ export const DepensesPage: React.FC = () => {
                 <th className="py-3 px-4">Date</th>
                 <th className="py-3 px-4">Réf</th>
                 <th className="py-3 px-4">Bénéficiaire / Description</th>
+                <th className="py-3 px-4">Secteur</th>
                 <th className="py-3 px-4">Catégorie</th>
                 <th className="py-3 px-4">Mode</th>
                 <th className="py-3 px-4">Fond Avant → Après</th>
@@ -522,14 +582,14 @@ export const DepensesPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
               {loading ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-500">
+                  <td colSpan={9} className="py-8 text-center text-slate-500">
                     <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-rose-600" />
                     Chargement des dépenses...
                   </td>
                 </tr>
               ) : filteredExpenses.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-500">
+                  <td colSpan={9} className="py-8 text-center text-slate-500">
                     Aucune dépense enregistrée pour les critères sélectionnés.
                   </td>
                 </tr>
@@ -544,6 +604,19 @@ export const DepensesPage: React.FC = () => {
                     </td>
                     <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">
                       {exp.title || exp.description}
+                    </td>
+                    <td className="py-3 px-4">
+                      <span className={clsx(
+                        'px-2 py-0.5 rounded-full text-[10px] font-black',
+                        exp.secteur_imputation === 'BAR' ? 'bg-blue-100 text-blue-800' :
+                        exp.secteur_imputation === 'CUISINE' ? 'bg-orange-100 text-orange-800' :
+                        exp.secteur_imputation === 'RESTAURANT' ? 'bg-rose-100 text-rose-800' :
+                        'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200'
+                      )}>
+                        {exp.secteur_imputation === 'COMMUN'
+                          ? `COMMUN (${exp.ventilation_bar_pct || 50}/${exp.ventilation_cuisine_pct || 50})`
+                          : (exp.secteur_imputation || 'COMMUN')}
+                      </span>
                     </td>
                     <td className="py-3 px-4">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
@@ -609,6 +682,85 @@ export const DepensesPage: React.FC = () => {
             >
               Fond actuel {form.mode_paiement} : {fmt(fondActuel)} → Après : {fmt(fondApres)}{' '}
               {fondApres < 0 && '(NÉGATIF - DÉCOUVERT AUTORISÉ)'}
+            </div>
+
+            {/* SECTEUR D'IMPUTATION & VENTILATION (EXIGENCE PAGES 14-15) */}
+            <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-2xl border border-slate-200 dark:border-slate-600 space-y-2.5">
+              <label className="block font-black text-slate-800 dark:text-slate-200 text-xs uppercase tracking-wider">
+                Secteur d'Imputation de la Dépense *
+              </label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+                {[
+                  { id: 'BAR', label: '🍾 Bar' },
+                  { id: 'CUISINE', label: '🍽️ Cuisine' },
+                  { id: 'RESTAURANT', label: '🏠 Salle' },
+                  { id: 'COMMUN', label: '⚖️ Commun' }
+                ].map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => setForm({ ...form, secteur_imputation: s.id as any })}
+                    className={clsx(
+                      'py-2 px-2 rounded-xl font-bold text-xs transition border flex items-center justify-center gap-1',
+                      form.secteur_imputation === s.id
+                        ? 'bg-rose-600 border-rose-600 text-white shadow-sm'
+                        : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100'
+                    )}
+                  >
+                    {s.label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Si Dépense COMMUNE : Clé de ventilation sans double comptage */}
+              {form.secteur_imputation === 'COMMUN' && (
+                <div className="pt-2 border-t border-slate-200 dark:border-slate-600 space-y-2">
+                  <div className="flex items-center justify-between text-[11px] font-bold">
+                    <span className="text-slate-600 dark:text-slate-300">Répartition Bar / Cuisine :</span>
+                    <span className="text-rose-600 font-mono font-black">{form.ventilation_bar_pct}% Bar / {form.ventilation_cuisine_pct}% Cuisine</span>
+                  </div>
+
+                  <div className="flex gap-1.5">
+                    {[
+                      { b: 50, c: 50, lbl: '50% / 50%' },
+                      { b: 60, c: 40, lbl: '60% Bar / 40% Cuisine' },
+                      { b: 70, c: 30, lbl: '70% Bar / 30% Cuisine' },
+                      { b: 40, c: 60, lbl: '40% Bar / 60% Cuisine' }
+                    ].map((preset) => (
+                      <button
+                        key={preset.lbl}
+                        type="button"
+                        onClick={() => setForm({ ...form, ventilation_bar_pct: preset.b, ventilation_cuisine_pct: preset.c })}
+                        className={clsx(
+                          'py-1 px-2 rounded-lg text-[10px] font-bold transition border flex-1 text-center',
+                          form.ventilation_bar_pct === preset.b
+                            ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 border-slate-900'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200'
+                        )}
+                      >
+                        {preset.lbl}
+                      </button>
+                    ))}
+                  </div>
+
+                  {Number(form.montant) > 0 && (
+                    <div className="flex justify-between items-center text-[11px] bg-white dark:bg-slate-800 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                      <div>
+                        <span className="text-blue-600 font-bold block">Part Bar : {fmt(Number(form.montant) * form.ventilation_bar_pct / 100)}</span>
+                        <span className="text-orange-600 font-bold block">Part Cuisine : {fmt(Number(form.montant) * form.ventilation_cuisine_pct / 100)}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[10px] text-slate-400 block font-normal">Décaissé unique :</span>
+                        <span className="text-slate-900 dark:text-white font-mono font-black">{fmt(Number(form.montant))}</span>
+                      </div>
+                    </div>
+                  )}
+
+                  <p className="text-[10px] text-emerald-700 dark:text-emerald-400 font-medium">
+                    🛡️ <strong>Règle Antigravity :</strong> Aucun double comptage. Le total décaissé en caisse est unique ({fmt(Number(form.montant || 0))}).
+                  </p>
+                </div>
+              )}
             </div>
 
             <div>

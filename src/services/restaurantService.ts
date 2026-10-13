@@ -522,6 +522,91 @@ export async function enregistrerRetourBouteilles(params: {
 }
 
 /**
+ * 6.b Enregistrer un retour d'emballages / bouteilles vides pour une session de serveuse
+ * RÈGLE D'OR : Le retour d'emballages vides NE modifie JAMAIS le stock de boissons pleines.
+ */
+export async function enregistrerRetourEmballageSession(params: {
+  company_id: string
+  session_id: string
+  serveur_nom: string
+  boisson_id?: string
+  format_bouteille: '12T' | '20T' | '24T' | 'BOUTEILLE_65CL' | 'BOUTEILLE_50CL' | 'EAU_MINERALE' | 'AUTRE'
+  designation: string
+  qte_rendue: number
+  receptionne_par: string
+  notes?: string
+}): Promise<{ success: boolean; resteEmballages: number; reference: string }> {
+  const {
+    company_id,
+    session_id,
+    serveur_nom,
+    boisson_id,
+    format_bouteille,
+    designation,
+    qte_rendue,
+    receptionne_par,
+    notes
+  } = params
+
+  if (!company_id || !session_id || qte_rendue <= 0) {
+    return { success: false, resteEmballages: 0, reference: '' }
+  }
+
+  const ref = `RET-EMB-${Date.now().toString().slice(-6)}`
+
+  try {
+    // 1. Mettre à jour restaurant_boissons_confiees si boisson_id spécifié
+    let reste = 0
+    if (boisson_id) {
+      const { data: b } = await supabase
+        .from('restaurant_boissons_confiees')
+        .select('*')
+        .eq('id', boisson_id)
+        .single()
+
+      if (b) {
+        const dejaRendu = Number(b.qte_retournee || 0)
+        const totalRemis = Number(b.qte_remise || 0)
+        const nouveauRendu = Math.min(totalRemis, dejaRendu + qte_rendue)
+        reste = Math.max(0, totalRemis - nouveauRendu)
+
+        await supabase
+          .from('restaurant_boissons_confiees')
+          .update({
+            qte_retournee: nouveauRendu,
+            qte_restante_declaree: reste,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', boisson_id)
+      }
+    }
+
+    // 2. Insérer le log de retour d'emballages
+    try {
+      await supabase.from('restaurant_retours_emballages').insert({
+        company_id,
+        session_id,
+        reference: ref,
+        serveur_nom,
+        format_bouteille,
+        designation,
+        qte_rendue,
+        receptionne_par,
+        notes,
+        created_at: new Date().toISOString()
+      })
+    } catch (_) {
+      // Ignorer si la table spécifique n'existe pas encore
+    }
+
+    return { success: true, resteEmballages: reste, reference: ref }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur retour emballage session:', err.message)
+    return { success: false, resteEmballages: 0, reference: '' }
+  }
+}
+
+/**
  * 7. Finaliser atomiquement une commande restaurant après le délai de 4 minutes
  */
 export async function finaliserCommandeRestaurant(params: {
@@ -632,5 +717,6 @@ export default {
   cloturerSessionServeuse,
   payerCreanceServeuse,
   enregistrerRetourBouteilles,
+  enregistrerRetourEmballageSession,
   finaliserCommandeRestaurant,
 }

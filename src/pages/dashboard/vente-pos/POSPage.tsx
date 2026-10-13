@@ -427,8 +427,13 @@ export const POSPage: React.FC = () => {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false)
   const [showAvoirModal, setShowAvoirModal] = useState(false)
   const [selectedSaleForAvoir, setSelectedSaleForAvoir] = useState<SaleRecord | null>(null)
-  const [printFormat, setPrintFormat] = useState<'ticket80' | 'factureA4' | 'brasserie' | 'bon_cuisine'>('factureA4')
+  const [printFormat, setPrintFormat] = useState<'ticket80' | 'ticket80_double' | 'factureA4' | 'brasserie' | 'bon_cuisine'>('factureA4')
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
+
+  // Minuteur d'inactivité du panier de 3 minutes (Règle Antigravity)
+  const [lastCartActivity, setLastCartActivity] = useState<number>(Date.now())
+  const [inactiveSeconds, setInactiveSeconds] = useState<number>(0)
+  const [showInactivityWarning, setShowInactivityWarning] = useState<boolean>(false)
 
   // Modèle de données pour la facture Brasserie avec situation des emballages
   const factureBrasserieData: FactureBrasserieData | null = useMemo(() => {
@@ -1387,6 +1392,57 @@ export const POSPage: React.FC = () => {
 
   // Total Net TTC à payer : Sous-total TTC - Remises (RÈGLE ABSOLUE GESTIO 229 : L'AIB ne s'ajoute JAMAIS au prix TTC catalogue client)
   const totalNetTTC = Math.max(0, Math.round((subtotalTTC - totalDiscount) * 100) / 100)
+
+  // Ventilation Bar vs Cuisine pour le panier restaurant (Règle Métier 2 Stocks Indépendants)
+  const { subtotalBarTTC, subtotalCuisineTTC } = useMemo(() => {
+    let bar = 0
+    let cuisine = 0
+    cart.forEach(item => {
+      const lineTtc = item.qty * item.unitPrice - item.qty * item.discount
+      const isCuisine = Boolean(
+        item.product.is_recipe ||
+        item.product.recipe_id ||
+        item.product.sector_meta?.restaurant_circuit === 'CUISINE' ||
+        (item.product as any).restaurant_circuit === 'CUISINE'
+      )
+      if (isCuisine) {
+        cuisine += lineTtc
+      } else {
+        bar += lineTtc
+      }
+    })
+    return {
+      subtotalBarTTC: Math.max(0, Math.round(bar)),
+      subtotalCuisineTTC: Math.max(0, Math.round(cuisine))
+    }
+  }, [cart])
+
+  // Gestion du minuteur d'inactivité du panier (3 minutes)
+  useEffect(() => {
+    if (cart.length > 0) {
+      setLastCartActivity(Date.now())
+      setInactiveSeconds(0)
+      setShowInactivityWarning(false)
+    }
+  }, [cart.length])
+
+  useEffect(() => {
+    if (cart.length === 0) {
+      setInactiveSeconds(0)
+      setShowInactivityWarning(false)
+      return
+    }
+
+    const interval = setInterval(() => {
+      const diffSec = Math.floor((Date.now() - lastCartActivity) / 1000)
+      setInactiveSeconds(diffSec)
+      if (diffSec >= 180 && !showInactivityWarning) {
+        setShowInactivityWarning(true)
+      }
+    }, 1000)
+
+    return () => clearInterval(interval)
+  }, [cart.length, lastCartActivity, showInactivityWarning])
 
   // ─── Gestion des Modes de Paiement (Panier & Checkout Intégré) ──────────────
 
@@ -2608,7 +2664,7 @@ export const POSPage: React.FC = () => {
                     title="Vente de plats et boissons enregistrés dans Fiche et Recette"
                   >
                     <span>🍽️</span>
-                    <span>RESTAURANT</span>
+                    <span>RESTAURANT / MAQUIS</span>
                     {recipeProducts.length > 0 && (
                       <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-white/20">
                         {recipeProducts.length}
@@ -2783,9 +2839,19 @@ export const POSPage: React.FC = () => {
                   </div>
                   <div>
                     <h3 className="font-extrabold text-slate-900 text-xs">Panier & Encaissement</h3>
-                    <p className="text-[10px] text-slate-500 font-medium">
-                      {cart.length === 0 ? 'Aucun article' : `${cart.length} article${cart.length > 1 ? 's' : ''} au panier`}
-                    </p>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-[10px] text-slate-500 font-medium">
+                        {cart.length === 0 ? 'Aucun article' : `${cart.length} article${cart.length > 1 ? 's' : ''}`}
+                      </p>
+                      {cart.length > 0 && (
+                        <span className={clsx(
+                          "text-[9px] font-mono px-1.5 py-0.5 rounded-full font-bold",
+                          inactiveSeconds >= 120 ? "bg-amber-100 text-amber-900 animate-pulse" : "bg-slate-200/80 text-slate-700"
+                        )}>
+                          ⏱️ {String(Math.floor(inactiveSeconds / 60)).padStart(2, '0')}:{String(inactiveSeconds % 60).padStart(2, '0')} / 03:00
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
 
@@ -2813,6 +2879,41 @@ export const POSPage: React.FC = () => {
 
               {/* Corps Défilable Interne : Client, Articles, Totaux Fiscaux, Règlements */}
               <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 text-xs">
+                {showInactivityWarning && (
+                  <div className="p-3 bg-amber-500 text-white rounded-2xl shadow-md border border-amber-600 text-xs space-y-2 animate-fadeIn">
+                    <div className="flex items-center gap-1.5 font-black">
+                      <AlertTriangle className="w-4 h-4 text-white shrink-0" />
+                      <span>Panier Inactif (&gt; 3 minutes)</span>
+                    </div>
+                    <p className="text-[11px] text-amber-50">
+                      Ce panier est inactif depuis plus de 3 minutes. Souhaitez-vous continuer cette commande ou libérer les articles réservés ?
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setLastCartActivity(Date.now())
+                          setInactiveSeconds(0)
+                          setShowInactivityWarning(false)
+                        }}
+                        className="flex-1 py-1.5 bg-white text-amber-950 rounded-xl text-xs font-black shadow-sm hover:bg-amber-50 transition"
+                      >
+                        Conserver Commande
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearCart()
+                          setShowInactivityWarning(false)
+                        }}
+                        className="flex-1 py-1.5 bg-amber-950/40 hover:bg-amber-950/60 text-white rounded-xl text-xs font-bold transition"
+                      >
+                        Vider Panier
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* 1. Sélection Client & Attribution Serveuse (Comptoir) */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
                   <div className="flex items-center gap-2">
@@ -3080,6 +3181,19 @@ export const POSPage: React.FC = () => {
                           </button>
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {isRestaurant && (subtotalBarTTC > 0 && subtotalCuisineTTC > 0) && (
+                    <div className="p-2 bg-slate-100/90 rounded-xl border border-slate-200 text-[10px] space-y-1">
+                      <div className="flex justify-between font-bold text-blue-800">
+                        <span>🍾 Sous-total BAR :</span>
+                        <span className="font-mono">{fmt(subtotalBarTTC)}</span>
+                      </div>
+                      <div className="flex justify-between font-bold text-orange-800">
+                        <span>🍽️ Sous-total RESTAURANT / MAQUIS :</span>
+                        <span className="font-mono">{fmt(subtotalCuisineTTC)}</span>
+                      </div>
                     </div>
                   )}
 
@@ -3705,15 +3819,26 @@ export const POSPage: React.FC = () => {
                 Ticket Caisse 80mm
               </button>
               {isRestaurant && (
-                <button
-                  onClick={() => setPrintFormat('bon_cuisine')}
-                  className={clsx(
-                    'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm',
-                    printFormat === 'bon_cuisine' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-900 border border-rose-200 hover:bg-rose-100'
-                  )}
-                >
-                  <span>🍳</span> Bon Cuisine / Bar
-                </button>
+                <>
+                  <button
+                    onClick={() => setPrintFormat('ticket80_double')}
+                    className={clsx(
+                      'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm',
+                      printFormat === 'ticket80_double' ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-900 border border-indigo-200 hover:bg-indigo-100'
+                    )}
+                  >
+                    <span>🧾</span> Ticket Double (Client + Cuisine)
+                  </button>
+                  <button
+                    onClick={() => setPrintFormat('bon_cuisine')}
+                    className={clsx(
+                      'px-3 py-1 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm',
+                      printFormat === 'bon_cuisine' ? 'bg-rose-600 text-white' : 'bg-rose-50 text-rose-900 border border-rose-200 hover:bg-rose-100'
+                    )}
+                  >
+                    <span>🍳</span> Bon Cuisine / Bar
+                  </button>
+                </>
               )}
             </div>
             <div className="flex items-center gap-2">
@@ -3919,7 +4044,7 @@ export const POSPage: React.FC = () => {
                 <p>Pour tout renseignement, veuillez contacter la Direction de {company?.name}.</p>
               </div>
             </div>
-          ) : printFormat === 'ticket80' ? (
+          ) : (printFormat === 'ticket80' || printFormat === 'ticket80_double') ? (
             /* ── TICKET DE CAISSE 80MM STANDARD (SANS FAUX NUMÉROS FISCAUX) ── */
             <div className="mx-auto max-w-[80mm] p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl font-mono text-xs space-y-3">
               <div className="text-center space-y-1">
@@ -4011,6 +4136,54 @@ export const POSPage: React.FC = () => {
               <div className="text-center pt-2 border-t border-slate-200 text-[10px] text-slate-400">
                 <p>Merci pour votre visite !</p>
               </div>
+
+              {/* 2ÈME EXEMPLAIRE : PRODUCTION CUISINE & BAR (SI FORMAT DOUBLE CHOISI) */}
+              {printFormat === 'ticket80_double' && (
+                <div className="pt-6 border-t-2 border-dashed border-slate-800 my-4 space-y-2">
+                  <div className="text-center space-y-1">
+                    <span className="bg-slate-900 text-white text-[9px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider">
+                      ✂️ 2ÈME EXEMPLAIRE : CUISINE & BAR
+                    </span>
+                    <div className="text-base font-black text-slate-900">
+                      {currentSale?.table_numero ? `TABLE : ${currentSale.table_numero}` : 'COMPTOIR / EMPORTER'}
+                    </div>
+                    <div className="flex justify-between text-[10px] text-slate-600">
+                      <span>Serveur : {currentSale?.serveur_nom || 'Salle'}</span>
+                      <span>CMD : {currentSale?.order_number}</span>
+                    </div>
+                  </div>
+                  <table className="w-full text-[10px] border-t border-dashed border-slate-300 pt-1">
+                    <thead>
+                      <tr className="border-b border-slate-200">
+                        <th className="text-left pb-1">Article</th>
+                        <th className="text-center pb-1">Qté</th>
+                        <th className="text-right pb-1">Poste</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {currentSale?.lines.map((l: any, i: number) => {
+                        const cat = ((l.product?.category || l.product?.category_name || '') as string).toLowerCase()
+                        const nom = (l.product?.name || '').toLowerCase()
+                        const isDrink = cat.includes('boisson') || cat.includes('biere') || cat.includes('vin') || nom.includes('biere') || nom.includes('coca') || nom.includes('eau')
+                        return (
+                          <tr key={i}>
+                            <td className="py-1 font-bold">{l.product?.name}</td>
+                            <td className="py-1 text-center font-mono font-black">{l.qty}</td>
+                            <td className="py-1 text-right font-black text-[9px]">
+                              <span className={clsx('px-1.5 py-0.5 rounded', isDrink ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800')}>
+                                {isDrink ? 'BAR' : 'CUISINE'}
+                              </span>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="text-center pt-2 text-[9px] text-slate-400">
+                    <p>Bon de préparation interne</p>
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             /* ── BON DE PRÉPARATION CUISINE & BAR (SANS PRIX) ── */
