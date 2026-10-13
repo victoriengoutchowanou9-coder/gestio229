@@ -16,6 +16,8 @@ interface RestaurantOrderWidgetProps {
   setCouverts: (n: number) => void
   serveur: string
   setServeur: (s: string) => void
+  circuit?: 'BAR' | 'CUISINE'
+  setCircuit?: (c: 'BAR' | 'CUISINE') => void
 }
 
 export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
@@ -24,7 +26,9 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
   couverts,
   setCouverts,
   serveur,
-  setServeur
+  setServeur,
+  circuit = 'BAR',
+  setCircuit
 }) => {
   const { companyId, supabaseTenant } = useTenant()
   const location = useLocation()
@@ -80,8 +84,34 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
           </div>
         </div>
 
-        {/* Sélecteurs Table, Couverts et Serveur */}
+        {/* Sélecteurs Circuit, Table, Couverts et Serveur */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Circuit BAR ou CUISINE */}
+          {setCircuit && (
+            <div className="flex items-center gap-1 bg-slate-800/90 p-1 rounded-xl border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setCircuit('BAR')}
+                className={clsx(
+                  'px-3 py-1 rounded-lg text-xs font-black transition flex items-center gap-1',
+                  circuit === 'BAR' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                )}
+              >
+                <span>🍾</span> BAR
+              </button>
+              <button
+                type="button"
+                onClick={() => setCircuit('CUISINE')}
+                className={clsx(
+                  'px-3 py-1 rounded-lg text-xs font-black transition flex items-center gap-1',
+                  circuit === 'CUISINE' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-400 hover:text-white'
+                )}
+              >
+                <span>🍳</span> CUISINE
+              </button>
+            </div>
+          )}
+
           {/* Choix Table */}
           <div className="flex items-center gap-1.5 bg-slate-800/80 px-2.5 py-1.5 rounded-xl border border-slate-700">
             <span className="text-[10px] text-slate-400 font-bold uppercase">Table :</span>

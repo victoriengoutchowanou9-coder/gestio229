@@ -36,6 +36,10 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [versements, setVersements] = useState<VersementServeur[]>([])
   const [presences, setPresences] = useState<any[]>([])
   const [plaintes, setPlaintes] = useState<any[]>([])
+  const [creances, setCreances] = useState<any[]>([])
+  const [selectedCreanceToPay, setSelectedCreanceToPay] = useState<any | null>(null)
+  const [paiementMontant, setPaiementMontant] = useState<number>(0)
+  const [paiementMode, setPaiementMode] = useState<string>('ESPECES')
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
 
@@ -47,8 +51,10 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [showClotureModal, setShowClotureModal] = useState(false)
   const [showPresenceModal, setShowPresenceModal] = useState(false)
   const [showPlainteModal, setShowPlainteModal] = useState(false)
+  const [showPaiementCreanceModal, setShowPaiementCreanceModal] = useState(false)
 
   const [selectedSession, setSelectedSession] = useState<ServeurSession | null>(null)
+  const [selectedStaffDetail, setSelectedStaffDetail] = useState<any | null>(null)
 
   // Formulaires
   const [memberForm, setMemberForm] = useState({
@@ -106,13 +112,14 @@ export const ServeursPersonnelPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [srvRes, sessRes, confRes, vmtRes, presRes, pltRes] = await Promise.all([
+      const [srvRes, sessRes, confRes, vmtRes, presRes, pltRes, creanceRes] = await Promise.all([
         supabaseTenant('restaurant_serveurs').select('*').order('nom_complet'),
         supabaseTenant('restaurant_sessions_serveurs').select('*').order('created_at', { ascending: false }).limit(50),
         supabaseTenant('restaurant_boissons_confiees').select('*').order('created_at', { ascending: false }).limit(100),
         supabaseTenant('restaurant_versements_serveurs').select('*').order('date_versement', { ascending: false }).limit(100),
         supabaseTenant('restaurant_presences').select('*').order('date_presence', { ascending: false }).limit(50),
-        supabaseTenant('restaurant_plaintes_incidents').select('*').order('created_at', { ascending: false }).limit(50)
+        supabaseTenant('restaurant_plaintes_incidents').select('*').order('created_at', { ascending: false }).limit(50),
+        supabaseTenant('restaurant_creances_serveuses').select('*').order('date_creation', { ascending: false }).limit(100)
       ])
 
       setPersonnel(srvRes.data || [])
@@ -121,6 +128,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       setVersements(vmtRes.data || [])
       setPresences(presRes.data || [])
       setPlaintes(pltRes.data || [])
+      setCreances(creanceRes.data || [])
 
       if (selectedSession) {
         const updated = (sessRes.data || []).find((s: any) => s.id === selectedSession.id)
@@ -619,8 +627,14 @@ export const ServeursPersonnelPage: React.FC = () => {
                 {personnel
                   .filter(p => !search || p.nom_complet.toLowerCase().includes(search.toLowerCase()))
                   .map(p => (
-                    <tr key={p.id} className="hover:bg-slate-50/60">
-                      <td className="py-3 px-4 font-black text-slate-900">{p.nom_complet} <span className="text-[10px] text-slate-400 font-mono block">{p.matricule}</span></td>
+                    <tr key={p.id} className="hover:bg-slate-50/60 transition cursor-pointer">
+                      <td className="py-3 px-4 font-black text-slate-900" onClick={() => setSelectedStaffDetail(p)}>
+                        <span className="hover:text-rose-600 flex items-center gap-1.5">
+                          {p.nom_complet}
+                          <span className="text-[10px] text-rose-500 font-bold bg-rose-50 px-1.5 py-0.5 rounded border border-rose-200">Voir fiche & créances →</span>
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono block">{p.matricule}</span>
+                      </td>
                       <td className="py-3 px-4"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-50 text-rose-700">{p.role}</span></td>
                       <td className="py-3 px-4 font-mono text-slate-600">{p.telephone || '-'}</td>
                       <td className="py-3 px-4 font-bold text-slate-700">{p.zone_attribuee}</td>
@@ -1133,6 +1147,211 @@ export const ServeursPersonnelPage: React.FC = () => {
                 <button type="submit" className="px-4 py-2 bg-amber-600 text-white rounded-xl text-xs font-black shadow-md">Enregistrer Incident</button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODALE INDIVIDUELLE PAR SERVEUSE (EXIGENCE POINT 9) ── */}
+      {selectedStaffDetail && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[90vh] overflow-y-auto p-6 border border-slate-200 shadow-2xl space-y-6">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-rose-500/10 text-rose-600 border border-rose-500/20 flex items-center justify-center font-black text-lg">
+                  {selectedStaffDetail.nom_complet.slice(0, 2).toUpperCase()}
+                </div>
+                <div>
+                  <h3 className="text-lg font-black text-slate-900">{selectedStaffDetail.nom_complet}</h3>
+                  <p className="text-xs text-slate-500">Matricule : {selectedStaffDetail.matricule} • Rôle : {selectedStaffDetail.role} • Zone : {selectedStaffDetail.zone_attribuee}</p>
+                </div>
+              </div>
+              <button onClick={() => setSelectedStaffDetail(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Récapitulatif financier de la serveuse */}
+            {(() => {
+              const staffCreances = creances.filter(c => c.serveur_nom === selectedStaffDetail.nom_complet)
+              const totalBarDu = staffCreances.filter(c => c.circuit === 'BAR').reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
+              const totalCuisineDu = staffCreances.filter(c => c.circuit === 'CUISINE').reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
+              const totalGeneralDu = staffCreances.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
+              const totalGeneralPaye = staffCreances.reduce((acc, c) => acc + Number(c.montant_paye || 0), 0)
+              const totalBouteillesDues = staffCreances.reduce((acc, c) => acc + Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0)), 0)
+
+              return (
+                <div className="space-y-6">
+                  {/* Cartes financières */}
+                  <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Sous-total BAR</p>
+                      <p className="text-sm font-black text-rose-600 font-mono mt-0.5">{fmt(totalBarDu)}</p>
+                    </div>
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Sous-total CUISINE</p>
+                      <p className="text-sm font-black text-orange-600 font-mono mt-0.5">{fmt(totalCuisineDu)}</p>
+                    </div>
+                    <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase">Total Payé</p>
+                      <p className="text-sm font-black text-emerald-600 font-mono mt-0.5">{fmt(totalGeneralPaye)}</p>
+                    </div>
+                    <div className="bg-rose-50 p-3.5 rounded-2xl border border-rose-200">
+                      <p className="text-[10px] font-black text-rose-700 uppercase">Solde Restant Dû</p>
+                      <p className="text-base font-black text-rose-700 font-mono mt-0.5">{fmt(totalGeneralDu)}</p>
+                    </div>
+                    <div className="bg-amber-50 p-3.5 rounded-2xl border border-amber-200">
+                      <p className="text-[10px] font-black text-amber-800 uppercase">Bouteilles Dues</p>
+                      <p className="text-base font-black text-amber-900 font-mono mt-0.5">{totalBouteillesDues} btls</p>
+                    </div>
+                  </div>
+
+                  {/* Tableau des commandes et créances */}
+                  <div className="space-y-3">
+                    <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider">Commandes & Produits Imputés</h4>
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                          <tr>
+                            <th className="p-3">Date & Commande</th>
+                            <th className="p-3">Circuit</th>
+                            <th className="p-3 text-right">Montant Initial</th>
+                            <th className="p-3 text-right">Payé</th>
+                            <th className="p-3 text-right">Solde Dû</th>
+                            <th className="p-3 text-center">Consignes</th>
+                            <th className="p-3 text-center">Statut</th>
+                            <th className="p-3 text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {staffCreances.map((c: any) => {
+                            const btlsRestantes = Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0))
+                            return (
+                              <tr key={c.id} className="hover:bg-slate-50/50">
+                                <td className="p-3 font-mono font-bold text-slate-900">
+                                  {c.order_number}
+                                  <span className="text-[10px] text-slate-400 block font-normal">{new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}</span>
+                                </td>
+                                <td className="p-3">
+                                  <span className={clsx('px-2 py-0.5 rounded text-[10px] font-black', c.circuit === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800')}>
+                                    {c.circuit}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-right font-mono text-slate-600">{fmt(c.montant_initial)}</td>
+                                <td className="p-3 text-right font-mono font-bold text-emerald-600">{fmt(c.montant_paye)}</td>
+                                <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(c.solde_restant)}</td>
+                                <td className="p-3 text-center font-mono">
+                                  {c.consignes_bouteilles_dues > 0 ? (
+                                    <span className="text-amber-800 font-bold text-[10px] bg-amber-50 px-2 py-0.5 rounded-full border border-amber-200">
+                                      {btlsRestantes} / {c.consignes_bouteilles_dues}
+                                    </span>
+                                  ) : '-'}
+                                </td>
+                                <td className="p-3 text-center">
+                                  <span className={clsx('px-2 py-0.5 rounded-full text-[10px] font-black uppercase', c.statut === 'PAYE' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800')}>
+                                    {c.statut}
+                                  </span>
+                                </td>
+                                <td className="p-3 text-right">
+                                  {c.solde_restant > 0 && (
+                                    <button
+                                      onClick={() => {
+                                        setSelectedCreanceToPay(c)
+                                        setPaiementMontant(Number(c.solde_restant) || 0)
+                                        setShowPaiementCreanceModal(true)
+                                      }}
+                                      className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-black transition shadow-sm"
+                                    >
+                                      Payer
+                                    </button>
+                                  )}
+                                </td>
+                              </tr>
+                            )
+                          })}
+                          {staffCreances.length === 0 && (
+                            <tr>
+                              <td colSpan={8} className="p-8 text-center text-slate-400">Aucune commande ou créance enregistrée pour cette serveuse.</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
+      {/* MODALE PAIEMENT CRÉANCE SERVEUSE */}
+      {showPaiementCreanceModal && selectedCreanceToPay && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 border border-slate-200 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center border-b pb-3">
+              <h3 className="font-black text-sm text-slate-900">Enregistrer un Règlement de Créance</h3>
+              <button onClick={() => setShowPaiementCreanceModal(false)} className="text-slate-400 p-1"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="space-y-3">
+              <div className="p-3 bg-slate-50 rounded-2xl text-xs space-y-1">
+                <p><strong>Serveuse :</strong> {selectedCreanceToPay.serveur_nom}</p>
+                <p><strong>Commande :</strong> {selectedCreanceToPay.order_number}</p>
+                <p><strong>Solde restant dû :</strong> <span className="text-rose-600 font-black">{fmt(selectedCreanceToPay.solde_restant)}</span></p>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Montant à encaisser (FCFA) *</label>
+                <input
+                  type="number"
+                  min="1"
+                  max={selectedCreanceToPay.solde_restant}
+                  value={paiementMontant}
+                  onChange={e => setPaiementMontant(Number(e.target.value))}
+                  className="w-full px-3 py-2 border rounded-xl text-sm font-black font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Mode de règlement *</label>
+                <select
+                  value={paiementMode}
+                  onChange={e => setPaiementMode(e.target.value)}
+                  className="w-full px-3 py-2 border rounded-xl text-xs font-bold"
+                >
+                  <option value="ESPECES">Espèces (Caisse)</option>
+                  <option value="MTN_MOMO">MTN Mobile Money</option>
+                  <option value="MOOV_MONEY">Moov Money</option>
+                  <option value="CARTE">Carte Bancaire</option>
+                </select>
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t">
+                <button onClick={() => setShowPaiementCreanceModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
+                <button
+                  onClick={async () => {
+                    const { payerCreanceServeuse } = await import('../../../services/restaurantService')
+                    const res = await payerCreanceServeuse({
+                      company_id: companyId || '',
+                      creance_id: selectedCreanceToPay.id,
+                      serveur_nom: selectedCreanceToPay.serveur_nom,
+                      montant: paiementMontant,
+                      mode_reglement: paiementMode,
+                      recu_par: user?.full_name || 'Gérant'
+                    })
+                    if (res.success) {
+                      toast.success('Règlement validé', `Encaissé : ${fmt(paiementMontant)}. Nouveau solde : ${fmt(res.soldeRestant)}`)
+                      setShowPaiementCreanceModal(false)
+                      loadAllData()
+                    } else {
+                      toast.error('Erreur', 'Impossible d enregistrer le règlement.')
+                    }
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md"
+                >
+                  Confirmer Encaissement
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

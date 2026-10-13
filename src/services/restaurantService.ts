@@ -352,9 +352,232 @@ export async function cloturerSessionServeuse(params: {
   }
 }
 
+/**
+ * 5. Régler une créance de serveuse (Paiement total ou partiel)
+ */
+export async function payerCreanceServeuse(params: {
+  company_id: string
+  creance_id: string
+  serveur_nom: string
+  montant: number
+  mode_reglement: string
+  recu_par: string
+}): Promise<{ success: boolean; soldeRestant: number; nouveauStatut: string }> {
+  const { company_id, creance_id, serveur_nom, montant, mode_reglement, recu_par } = params
+
+  try {
+    const { data: c, error: cErr } = await supabase
+      .from('restaurant_creances_serveuses')
+      .select('*')
+      .eq('id', creance_id)
+      .single()
+
+    if (cErr || !c) throw new Error('Créance introuvable')
+
+    const soldeActuel = Number(c.solde_restant) || 0
+    const dejaPaye = Number(c.montant_paye) || 0
+    const nouveauPaye = dejaPaye + montant
+    const nouveauSolde = Math.max(0, soldeActuel - montant)
+    const nouveauStatut = nouveauSolde === 0 ? 'PAYE' : 'PARTIEL'
+
+    // 1. Mettre à jour la créance
+    await supabase
+      .from('restaurant_creances_serveuses')
+      .update({
+        montant_paye: nouveauPaye,
+        solde_restant: nouveauSolde,
+        statut: nouveauStatut,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', creance_id)
+
+    // 2. Insérer le règlement
+    const ref = `REG-${Date.now().toString().slice(-6)}`
+    await supabase.from('restaurant_reglements_serveuses').insert({
+      company_id,
+      creance_id,
+      serveur_nom,
+      montant,
+      mode_reglement,
+      reference: ref,
+      recu_par,
+      date_reglement: new Date().toISOString()
+    })
+
+    // 3. Mettre à jour la session serveuse si liée
+    if (c.session_id) {
+      const { data: sess } = await supabase
+        .from('restaurant_sessions_serveurs')
+        .select('total_versements_recus, solde_restant_a_remettre')
+        .eq('id', c.session_id)
+        .single()
+
+      if (sess) {
+        await supabase
+          .from('restaurant_sessions_serveurs')
+          .update({
+            total_versements_recus: (Number(sess.total_versements_recus) || 0) + montant,
+            solde_restant_a_remettre: Math.max(0, (Number(sess.solde_restant_a_remettre) || 0) - montant),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', c.session_id)
+      }
+    }
+
+    return { success: true, soldeRestant: nouveauSolde, nouveauStatut }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur paiement créance serveuse:', err)
+    return { success: false, soldeRestant: 0, nouveauStatut: 'ERREUR' }
+  }
+}
+
+/**
+ * 6. Enregistrer un retour de bouteilles consignées pour une serveuse
+ */
+export async function enregistrerRetourBouteilles(params: {
+  creance_id: string
+  qte_rendue: number
+}): Promise<{ success: boolean; resteDu: number }> {
+  const { creance_id, qte_rendue } = params
+  try {
+    const { data: c, error } = await supabase
+      .from('restaurant_creances_serveuses')
+      .select('consignes_bouteilles_dues, consignes_bouteilles_rendues')
+      .eq('id', creance_id)
+      .single()
+
+    if (error || !c) throw new Error('Créance introuvable')
+
+    const totalDues = Number(c.consignes_bouteilles_dues) || 0
+    const dejaRendues = Number(c.consignes_bouteilles_rendues) || 0
+    const nouveauRendu = Math.min(totalDues, dejaRendues + qte_rendue)
+    const resteDu = Math.max(0, totalDues - nouveauRendu)
+
+    await supabase
+      .from('restaurant_creances_serveuses')
+      .update({
+        consignes_bouteilles_rendues: nouveauRendu,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', creance_id)
+
+    return { success: true, resteDu }
+  } catch (err) {
+    console.error('[RestaurantService] Erreur retour consignes:', err)
+    return { success: false, resteDu: 0 }
+  }
+}
+
+/**
+ * 7. Finaliser atomiquement une commande restaurant après le délai de 4 minutes
+ */
+export async function finaliserCommandeRestaurant(params: {
+  company_id: string
+  order_id: string
+  order_number: string
+  circuit: 'BAR' | 'CUISINE'
+  serveur_nom: string
+  items: Array<{
+    produit_id: string
+    designation: string
+    quantite: number
+    prix_unitaire: number
+    is_consigne?: boolean
+  }>
+  total_ttc: number
+}): Promise<{ success: boolean }> {
+  const { company_id, order_id, order_number, circuit, serveur_nom, items, total_ttc } = params
+
+  try {
+    // 1. Déstockage atomique & fiches techniques
+    if (circuit === 'CUISINE') {
+      for (const item of items) {
+        await destockerMatieresPlat({
+          company_id,
+          order_id,
+          order_number,
+          plat_nom: item.designation,
+          portion_qty: item.quantite,
+          sector_slug: 'restaurant'
+        })
+      }
+    } else {
+      // Pour le BAR : Déstocker les boissons
+      for (const item of items) {
+        if (item.produit_id) {
+          const { data: prod } = await supabase
+            .from('products')
+            .select('stock_vente, sector_meta')
+            .eq('id', item.produit_id)
+            .single()
+
+          if (prod) {
+            const currentStock = Number(prod.stock_vente ?? prod.sector_meta?.stock_vente ?? 0)
+            const newStock = Math.max(0, currentStock - item.quantite)
+            await supabase
+              .from('products')
+              .update({
+                stock_vente: newStock,
+                sector_meta: { ...(prod.sector_meta || {}), stock_vente: newStock }
+              })
+              .eq('id', item.produit_id)
+
+            await supabase.from('stock_movements').insert({
+              company_id,
+              sector_slug: 'restaurant',
+              product_id: item.produit_id,
+              reference_type: 'VENTE_BAR',
+              reference_number: order_number,
+              quantity: -item.quantite,
+              notes: `Vente BAR ${order_number} (${serveur_nom})`
+            })
+          }
+        }
+      }
+    }
+
+    // 2. Créer la créance serveuse
+    const nbBouteillesConsignees = items.reduce((acc, it) => acc + (it.is_consigne ? it.quantite : 0), 0)
+    await supabase.from('restaurant_creances_serveuses').insert({
+      company_id,
+      order_id,
+      order_number,
+      serveur_nom,
+      circuit,
+      montant_initial: total_ttc,
+      montant_paye: 0,
+      solde_restant: total_ttc,
+      statut: 'NON_PAYE',
+      consignes_bouteilles_dues: nbBouteillesConsignees,
+      consignes_bouteilles_rendues: 0,
+      details: items,
+      date_creation: new Date().toISOString()
+    })
+
+    // 3. Mettre à jour le statut de la commande en CONFIRME
+    await supabase
+      .from('restaurant_commandes')
+      .update({
+        validation_status: 'CONFIRME',
+        confirmed_at: new Date().toISOString(),
+        statut: 'EN_PREPARATION',
+        updated_at: new Date().toISOString()
+      })
+      .eq('numero_commande', order_number)
+
+    return { success: true }
+  } catch (err) {
+    console.error('[RestaurantService] Erreur finalisation commande:', err)
+    return { success: false }
+  }
+}
+
 export default {
   destockerMatieresPlat,
   attribuerBoissonServeuse,
   enregistrerVersementServeur,
   cloturerSessionServeuse,
+  payerCreanceServeuse,
+  enregistrerRetourBouteilles,
+  finaliserCommandeRestaurant,
 }

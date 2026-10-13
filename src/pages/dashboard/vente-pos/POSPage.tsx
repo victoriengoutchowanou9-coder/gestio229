@@ -180,9 +180,11 @@ export const POSPage: React.FC = () => {
   const currentSectorSlug = (sectorSlug || secteurActif?.slug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
   const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
+  const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>('BAR')
   const [restaurantTable, setRestaurantTable] = useState('')
   const [restaurantCouverts, setRestaurantCouverts] = useState(1)
   const [restaurantServeur, setRestaurantServeur] = useState('')
+  const [pendingOrders, setPendingOrders] = useState<any[]>([])
   const location = useLocation()
 
   // Navigation interne
@@ -1977,7 +1979,31 @@ export const POSPage: React.FC = () => {
               })
             }
 
-            // 4. Mettre à jour le statut de la table en 'OCCUPEE' si table sélectionnée
+            // 4. Créer la créance serveuse et suivre les contenants consignés
+            const nbConsignes = cartSnapshot.reduce((acc, it) => {
+              const nom = (it.product.name || '').toLowerCase()
+              const isBouteilleConsignee = nom.includes('castel') || nom.includes('beaufort') || nom.includes('guinness') || nom.includes('youki') || nom.includes('biere')
+              return acc + (isBouteilleConsignee ? it.qty : 0)
+            }, 0)
+
+            await supabase.from('restaurant_creances_serveuses').insert({
+              company_id: compId,
+              sector_slug: currentSectorSlug,
+              order_id: savedDbSale.id,
+              order_number: orderNum,
+              serveur_nom: srvNom,
+              circuit: restaurantCircuit,
+              montant_initial: totalNetTTCSnapshot,
+              montant_paye: totalNetTTCSnapshot - creditAmount,
+              solde_restant: creditAmount,
+              statut: creditAmount > 0 ? 'PARTIEL' : 'PAYE',
+              consignes_bouteilles_dues: nbConsignes,
+              consignes_bouteilles_rendues: 0,
+              details: cartSnapshot.map(c => ({ name: c.product.name, qty: c.qty, price: c.unitPrice })),
+              date_creation: new Date().toISOString()
+            })
+
+            // 5. Mettre à jour le statut de la table en 'OCCUPEE' si table sélectionnée
             if (numTable && numTable !== 'COMPTOIR') {
               await supabase.from('restaurant_tables')
                 .update({ statut: 'OCCUPEE', updated_at: new Date().toISOString() })
@@ -2206,13 +2232,24 @@ export const POSPage: React.FC = () => {
     }
   }
 
-  // Filtrages
-  const filteredProducts = products.filter(
-    (p) =>
-      !search ||
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.code.toLowerCase().includes(search.toLowerCase())
-  )
+  // Filtrages (Avec séparation stricte des circuits BAR et CUISINE en mode Restaurant)
+  const filteredProducts = products.filter((p) => {
+    if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
+      return false
+    }
+    if (isRestaurant) {
+      const cat = ((p.category?.name || p.category || (p as any).category_name || '') as string).toLowerCase()
+      const nom = (p.name || '').toLowerCase()
+      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
+      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (
+        (cat.includes('boisson') || cat.includes('biere') || cat.includes('vin') || cat.includes('bar') || nom.includes('biere') || nom.includes('coca') || nom.includes('fanta') || nom.includes('eau ')) ? 'BAR' : 'CUISINE'
+      )
+      // Ne jamais vendre les matières premières brutes directement en plat
+      if (isMatiere) return false
+      return restaurantCircuit === 'CUISINE' ? pCircuit === 'CUISINE' : pCircuit === 'BAR'
+    }
+    return true
+  })
 
   const filteredHistory = salesHistory.filter(
     (s) =>
@@ -2384,6 +2421,8 @@ export const POSPage: React.FC = () => {
               setCouverts={setRestaurantCouverts}
               serveur={restaurantServeur}
               setServeur={setRestaurantServeur}
+              circuit={restaurantCircuit}
+              setCircuit={setRestaurantCircuit}
             />
           )}
 

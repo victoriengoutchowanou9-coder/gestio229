@@ -91,6 +91,8 @@ export const StocksPage: React.FC = () => {
   const currentSectorSlug = sectorSlug
 
   const [activeTab, setActiveTab] = useState<'double_stock' | 'inventaire' | 'fiche_journaliere'>('double_stock')
+  const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
+  const [circuitStock, setCircuitStock] = useState<'BAR' | 'CUISINE'>('BAR')
 
   const [products, setProducts] = useState<ProductStock[]>([])
   const [loading, setLoading] = useState(true)
@@ -819,7 +821,16 @@ export const StocksPage: React.FC = () => {
     totalStockValVente
   } = stockValuation
 
-  const filteredProducts = products.filter(
+  const displayedProducts = useMemo(() => {
+    if (!isRestaurant) return products
+    return products.filter(p => {
+      const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
+      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
+      return circuitStock === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
+    })
+  }, [products, isRestaurant, circuitStock])
+
+  const filteredProducts = displayedProducts.filter(
     (p) =>
       !search ||
       p.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -828,6 +839,53 @@ export const StocksPage: React.FC = () => {
 
   return (
     <div className="space-y-4">
+      {/* ── SÉLECTEUR DE CIRCUIT RESTAURANT OBLIGATOIRE : [ BAR ] et [ CUISINE ] ── */}
+      {isRestaurant && (
+        <div className="bg-gradient-to-r from-slate-900 via-rose-950 to-slate-900 p-4 rounded-3xl shadow-lg border border-rose-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-4 text-white">
+          <div className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-2xl bg-rose-500/20 text-rose-400 border border-rose-500/30 flex items-center justify-center font-bold">
+              📦
+            </span>
+            <div>
+              <h3 className="font-black text-sm text-white flex items-center gap-2">
+                Gestion des Stocks CHR Spécialisée
+                <span className="bg-rose-500 text-white text-[10px] font-black px-2 py-0.5 rounded-full font-mono uppercase">
+                  Circuit {circuitStock}
+                </span>
+              </h3>
+              <p className="text-xs text-slate-300">
+                Séparation stricte entre les boissons du Bar et les matières premières de la Cuisine
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-950/60 p-1.5 rounded-2xl border border-slate-800">
+            <button
+              onClick={() => setCircuitStock('BAR')}
+              className={clsx(
+                'px-5 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 shadow-sm',
+                circuitStock === 'BAR'
+                  ? 'bg-rose-600 text-white shadow-rose-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              )}
+            >
+              <span>🍾</span> Stock Boissons BAR
+            </button>
+            <button
+              onClick={() => setCircuitStock('CUISINE')}
+              className={clsx(
+                'px-5 py-2 rounded-xl text-xs font-black transition flex items-center gap-2 shadow-sm',
+                circuitStock === 'CUISINE'
+                  ? 'bg-rose-600 text-white shadow-rose-600/30'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              )}
+            >
+              <span>🥩</span> Stock Matières CUISINE
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* ── En-tête & Onglets ───────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
         <div>
