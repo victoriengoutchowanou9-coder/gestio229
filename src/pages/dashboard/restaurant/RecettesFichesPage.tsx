@@ -8,6 +8,7 @@ import {
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { formatFCFA } from '../../../utils/tax'
+import { ConfirmModal } from '../../../components/modals'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -114,7 +115,18 @@ export const RecettesFichesPage: React.FC = () => {
   const [editCostU, setEditCostU] = useState<number>(0)
   const [isAddingIngredientToExisting, setIsAddingIngredientToExisting] = useState(false)
   const [editingSellingPrice, setEditingSellingPrice] = useState(false)
-  const [tempDetailSellingPrice, setTempDetailSellingPrice] = useState<string>('')
+  // Modale personnalisée de confirmation de suppression
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean
+    title?: string
+    message: string
+    onConfirm: () => void | Promise<void>
+    isLoading?: boolean
+  }>({
+    isOpen: false,
+    message: '',
+    onConfirm: () => {}
+  })
 
   // 1. Charger les fiches techniques
   const loadFiches = useCallback(async () => {
@@ -454,32 +466,50 @@ export const RecettesFichesPage: React.FC = () => {
     }
   }
 
-  // Supprimer une ligne d'ingrédient spécifique
-  const handleDeleteIngredientRow = async (id: string, ingNom: string) => {
-    if (!window.confirm(`Confirmez-vous la suppression de l'ingrédient "${ingNom}" de cette recette ?`)) return
-    try {
-      const { error } = await supabaseTenant('restaurant_fiches_techniques').delete().eq('id', id)
-      if (error) throw error
-      toast.success('Ingrédient supprimé', `"${ingNom}" a été retiré de la recette.`)
-      await loadFiches()
-    } catch (err: any) {
-      toast.error('Erreur', err.message)
-    }
+  // Supprimer une ligne d'ingrédient spécifique avec modale personnalisée gestio229.com
+  const handleDeleteIngredientRow = (id: string, ingNom: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'gestio229.com indique',
+      message: `Confirmez-vous la suppression de l'ingrédient ${ingNom} de cette recette ?`,
+      onConfirm: async () => {
+        try {
+          setConfirmDialog(prev => ({ ...prev, isLoading: true }))
+          const { error } = await supabaseTenant('restaurant_fiches_techniques').delete().eq('id', id)
+          if (error) throw error
+          toast.success('Ingrédient supprimé', `"${ingNom}" a été retiré de la recette.`)
+          setConfirmDialog({ isOpen: false, message: '', onConfirm: () => {} })
+          await loadFiches()
+        } catch (err: any) {
+          toast.error('Erreur', err.message)
+          setConfirmDialog(prev => ({ ...prev, isLoading: false }))
+        }
+      }
+    })
   }
 
-  // Supprimer la recette entière (toutes les fiches de ce plat)
-  const handleDeleteEntireRecipe = async (platNom: string) => {
-    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer DÉFINITIVEMENT l'intégralité de la recette et des fiches techniques pour "${platNom}" ?`)) return
-    try {
-      const { error } = await supabaseTenant('restaurant_fiches_techniques').delete().eq('plat_nom', platNom)
-      if (error) throw error
-      toast.success('Recette supprimée', `La recette "${platNom}" a été entièrement supprimée.`)
-      setShowDetailModal(false)
-      setActivePlatDetail(null)
-      await loadFiches()
-    } catch (err: any) {
-      toast.error('Erreur', err.message)
-    }
+  // Supprimer la recette entière avec modale personnalisée gestio229.com
+  const handleDeleteEntireRecipe = (platNom: string) => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'gestio229.com indique',
+      message: `Confirmez-vous la suppression définitive de la recette et des fiches techniques pour "${platNom}" ?`,
+      onConfirm: async () => {
+        try {
+          setConfirmDialog(prev => ({ ...prev, isLoading: true }))
+          const { error } = await supabaseTenant('restaurant_fiches_techniques').delete().eq('plat_nom', platNom)
+          if (error) throw error
+          toast.success('Recette supprimée', `La recette "${platNom}" a été entièrement supprimée.`)
+          setShowDetailModal(false)
+          setActivePlatDetail(null)
+          setConfirmDialog({ isOpen: false, message: '', onConfirm: () => {} })
+          await loadFiches()
+        } catch (err: any) {
+          toast.error('Erreur', err.message)
+          setConfirmDialog(prev => ({ ...prev, isLoading: false }))
+        }
+      }
+    })
   }
 
   // Démarrer l'édition en ligne d'une matière première dans la modale Détails
@@ -1528,6 +1558,18 @@ export const RecettesFichesPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modale de Confirmation Personnalisée (Remplacement de window.confirm) */}
+      <ConfirmModal
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        onClose={() => setConfirmDialog({ isOpen: false, message: '', onConfirm: () => {} })}
+        onConfirm={confirmDialog.onConfirm}
+        isLoading={confirmDialog.isLoading}
+        confirmText="OK"
+        cancelText="Annuler"
+      />
     </div>
   )
 }
