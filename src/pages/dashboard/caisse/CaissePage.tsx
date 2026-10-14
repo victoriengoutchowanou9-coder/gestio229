@@ -261,6 +261,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [closingPhysicalCash, setClosingPhysicalCash] = useState<number>(0)
   const [rolloverCash, setRolloverCash] = useState<number>(0)
   const [closingNotes, setClosingNotes] = useState<string>('')
+  const [ecartReason, setEcartReason] = useState<string>('')
 
   // Chargement strict des sessions (détection session antérieure et session du jour)
   const loadSessions = useCallback(async () => {
@@ -640,18 +641,60 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           const jourRes = await getCaisseJournaliereBySector(currentCompanyId, secId, cId, todayDate)
           setCaisseJourData(jourRes)
 
-          // Récupérer DERNIÈRE clôture sans filtre date
-          const { data: lastZ } = await supabase
-            .from('clotures_caisse')
-            .select('fond_reel_especes, fond_reel_momo, fond_reel, fond_especes_apres, fond_momo_apres, especes_cloture, momo_cloture')
-            .eq('company_id', currentCompanyId)
-            .eq('secteur_id', secId)
-            .order('date_cloture', { ascending: false })
-            .limit(1)
-            .maybeSingle()
+          // Récupérer DERNIÈRE clôture sans filtre date (Report veille)
+          let repEsp = 0
+          let repMo = 0
+          try {
+            const { data: lastZ } = await supabase
+              .from('clotures_caisse')
+              .select('*')
+              .eq('company_id', currentCompanyId)
+              .or(`secteur_id.eq.${secId},secteur_id.is.null`)
+              .order('created_at', { ascending: false })
+              .limit(1)
+              .maybeSingle()
 
-          const repEsp = Number(lastZ?.fond_reel_especes ?? lastZ?.fond_reel ?? lastZ?.fond_especes_apres ?? lastZ?.especes_cloture ?? 0)
-          const repMo = Number(lastZ?.fond_reel_momo ?? lastZ?.fond_momo_apres ?? lastZ?.momo_cloture ?? 0)
+            if (lastZ) {
+              repEsp = Number(lastZ.fond_especes_apres ?? lastZ.fond_reel ?? lastZ.fond_reel_especes ?? lastZ.especes_cloture ?? 0)
+              repMo = Number(lastZ.fond_momo_apres ?? lastZ.fond_reel_momo ?? lastZ.momo_cloture ?? 0)
+            }
+          } catch (_) {}
+
+          if (repEsp === 0) {
+            try {
+              const { data: lastCC } = await supabase
+                .from('caisse_clotures')
+                .select('*')
+                .eq('company_id', currentCompanyId)
+                .or(`sector_slug.eq.${cleanSectorSlug(currentSectorSlug)},secteur_slug.eq.${cleanSectorSlug(currentSectorSlug)}`)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+
+              if (lastCC) {
+                repEsp = Number(lastCC.fond_actuel_especes_apres ?? lastCC.total_especes_jour ?? 0)
+                repMo = Number(lastCC.fond_actuel_momo_apres ?? lastCC.total_momo_jour ?? 0)
+              }
+            } catch (_) {}
+          }
+
+          if (repEsp === 0) {
+            try {
+              const { data: caisseData } = await supabase
+                .from('caisses')
+                .select('fond_ouverture_especes, fond_ouverture_momo, solde_especes_final')
+                .eq('company_id', currentCompanyId)
+                .or(`sector_slug.eq.${cleanSectorSlug(currentSectorSlug)},secteur_slug.eq.${cleanSectorSlug(currentSectorSlug)}`)
+                .limit(1)
+                .maybeSingle()
+
+              if (caisseData) {
+                repEsp = Number(caisseData.fond_ouverture_especes ?? caisseData.solde_especes_final ?? 0)
+                repMo = Number(caisseData.fond_ouverture_momo ?? 0)
+              }
+            } catch (_) {}
+          }
+
           setLastClosure({
             fond_reel_especes: repEsp,
             fond_reel_momo: repMo,
@@ -870,62 +913,76 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const totalSortiesDuJour = totalRetraitsEspeces + totalRetraitsMomo + depensesEspeces + depensesMomo
 
   // =============================================================================
-  // RÈGLES MÉTIER OFFICIELLES GESTIO 229 CAISSE : FOND ACTUEL vs DU JOUR (M048)
+  // RÈGLES MÉTIER OFFICIELLES GESTIO 229 CAISSE : FOND ACTUEL vs SOLDE THÉORIQUE
   // 1. Espèces du jour = ventes espèces du jour + remboursements espèces
   //    Momo du jour = ventes Momo du jour + remboursements Momo du jour
-  // 2. Les ventes restent dans "DU JOUR" tant que la caisse n'a pas été clôturée.
-  // 3. À la clôture, DU JOUR est transféré dans FOND ACTUEL et remis à 0.
-  // 4. Les dépenses et retraits de trésorerie sont déduits du FOND ACTUEL (pas du jour).
-  // 5. Négatif autorisé sur les fonds actuels en cas de découvert (affiché en rouge).
+  // 2. Fond Initial Matin = dernier montant laissé lors de la clôture de la veille
+  // 3. Fond Actuel Espèces = Solde Théorique = Fond Initial Matin + Entrées jour (Espèces) - Dépenses - Versements
   // =============================================================================
+
+  // Variables explicites déclarées pour éviter toute ReferenceError
+  const sumVentesEspeces = Number(ventesEspeces) || 0
+  const sumVentesMomo = Number(ventesMomo) || 0
+  const sumDepensesEspeces = Number(depensesEspeces) || 0
+  const sumDepensesMomo = Number(depensesMomo) || 0
+  const sumRemboursements = (Number(remboursementsEspeces) || 0) + (Number(remboursementsMomo) || 0)
 
   // 1. Compteurs Du Jour (Uniquement encaissements : ventes + remboursements)
   const especesDuJour = caisseJourData.especes_du_jour > 0
     ? caisseJourData.especes_du_jour
-    : (ventesEspeces + remboursementsEspeces)
+    : (sumVentesEspeces + (Number(remboursementsEspeces) || 0))
 
   const momoDuJour = caisseJourData.momo_du_jour > 0
     ? caisseJourData.momo_du_jour
-    : (ventesMomo + remboursementsMomo)
+    : (sumVentesMomo + (Number(remboursementsMomo) || 0))
 
   const nbVentesDuJour = caisseJourData.nb_ventes > 0
     ? caisseJourData.nb_ventes
     : salesToday.length
 
-  // 2. Fond Initial / Report de la dernière clôture
-  const reportEspeces = Number(lastClosure.fond_reel_especes) || Number(fondsActuelsData.fond_initial_especes) || initialCash
-  const reportMomo = Number(lastClosure.fond_reel_momo) || Number(fondsActuelsData.fond_initial_momo) || initialMomo
+  const depensesEspecesJour = sumDepensesEspeces
+  const depensesMomoJour = sumDepensesMomo
+  const retraitsEspecesJour = totalRetraitsEspeces
+  const retraitsMomoJour = totalRetraitsMomo
+
+  // 2. Fond Initial / Report réel du matin (RÈGLE MÉTIER OFFICIELLE) :
+  // Le Report doit correspondre au Fond Initial Matin réel laissé lors de la dernière clôture.
+  // Ne jamais afficher 0 si un fond persistant existe en caisse.
+  const reportEspecesRaw = Number(lastClosure.fond_reel_especes) || Number(fondsActuelsData.fond_initial_especes) || initialCash
+  const netMouvementsEspecesJour = especesDuJour - depensesEspecesJour - retraitsEspecesJour
+  const fondSecteurEsp = Number(fondsActuelsData.fond_actuel_especes) || 0
+
+  const reportEspeces = reportEspecesRaw > 0
+    ? reportEspecesRaw
+    : (fondSecteurEsp > netMouvementsEspecesJour && fondSecteurEsp > 0
+        ? Math.max(0, fondSecteurEsp - netMouvementsEspecesJour)
+        : reportEspecesRaw)
+
+  const reportMomoRaw = Number(lastClosure.fond_reel_momo) || Number(fondsActuelsData.fond_initial_momo) || initialMomo
+  const netMouvementsMomoJour = momoDuJour - depensesMomoJour - retraitsMomoJour
+  const fondSecteurMomo = Number(fondsActuelsData.fond_actuel_momo) || 0
+
+  const reportMomo = reportMomoRaw > 0
+    ? reportMomoRaw
+    : (fondSecteurMomo > netMouvementsMomoJour && fondSecteurMomo > 0
+        ? Math.max(0, fondSecteurMomo - netMouvementsMomoJour)
+        : reportMomoRaw)
 
   const fondInitialEspeces = reportEspeces
   const fondInitialMomo = reportMomo
 
-  // 3. Totaux du jour (dépenses et retraits)
-  const depensesEspecesJour = depensesEspeces
-  const depensesMomoJour = depensesMomo
-  const retraitsEspecesJour = totalRetraitsEspeces
-  const retraitsMomoJour = totalRetraitsMomo
+  // 3. FOND ACTUEL & SOLDE THÉORIQUE (RÈGLE MÉTIER OFFICIELLE) :
+  // Fond Actuel Espèces = Fond Initial du Matin (clôture veille) + Somme ventes Espèces du jour + Autres entrées espèces - Dépenses espèces - Versements banque/retraits
+  const fondTheoriqueEsp = fondInitialEspeces + especesDuJour - depensesEspecesJour - retraitsEspecesJour
+  const fondTheoriqueMomo = fondInitialMomo + momoDuJour - depensesMomoJour - retraitsMomoJour
 
-  // 4. FORMULE OBLIGATOIRE DU FOND ACTUEL (RÈGLES 1 & 2) :
-  // Le Fond Actuel est un cumul persistant par secteur qui ne dépend PAS de la date.
-  // FOND ACTUEL ESPÈCES = [Somme de toutes les clôtures validées du secteur] - [Somme des Retraits ESPÈCES Trésorerie] - [Somme des Dépenses ESPÈCES]
-  // FOND ACTUEL MOMO = [Somme de toutes les clôtures validées MOMO] - [Somme des Retraits MOMO Trésorerie]
-  // Si le fond est calculé par getFondsActuelsBySector (calculerFondsActuelsSector), l'utiliser en priorité absolue.
-  const fondActuelEspeces = (fondsActuelsData.fond_actuel_especes !== undefined && fondsActuelsData.fond_actuel_especes !== 0)
-    ? fondsActuelsData.fond_actuel_especes
-    : (reportEspeces - retraitsEspecesJour - depensesEspecesJour)
+  const fondActuelEspeces = fondTheoriqueEsp
+  const fondActuelMomo = fondTheoriqueMomo
 
-  const fondActuelMomo = (fondsActuelsData.fond_actuel_momo !== undefined && fondsActuelsData.fond_actuel_momo !== 0)
-    ? fondsActuelsData.fond_actuel_momo
-    : (reportMomo - retraitsMomoJour)
-
-  // Fond théorique espèces à la clôture (pour vérification écarts physiques si besoin)
-  const fondTheoriqueEsp = fondActuelEspeces + especesDuJour
-  const fondTheoriqueMomo = fondActuelMomo + momoDuJour
-
-  // 5. Fond initial global
+  // 4. Fond initial global
   const fondInitialTotal = fondInitialEspeces + fondInitialMomo
 
-  // 6. Fond théorique actuel global
+  // 5. Fond théorique actuel global
   const fondTheoriqueActuel = fondActuelEspeces + fondActuelMomo
 
   // CA total des ventes du jour (tous modes confondus, hors avoirs)
@@ -989,10 +1046,17 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   // ─── Action : Fermer la Caisse (avec Clôture Rigoureuse et Audit) ─────────────
   const handleConfirmCloseCaisse = async () => {
-    const ecart = Number(closingPhysicalCash) - fondTheoriqueEsp
+    const physicalVal = Number(closingPhysicalCash) || 0
+    const ecart = physicalVal - fondTheoriqueEsp
+    const fullNotes = [ecartReason, closingNotes].filter(Boolean).join(' - ')
 
-    if (ecart !== 0 && !closingNotes.trim()) {
-      toast.error('Justification obligatoire', 'Un écart de caisse est constaté. Veuillez saisir un motif dans les observations.')
+    if (ecart !== 0 && !fullNotes.trim()) {
+      toast.error('Justification obligatoire', 'Un écart de caisse est constaté. Veuillez choisir un motif ou saisir une observation.')
+      return
+    }
+
+    if (Number(rolloverCash) > physicalVal) {
+      toast.error('Montant invalide', 'Le montant laissé pour demain ne peut pas dépasser les espèces réelles comptées.')
       return
     }
 
@@ -1023,9 +1087,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         currentSectorSlug,
         closedBy,
         fondTheoriqueEsp,
-        Number(closingPhysicalCash),
+        physicalVal,
         momoDuJour,
-        closingNotes
+        fullNotes,
+        Number(rolloverCash)
       )
 
       if (!closeRes.success) {
@@ -1040,11 +1105,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         closed_by: closedBy,
         caisse_name: `Caisse ${currentSectorSlug.toUpperCase()}`,
         fond_especes_theorique: fondTheoriqueEsp,
-        fond_especes_physique: Number(closingPhysicalCash),
+        fond_especes_physique: physicalVal,
         ecart_especes: ecart,
         fond_momo: momoDuJour,
-        total_fermeture: Number(closingPhysicalCash) + momoDuJour,
-        notes: closingNotes || 'Clôture de session normale',
+        total_fermeture: physicalVal + momoDuJour,
+        notes: fullNotes || 'Clôture de session normale',
         status: 'CLOTURE_VALIDEE',
         emailed_to: recipientEmails
       }
@@ -1052,17 +1117,24 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       setClosuresHistory([newClosure, ...closuresHistory])
       setActiveReportClosure(newClosure)
 
-      // Transfert officiel M048 : du jour -> fond actuel, remise à 0 du jour
+      // Transfert officiel M048 : du jour -> fond actuel, enregistrement rigoureux du montant laissé
       const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id) ? user.id : null
       try {
         await cloturerCaisseOfficielle(currentCompanyId, secteurActif.id, cashRegisterId || caisseActive.id, validUserId, {
           fond_initial: fondInitialEspeces,
           total_entrees: especesDuJour,
-          total_sorties: sumDepensesEspeces,
+          total_sorties: sumDepensesEspeces + retraitsEspecesJour,
           fond_theorique: fondTheoriqueEsp,
-          fond_reel: Number(closingPhysicalCash),
+          fond_reel: physicalVal,
           ecart: ecart,
-          commentaire: closingNotes || 'Clôture de session validée',
+          fond_initial_matin: fondInitialEspeces,
+          total_entrees_jour: especesDuJour,
+          total_depenses_jour: sumDepensesEspeces,
+          solde_theorique: fondTheoriqueEsp,
+          fond_initial_suivant: Number(rolloverCash),
+          montant_laisse: Number(rolloverCash),
+          versement_coffre: Math.max(0, physicalVal - Number(rolloverCash)),
+          commentaire: fullNotes || 'Clôture de session validée',
         })
       } catch (clotErr) {
         console.warn('Erreur cloturerCaisseOfficielle:', clotErr)
@@ -1103,19 +1175,19 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             depensesEspeces: sumDepensesEspeces,
             fondTheoriqueEspeces: fondTheoriqueEsp,
             fondTheoriqueMomo: momoDuJour,
-            fondReelEspeces: Number(closingPhysicalCash),
+            fondReelEspeces: physicalVal,
             fondReelMomo: momoDuJour,
             ecartEspeces: ecart,
             ecartMomo: 0,
             caDuJour: caDuJour,
             especesDuJour: especesDuJour,
             momoDuJour: momoDuJour,
-            fondActuel: Number(closingPhysicalCash) + momoDuJour,
-            fondActuelEspeces: Number(closingPhysicalCash),
+            fondActuel: physicalVal + momoDuJour,
+            fondActuelEspeces: physicalVal,
             fondActuelMomo: momoDuJour,
             totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
-            totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
-            remboursement: remboursementsEspeces + remboursementsMomo,
+            totalRemboursementsJour: sumRemboursements,
+            remboursement: sumRemboursements,
             margeBruteJour: margeBruteJour,
             totalCreances: totalCreances
           },
@@ -1128,7 +1200,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             motif: m.motif,
             reference: m.reference
           })),
-          notes: closingNotes
+          notes: fullNotes
         }
 
         const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
@@ -1149,10 +1221,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             caDuJour: caDuJour,
             especesDuJour: especesDuJour,
             momoDuJour: momoDuJour,
-            fondActuel: Number(closingPhysicalCash) + momoDuJour,
+            fondActuel: physicalVal + momoDuJour,
             totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
-            totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
-            remboursement: remboursementsEspeces + remboursementsMomo,
+            totalRemboursementsJour: sumRemboursements,
+            remboursement: sumRemboursements,
             margeBruteJour: margeBruteJour,
             totalCreances: totalCreances,
             top5Produits: top5ProduitsJour
@@ -1165,8 +1237,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           `Rapport de clôture transmis à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}).`
         )
       } catch (mailErr: any) {
-        console.error('[sendRapportCaisse] Échec envoi direct :', mailErr)
-        toast.error('Erreur SMTP', mailErr?.message || 'Échec de l\'envoi automatique du rapport de caisse par email.')
+        console.warn('[sendRapportCaisse] Échec envoi direct :', mailErr)
+        toast.warning(
+          'Rapport généré mais email non envoyé',
+          mailErr?.message || 'Vérifiez la configuration SMTP Vercel.'
+        )
       }
 
       // Fermeture locale de la caisse et fermeture de la modale
@@ -1175,8 +1250,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       setShowCloseModal(false)
       setShowReportModal(false)
       setClosingNotes('')
+      setEcartReason('')
+      setLastClosure({
+        fond_reel_especes: Number(rolloverCash),
+        fond_reel_momo: fondTheoriqueMomo,
+      })
 
-      toast.success('Caisse clôturée avec succès !', `Nouveau fond espèces : ${fmt(Number(closingPhysicalCash))}`)
+      toast.success('Caisse clôturée avec succès !', `Nouveau fond laissé pour demain : ${fmt(Number(rolloverCash))}`)
 
       await loadCaisseData()
       if (refreshFonds) await refreshFonds()
@@ -1200,11 +1280,18 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       const res = await cloturerCaisseOfficielle(currentCompanyId, secId, cId, validUserId, {
         fond_initial: fondInitialEspeces,
         total_entrees: especesDuJour,
-        total_sorties: sumDepensesEspeces,
-        fond_theorique: fondActuelEspeces,
-        fond_reel: fondActuelEspeces + especesDuJour,
+        total_sorties: sumDepensesEspeces + retraitsEspecesJour,
+        fond_theorique: fondTheoriqueEsp,
+        fond_reel: fondTheoriqueEsp,
         ecart: 0,
         commentaire: 'Clôture de caisse directe validée',
+        fond_initial_matin: fondInitialEspeces,
+        total_entrees_jour: especesDuJour,
+        total_depenses_jour: sumDepensesEspeces,
+        solde_theorique: fondTheoriqueEsp,
+        fond_initial_suivant: fondTheoriqueEsp,
+        montant_laisse: fondTheoriqueEsp,
+        versement_coffre: 0,
       })
       if (res.success) {
         toast.success(
@@ -1213,6 +1300,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         )
         saveCaisseState('FERMEE', null, '', 0, 0)
         setActiveSessionId(null)
+        setLastClosure({
+          fond_reel_especes: fondTheoriqueEsp,
+          fond_reel_momo: fondTheoriqueMomo,
+        })
         await loadCaisseData()
         if (refreshFonds) await refreshFonds()
       } else {
@@ -1819,8 +1910,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           {(especesDuJour + momoDuJour > 0 || caisseStatus === 'OUVERTE') && (
             <button
               onClick={() => {
-                setClosingPhysicalCash(fondActuelEspeces + especesDuJour)
-                setRolloverCash(fondActuelEspeces + especesDuJour)
+                setClosingPhysicalCash(fondTheoriqueEsp)
+                setRolloverCash(fondTheoriqueEsp)
+                setClosingNotes('')
+                setEcartReason('')
                 setShowCloseModal(true)
               }}
               disabled={isOperatingCaisse}
@@ -1934,7 +2027,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             )}
           </div>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5 font-medium">
-            Report {fmt(reportEspeces)} + Jour {fmt(especesDuJour)} - Dépenses {fmt(depensesEspecesJour)}{retraitsEspecesJour > 0 ? ` - Retraits ${fmt(retraitsEspecesJour)}` : ''}
+            Report {fmt(fondInitialEspeces)} + Jour {fmt(especesDuJour)} - Dépenses {fmt(sumDepensesEspeces)}{retraitsEspecesJour > 0 ? ` - Versements ${fmt(retraitsEspecesJour)}` : ''}
           </p>
         </div>
 
@@ -1961,7 +2054,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             )}
           </div>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5 font-medium">
-            Report {fmt(reportMomo)} + Jour {fmt(momoDuJour)} - Dépenses {fmt(depensesMomoJour)}{retraitsMomoJour > 0 ? ` - Retraits ${fmt(retraitsMomoJour)}` : ''}
+            Report {fmt(fondInitialMomo)} + Jour {fmt(momoDuJour)} - Dépenses {fmt(sumDepensesMomo)}{retraitsMomoJour > 0 ? ` - Versements ${fmt(retraitsMomoJour)}` : ''}
           </p>
         </div>
 
@@ -2322,7 +2415,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
       {/* ── MODAL FERMETURE DE CAISSE (Z DE CAISSE) ─────────────────────────── */}
       <ModalPortal isOpen={showCloseModal} onClose={() => setShowCloseModal(false)} id="modal-close-caisse">
-        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-lg w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
           <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
             <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
               <Lock className="w-5 h-5 text-rose-600" />
@@ -2334,68 +2427,167 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           </div>
 
           <div className="space-y-4 text-xs">
-            <div className="bg-slate-50 p-3.5 rounded-2xl space-y-1.5 font-mono">
-              <div className="flex justify-between">
-                <span className="text-slate-600 font-sans">Solde Espèces Théorique :</span>
-                <span className="font-bold text-slate-900">{fmt(fondActuelEspeces)}</span>
+            {/* 4 Lignes claires et non modifiables (Règle Métier Officielle) */}
+            <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-2 font-mono text-xs shadow-inner">
+              <div className="flex justify-between items-center text-slate-700">
+                <span className="font-sans font-medium">Fond Initial ce matin :</span>
+                <span className="font-bold text-slate-900">{fmt(fondInitialEspeces)}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-slate-600 font-sans">Solde MoMo Théorique :</span>
-                <span className="font-bold text-slate-900">{fmt(fondActuelMomo)}</span>
+              <div className="flex justify-between items-center text-emerald-700">
+                <span className="font-sans font-medium">+ Entrées du jour (Espèces) :</span>
+                <span className="font-bold">+{fmt(especesDuJour)}</span>
+              </div>
+              <div className="flex justify-between items-center text-rose-700">
+                <span className="font-sans font-medium">- Dépenses / Versements :</span>
+                <span className="font-bold">-{fmt(sumDepensesEspeces + retraitsEspecesJour)}</span>
+              </div>
+              <div className="flex justify-between items-center pt-2.5 border-t border-slate-200 text-sm">
+                <span className="font-sans font-black text-slate-900">= Solde Théorique :</span>
+                <span className="font-black text-emerald-800">{fmt(fondTheoriqueEsp)}</span>
               </div>
             </div>
 
+            {/* Champ unique : Espèces réellement comptées */}
             <div>
-              <label className="font-bold text-slate-700 block mb-1">
+              <label className="font-bold text-slate-800 block mb-1">
                 Espèces réellement comptées dans le tiroir (FCFA) *
               </label>
               <input
                 type="number"
-                value={closingPhysicalCash}
+                value={closingPhysicalCash === 0 && !closingNotes && !ecartReason ? '' : closingPhysicalCash}
+                placeholder={String(fondTheoriqueEsp)}
                 onChange={(e) => {
-                  const val = Number(e.target.value)
+                  const val = e.target.value === '' ? 0 : Number(e.target.value)
                   setClosingPhysicalCash(val)
-                  setRolloverCash(val)
                 }}
-                className="w-full p-2.5 border border-slate-200 rounded-xl font-mono text-sm font-bold"
+                className="w-full p-3 border-2 border-slate-300 focus:border-emerald-500 rounded-xl font-mono text-base font-black text-slate-900 focus:outline-none transition"
               />
-              {closingPhysicalCash !== fondActuelEspeces && (
-                <div className="mt-1.5 p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 font-mono text-xs flex justify-between items-center">
-                  <span>Écart de caisse :</span>
-                  <span className="font-black font-mono">
-                    {closingPhysicalCash - fondActuelEspeces > 0 ? '+' : ''}{fmt(closingPhysicalCash - fondActuelEspeces)}
+
+              {/* Indicateur Écart en temps réel */}
+              {(() => {
+                const physicalVal = Number(closingPhysicalCash) || 0
+                const ecartVal = physicalVal - fondTheoriqueEsp
+                if (ecartVal === 0) {
+                  return (
+                    <div className="mt-2 p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 font-mono text-xs flex justify-between items-center font-bold">
+                      <span className="flex items-center gap-1.5 font-sans">
+                        <CheckCircle className="w-4 h-4 text-emerald-600" />
+                        Solde Exact (Aucun écart)
+                      </span>
+                      <span>0 FCFA</span>
+                    </div>
+                  )
+                }
+
+                const isDoubleCount = (
+                  (especesDuJour > 0 && Math.abs(ecartVal - especesDuJour) < 1) ||
+                  (momoDuJour > 0 && Math.abs(ecartVal - momoDuJour) < 1)
+                )
+
+                return (
+                  <div className="space-y-2 mt-2">
+                    <div className={`p-2.5 rounded-xl border font-mono text-xs flex justify-between items-center font-bold ${
+                      ecartVal < 0
+                        ? 'bg-rose-50 border-rose-300 text-rose-800'
+                        : 'bg-amber-50 border-amber-300 text-amber-800'
+                    }`}>
+                      <span className="flex items-center gap-1.5 font-sans">
+                        <AlertCircle className="w-4 h-4 text-rose-600" />
+                        {ecartVal < 0 ? 'Manquant constaté :' : 'Surplus constaté :'}
+                      </span>
+                      <span className="font-black">
+                        {ecartVal > 0 ? '+' : ''}{fmt(ecartVal)}
+                      </span>
+                    </div>
+
+                    {isDoubleCount && (
+                      <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-amber-900 text-xs flex items-start gap-2">
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <span className="font-sans leading-relaxed">
+                          <strong>Attention :</strong> vous avez peut-être compté le fond + la journée deux fois. Le Fond Actuel inclut déjà les ventes du jour.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+            </div>
+
+            {/* Montant laissé pour demain (Règle Métier 3) */}
+            <div>
+              <div className="flex justify-between items-center mb-1">
+                <label className="font-bold text-slate-800">
+                  Montant laissé en caisse pour demain (FCFA) *
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setRolloverCash(fondTheoriqueEsp)}
+                  className="text-[10px] text-emerald-700 hover:underline font-bold"
+                >
+                  Mettre Théorique ({fmt(fondTheoriqueEsp)})
+                </button>
+              </div>
+              <input
+                type="number"
+                min="0"
+                value={rolloverCash}
+                onChange={(e) => setRolloverCash(Number(e.target.value))}
+                className={`w-full p-2.5 border rounded-xl font-mono text-sm font-bold text-emerald-800 ${
+                  Number(rolloverCash) > Number(closingPhysicalCash)
+                    ? 'border-rose-400 bg-rose-50/30'
+                    : 'border-slate-300 bg-emerald-50/20'
+                }`}
+              />
+              {Number(rolloverCash) > Number(closingPhysicalCash) ? (
+                <p className="text-[11px] text-rose-600 font-bold mt-1">
+                  Bloqué : Le montant laissé pour demain ({fmt(Number(rolloverCash))}) ne peut pas dépasser les espèces réelles ({fmt(Number(closingPhysicalCash))}).
+                </p>
+              ) : (
+                <div className="mt-1.5 p-2 bg-slate-100 rounded-lg flex justify-between items-center text-[11px]">
+                  <span className="text-slate-600 font-sans">Solde à verser en coffre / Trésorerie :</span>
+                  <span className="font-black font-mono text-slate-900">
+                    {fmt(Math.max(0, Number(closingPhysicalCash) - Number(rolloverCash)))}
                   </span>
                 </div>
               )}
             </div>
 
-            <div>
-              <label className="font-bold text-slate-700 block mb-1">
-                Montant laissé en caisse pour demain (Fond Initial Suivant) *
-              </label>
-              <input
-                type="number"
-                min="0"
-                max={closingPhysicalCash}
-                value={rolloverCash}
-                onChange={(e) => setRolloverCash(Number(e.target.value))}
-                className="w-full p-2.5 border border-slate-200 rounded-xl font-mono text-sm font-bold text-emerald-700 bg-emerald-50/30"
-              />
-              <p className="text-[10px] text-slate-400 mt-1">
-                Le solde restant ({fmt(Math.max(0, closingPhysicalCash - rolloverCash))}) sera versé au coffre-fort / Trésorerie.
-              </p>
-            </div>
+            {/* Aide et Observations en cas d'écart */}
+            {Number(closingPhysicalCash) !== fondTheoriqueEsp && (
+              <div>
+                <label className="font-bold text-rose-700 block mb-1">
+                  Motif de l'écart *
+                </label>
+                <select
+                  value={ecartReason}
+                  onChange={(e) => {
+                    const sel = e.target.value
+                    setEcartReason(sel)
+                    if (sel && sel !== 'Autre' && !closingNotes.includes(sel)) {
+                      setClosingNotes((prev) => prev ? `${sel} - ${prev}` : sel)
+                    }
+                  }}
+                  className="w-full p-2.5 border border-rose-300 rounded-xl text-xs font-semibold bg-rose-50/30 text-rose-900 mb-2"
+                >
+                  <option value="">-- Sélectionnez la cause constatée --</option>
+                  <option value="Oubli rendu monnaie">Oubli rendu monnaie</option>
+                  <option value="Erreur saisie vente">Erreur saisie vente</option>
+                  <option value="Dépense non enregistrée">Dépense non enregistrée</option>
+                  <option value="Autre">Autre justification</option>
+                </select>
+              </div>
+            )}
 
             <div>
               <label className="font-bold text-slate-700 block mb-1">
-                Observations / Remarques {closingPhysicalCash !== fondActuelEspeces && <span className="text-rose-600 font-bold">* (Justification écart obligatoire)</span>}
+                Observations / Remarques {Number(closingPhysicalCash) !== fondTheoriqueEsp && <span className="text-rose-600 font-bold">* (Justification obligatoire)</span>}
               </label>
               <textarea
                 value={closingNotes}
                 onChange={(e) => setClosingNotes(e.target.value)}
-                placeholder={closingPhysicalCash !== fondActuelEspeces ? "Veuillez expliquer impérativement la cause de l'écart..." : "Ex : RAS, solde exact remis au gérant"}
+                placeholder={Number(closingPhysicalCash) !== fondTheoriqueEsp ? "Veuillez expliquer impérativement la cause de l'écart..." : "Ex : RAS, solde exact remis au gérant"}
                 className={`w-full p-2.5 border rounded-xl text-xs ${
-                  closingPhysicalCash !== fondActuelEspeces && !closingNotes.trim()
+                  Number(closingPhysicalCash) !== fondTheoriqueEsp && !closingNotes.trim() && !ecartReason
                     ? 'border-rose-300 ring-2 ring-rose-100 bg-rose-50/20'
                     : 'border-slate-200'
                 }`}
@@ -2413,9 +2605,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </button>
               <button
                 type="button"
-                disabled={isOperatingCaisse}
+                disabled={
+                  isOperatingCaisse ||
+                  Number(rolloverCash) > Number(closingPhysicalCash) ||
+                  (Number(closingPhysicalCash) !== fondTheoriqueEsp && !closingNotes.trim() && !ecartReason)
+                }
                 onClick={handleConfirmCloseCaisse}
-                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
+                className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isOperatingCaisse ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
                 <span>{isOperatingCaisse ? "Clôture & envoi email..." : "Valider la Clôture"}</span>

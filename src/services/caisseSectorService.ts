@@ -475,7 +475,8 @@ export async function cloturerSessionCaisse(
   fondTheoriqueEsp: number,
   especesPhysiquesComptees: number,
   momoPhysiqueCompte: number,
-  notes: string = ''
+  notes: string = '',
+  rolloverCash?: number
 ): Promise<{ success: boolean; ecart: number; error?: string }> {
   const clean = cleanSectorSlug(sectorSlug)
   const nowIso = new Date().toISOString()
@@ -507,8 +508,8 @@ export async function cloturerSessionCaisse(
       } catch (e) {}
     }
 
-    // Le nouveau fond réel après clôture
-    const nouveauFondEspeces = especesPhysiquesComptees
+    // Le nouveau fond réel laissé en caisse pour le lendemain
+    const nouveauFondEspeces = rolloverCash !== undefined ? rolloverCash : especesPhysiquesComptees
     const nouveauFondMomo = momoPhysiqueCompte
     const totalZ = especesPhysiquesComptees + momoPhysiqueCompte
 
@@ -1124,6 +1125,13 @@ export async function cloturerCaisseOfficielle(
     fond_reel?: number
     ecart?: number
     commentaire?: string
+    fond_initial_matin?: number
+    total_entrees_jour?: number
+    total_depenses_jour?: number
+    solde_theorique?: number
+    fond_initial_suivant?: number
+    montant_laisse?: number
+    versement_coffre?: number
   }
 ): Promise<{ success: boolean; especes?: number; momo?: number; error?: string }> {
   if (!companyId) {
@@ -1164,9 +1172,10 @@ export async function cloturerCaisseOfficielle(
     const newEsp = (curFond.fond_actuel_especes || 0) + espTransf
     const newMomo = (curFond.fond_actuel_momo || 0) + momoTransf
 
-    const fondTheorique = details?.fond_theorique ?? curFond.fond_actuel_especes ?? 0
+    const fondTheorique = details?.solde_theorique ?? details?.fond_theorique ?? curFond.fond_actuel_especes ?? 0
     const fondReel = details?.fond_reel ?? newEsp
-    const ecart = details?.ecart ?? (fondReel - (fondTheorique + espTransf))
+    const ecart = details?.ecart ?? (fondReel - fondTheorique)
+    const montantLaisse = details?.fond_initial_suivant ?? details?.montant_laisse ?? fondReel
 
     // Mettre à jour fonds_actuels si secteur valide
     if (validSecteurId) {
@@ -1177,8 +1186,10 @@ export async function cloturerCaisseOfficielle(
             company_id: companyId,
             secteur_id: validSecteurId,
             caisse_id: validCaisseId,
-            fond_actuel_especes: newEsp,
+            fond_actuel_especes: montantLaisse,
             fond_actuel_momo: newMomo,
+            fond_initial_especes: montantLaisse,
+            fond_initial_momo: newMomo,
             updated_at: new Date().toISOString(),
           })
 
@@ -1188,6 +1199,21 @@ export async function cloturerCaisseOfficielle(
       } catch (fErr) {
         console.warn('[CAISSE-SERVICE] Exception upsert fonds_actuels:', fErr)
       }
+    }
+
+    // Mettre à jour caisses
+    if (validCaisseId) {
+      try {
+        await supabase
+          .from('caisses')
+          .update({
+            fond_ouverture_especes: montantLaisse,
+            solde_especes_final: montantLaisse,
+            fond_ouverture_momo: newMomo,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('id', validCaisseId)
+      } catch (_) {}
     }
 
     // Historiser clôture dans clotures_caisse
@@ -1201,11 +1227,11 @@ export async function cloturerCaisseOfficielle(
         momo_cloture: momoTransf,
         fond_especes_avant: curFond.fond_actuel_especes || 0,
         fond_momo_avant: curFond.fond_actuel_momo || 0,
-        fond_especes_apres: newEsp,
+        fond_especes_apres: montantLaisse,
         fond_momo_apres: newMomo,
-        fond_initial: details?.fond_initial ?? curFond.fond_initial_especes ?? 0,
-        total_entrees: details?.total_entrees ?? espTransf,
-        total_sorties: details?.total_sorties ?? 0,
+        fond_initial: details?.fond_initial_matin ?? details?.fond_initial ?? curFond.fond_initial_especes ?? 0,
+        total_entrees: details?.total_entrees_jour ?? details?.total_entrees ?? espTransf,
+        total_sorties: details?.total_depenses_jour ?? details?.total_sorties ?? 0,
         fond_theorique: fondTheorique,
         fond_reel: fondReel,
         fond_reel_especes: fondReel,
