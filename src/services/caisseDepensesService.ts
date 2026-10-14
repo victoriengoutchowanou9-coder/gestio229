@@ -237,14 +237,42 @@ export async function enregistrerDepenseCaisse(params: {
     const soldeAvant = await getSoldeFondActuel(company_id, secteur_id, caisse_id, mode_paiement)
     const soldeApres = soldeAvant - numMontant // NÉGATIF AUTORISÉ STRICTEMENT
 
-    // Dépense
+    // Dépense dans caisse_mouvements (table universelle réactive des flux caisse)
     let depenseId = `dep-${Date.now()}`
+    const cleanSlug = (secteur_id || '').toLowerCase().trim().replace(/^sec-/, '');
     try {
-      const { data: insDep, error: depErr } = await supabase
+      const { data: insMvt } = await supabase
+        .from('caisse_mouvements')
+        .insert({
+          company_id,
+          sector_slug: cleanSlug,
+          secteur_slug: cleanSlug,
+          caisse_id: caisse_id || null,
+          type: 'depense',
+          sens: 'sortie',
+          montant: numMontant,
+          motif: `Dépense: ${categorie}${description ? ` (${description})` : ''}`,
+          montant_especes: mode_paiement === 'espece' ? numMontant : 0,
+          montant_momo: mode_paiement !== 'espece' ? numMontant : 0,
+          source_module: 'caisse',
+          user_id: user_id || null,
+          statut: 'valide',
+        })
+        .select('id')
+        .maybeSingle()
+
+      if (insMvt?.id) {
+        depenseId = insMvt.id
+      }
+    } catch (_) {}
+
+    try {
+      await supabase
         .from('depenses')
         .insert({
           company_id,
           secteur_id,
+          sector_slug: cleanSlug,
           caisse_id: caisse_id || null,
           categorie,
           description: description || '',
@@ -254,12 +282,6 @@ export async function enregistrerDepenseCaisse(params: {
           fond_apres: soldeApres,
           created_by: user_id || null,
         })
-        .select('id')
-        .maybeSingle()
-
-      if (!depErr && insDep) {
-        depenseId = insDep.id
-      }
     } catch (_) {}
 
     // Mise à jour fond_actuel
@@ -298,6 +320,13 @@ export async function enregistrerDepenseCaisse(params: {
     } catch (_) {}
 
     setLocalFond(lKey, soldeApres)
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('gestio:transaction_created'));
+        window.dispatchEvent(new CustomEvent('gestio:depense_created'));
+      }
+    } catch (_) {}
+
     return {
       success: true,
       depense_id: depenseId,

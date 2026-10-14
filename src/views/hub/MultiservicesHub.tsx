@@ -51,17 +51,22 @@ export interface ActivityEntry {
   status: ActivityStatus;      // PARTIE 9 : ACTIVE | SUSPENDUE | ARCHIVEE
   isConfigured: boolean;
   // PARTIE 3 : Métriques du Jour (F CFA)
-  revenue: number;             // CA DU JOUR
+  dayRevenue?: number;         // CA DU JOUR
+  dayRevenueHT?: number;
   dayCogsHT?: number;          // COÛT D'ACHAT DU JOUR
   dayGrossMargin?: number;     // MARGE BRUTE DU JOUR
-  expenses: number;            // DÉPENSES DU JOUR
-  netMargin: number;           // MARGE NETTE DU JOUR (Marge brute - Dépenses)
-  // PARTIE 4 : Métriques du Mois (F CFA)
+  dayExpenses?: number;        // DÉPENSES DU JOUR
+  dayNetMargin?: number;       // MARGE NETTE DU JOUR (Marge brute - Dépenses)
+  // PARTIE 4 : Métriques du Mois (F CFA) - Affichées sur chaque carte du HUB (Cumul Cotonou)
+  revenue: number;             // CA MENSUEL DE LA CARTE
   monthRevenue: number;        // CA DU MOIS
+  monthRevenueHT?: number;
   monthCogsHT?: number;        // COÛT D'ACHAT DU MOIS
   monthGrossMargin?: number;   // MARGE BRUTE DU MOIS
+  expenses: number;            // DÉPENSES DU MOIS
   monthExpenses: number;       // DÉPENSES DU MOIS
-  monthNetMargin: number;      // MARGE NETTE DU MOIS (Marge brute - Dépenses)
+  netMargin: number;           // MARGE NETTE DU MOIS
+  monthNetMargin: number;      // MARGE NETTE DU MOIS
   archivedAt?: string;         // Date d'archivage (si statut = ARCHIVEE)
 }
 
@@ -433,37 +438,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     loadActivitiesFromSupabase();
   }, [companyId, loadActivitiesFromSupabase]);
 
-  // Synchronisation Realtime Supabase multi-appareils (PC / Mobile / Tablette)
-  useEffect(() => {
-    if (!companyId) return;
-
-    const channel = supabase
-      .channel(`company_activities_rt_${companyId}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'company_activities',
-          filter: `company_id=eq.${companyId}`,
-        },
-        () => {
-          loadActivitiesFromSupabase();
-        }
-      )
-      .subscribe();
-
-    const handleFocus = () => {
-      loadActivitiesFromSupabase();
-    };
-    window.addEventListener('focus', handleFocus);
-
-    return () => {
-      supabase.removeChannel(channel);
-      window.removeEventListener('focus', handleFocus);
-    };
-  }, [companyId, loadActivitiesFromSupabase]);
-
   // ── Métriques financières réelles consolidées (Règle d'or Hub : Fuseau Africa/Porto-Novo) ──
   const loadFinancialMetrics = useCallback(async () => {
     if (!companyId) return;
@@ -493,16 +467,22 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           return {
             ...act,
             // Métriques isolées strictement du jour et du mois pour ce secteur
-            revenue: card.dayRevenue,
+            dayRevenue: card.dayRevenue,
+            dayRevenueHT: card.dayRevenueHT,
             dayCogsHT: card.dayCogsHT,
             dayGrossMargin: card.dayGrossMargin,
-            expenses: card.dayExpenses,
-            netMargin: card.dayNetMargin,
+            dayExpenses: card.dayExpenses,
+            dayNetMargin: card.dayNetMargin,
             monthRevenue: card.monthRevenue,
+            monthRevenueHT: card.monthRevenueHT,
             monthCogsHT: card.monthCogsHT,
             monthGrossMargin: card.monthGrossMargin,
             monthExpenses: card.monthExpenses,
             monthNetMargin: card.monthNetMargin,
+            // RÈGLE MÉTIER ATTENDUE : Les cartes affichent le cumul du mois en cours (Cotonou UTC+1)
+            revenue: card.monthRevenue,
+            expenses: card.monthExpenses,
+            netMargin: card.monthNetMargin,
           };
         })
       );
@@ -510,6 +490,94 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       console.warn('[Hub] Erreur métriques financières consolidées:', e);
     }
   }, [companyId]);
+
+  // Synchronisation Realtime Supabase multi-appareils (Ventes, Dépenses, Caisses, Activités)
+  useEffect(() => {
+    if (!companyId) return;
+
+    let debounceTimer: any = null;
+    const debouncedRefresh = () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        loadFinancialMetrics();
+      }, 100);
+    };
+
+    const channel = supabase
+      .channel(`hub_realtime_${companyId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'company_activities',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          loadActivitiesFromSupabase();
+          debouncedRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'sales_orders',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          debouncedRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'caisse_mouvements',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          debouncedRefresh();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'expenses',
+          filter: `company_id=eq.${companyId}`,
+        },
+        () => {
+          debouncedRefresh();
+        }
+      )
+      .subscribe();
+
+    const handleFocus = () => {
+      loadActivitiesFromSupabase();
+      debouncedRefresh();
+    };
+    const handleTransaction = () => {
+      debouncedRefresh();
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('gestio:transaction_created', handleTransaction);
+    window.addEventListener('gestio:sale_created', handleTransaction);
+    window.addEventListener('gestio:depense_created', handleTransaction);
+
+    return () => {
+      clearTimeout(debounceTimer);
+      supabase.removeChannel(channel);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('gestio:transaction_created', handleTransaction);
+      window.removeEventListener('gestio:sale_created', handleTransaction);
+      window.removeEventListener('gestio:depense_created', handleTransaction);
+    };
+  }, [companyId, loadActivitiesFromSupabase, loadFinancialMetrics]);
 
   useEffect(() => {
     // Peinture instantanée du Hub à 0ms puis calcul des métriques en arrière-plan
@@ -554,11 +622,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // ── CALCULS CONSOLIDÉS DU JOUR (PARTIE 3) & DU MOIS (PARTIE 4) ─────────────
   const dayTotals = useMemo(() => {
-    const sumRevenue = activeActivities.reduce((a, s) => a + (s.revenue || 0), 0);
+    const sumRevenue = activeActivities.reduce((a, s) => a + (s.dayRevenue ?? 0), 0);
     const sumGrossMargin = activeActivities.reduce((a, s) => a + (s.dayGrossMargin || 0), 0);
     const sumCogs = activeActivities.reduce((a, s) => a + (s.dayCogsHT || 0), 0);
-    const sumExpenses = activeActivities.reduce((a, s) => a + (s.expenses || 0), 0);
-    const sumNetMargin = activeActivities.reduce((a, s) => a + (s.netMargin || 0), 0);
+    const sumExpenses = activeActivities.reduce((a, s) => a + (s.dayExpenses ?? 0), 0);
+    const sumNetMargin = activeActivities.reduce((a, s) => a + (s.dayNetMargin ?? 0), 0);
 
     const totalRevenue = hubTotals && typeof hubTotals.ca_jour === 'number'
       ? hubTotals.ca_jour
@@ -1282,24 +1350,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     {act.sectorLabel}
                   </div>
 
-                  {/* 5.1 Corps financier obligatoire : CA, Dépenses, Marge Nette */}
+                  {/* 5.1 Corps financier obligatoire : CA, Dépenses, Marge Nette (Cumul mensuel Cotonou UTC+1) */}
                   <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
                     darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
                   }`}>
                     <div className="flex items-center justify-between text-xs">
                       <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
-                      <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(act.revenue)} F CFA</span>
+                      <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(act.monthRevenue ?? act.revenue)} F CFA</span>
                     </div>
                     <div className="flex items-center justify-between text-xs">
                       <span className={darkMode ? "text-slate-400" : "text-slate-500"}>Dépenses :</span>
-                      <span className="font-mono font-bold text-rose-500">{fmt(act.expenses)} F CFA</span>
+                      <span className="font-mono font-bold text-rose-500">{fmt(act.monthExpenses ?? act.expenses)} F CFA</span>
                     </div>
                     <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
                       darkMode ? 'border-slate-800/80' : 'border-slate-200'
                     }`}>
-                      <span className={`font-semibold ${act.netMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
-                      <span className={`font-mono font-black ${act.netMargin >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        {fmt(act.netMargin)} F CFA {act.netMargin < 0 ? '(Déficit)' : ''}
+                      <span className={`font-semibold ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
+                      <span className={`font-mono font-black ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                        {fmt(act.monthNetMargin ?? act.netMargin)} F CFA {(act.monthNetMargin ?? act.netMargin) < 0 ? '(Déficit)' : ''}
                       </span>
                     </div>
                   </div>

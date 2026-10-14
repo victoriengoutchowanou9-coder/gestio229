@@ -2090,6 +2090,12 @@ export const POSPage: React.FC = () => {
         // 2. RETOUR VISUEL IMMÉDIAT DÈS CONFIRMATION DE L'INSERTION (< 2s)
         setPaying(false)
         toast.success('Enregistré', `Vente ${orderNum} validée avec succès.`)
+        try {
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new CustomEvent('gestio:transaction_created'))
+            window.dispatchEvent(new CustomEvent('gestio:sale_created'))
+          }
+        } catch (_) {}
 
         // Mise à jour de l'ID réel dans l'historique local (sans rechargement de page)
         setSalesHistory(prev => prev.map(s => s.id === `optimistic-${orderNum}` ? { ...s, id: savedDbSale.id } : s))

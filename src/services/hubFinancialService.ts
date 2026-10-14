@@ -65,12 +65,16 @@ export function getCotonouDates(baseDate?: Date | string): {
   todayStr: string;
   monthStartStr: string;
   monthEndStr: string;
+  monthStartIso: string;
+  monthEndIso: string;
+  todayStartIso: string;
+  todayEndIso: string;
   todayFormatted: string;
   monthFormatted: string;
 } {
   const d = baseDate ? new Date(baseDate) : new Date();
 
-  // Date du jour en YYYY-MM-DD selon Africa/Porto-Novo
+  // Date du jour en YYYY-MM-DD selon Africa/Porto-Novo (UTC+1 permanent)
   const todayStr = new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Africa/Porto-Novo',
     year: 'numeric',
@@ -78,13 +82,23 @@ export function getCotonouDates(baseDate?: Date | string): {
     day: '2-digit',
   }).format(d);
 
-  const [yearStr, monthStr] = todayStr.split('-');
+  const [yearStr, monthStr, dayStr] = todayStr.split('-');
   const year = parseInt(yearStr, 10);
   const month = parseInt(monthStr, 10);
 
+  // 1er jour du mois à 00:00:00 (Cotonou, UTC+1)
   const monthStartStr = `${yearStr}-${monthStr}-01`;
-  const lastDay = String(new Date(year, month, 0).getDate()).padStart(2, '0');
-  const monthEndStr = `${yearStr}-${monthStr}-${lastDay}`;
+  const monthStartIso = `${yearStr}-${monthStr}-01T00:00:00.000+01:00`;
+
+  // Dernier jour du mois à 23:59:59.999 (Cotonou, UTC+1)
+  const lastDayNum = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const lastDayStr = String(lastDayNum).padStart(2, '0');
+  const monthEndStr = `${yearStr}-${monthStr}-${lastDayStr}`;
+  const monthEndIso = `${yearStr}-${monthStr}-${lastDayStr}T23:59:59.999+01:00`;
+
+  // Bornes du jour en cours (Cotonou, UTC+1)
+  const todayStartIso = `${todayStr}T00:00:00.000+01:00`;
+  const todayEndIso = `${todayStr}T23:59:59.999+01:00`;
 
   const todayFormatted = new Intl.DateTimeFormat('fr-FR', {
     day: '2-digit',
@@ -110,6 +124,10 @@ export function getCotonouDates(baseDate?: Date | string): {
     todayStr,
     monthStartStr,
     monthEndStr,
+    monthStartIso,
+    monthEndIso,
+    todayStartIso,
+    todayEndIso,
     todayFormatted,
     monthFormatted,
   };
@@ -143,7 +161,7 @@ export async function fetchHubFinancialMetrics(
   companyId: string,
   targetDateStr?: string
 ): Promise<HubFinancialResult> {
-  const { todayStr, monthStartStr, monthEndStr } = getCotonouDates(targetDateStr);
+  const { todayStr, monthStartStr, monthEndStr, monthStartIso, monthEndIso } = getCotonouDates(targetDateStr);
 
   const sectorsMap: Record<string, SectorMetrics> = {};
 
@@ -170,34 +188,56 @@ export async function fetchHubFinancialMetrics(
     return sectorsMap[clean];
   };
 
-  // 1. Tenter l'appel RPC et les requêtes Supabase en parallèle strict (< 800ms)
+  // 1. Tenter l'appel RPC et les requêtes Supabase en parallèle strict
   let rpcTotals: HubFinancialTotals | null = null;
   const rpcPromise = Promise.race([
     supabase.rpc('fn_dashboard_hub', { p_company_id: companyId, p_date: todayStr }),
     new Promise<{ data: null; error: any }>((resolve) => setTimeout(() => resolve({ data: null, error: new Error('RPC timeout') }), 1200))
   ]);
 
+  // Ventes : filtrage strict du 1er jour du mois à 00:00:00 au dernier jour à 23:59:59 (heure Cotonou)
   const salesPromise = supabase
     .from('sales_orders')
     .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status, notes')
     .eq('company_id', companyId)
-    .gte('created_at', monthStartStr)
+    .gte('created_at', monthStartIso)
+    .lte('created_at', monthEndIso)
     .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
-    .order('created_at', { ascending: false })
-    .limit(500);
+    .order('created_at', { ascending: false });
 
+  // Dépenses via caisse_mouvements (table centrale du flux caisse de tous les secteurs)
+  const caisseMvtPromise = supabase
+    .from('caisse_mouvements')
+    .select('id, montant, created_at, sector_slug, secteur_slug, sens, type, caisse_id, motif')
+    .eq('company_id', companyId)
+    .gte('created_at', monthStartIso)
+    .lte('created_at', monthEndIso)
+    .order('created_at', { ascending: false });
+
+  // Dépenses via table expenses (si utilisée)
+  const expensesPromise = supabase
+    .from('expenses')
+    .select('id, amount, expense_date, created_at, sector_slug, category, title, notes')
+    .eq('company_id', companyId)
+    .gte('created_at', monthStartIso)
+    .lte('created_at', monthEndIso)
+    .order('created_at', { ascending: false });
+
+  // Dépenses via table depenses (si table présente)
   const depensesPromise = supabase
     .from('depenses')
     .select('id, montant, date_depense, created_at, secteur_id, categorie, description')
     .eq('company_id', companyId)
-    .gte('created_at', monthStartStr)
-    .order('created_at', { ascending: false })
-    .limit(300);
+    .gte('created_at', monthStartIso)
+    .lte('created_at', monthEndIso)
+    .order('created_at', { ascending: false });
 
-  const [rpcRes, salesRes, depRes] = await Promise.allSettled([
+  const [rpcRes, salesRes, caisseRes, expRes, depRes] = await Promise.allSettled([
     rpcPromise,
     salesPromise,
-    depensesPromise
+    caisseMvtPromise,
+    expensesPromise,
+    depensesPromise,
   ]);
 
   if (rpcRes.status === 'fulfilled' && rpcRes.value.data) {
@@ -227,7 +267,7 @@ export async function fetchHubFinancialMetrics(
 
       if (!isToday && !isThisMonth) continue;
 
-      const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'brasserie';
+      const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'boutique';
       const card = initSector(secSlug);
 
       const orderMargin = computeOrderMargin(item);
@@ -251,91 +291,103 @@ export async function fetchHubFinancialMetrics(
     }
   }
 
-  // 3. Traiter les dépenses par secteur
-  try {
-    const depList = depRes.status === 'fulfilled' ? depRes.value.data : null;
+  // 3. Traiter les dépenses par secteur (caisse_mouvements + expenses + depenses sans doublons)
+  const processedExpenseIds = new Set<string>();
 
-    // Récupérer la table secteurs pour mapper secteur_id UUID vers slug
-    const { data: secList } = await supabase
-      .from('secteurs')
-      .select('id, slug')
-      .eq('company_id', companyId);
-
-    const uuidToSlug: Record<string, string> = {};
-    if (secList) {
-      secList.forEach((s) => {
-        if (s.id && s.slug) uuidToSlug[s.id] = s.slug.toLowerCase().trim().replace(/^sec-/, '');
-      });
-    }
-
-    if (depList && depList.length > 0) {
-      for (const d of depList) {
-        if (!isTrueOperatingExpense(d)) continue;
-
-        const dDate = extractCotonouDate(d.date_depense, d.created_at);
-        if (!dDate) continue;
-
-        const isToday = dDate === todayStr;
-        const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
-
-        if (!isToday && !isThisMonth) continue;
-
-        const montant = safeNum(d.montant);
-        const targetSlug = (d.secteur_id && uuidToSlug[d.secteur_id]) || 'general';
-        const card = initSector(targetSlug);
-
-        if (isToday) {
-          card.dayExpenses += montant;
-        }
-
-        if (isThisMonth) {
-          card.monthExpenses += montant;
-        }
+  // 3.1 Dépenses enregistrées dans caisse_mouvements
+  if (caisseRes.status === 'fulfilled' && caisseRes.value.data && caisseRes.value.data.length > 0) {
+    for (const m of caisseRes.value.data) {
+      if (!isTrueOperatingExpense({
+        ...m,
+        description: m.motif,
+      })) {
+        continue;
       }
-    } else {
-      // ─── Fallback : lire caisse_mouvements (filtrage strict trésorerie & clôture) ───
-      const { data: mvtList } = await supabase
-        .from('caisse_mouvements')
-        .select('id, montant, created_at, sector_slug, sens, type, caisse_id, motif')
-        .eq('company_id', companyId)
-        .gte('created_at', monthStartStr)
-        .order('created_at', { ascending: false })
-        .limit(500);
 
-      if (mvtList && mvtList.length > 0) {
-        for (const m of mvtList) {
-          if (!isTrueOperatingExpense({
-            ...m,
-            description: m.motif,
-          })) {
-            continue;
-          }
+      const dDate = extractCotonouDate(null, m.created_at);
+      if (!dDate) continue;
 
-          const dDate = extractCotonouDate(null, m.created_at);
-          if (!dDate) continue;
+      const isToday = dDate === todayStr;
+      const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+      if (!isToday && !isThisMonth) continue;
 
-          const isToday = dDate === todayStr;
-          const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
-          if (!isToday && !isThisMonth) continue;
+      processedExpenseIds.add(String(m.id));
 
-          const montant = safeNum(m.montant);
-          const targetSlug = (m.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-          const card = initSector(targetSlug);
+      const montant = safeNum(m.montant);
+      const targetSlug = (m.sector_slug || m.secteur_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+      const card = initSector(targetSlug);
 
-          if (isToday) {
-            card.dayExpenses += montant;
-          }
-          if (isThisMonth) {
-            card.monthExpenses += montant;
-          }
-        }
+      if (isToday) {
+        card.dayExpenses += montant;
+      }
+      if (isThisMonth) {
+        card.monthExpenses += montant;
       }
     }
-  } catch (dErr) {
-    console.warn('[HubFinancialService] Erreur lecture depenses:', dErr);
   }
 
-  // 4. Calculer la marge nette par secteur : Marge Nette = Marge Brute - Dépenses
+  // 3.2 Dépenses enregistrées dans expenses
+  if (expRes.status === 'fulfilled' && expRes.value.data && expRes.value.data.length > 0) {
+    for (const e of expRes.value.data) {
+      if (processedExpenseIds.has(String(e.id))) continue;
+      if (!isTrueOperatingExpense({
+        ...e,
+        description: e.title || e.category,
+      })) {
+        continue;
+      }
+
+      const dDate = extractCotonouDate(e.expense_date, e.created_at);
+      if (!dDate) continue;
+
+      const isToday = dDate === todayStr;
+      const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+      if (!isToday && !isThisMonth) continue;
+
+      processedExpenseIds.add(String(e.id));
+
+      const montant = safeNum(e.amount);
+      const targetSlug = (e.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+      const card = initSector(targetSlug);
+
+      if (isToday) {
+        card.dayExpenses += montant;
+      }
+      if (isThisMonth) {
+        card.monthExpenses += montant;
+      }
+    }
+  }
+
+  // 3.3 Dépenses enregistrées dans table depenses (si présente)
+  if (depRes.status === 'fulfilled' && depRes.value.data && depRes.value.data.length > 0) {
+    for (const d of depRes.value.data) {
+      if (processedExpenseIds.has(String(d.id))) continue;
+      if (!isTrueOperatingExpense(d)) continue;
+
+      const dDate = extractCotonouDate(d.date_depense, d.created_at);
+      if (!dDate) continue;
+
+      const isToday = dDate === todayStr;
+      const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+      if (!isToday && !isThisMonth) continue;
+
+      processedExpenseIds.add(String(d.id));
+
+      const montant = safeNum(d.montant);
+      const targetSlug = (d.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+      const card = initSector(targetSlug);
+
+      if (isToday) {
+        card.dayExpenses += montant;
+      }
+      if (isThisMonth) {
+        card.monthExpenses += montant;
+      }
+    }
+  }
+
+  // 4. Calculer la marge nette par secteur : Marge Nette = Marge Brute (ou CA si pas de COGS) - Dépenses
   const sectorCards = Object.values(sectorsMap);
   for (const c of sectorCards) {
     c.dayRevenue = Math.round(c.dayRevenue * 100) / 100;
@@ -343,14 +395,18 @@ export async function fetchHubFinancialMetrics(
     c.dayCogsHT = Math.round(c.dayCogsHT * 100) / 100;
     c.dayGrossMargin = Math.round(c.dayGrossMargin * 100) / 100;
     c.dayExpenses = Math.round(c.dayExpenses * 100) / 100;
-    c.dayNetMargin = Math.round((c.dayGrossMargin - c.dayExpenses) * 100) / 100;
+    
+    const dayMarginBase = (c.dayGrossMargin > 0 || c.dayCogsHT > 0) ? c.dayGrossMargin : c.dayRevenue;
+    c.dayNetMargin = Math.round((dayMarginBase - c.dayExpenses) * 100) / 100;
 
     c.monthRevenue = Math.round(c.monthRevenue * 100) / 100;
     c.monthRevenueHT = Math.round(c.monthRevenueHT * 100) / 100;
     c.monthCogsHT = Math.round(c.monthCogsHT * 100) / 100;
     c.monthGrossMargin = Math.round(c.monthGrossMargin * 100) / 100;
     c.monthExpenses = Math.round(c.monthExpenses * 100) / 100;
-    c.monthNetMargin = Math.round((c.monthGrossMargin - c.monthExpenses) * 100) / 100;
+
+    const monthMarginBase = (c.monthGrossMargin > 0 || c.monthCogsHT > 0) ? c.monthGrossMargin : c.monthRevenue;
+    c.monthNetMargin = Math.round((monthMarginBase - c.monthExpenses) * 100) / 100;
   }
 
   // 5. Calculer les totaux consolidés globaux
