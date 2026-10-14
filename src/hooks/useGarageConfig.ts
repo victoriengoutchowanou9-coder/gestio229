@@ -43,6 +43,14 @@ export function useGarageConfig() {
     return () => { isMounted = false }
   }, [companyId])
 
+  // Synchronisation avec l'état company du store Zustand
+  useEffect(() => {
+    const compMode = (company as any)?.garage_version_mode
+    if (compMode && (compMode === 'CLASSIC' || compMode === 'BTP_MULTISITE')) {
+      setVersionMode(compMode)
+    }
+  }, [company])
+
   const selectVersion = useCallback(async (mode: GarageVersionMode): Promise<boolean> => {
     if (!companyId) return false
     setLoading(true)
@@ -50,7 +58,7 @@ export function useGarageConfig() {
       const ok = await setGarageVersionMode(companyId, mode)
       if (ok) {
         setVersionMode(mode)
-        if (company) {
+        if (company && typeof setCompany === 'function') {
           setCompany({
             ...company,
             garage_version_mode: mode

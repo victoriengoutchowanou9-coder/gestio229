@@ -25,7 +25,7 @@ export const GarageSectorDispatcher: React.FC = () => {
 
   // Si l'utilisateur n'a pas encore fait de choix
   if (!hasChosenVersion) {
-    return <GarageVersionSelector onSelected={() => reload()} />
+    return <GarageVersionSelector onSelected={async () => { await reload() }} />
   }
 
   // Version 2 : Parc BTP & Multisite

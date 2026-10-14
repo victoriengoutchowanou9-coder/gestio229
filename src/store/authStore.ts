@@ -31,6 +31,7 @@ interface AuthState {
   errorMessage: string | null
 
   // Actions
+  setCompany: (company: Company | null) => void
   initialize: () => Promise<void>
   login: (identifier: string, password: string) => Promise<{ success: boolean; redirectTo?: string; error?: string }>
   logout: () => Promise<void>
@@ -53,6 +54,8 @@ export const useAuthStore = create<AuthState>()(
       company: null,
       tenantCtx: null,
       errorMessage: null,
+
+      setCompany: (company) => set({ company }),
 
       // ─── Initialisation au démarrage de l'app ─────────────────────────────
       // Appelle d'abord supabase.auth.getSession() et attend la réponse.

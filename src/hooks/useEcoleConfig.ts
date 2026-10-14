@@ -44,6 +44,14 @@ export function useEcoleConfig() {
     return () => { isMounted = false }
   }, [companyId])
 
+  // Synchronisation avec l'état company du store Zustand
+  useEffect(() => {
+    const compType = (company as any)?.ecole_type_etablissement
+    if (compType && (compType === 'SCOLAIRE' || compType === 'FORMATION_PRO' || compType === 'MIXTE')) {
+      setTypeEtablissement(compType)
+    }
+  }, [company])
+
   const selectType = useCallback(async (type: EcoleTypeEtablissement): Promise<boolean> => {
     if (!companyId) return false
     setLoading(true)
@@ -51,7 +59,7 @@ export function useEcoleConfig() {
       const ok = await setEcoleTypeEtablissement(companyId, type)
       if (ok) {
         setTypeEtablissement(type)
-        if (company) {
+        if (company && typeof setCompany === 'function') {
           setCompany({
             ...company,
             ecole_type_etablissement: type

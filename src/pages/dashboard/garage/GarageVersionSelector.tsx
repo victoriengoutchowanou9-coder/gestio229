@@ -15,7 +15,7 @@ import { useGarageConfig } from '../../../hooks/useGarageConfig'
 import { useUIStore } from '../../../store/uiStore'
 
 interface Props {
-  onSelected?: (mode: 'CLASSIC' | 'BTP_MULTISITE') => void
+  onSelected?: (mode: 'CLASSIC' | 'BTP_MULTISITE') => void | Promise<void>
 }
 
 export const GarageVersionSelector: React.FC<Props> = ({ onSelected }) => {
@@ -35,9 +35,7 @@ export const GarageVersionSelector: React.FC<Props> = ({ onSelected }) => {
             : 'Votre établissement est configuré en mode Parc Matériel BTP & Maintenance Multisite.'
         )
         if (onSelected) {
-          onSelected(mode)
-        } else {
-          window.location.reload()
+          await onSelected(mode)
         }
       } else {
         toast.error('Erreur', 'Impossible de sauvegarder votre choix. Veuillez réessayer.')
