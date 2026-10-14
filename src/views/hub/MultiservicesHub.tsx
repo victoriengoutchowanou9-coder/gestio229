@@ -317,59 +317,52 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       const missingSlugs = targetSlugs.filter((slug) => !coveredSlugs.has(slug));
       const newSeededEntries: ActivityEntry[] = [];
 
-      for (const rawSlug of missingSlugs) {
-        const meta = getSectorMeta(rawSlug);
-        const actName = `${companyName || comp?.name || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
-        let assignedId = `act-${companyId.slice(0, 8)}-${rawSlug}`;
+      if (missingSlugs.length > 0) {
+        const rowsToInsert = missingSlugs.map((rawSlug) => {
+          const meta = getSectorMeta(rawSlug);
+          const actName = `${companyName || comp?.name || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
+          const assignedId = `act-${companyId.slice(0, 8)}-${rawSlug}`;
+          
+          newSeededEntries.push({
+            id: assignedId,
+            sectorSlug: rawSlug,
+            sectorLabel: meta?.label || actName,
+            sectorIcon: meta?.emoji ?? '🏢',
+            sectorColor: meta?.color ?? '#059669',
+            name: actName,
+            location: comp?.city || 'Bénin',
+            manager: comp?.responsible_name || '',
+            status: 'ACTIVE',
+            isConfigured: true,
+            revenue: 0,
+            grossMargin: 0,
+            expenses: 0,
+            netMargin: 0,
+            monthRevenue: 0,
+            monthGrossMargin: 0,
+            monthExpenses: 0,
+            monthNetMargin: 0,
+          });
 
-        // Tentative d'insertion Supabase (résiliente aux règles RLS / anon)
-        try {
-          const { data: newAct, error: actErr } = await supabase
-            .from('company_activities')
-            .insert({
-              company_id: companyId,
-              sector_slug: rawSlug,
-              sector_code: rawSlug.toUpperCase(),
-              activity_name: actName,
-              pos_location: comp?.city || 'Bénin',
-              manager_name: comp?.responsible_name || '',
-              status: 'ACTIVE',
-              is_active: true,
-              color: meta?.color || '#059669',
-            })
-            .select()
-            .single();
-
-          if (newAct?.id) {
-            assignedId = newAct.id;
-          } else if (actErr) {
-            console.warn(`[Hub] Auto-seed Supabase pour ${rawSlug} (RLS):`, actErr.message);
-          }
-        } catch (seedErr) {
-          console.warn(`[Hub] Exception auto-seed pour ${rawSlug}:`, seedErr);
-        }
-
-        // On garantit que l'activité est affichée même en cas de blocage RLS Supabase
-        newSeededEntries.push({
-          id: assignedId,
-          sectorSlug: rawSlug,
-          sectorLabel: meta?.label || actName,
-          sectorIcon: meta?.emoji ?? '🏢',
-          sectorColor: meta?.color ?? '#059669',
-          name: actName,
-          location: comp?.city || 'Bénin',
-          manager: comp?.responsible_name || '',
-          status: 'ACTIVE',
-          isConfigured: true,
-          revenue: 0,
-          grossMargin: 0,
-          expenses: 0,
-          netMargin: 0,
-          monthRevenue: 0,
-          monthGrossMargin: 0,
-          monthExpenses: 0,
-          monthNetMargin: 0,
+          return {
+            company_id: companyId,
+            sector_slug: rawSlug,
+            sector_code: rawSlug.toUpperCase(),
+            activity_name: actName,
+            pos_location: comp?.city || 'Bénin',
+            manager_name: comp?.responsible_name || '',
+            status: 'ACTIVE',
+            is_active: true,
+            color: meta?.color || '#059669',
+          };
         });
+
+        // Insertion groupée asynchrone non-bloquante
+        supabase
+          .from('company_activities')
+          .insert(rowsToInsert)
+          .then(() => {})
+          .catch(() => {});
       }
 
       // 5. Fusionner, dédupliquer et mettre à jour le state & localStorage
@@ -519,7 +512,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   }, [companyId]);
 
   useEffect(() => {
-    loadFinancialMetrics();
+    // Peinture instantanée du Hub à 0ms puis calcul des métriques en arrière-plan
+    const t = setTimeout(() => {
+      loadFinancialMetrics();
+    }, 50);
+    return () => clearTimeout(t);
   }, [loadFinancialMetrics, activities.length]);
 
   const persist = useCallback(

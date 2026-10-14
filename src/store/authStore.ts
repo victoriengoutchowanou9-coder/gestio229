@@ -60,7 +60,21 @@ export const useAuthStore = create<AuthState>()(
       // Ce n'est qu'après avoir confirmé qu'il n'y a AUCUNE session que l'on passe en 'unauthenticated'.
 
       initialize: async () => {
-        set({ status: 'loading' })
+        // Optimisation SPA Instantanée : si déjà authentifié avec profil et entreprise, ne pas réinitialiser en 'loading'
+        if (get().status === 'authenticated' && get().user && get().company) {
+          return
+        }
+
+        // Si nous avons un état persisté valide, l'activer immédiatement sans attendre le réseau (0ms)
+        const persistedUser = get().user
+        const persistedCompany = get().company
+        const persistedCtx = get().tenantCtx
+        if (persistedUser && persistedCompany && persistedCtx) {
+          set({ status: 'authenticated' })
+        } else {
+          set({ status: 'loading' })
+        }
+
         try {
           // 1. Récupérer la session Supabase persistée
           const { data: { session }, error: sessionError } = await supabase.auth.getSession()
@@ -204,12 +218,14 @@ export const useAuthStore = create<AuthState>()(
                     fallbackUser
                   )
                   if (ctx && ctx.company) {
-                    try {
-                      await supabase
+                    if (fallbackUser.id) {
+                      supabase
                         .from('user_profiles')
                         .update({ last_login: new Date().toISOString() })
                         .eq('id', fallbackUser.id)
-                    } catch (_) {}
+                        .then(() => {})
+                        .catch(() => {})
+                    }
 
                     set({
                       status: 'authenticated',
@@ -346,14 +362,14 @@ export const useAuthStore = create<AuthState>()(
               return { success: false, error: msg }
             }
 
-            // Mettre à jour last_login si id présent
+            // Mettre à jour last_login en tâche de fond (non bloquant)
             if (ctx.user?.id) {
-              try {
-                await supabase
-                  .from('user_profiles')
-                  .update({ last_login: new Date().toISOString() })
-                  .eq('id', ctx.user.id)
-              } catch (_) {}
+              supabase
+                .from('user_profiles')
+                .update({ last_login: new Date().toISOString() })
+                .eq('id', ctx.user.id)
+                .then(() => {})
+                .catch(() => {})
             }
 
             set({
@@ -430,14 +446,14 @@ export const useAuthStore = create<AuthState>()(
             return { success: false, error: 'Entreprise introuvable' }
           }
 
-          // Mettre à jour last_login
+          // Mettre à jour last_login en tâche de fond (non bloquant)
           if (profile?.id) {
-            try {
-              await supabase
-                .from('user_profiles')
-                .update({ last_login: new Date().toISOString() })
-                .eq('id', profile.id)
-            } catch (_) {}
+            supabase
+              .from('user_profiles')
+              .update({ last_login: new Date().toISOString() })
+              .eq('id', profile.id)
+              .then(() => {})
+              .catch(() => {})
           }
 
           // 1. Déterminer et valider le secteur assigné à l'utilisateur interne

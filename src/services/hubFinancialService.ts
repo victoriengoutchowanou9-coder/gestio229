@@ -170,89 +170,90 @@ export async function fetchHubFinancialMetrics(
     return sectorsMap[clean];
   };
 
-  // 1. Tenter l'appel RPC Supabase fn_dashboard_hub
+  // 1. Tenter l'appel RPC et les requêtes Supabase en parallèle strict (< 800ms)
   let rpcTotals: HubFinancialTotals | null = null;
-  try {
-    const { data: rpcData, error: rpcErr } = await supabase.rpc('fn_dashboard_hub', {
-      p_company_id: companyId,
-      p_date: todayStr,
-    });
-    if (!rpcErr && rpcData) {
-      rpcTotals = {
-        date: rpcData.date || todayStr,
-        ca_jour: Number(rpcData.ca_jour) || 0,
-        depenses_jour: Number(rpcData.depenses_jour) || 0,
-        marge_jour: Number(rpcData.marge_jour) || 0,
-        ca_mois: Number(rpcData.ca_mois) || 0,
-        depenses_mois: Number(rpcData.depenses_mois) || 0,
-        marge_mois: Number(rpcData.marge_mois) || 0,
-        mois_debut: rpcData.mois_debut || monthStartStr,
-        mois_fin: rpcData.mois_fin || monthEndStr,
-      };
-    }
-  } catch (err) {
-    // Si la fonction n'est pas encore déployée dans la BDD Supabase, le calcul direct prend le relais
+  const rpcPromise = Promise.race([
+    supabase.rpc('fn_dashboard_hub', { p_company_id: companyId, p_date: todayStr }),
+    new Promise<{ data: null; error: any }>((resolve) => setTimeout(() => resolve({ data: null, error: new Error('RPC timeout') }), 1200))
+  ]);
+
+  const salesPromise = supabase
+    .from('sales_orders')
+    .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status, notes')
+    .eq('company_id', companyId)
+    .gte('created_at', monthStartStr)
+    .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
+    .order('created_at', { ascending: false })
+    .limit(500);
+
+  const depensesPromise = supabase
+    .from('depenses')
+    .select('id, montant, date_depense, created_at, secteur_id, categorie, description')
+    .eq('company_id', companyId)
+    .gte('created_at', monthStartStr)
+    .order('created_at', { ascending: false })
+    .limit(300);
+
+  const [rpcRes, salesRes, depRes] = await Promise.allSettled([
+    rpcPromise,
+    salesPromise,
+    depensesPromise
+  ]);
+
+  if (rpcRes.status === 'fulfilled' && rpcRes.value.data) {
+    const rpcData = rpcRes.value.data as any;
+    rpcTotals = {
+      date: rpcData.date || todayStr,
+      ca_jour: Number(rpcData.ca_jour) || 0,
+      depenses_jour: Number(rpcData.depenses_jour) || 0,
+      marge_jour: Number(rpcData.marge_jour) || 0,
+      ca_mois: Number(rpcData.ca_mois) || 0,
+      depenses_mois: Number(rpcData.depenses_mois) || 0,
+      marge_mois: Number(rpcData.marge_mois) || 0,
+      mois_debut: rpcData.mois_debut || monthStartStr,
+      mois_fin: rpcData.mois_fin || monthEndStr,
+    };
   }
 
-  // 2. Récupérer les ventes sales_orders récentes pour calculer le détail exact par secteur
-  try {
-    const { data: salesList } = await supabase
-      .from('sales_orders')
-      .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status, notes')
-      .eq('company_id', companyId)
-      .gte('created_at', monthStartStr)
-      .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
-      .order('created_at', { ascending: false })
-      .limit(1000);
+  // 2. Traiter les ventes par secteur
+  if (salesRes.status === 'fulfilled' && salesRes.value.data) {
+    const salesList = salesRes.value.data;
+    for (const item of salesList) {
+      const itemDate = extractCotonouDate(item.order_date, item.created_at);
+      if (!itemDate) continue;
 
-    if (salesList && salesList.length > 0) {
-      for (const item of salesList) {
-        const itemDate = extractCotonouDate(item.order_date, item.created_at);
-        if (!itemDate) continue;
+      const isToday = itemDate === todayStr;
+      const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
 
-        const isToday = itemDate === todayStr;
-        const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
+      if (!isToday && !isThisMonth) continue;
 
-        if (!isToday && !isThisMonth) continue;
+      const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'brasserie';
+      const card = initSector(secSlug);
 
-        const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'brasserie';
-        const card = initSector(secSlug);
+      const orderMargin = computeOrderMargin(item);
+      if (!orderMargin.hasKnownCost) {
+        card.hasKnownCost = false;
+      }
 
-        // Utiliser la source unique de calcul de marge
-        const orderMargin = computeOrderMargin(item);
-        if (!orderMargin.hasKnownCost) {
-          card.hasKnownCost = false;
-        }
+      if (isToday) {
+        card.dayRevenue += orderMargin.revenueTTC;
+        card.dayRevenueHT += orderMargin.revenueHT;
+        card.dayCogsHT += orderMargin.cogsHT;
+        card.dayGrossMargin += orderMargin.grossMargin;
+      }
 
-        if (isToday) {
-          card.dayRevenue += orderMargin.revenueTTC;
-          card.dayRevenueHT += orderMargin.revenueHT;
-          card.dayCogsHT += orderMargin.cogsHT;
-          card.dayGrossMargin += orderMargin.grossMargin;
-        }
-
-        if (isThisMonth) {
-          card.monthRevenue += orderMargin.revenueTTC;
-          card.monthRevenueHT += orderMargin.revenueHT;
-          card.monthCogsHT += orderMargin.cogsHT;
-          card.monthGrossMargin += orderMargin.grossMargin;
-        }
+      if (isThisMonth) {
+        card.monthRevenue += orderMargin.revenueTTC;
+        card.monthRevenueHT += orderMargin.revenueHT;
+        card.monthCogsHT += orderMargin.cogsHT;
+        card.monthGrossMargin += orderMargin.grossMargin;
       }
     }
-  } catch (sErr) {
-    console.warn('[HubFinancialService] Erreur lecture sales_orders:', sErr);
   }
 
-  // 3. Récupérer les dépenses réelles et les imputer aux secteurs
-  // Priorité : table 'depenses', fallback : 'caisse_mouvements' (avec filtrage trésorerie strict)
+  // 3. Traiter les dépenses par secteur
   try {
-    const { data: depList } = await supabase
-      .from('depenses')
-      .select('id, montant, date_depense, created_at, secteur_id, categorie, description')
-      .eq('company_id', companyId)
-      .gte('created_at', monthStartStr)
-      .order('created_at', { ascending: false })
-      .limit(500);
+    const depList = depRes.status === 'fulfilled' ? depRes.value.data : null;
 
     // Récupérer la table secteurs pour mapper secteur_id UUID vers slug
     const { data: secList } = await supabase

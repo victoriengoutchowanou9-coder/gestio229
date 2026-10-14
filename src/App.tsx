@@ -3,7 +3,7 @@
 // =============================================================================
 
 import React, { useEffect, Suspense } from 'react'
-import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import AppLayout from './components/layout/AppLayout'
 import ModuleGuard from './components/subscription/ModuleGuard'
@@ -16,6 +16,8 @@ import { getActiveSectorSlug } from './lib/sectorClient'
 import { ThemeProvider } from './context/ThemeContext'
 import { useAppCacheStore } from './store/appCacheStore'
 import { preloadCommonModules } from './lib/modulePreloader'
+import HubSkeleton from './components/ui/HubSkeleton'
+import { ModuleSkeleton } from './components/ui/Skeleton'
 
 // ─── GESTIO 229 ADMIN — Back-Office Super Administrateur ──────────────────
 import AdminLoginPage from './pages/admin/AdminLoginPage'
@@ -184,14 +186,16 @@ const FullPageLoader = () => (
 
 /**
  * ProtectedRoute / PrivateRoute :
- * Affiche un loader (spinner "Chargement...") tant que isLoading = true.
- * Si isLoading = false et pas de session => redirige vers /login.
- * Si session existe => affiche la page demandée, même après F5.
+ * Affiche immédiatement un squelette léger (HubSkeleton ou ModuleSkeleton) sans spinner plein écran.
+ * Si pas de session => redirige vers /login.
  */
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const status = useAuthStore((s) => s.status)
+  const location = useLocation()
   const isLoading = status === 'idle' || status === 'loading'
-  if (isLoading) return <FullPageLoader />
+  if (isLoading) {
+    return location.pathname.includes('/hub') ? <HubSkeleton /> : <ModuleSkeleton />
+  }
   if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
   return <>{children}</>
 }
@@ -204,7 +208,7 @@ export const PrivateRoute = ProtectedRoute
  */
 const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, status } = useAuthStore()
-  if (status === 'idle' || status === 'loading') return <FullPageLoader />
+  if (status === 'idle' || status === 'loading') return <HubSkeleton />
   const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
   if (!isAdmin) {
     const perm = (typeof user?.permissions === 'object' && user.permissions) ? user.permissions : {}
@@ -235,7 +239,7 @@ const PublicRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const status = useAuthStore((s) => s.status)
   const tenantCtx = useAuthStore((s) => s.tenantCtx)
 
-  if (status === 'idle' || status === 'loading') return <FullPageLoader />
+  if (status === 'loading') return <div className="min-h-screen bg-slate-900" />
 
   const isConfirmationOrSignupReturn = 
     window.location.search.includes('confirmed=') || 
@@ -346,19 +350,25 @@ const SectorAwareGrilles: React.FC = () => {
 const AppInitializer: React.FC = () => {
   const initialize = useAuthStore((s) => s.initialize)
   const company = useAuthStore((s) => s.company)
-  const preloadEssentialData = useAppCacheStore((s) => s.preloadEssentialData)
 
   useEffect(() => {
     initialize()
   }, [initialize])
 
-  // Dès que l'entreprise est connue, charger le cache essentiel et précharger les modules
+  // Au repos (idle), précharger les modules fréquents sans bloquer le fil d'exécution
   useEffect(() => {
     if (company?.id) {
-      preloadEssentialData(company.id)
-      preloadCommonModules()
+      if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+        (window as any).requestIdleCallback(() => {
+          preloadCommonModules()
+        })
+      } else {
+        setTimeout(() => {
+          preloadCommonModules()
+        }, 1200)
+      }
     }
-  }, [company?.id, preloadEssentialData])
+  }, [company?.id])
 
   return null
 }

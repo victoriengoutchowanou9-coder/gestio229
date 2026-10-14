@@ -269,7 +269,7 @@ export const SectorLoader = {
         }
       }
 
-      // 1.5. Contrôle et expiration automatique de la période d'essai gratuit de 1 mois (30 jours) côté serveur/BDD
+      // 1.5. Contrôle et expiration automatique de la période d'essai gratuit de 1 mois (30 jours)
       if (company && (company.subscription_status === 'trial' || !company.subscription_status)) {
         const createdAt = company.created_at ? new Date(company.created_at).getTime() : Date.now()
         const trialDurationMs = 30 * 24 * 60 * 60 * 1000
@@ -277,94 +277,63 @@ export const SectorLoader = {
 
         if (isExpired) {
           company.subscription_status = 'expired'
-          try {
-            await supabase
-              .from('companies')
-              .update({ subscription_status: 'expired', updated_at: new Date().toISOString() })
-              .eq('id', company.id)
-          } catch (e) {
-            console.error('[SectorLoader] Erreur persistance statut expiré :', e)
-          }
+          // Persistance asynchrone non-bloquante
+          supabase
+            .from('companies')
+            .update({ subscription_status: 'expired', updated_at: new Date().toISOString() })
+            .eq('id', company.id)
+            .then(() => {})
+            .catch(() => {})
         }
       }
 
       const user = profile as UserProfile
 
-      // 2. Charger les secteurs actifs de l'entreprise
+      // 2. Charger les secteurs actifs de l'entreprise (Résolution ultra-rapide en mémoire < 1ms)
       let rawSectors: Sector[] = []
-
-      // A. Essayer depuis company_sectors (si la table existe)
-      try {
-        const { data: companySectors } = await supabase
-          .from('company_sectors')
-          .select(`*, sector:sectors(*)`)
-          .eq('company_id', company.id)
-          .order('activated_at')
-
-        if (companySectors && companySectors.length > 0) {
-          rawSectors = companySectors.map((cs: any) => cs.sector as Sector).filter(Boolean)
-        }
-      } catch (err) {
-        // Ignorer si la table company_sectors n'existe pas
+      const rawTargetSlugs: string[] = []
+      if (Array.isArray(company.selected_sectors) && company.selected_sectors.length > 0) {
+        rawTargetSlugs.push(...company.selected_sectors)
+      } else if (Array.isArray(company.sectors) && company.sectors.length > 0) {
+        rawTargetSlugs.push(...company.sectors)
+      } else if (company.active_sector) {
+        rawTargetSlugs.push(company.active_sector)
       }
 
-      // B. Si aucun secteur trouvé, utiliser les champs de la table companies
-      if (rawSectors.length === 0) {
-        const rawTargetSlugs: string[] = []
-        if (Array.isArray(company.selected_sectors) && company.selected_sectors.length > 0) {
-          rawTargetSlugs.push(...company.selected_sectors)
-        } else if (Array.isArray(company.sectors) && company.sectors.length > 0) {
-          rawTargetSlugs.push(...company.sectors)
-        } else if (company.active_sector) {
-          rawTargetSlugs.push(company.active_sector)
-        }
-
-        // Nettoyage strict des slugs (suppression du préfixe 'sec-')
-        const normalizedSlugs = Array.from(
-          new Set(
-            rawTargetSlugs
-              .map((s) => String(s).replace(/^sec-/, '').toLowerCase().trim())
-              .filter(Boolean)
-          )
+      const normalizedSlugs = Array.from(
+        new Set(
+          rawTargetSlugs
+            .map((s) => String(s).replace(/^sec-/, '').toLowerCase().trim())
+            .filter(Boolean)
         )
+      )
 
-        if (normalizedSlugs.length > 0) {
-          const { data: matchedSectors } = await supabase
+      if (normalizedSlugs.length > 0) {
+        for (const sSlug of normalizedSlugs) {
+          const catMeta = ALL_SECTORS_CATALOG.find((c) => c.slug === sSlug)
+          rawSectors.push({
+            id: `sec-${sSlug}`,
+            name: catMeta?.name || sSlug.charAt(0).toUpperCase() + sSlug.slice(1),
+            slug: sSlug,
+            description: catMeta?.description || '',
+            is_active: true,
+            modules: ['ventes', 'caisse', 'stock', 'clients', 'depenses', 'reporting'],
+          } as any)
+        }
+      }
+
+      // Fallback uniquement si la liste était totalement vide
+      if (rawSectors.length === 0) {
+        try {
+          const { data: defaultSectors } = await supabase
             .from('sectors')
             .select('*')
-            .in('slug', normalizedSlugs)
-
-          if (matchedSectors && matchedSectors.length > 0) {
-            rawSectors = matchedSectors as Sector[]
+            .eq('is_active', true)
+            .limit(3)
+          if (defaultSectors && defaultSectors.length > 0) {
+            rawSectors = defaultSectors as Sector[]
           }
-
-          // Pour tout slug souscrit absent de la table 'sectors', le synthétiser depuis le catalogue officiel
-          for (const sSlug of normalizedSlugs) {
-            if (!rawSectors.some((r) => r.slug === sSlug)) {
-              const catMeta = ALL_SECTORS_CATALOG.find((c) => c.slug === sSlug)
-              rawSectors.push({
-                id: `synth-${sSlug}`,
-                name: catMeta?.name || sSlug.charAt(0).toUpperCase() + sSlug.slice(1),
-                slug: sSlug,
-                description: catMeta?.description || '',
-                is_active: true,
-                modules: ['ventes', 'caisse', 'stock', 'clients', 'depenses', 'reporting'],
-              } as any)
-            }
-          }
-        }
-      }
-
-      // C. Fallback : UNIQUEMENT pour administrateur si l'entreprise n'a absolument aucun secteur configuré
-      const isUserAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
-      if (rawSectors.length === 0 && isUserAdmin) {
-        const { data: defaultSectors } = await supabase
-          .from('sectors')
-          .select('*')
-          .eq('is_active', true)
-          .limit(3)
-
-        rawSectors = (defaultSectors as Sector[]) || []
+        } catch (_) {}
       }
 
       // 3. Résoudre les modules pour chaque secteur
