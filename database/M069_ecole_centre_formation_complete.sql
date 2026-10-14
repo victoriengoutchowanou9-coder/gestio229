@@ -238,18 +238,44 @@ CREATE INDEX IF NOT EXISTS idx_ecole_eval_comp ON public.ecole_evaluations(compa
 CREATE TABLE IF NOT EXISTS public.ecole_notes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-    evaluation_id UUID NOT NULL REFERENCES public.ecole_evaluations(id) ON DELETE CASCADE,
-    eleve_id UUID NOT NULL REFERENCES public.ecole_eleves_apprenants(id) ON DELETE CASCADE,
-    note NUMERIC(6, 2) NOT NULL,
+    evaluation_id UUID REFERENCES public.ecole_evaluations(id) ON DELETE CASCADE,
+    eleve_id UUID REFERENCES public.ecole_eleves_apprenants(id) ON DELETE CASCADE,
+    note NUMERIC(6, 2) DEFAULT 0,
     note_sur NUMERIC(6, 2) DEFAULT 20.0,
     appreciation VARCHAR(200),
     statut_presence VARCHAR(20) DEFAULT 'PRESENT', -- PRESENT, ABSENT, ABSENT_JUSTIFIE
     saisie_par VARCHAR(150),
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(evaluation_id, eleve_id)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Rétrocompatibilité : Si public.ecole_notes existait déjà avec l'ancienne structure M030, ajouter toutes les colonnes
+ALTER TABLE public.ecole_notes
+    ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS evaluation_id UUID REFERENCES public.ecole_evaluations(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS eleve_id UUID REFERENCES public.ecole_eleves_apprenants(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS note NUMERIC(6, 2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS note_sur NUMERIC(6, 2) DEFAULT 20.0,
+    ADD COLUMN IF NOT EXISTS appreciation VARCHAR(200),
+    ADD COLUMN IF NOT EXISTS statut_presence VARCHAR(20) DEFAULT 'PRESENT',
+    ADD COLUMN IF NOT EXISTS saisie_par VARCHAR(150),
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_ecole_notes_comp ON public.ecole_notes(company_id, eleve_id);
+
+-- Contrainte d'unicité évaluation + élève pour les upserts
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ecole_notes_eval_eleve_unique'
+    ) THEN
+        ALTER TABLE public.ecole_notes
+            ADD CONSTRAINT ecole_notes_eval_eleve_unique UNIQUE (evaluation_id, eleve_id);
+    END IF;
+EXCEPTION
+    WHEN others THEN NULL;
+END $$;
+
 
 -- Bulletins de Notes Périodiques / Annuels
 CREATE TABLE IF NOT EXISTS public.ecole_bulletins (
@@ -493,40 +519,13 @@ CREATE TABLE IF NOT EXISTS public.ecole_prets_livres (
 CREATE INDEX IF NOT EXISTS idx_ecole_prets_comp ON public.ecole_prets_livres(company_id, statut);
 
 -- ══════════════════════════════════════════════════════════════════════════════
--- 9. COMPATIBILITÉ RÉTROACTIVE (VUES OU BRIDGES SI NÉCESSAIRE)
+-- 9. MISE À NIVEAU RÉTROACTIVE DES ANCIENNES TABLES M030 (SI PRÉSENTES)
 -- ══════════════════════════════════════════════════════════════════════════════
 
--- Si d'anciennes tables existent (ecole_eleves, ecole_paiements_scolaires), les tables créées ici restent les tables maîtresses
--- On crée des vues de confort si elles n'existent pas encore
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'ecole_eleves') THEN
-        CREATE VIEW public.ecole_eleves AS
-        SELECT 
-            id, company_id, nom, prenom, classe_nom AS classe, 
-            date_naissance, responsable_contact AS contact_parent, 
-            frais_scolarite_total AS montant_frais_annuels, 
-            frais_scolarite_paye AS frais_payes, 
-            statut, created_at, updated_at
-        FROM public.ecole_eleves_apprenants;
-    END IF;
-    
-    IF NOT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname = 'public' AND tablename = 'ecole_paiements_scolaires') THEN
-        CREATE VIEW public.ecole_paiements_scolaires AS
-        SELECT 
-            p.id, p.company_id, p.numero_recu AS reference,
-            concat(e.prenom, ' ', e.nom) AS eleve_nom,
-            e.classe_nom AS classe,
-            'Scolarité' AS type_frais,
-            p.montant,
-            p.mode_paiement,
-            p.date_paiement::date AS date_paiement,
-            p.encaisse_par AS agent_nom,
-            p.created_at
-        FROM public.ecole_paiements_recus p
-        JOIN public.ecole_eleves_apprenants e ON e.id = p.eleve_id;
-    END IF;
-END $$;
+-- Assurer la présence des colonnes indispensables sur les tables existantes
+ALTER TABLE public.ecole_absences
+    ADD COLUMN IF NOT EXISTS eleve_id UUID REFERENCES public.ecole_eleves_apprenants(id) ON DELETE CASCADE;
+
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 10. ACTIVATION DU ROW LEVEL SECURITY (RLS) SANS CASSE
