@@ -42,7 +42,7 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
 
   // Vérification de la période d'essai (30 jours) et de la validité de l'abonnement
   const subInfo = getCompanySubscriptionInfo(company)
-  if (subInfo.isExpired || subInfo.isSuspended) {
+  if (company && (subInfo.isExpired || subInfo.isSuspended)) {
     return (
       <div className="min-h-[75vh] flex items-center justify-center p-4">
         <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl border border-amber-200 dark:border-amber-900/60 p-8 shadow-xl text-center">

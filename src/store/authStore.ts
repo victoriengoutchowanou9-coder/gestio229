@@ -71,8 +71,7 @@ export const useAuthStore = create<AuthState>()(
         // Si nous avons un état persisté valide, l'activer immédiatement sans attendre le réseau (0ms)
         const persistedUser = get().user
         const persistedCompany = get().company
-        const persistedCtx = get().tenantCtx
-        if (persistedUser && persistedCompany && persistedCtx) {
+        if (persistedUser && persistedCompany) {
           set({ status: 'authenticated' })
         } else {
           set({ status: 'loading' })
@@ -732,6 +731,7 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         user: state.user,
         company: state.company,
+        tenantCtx: state.tenantCtx,
       }),
     }
   )

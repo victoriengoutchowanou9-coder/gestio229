@@ -12,6 +12,7 @@ import ToastContainer from '../ui/ToastContainer'
 import SectorErrorBoundary from '../common/SectorErrorBoundary'
 import { AppProvider } from '../../contexts/AppContext'
 import { ModuleSkeleton } from '../ui/Skeleton'
+import { useAuthStore } from '../../store/authStore'
 
 const AppLayout: React.FC = () => {
   const sidebarCollapsed = useUIStore((s) => s.sidebarCollapsed)
@@ -20,6 +21,7 @@ const AppLayout: React.FC = () => {
   const setActiveModule = useUIStore((s) => s.setActiveModule)
   const setLastVisitedModule = useAppCacheStore((s) => s.setLastVisitedModule)
   const location = useLocation()
+  const { status, company } = useAuthStore()
 
   // Mettre à jour le module actif selon la route et mémoriser l'historique
   useEffect(() => {
@@ -29,6 +31,11 @@ const AppLayout: React.FC = () => {
     setLastVisitedModule(location.pathname)
     closeMobileSidebar()
   }, [location.pathname, setActiveModule, setLastVisitedModule, closeMobileSidebar])
+
+  // Attente résiliente avec skeleton léger si company est en cours de chargement
+  if (!company && (status === 'idle' || status === 'loading')) {
+    return <ModuleSkeleton />
+  }
 
   return (
     <div 

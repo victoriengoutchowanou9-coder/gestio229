@@ -381,7 +381,15 @@ export const SectorLoader = {
    * - Utilisateur interne non-admin → Redirection STRICTE vers son /app/[sector_slug]/[module]
    *   (Accès au HUB formellement interdit)
    */
-  resolveRoute(company: Company, sectors: Sector[], user?: UserProfile): RoutingDecision {
+  resolveRoute(company: Company | null | undefined, sectors: Sector[], user?: UserProfile): RoutingDecision {
+    if (!company) {
+      return {
+        type: 'MULTISERVICES' as RoutingType,
+        redirectTo: '/hub',
+        activeSectors: sectors,
+      }
+    }
+
     // Cas : compte suspendu
     if (
       company.subscription_status === 'suspended' ||
@@ -444,7 +452,7 @@ export const SectorLoader = {
 
   // ─── Résolution Nav Globale (avec prise en compte des modules spécifiques par secteur) ─────────────
 
-  getDefaultNav(sectorSlug?: string): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
+  getDefaultNav(sectorSlug?: string, company?: Company | null): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const cleanSlug = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
     const isStation = cleanSlug === 'station-service' || cleanSlug === 'station' || cleanSlug === 'hydrocarbures'
     const isRestaurant = cleanSlug === 'restaurant' || cleanSlug === 'bar-restaurant-maquis' || cleanSlug === 'bar' || cleanSlug === 'maquis' || cleanSlug === 'fastfood'
@@ -715,6 +723,73 @@ export const SectorLoader = {
       return { grouped, flat: classicNav }
     }
 
+    // ── Menu spécifique École & Centre de Formation (Scolaire, Formation Pro, Mixte) ──
+    const isEcole = cleanSlug === 'ecole' || cleanSlug === 'formation' || cleanSlug === 'centre-de-formation' || cleanSlug === 'education'
+    if (isEcole) {
+      let ecoleType = (company as any)?.ecole_type_etablissement || null
+      try {
+        const key = company?.id ? `gestio229_ecole_type_${company.id}` : null
+        const val = key ? localStorage.getItem(key) : null
+        if (val === 'SCOLAIRE' || val === 'FORMATION_PRO' || val === 'MIXTE') {
+          ecoleType = val
+        } else if (!ecoleType) {
+          const allKeys = Object.keys(localStorage)
+          const modeKey = allKeys.find(k => k.startsWith('gestio229_ecole_type_'))
+          if (modeKey) {
+            const v = localStorage.getItem(modeKey)
+            if (v === 'SCOLAIRE' || v === 'FORMATION_PRO' || v === 'MIXTE') ecoleType = v
+          }
+        }
+      } catch (e) {}
+
+      const ecoleNav: NavItem[] = [
+        // APERÇU ÉCOLE / CENTRE
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+
+        // MODULES ADAPTATIFS SELON VERSION MÉTIER ÉCOLE
+        ...(ecoleType === 'FORMATION_PRO'
+          ? [
+              { id: 'formations_pro', label: 'Formations Pro & Certificats', icon: 'Award', href: `${prefix}/formations-pro`, group: 'commercial' },
+              { id: 'eleves', label: 'Apprenants & Inscriptions', icon: 'GraduationCap', href: `${prefix}/eleves`, group: 'commercial' },
+              { id: 'pedagogie', label: 'Sessions & Planning', icon: 'Calendar', href: `${prefix}/pedagogie`, group: 'commercial' },
+            ]
+          : ecoleType === 'SCOLAIRE'
+          ? [
+              { id: 'eleves', label: 'Élèves & Inscriptions', icon: 'GraduationCap', href: `${prefix}/eleves`, group: 'commercial' },
+              { id: 'pedagogie', label: 'Pédagogie & Planning', icon: 'Calendar', href: `${prefix}/pedagogie`, group: 'commercial' },
+              { id: 'notes_resultats', label: 'Notes & Bulletins', icon: 'BookOpen', href: `${prefix}/notes`, group: 'commercial' },
+              { id: 'absences', label: 'Absences & Discipline', icon: 'CalendarX', href: `${prefix}/absences`, group: 'commercial' },
+            ]
+          : [
+              { id: 'eleves', label: 'Élèves & Inscriptions', icon: 'GraduationCap', href: `${prefix}/eleves`, group: 'commercial' },
+              { id: 'formations_pro', label: 'Formations Pro & Certificats', icon: 'Award', href: `${prefix}/formations-pro`, group: 'commercial' },
+              { id: 'pedagogie', label: 'Pédagogie & Planning', icon: 'Calendar', href: `${prefix}/pedagogie`, group: 'commercial' },
+              { id: 'notes_resultats', label: 'Notes & Bulletins', icon: 'BookOpen', href: `${prefix}/notes`, group: 'commercial' },
+              { id: 'absences', label: 'Absences & Discipline', icon: 'CalendarX', href: `${prefix}/absences`, group: 'commercial' },
+            ]),
+
+        { id: 'bibliotheque', label: 'Bibliothèque & Supports', icon: 'Library', href: `${prefix}/bibliotheque`, group: 'gestion' },
+        { id: 'stock', label: 'Fournitures & Stocks', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Commandes', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+
+        // FINANCE & SCOLARITÉ
+        { id: 'frais_scolaires', label: ecoleType === 'FORMATION_PRO' ? 'Frais & Facturation' : 'Frais de Scolarité', icon: 'DollarSign', href: `${prefix}/frais`, group: 'finance' },
+        { id: 'caisse', label: 'Caisse & Encaissements', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Établissement', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+
+        // ADMINISTRATION
+        { id: 'rapports', label: 'Rapports & Statistiques', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Établissement', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+      const grouped = groupNavItems(ecoleNav)
+      return { grouped, flat: ecoleNav }
+    }
+
     // ── Logique par défaut pour tous les autres secteurs (Strictement Inchangée) ──
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',
@@ -755,13 +830,15 @@ export const SectorLoader = {
   // ─── Vérification d'accès par rôle et permissions ────────────────────────
 
   canAccess(user: UserProfile | null | undefined, moduleId: string, action: string = 'view', company?: Company | null): boolean {
-    if (!user) return false
+    if (!user) return true // Fallback d'affichage résilient si user est en cours de chargement
 
     // Vérification prioritaire de l'abonnement entreprise (Plan Starter vs Entreprise)
-    const comp = company || (user as any).company
+    const comp = company || (user as any)?.company || null
     if (comp) {
-      const planCheck = checkModuleAccess(moduleId, comp)
-      if (!planCheck.allowed) return false
+      try {
+        const planCheck = checkModuleAccess(moduleId, comp)
+        if (!planCheck.allowed) return false
+      } catch (err) {}
     }
 
     if (user.is_super_admin) return true

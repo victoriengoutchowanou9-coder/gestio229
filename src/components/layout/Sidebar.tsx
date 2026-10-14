@@ -117,13 +117,25 @@ const Sidebar: React.FC = () => {
   const currentSectorSlug = params.sectorSlug || localStorage.getItem('gestio229_active_sector') || undefined
   const sectorMeta = getActiveSectorMeta()
 
-  // Construire la nav dynamiquement pour le sous-logiciel actif
-  const { grouped } = SectorLoader.getDefaultNav(currentSectorSlug)
+  // Construire la nav dynamiquement pour le sous-logiciel actif (avec fallback securise)
+  let grouped: Record<string, any[]> = {}
+  try {
+    const res = SectorLoader.getDefaultNav(currentSectorSlug, company)
+    grouped = res?.grouped || {}
+  } catch (err) {
+    console.warn('[Sidebar] Avertissement résolution navigation :', err)
+    grouped = {}
+  }
 
   const handleLogout = async () => {
     await logout()
     navigate('/login')
   }
+
+  // Fallbacks résilients pour l'entreprise
+  const companyDisplayName = company?.name?.trim() || 'GESTIO 229'
+  const companyLogo = company?.logo_url || (company as any)?.logo || null
+  const companySectorLabel = (company as any)?.secteur || (company as any)?.active_sector || sectorMeta?.name || 'SaaS Multi-Secteurs'
 
   return (
     <>
@@ -149,15 +161,27 @@ const Sidebar: React.FC = () => {
           sidebarCollapsed ? 'p-3 items-center' : 'p-4 gap-2'
         )}>
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center flex-shrink-0 shadow-sm">
-              <span className="text-white font-bold text-sm">G</span>
-            </div>
+            {companyLogo ? (
+              <img
+                src={companyLogo}
+                alt={companyDisplayName}
+                className="w-9 h-9 rounded-xl object-contain bg-white shadow-sm flex-shrink-0 border border-slate-200 dark:border-slate-700"
+              />
+            ) : (
+              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-emerald-700 flex items-center justify-center flex-shrink-0 shadow-sm">
+                <span className="text-white font-bold text-sm">
+                  {companyDisplayName.charAt(0)?.toUpperCase() ?? 'G'}
+                </span>
+              </div>
+            )}
             {!sidebarCollapsed && (
               <div className="min-w-0">
-                <p className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate">
-                  {company?.name ?? 'GESTIO 229'}
+                <p className="text-sm font-bold text-slate-800 dark:text-slate-100 truncate" title={companyDisplayName}>
+                  {companyDisplayName}
                 </p>
-                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium">SaaS Multi-Secteurs</p>
+                <p className="text-xs text-emerald-600 dark:text-emerald-400 font-medium truncate" title={companySectorLabel}>
+                  {companySectorLabel}
+                </p>
               </div>
             )}
           </div>
@@ -172,9 +196,17 @@ const Sidebar: React.FC = () => {
         {/* ── Navigation avec filtrage des permissions et de l'abonnement ──────────────── */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-1">
           {GROUP_ORDER.map((groupKey) => {
-            const rawItems = grouped[groupKey] ?? []
+            const rawItems = grouped?.[groupKey] ?? []
             // Filtrage selon les droits réels définis pour l'utilisateur et son abonnement
-            const items = rawItems.filter((item) => SectorLoader.canAccess(user, item.id, 'view', company))
+            const items = user
+              ? rawItems.filter((item) => {
+                  try {
+                    return SectorLoader.canAccess(user, item.id, 'view', company ?? undefined)
+                  } catch (e) {
+                    return true
+                  }
+                })
+              : rawItems
             if (!items.length) return null
 
             return (
