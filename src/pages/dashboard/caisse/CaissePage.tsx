@@ -1068,130 +1068,113 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         console.warn('Erreur cloturerCaisseOfficielle:', clotErr)
       }
 
-      // Fermeture locale de la caisse
+      // ── ENVOI AUTOMATIQUE INSTANTANÉ DU RAPPORT PDF VIA GMAIL SMTP ──
+      try {
+        const heureActuelle = new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
+        const donneesPDF = {
+          company: {
+            name: company?.name || 'GESTIO 229',
+            ifu: (company as any)?.ifu_number,
+            rccm: (company as any)?.rccm_number,
+            phone: company?.phone,
+            email: company?.email
+          },
+          secteur: {
+            nom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
+            slug: currentSectorSlug
+          },
+          caisse: {
+            nom: caisseActive?.nom || `Caisse ${currentSectorSlug.toUpperCase()}`,
+            id: cashRegisterId || caisseActive?.id
+          },
+          session: {
+            id: newClosure.id,
+            dateCloture: closedAt,
+            fermePar: closedBy
+          },
+          user: {
+            nom: closedBy
+          },
+          date: closedAt,
+          heure: heureActuelle,
+          synthese: {
+            fondInitialEspeces: fondInitialEspeces,
+            encaissementsEspeces: especesDuJour,
+            depensesEspeces: sumDepensesEspeces,
+            fondTheoriqueEspeces: fondTheoriqueEsp,
+            fondTheoriqueMomo: momoDuJour,
+            fondReelEspeces: Number(closingPhysicalCash),
+            fondReelMomo: momoDuJour,
+            ecartEspeces: ecart,
+            ecartMomo: 0,
+            caDuJour: caDuJour,
+            especesDuJour: especesDuJour,
+            momoDuJour: momoDuJour,
+            fondActuel: Number(closingPhysicalCash) + momoDuJour,
+            fondActuelEspeces: Number(closingPhysicalCash),
+            fondActuelMomo: momoDuJour,
+            totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+            totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
+            remboursement: remboursementsEspeces + remboursementsMomo,
+            margeBruteJour: margeBruteJour,
+            totalCreances: totalCreances
+          },
+          top5Produits: top5ProduitsJour,
+          mouvements: movementsHistory.map((m) => ({
+            heure: new Date(m.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+            type: m.type,
+            montant: m.amount,
+            mode: m.payment_channel,
+            motif: m.motif,
+            reference: m.reference
+          })),
+          notes: closingNotes
+        }
+
+        const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
+        const pdfBase64 = await blobToBase64(blob)
+
+        const res = await envoyerRapportCaisseMail({
+          companyId: currentCompanyId,
+          secteurId: currentSectorSlug,
+          caisseId: cashRegisterId || caisseActive?.id,
+          date: new Date(closedAt).toLocaleDateString('fr-BJ'),
+          heure: heureActuelle,
+          pdfBase64,
+          emails: recipientEmails.length > 0 ? recipientEmails : undefined,
+          metadata: {
+            nomCaissier: closedBy,
+            secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
+            entreprise: company?.name || 'GESTIO 229',
+            caDuJour: caDuJour,
+            especesDuJour: especesDuJour,
+            momoDuJour: momoDuJour,
+            fondActuel: Number(closingPhysicalCash) + momoDuJour,
+            totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+            totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
+            remboursement: remboursementsEspeces + remboursementsMomo,
+            margeBruteJour: margeBruteJour,
+            totalCreances: totalCreances,
+            top5Produits: top5ProduitsJour
+          }
+        })
+
+        const sentRecipients = res.recipients || recipientEmails
+        toast.success(
+          'Rapport envoyé instantanément par email !',
+          `Rapport de clôture transmis à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}).`
+        )
+      } catch (mailErr: any) {
+        console.error('[sendRapportCaisse] Échec envoi direct :', mailErr)
+        toast.error('Erreur SMTP', mailErr?.message || 'Échec de l\'envoi automatique du rapport de caisse par email.')
+      }
+
+      // Fermeture locale de la caisse et fermeture de la modale
       saveCaisseState('FERMEE', null, '', 0, 0)
       setActiveSessionId(null)
       setShowCloseModal(false)
       setShowReportModal(false)
       setClosingNotes('')
-
-      // Traçabilité Audit Senior
-      await logAuditEvent({
-        companyId: company?.id,
-        userId: user?.id,
-        userName: user?.full_name,
-        userRole: user?.role,
-        action: 'CLOTURE_CAISSE',
-        module: 'CAISSE',
-        sector: currentSectorSlug.toUpperCase(),
-        description: `Clôture caisse ${currentSectorSlug} par ${closedBy}. Espèces : ${fmt(Number(closingPhysicalCash))}, MoMo : ${fmt(momoDuJour)}`
-      })
-
-      // ── ENVOI IMMÉDIAT DU RAPPORT PDF VIA GMAIL SMTP (Sans attendre 23h00) ──
-      const sendRapportCaisse = async () => {
-        try {
-          const heureActuelle = new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
-          const donneesPDF = {
-            company: {
-              name: company?.name || 'GESTIO 229',
-              ifu: (company as any)?.ifu_number,
-              rccm: (company as any)?.rccm_number,
-              phone: company?.phone,
-              email: company?.email
-            },
-            secteur: {
-              nom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
-              slug: currentSectorSlug
-            },
-            caisse: {
-              nom: caisseActive?.nom || `Caisse ${currentSectorSlug.toUpperCase()}`,
-              id: cashRegisterId || caisseActive?.id
-            },
-            session: {
-              id: newClosure.id,
-              dateCloture: closedAt,
-              fermePar: closedBy
-            },
-            user: {
-              nom: closedBy
-            },
-            date: closedAt,
-            heure: heureActuelle,
-            synthese: {
-              fondInitialEspeces: fondInitialEspeces,
-              encaissementsEspeces: especesDuJour,
-              depensesEspeces: sumDepensesEspeces,
-              fondTheoriqueEspeces: fondTheoriqueEsp,
-              fondTheoriqueMomo: momoDuJour,
-              fondReelEspeces: Number(closingPhysicalCash),
-              fondReelMomo: momoDuJour,
-              ecartEspeces: ecart,
-              ecartMomo: 0,
-              caDuJour: caDuJour,
-              especesDuJour: especesDuJour,
-              momoDuJour: momoDuJour,
-              fondActuel: Number(closingPhysicalCash) + momoDuJour,
-              fondActuelEspeces: Number(closingPhysicalCash),
-              fondActuelMomo: momoDuJour,
-              totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
-              totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
-              remboursement: remboursementsEspeces + remboursementsMomo,
-              margeBruteJour: margeBruteJour,
-              totalCreances: totalCreances
-            },
-            top5Produits: top5ProduitsJour,
-            mouvements: movementsHistory.map((m) => ({
-              heure: new Date(m.created_at).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
-              type: m.type,
-              montant: m.amount,
-              mode: m.payment_channel,
-              motif: m.motif,
-              reference: m.reference
-            })),
-            notes: closingNotes
-          }
-
-          const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
-          const pdfBase64 = await blobToBase64(blob)
-
-          const res = await envoyerRapportCaisseMail({
-            companyId: currentCompanyId,
-            secteurId: currentSectorSlug,
-            caisseId: cashRegisterId || caisseActive?.id,
-            date: new Date(closedAt).toLocaleDateString('fr-BJ'),
-            heure: heureActuelle,
-            pdfBase64,
-            emails: recipientEmails.length > 0 ? recipientEmails : undefined,
-            metadata: {
-              nomCaissier: closedBy,
-              secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
-              entreprise: company?.name || 'GESTIO 229',
-              caDuJour: caDuJour,
-              especesDuJour: especesDuJour,
-              momoDuJour: momoDuJour,
-              fondActuel: Number(closingPhysicalCash) + momoDuJour,
-              totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
-              totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
-              remboursement: remboursementsEspeces + remboursementsMomo,
-              margeBruteJour: margeBruteJour,
-              totalCreances: totalCreances,
-              top5Produits: top5ProduitsJour
-            }
-          })
-
-          const sentRecipients = res.recipients || recipientEmails
-          toast.success(
-            'Rapport envoyé par email !',
-            `Rapport envoyé à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}) sans attendre 23h00.`
-          )
-        } catch (mailErr: any) {
-          console.error('[sendRapportCaisse] Échec envoi direct :', mailErr)
-          toast.error('Erreur SMTP', mailErr?.message || 'Échec de l\'envoi automatique du rapport de caisse par email.')
-        }
-      }
-
-      // Déclenchement immédiat de l'envoi dès la confirmation de fermeture
-      sendRapportCaisse()
 
       toast.success('Caisse clôturée avec succès !', `Nouveau fond espèces : ${fmt(Number(closingPhysicalCash))}`)
 
@@ -2435,7 +2418,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                 className="flex-1 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
               >
                 {isOperatingCaisse ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
-                <span>{isOperatingCaisse ? "Clôture..." : "Valider Clôture"}</span>
+                <span>{isOperatingCaisse ? "Clôture & envoi email..." : "Valider la Clôture"}</span>
               </button>
             </div>
           </div>

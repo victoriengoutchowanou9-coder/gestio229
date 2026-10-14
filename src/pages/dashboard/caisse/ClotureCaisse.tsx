@@ -270,64 +270,60 @@ export const ClotureCaisse: React.FC = () => {
         } catch (_) {}
       }
 
+      // ── Envoi automatique instantané du rapport PDF consolidé dès validation ──
+      try {
+        const repData = construireDonneesRapport()
+        const { blob } = genererRapportCaissePDF(repData, { save: false })
+        const pdfBase64 = await blobToBase64(blob)
+
+        let targetEmails: string[] = []
+        try {
+          const actifs = await getDestinatairesActifs(companyId)
+          targetEmails = actifs.map((d) => d.email.trim().toLowerCase()).filter(Boolean)
+        } catch (_) {}
+
+        if (user?.email) targetEmails.push(user.email.trim().toLowerCase())
+        try {
+          const { data: comp } = await supabase.from('companies').select('email').eq('id', companyId).maybeSingle()
+          if (comp?.email) targetEmails.push(comp.email.trim().toLowerCase())
+        } catch (_) {}
+
+        targetEmails = Array.from(new Set(targetEmails.filter(Boolean)))
+        const totalSolde = lignes.reduce((s, l) => s + (l.soldeActuel || 0), 0)
+
+        const res = await envoyerRapportCaisseMail({
+          companyId,
+          secteurId: currentSectorSlug || 'multi-secteurs',
+          date: dateCloture,
+          pdfBase64,
+          emails: targetEmails.length > 0 ? targetEmails : undefined,
+          metadata: {
+            secteurNom: currentSectorSlug ? `Secteur ${currentSectorSlug.toUpperCase()}` : 'Synthèse Multi-Secteurs',
+            entreprise: user?.user_metadata?.company_name || 'GESTIO 229',
+            totalReel: totalSolde,
+            caDuJour: repData.synthese.caDuJour,
+            especesDuJour: repData.synthese.especesDuJour,
+            momoDuJour: repData.synthese.momoDuJour,
+            totalDepensesJour: (repData.synthese.depensesEspeces || 0) + (repData.synthese.depensesMomo || 0),
+            totalRemboursementsJour: repData.synthese.totalRemboursementsJour || 0,
+            remboursement: 0,
+            margeBruteJour: repData.synthese.margeBruteJour || 0,
+            totalCreances: repData.synthese.totalCreances || 0,
+            nomCaissier: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+            operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+            top5Produits: repData.top5Produits || []
+          }
+        })
+        const sentCount = res.recipients?.length || targetEmails.length
+        toast.success('Rapport envoyé instantanément par email !', `Rapport transmis à ${sentCount} destinataire(s) dès validation.`)
+      } catch (e: any) {
+        console.error('[ClotureCaisse] Erreur envoi automatique rapport :', e)
+        toast.error('Erreur SMTP', e?.message || 'Échec de l\'envoi automatique du rapport.')
+      }
+
       await refreshFonds()
       setClotureSuccess(true)
       setShowConfirmModal(false)
-
-      // ── Envoi automatique immédiat du rapport PDF consolidé (sans attendre 23h00) ──
-      const sendRapportAutomatique = async () => {
-        try {
-          const repData = construireDonneesRapport()
-          const { blob } = genererRapportCaissePDF(repData, { save: false })
-          const pdfBase64 = await blobToBase64(blob)
-
-          let targetEmails: string[] = []
-          try {
-            const actifs = await getDestinatairesActifs(companyId)
-            targetEmails = actifs.map((d) => d.email.trim().toLowerCase()).filter(Boolean)
-          } catch (_) {}
-
-          if (user?.email) targetEmails.push(user.email.trim().toLowerCase())
-          try {
-            const { data: comp } = await supabase.from('companies').select('email').eq('id', companyId).maybeSingle()
-            if (comp?.email) targetEmails.push(comp.email.trim().toLowerCase())
-          } catch (_) {}
-
-          targetEmails = Array.from(new Set(targetEmails.filter(Boolean)))
-          const totalSolde = lignes.reduce((s, l) => s + (l.soldeActuel || 0), 0)
-
-          const res = await envoyerRapportCaisseMail({
-            companyId,
-            secteurId: currentSectorSlug || 'multi-secteurs',
-            date: dateCloture,
-            pdfBase64,
-            emails: targetEmails.length > 0 ? targetEmails : undefined,
-            metadata: {
-              secteurNom: currentSectorSlug ? `Secteur ${currentSectorSlug.toUpperCase()}` : 'Synthèse Multi-Secteurs',
-              entreprise: user?.user_metadata?.company_name || 'GESTIO 229',
-              totalReel: totalSolde,
-              caDuJour: repData.synthese.caDuJour,
-              especesDuJour: repData.synthese.especesDuJour,
-              momoDuJour: repData.synthese.momoDuJour,
-              totalDepensesJour: (repData.synthese.depensesEspeces || 0) + (repData.synthese.depensesMomo || 0),
-              totalRemboursementsJour: repData.synthese.totalRemboursementsJour || 0,
-              remboursement: 0,
-              margeBruteJour: repData.synthese.margeBruteJour || 0,
-              totalCreances: repData.synthese.totalCreances || 0,
-              nomCaissier: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
-              operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
-              top5Produits: repData.top5Produits || []
-            }
-          })
-          const sentCount = res.recipients?.length || targetEmails.length
-          toast.success('Rapport envoyé par email !', `Rapport envoyé à ${sentCount} destinataire(s) sans attendre 23h00.`)
-        } catch (e: any) {
-          console.error('[ClotureCaisse] Erreur envoi automatique rapport :', e)
-          toast.error('Erreur SMTP', e?.message || 'Échec de l\'envoi automatique du rapport.')
-        }
-      }
-
-      sendRapportAutomatique()
 
       toast.success(
         'Journée clôturée avec succès !',
@@ -733,7 +729,7 @@ export const ClotureCaisse: React.FC = () => {
                 {cloturant ? (
                   <>
                     <RefreshCw className="w-4 h-4 animate-spin" />
-                    Clôture en cours...
+                    Clôture & envoi email...
                   </>
                 ) : (
                   <>
