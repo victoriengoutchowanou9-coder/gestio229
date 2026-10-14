@@ -15,17 +15,22 @@ function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
 }
 
-function getTransporter() {
-  const host = process.env.SMTP_HOST || 'smtp.gmail.com'
-  const port = Number(process.env.SMTP_PORT) || 587
-  const user = process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
-  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '')
+function getSmtpConfig() {
+  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
+  const port = Number((process.env.SMTP_PORT || '587').trim()) || 587
+  const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
+  const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
+  const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
+  const fromEmail = user || (process.env.SMTP_FROM_EMAIL || '').trim()
 
   if (!pass) {
-    throw new Error('Variable SMTP_PASS manquante sur Vercel. Impossible d\'envoyer le rapport automatique.')
+    throw new Error('SMTP_PASS manquante - configurez dans Vercel')
+  }
+  if (!user) {
+    throw new Error('SMTP_USER manquante - configurez dans Vercel')
   }
 
-  return nodemailer.createTransport({
+  const transporter = nodemailer.createTransport({
     host,
     port,
     secure: false, // 587 STARTTLS
@@ -37,18 +42,25 @@ function getTransporter() {
       rejectUnauthorized: false
     }
   })
+
+  return { transporter, host, port, user, pass, fromName, fromEmail }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   console.log('[cron-rapport-caisse] ⏰ Démarrage du Cron Job Quotidien de 23h00 via Gmail SMTP...')
 
-  let transporter: nodemailer.Transporter
+  let smtpConfig: ReturnType<typeof getSmtpConfig>
   try {
-    transporter = getTransporter()
+    smtpConfig = getSmtpConfig()
   } catch (err: any) {
-    console.error('[cron-rapport-caisse] ❌ Configuration SMTP incomplète :', err.message)
-    return res.status(500).json({ success: false, error: err.message })
+    console.warn('[cron-rapport-caisse] ⚠️ Configuration SMTP incomplète :', err.message)
+    return res.status(200).json({
+      success: false,
+      error: err.message || 'SMTP_PASS manquante - configurez dans Vercel'
+    })
   }
+
+  const { transporter, user, fromName, fromEmail } = smtpConfig
 
   try {
     // 1. Récupérer toutes les entreprises actives
@@ -70,8 +82,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const heureFormatted = '23:00'
     const results: any[] = []
 
-    const fromName = process.env.SMTP_FROM_NAME || 'GESTIO229'
-    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou9@gmail.com'
     const fromHeader = `"${fromName}" <${fromEmail}>`
     const subject = `Rapport Caisse GESTIO 229 - ${dateFormatted}`
 
@@ -87,7 +97,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         let recipients = (destinataires || []).map((d) => (d.email || '').trim().toLowerCase()).filter((e) => e.includes('@'))
 
-        // Fallback sur l'email de l'entreprise ou SMTP_FROM_EMAIL
+        // Fallback sur l'email de l'entreprise ou SMTP_USER
+        if (recipients.length === 0) {
+          if (company.email && company.email.includes('@')) {
+            recipients.push(company.email.trim().toLowerCase())
+          } else if (user && user.includes('@')) {
+            recipients.push(user)
+          }
+        }
         if (recipients.length === 0 && company.email) {
           recipients = [company.email.trim().toLowerCase()]
         }

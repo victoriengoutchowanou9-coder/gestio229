@@ -15,17 +15,22 @@ function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
 }
 
-function getTransporter() {
-  const host = process.env.SMTP_HOST || 'smtp.gmail.com'
-  const port = Number(process.env.SMTP_PORT) || 587
-  const user = process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
-  const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '')
+function getSmtpConfig() {
+  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
+  const port = Number((process.env.SMTP_PORT || '587').trim()) || 587
+  const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
+  const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
+  const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
+  const fromEmail = user || (process.env.SMTP_FROM_EMAIL || '').trim()
 
   if (!pass) {
-    throw new Error('Configuration manquante : variable SMTP_PASS non définie sur Vercel. Veuillez configurer le mot de passe d\'application Gmail dans les variables d\'environnement.')
+    throw new Error('SMTP_PASS manquante - configurez dans Vercel')
+  }
+  if (!user) {
+    throw new Error('SMTP_USER manquante - configurez dans Vercel')
   }
 
-  return nodemailer.createTransport({
+  const transporter = nodemailer.createTransport({
     host,
     port,
     secure: false, // Port 587 utilise STARTTLS
@@ -37,6 +42,8 @@ function getTransporter() {
       rejectUnauthorized: false
     }
   })
+
+  return { transporter, host, port, user, pass, fromName, fromEmail }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -66,12 +73,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     } = req.body || {}
 
     // 1. Initialiser le transporteur Nodemailer
-    let transporter: nodemailer.Transporter
+    let smtpConfig: ReturnType<typeof getSmtpConfig>
     try {
-      transporter = getTransporter()
+      smtpConfig = getSmtpConfig()
     } catch (cfgErr: any) {
-      return res.status(500).json({ success: false, error: cfgErr.message })
+      console.warn('[send-rapport-pdf] Configuration SMTP manquante :', cfgErr.message)
+      return res.status(400).json({
+        success: false,
+        error: cfgErr.message || 'SMTP_PASS manquante - configurez dans Vercel'
+      })
     }
+    const { transporter, user, fromName, fromEmail } = smtpConfig
 
     // 2. Récupérer les destinataires actifs depuis parametres_destinataires (où actif = true)
     const targetEmails: string[] = []
@@ -290,8 +302,6 @@ www.gestio229.com
     `.trim()
 
     // 4. Configuration de l'expéditeur et de l'objet
-    const fromName = process.env.SMTP_FROM_NAME || 'GESTIO229'
-    const fromEmail = process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou9@gmail.com'
     const fromHeader = `"${fromName}" <${fromEmail}>`
     const subject = `Rapport Caisse GESTIO 229 - ${dateFormatted}`
 

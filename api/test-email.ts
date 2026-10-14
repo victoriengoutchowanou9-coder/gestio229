@@ -22,26 +22,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
+    const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
+    const port = Number((process.env.SMTP_PORT || '587').trim()) || 587
+    const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
+    const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
+    const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
+
+    if (!pass) {
+      return res.status(400).json({
+        success: false,
+        error: 'SMTP_PASS manquante - configurez dans Vercel'
+      })
+    }
+
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        error: 'SMTP_USER manquante - configurez dans Vercel'
+      })
+    }
+
     const { testEmail } = req.body || {}
-    const targetEmail = (testEmail || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com').trim()
+    const targetEmail = (testEmail || user).trim()
 
     if (!targetEmail || !targetEmail.includes('@')) {
       return res.status(400).json({ success: false, error: 'Adresse email de test invalide.' })
     }
 
-    const host = process.env.SMTP_HOST || 'smtp.gmail.com'
-    const port = Number(process.env.SMTP_PORT) || 587
-    const user = process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
-    const pass = (process.env.SMTP_PASS || '').replace(/\s+/g, '')
-    const fromName = process.env.SMTP_FROM_NAME || 'GESTIO229'
-    const fromEmail = process.env.SMTP_FROM_EMAIL || user
-
-    if (!pass) {
-      return res.status(500).json({
-        success: false,
-        error: 'Variable SMTP_PASS manquante sur Vercel. Veuillez configurer le mot de passe d\'application Gmail (16 caractères) dans les variables d\'environnement.'
-      })
-    }
+    // Le test d'envoi "Tester l'envoi" doit impérativement utiliser SMTP_USER comme expéditeur
+    const fromEmail = user
+    const fromHeader = `"${fromName}" <${fromEmail}>`
 
     // 1. Initialiser le transporteur Nodemailer
     const transporter = nodemailer.createTransport({
@@ -71,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
 
     const mailOptions = {
-      from: `"${fromName}" <${fromEmail}>`,
+      from: fromHeader,
       to: targetEmail,
       subject: `🧪 Test Configuration Gmail SMTP - GESTIO 229 (${nowStr})`,
       text: `
