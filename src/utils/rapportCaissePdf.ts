@@ -8,19 +8,24 @@ import autoTable from 'jspdf-autotable'
 import { formatFCFA } from './formatters'
 import { supabase } from '../lib/supabase'
 
+import { formatMontantFCFA, generateFermetureCaisseHTML, FermetureCaisseData } from './generateFermetureCaisseHTML'
+export { generateFermetureCaisseHTML, formatMontantFCFA }
+export type { FermetureCaisseData }
+
 export interface RapportCaisseData {
-  company: {
+  company?: {
     name?: string
     ifu?: string
     rccm?: string
     phone?: string
     email?: string
   }
-  secteur: {
+  entreprise?: string
+  secteur?: {
     nom: string
     slug: string
-  }
-  caisse: {
+  } | string
+  caisse?: {
     nom: string
     id?: string
   }
@@ -31,40 +36,54 @@ export interface RapportCaisseData {
     ouvertPar?: string
     fermePar?: string
   }
-  user: {
+  user?: {
     nom: string
   }
+  caissiere?: string
   date: string | Date
   heure?: string
-  synthese: {
-    fondInitialEspeces: number
+  dateHeure?: string
+  ca?: number
+  espece?: number
+  momo?: number
+  marge?: number
+  margePercent?: number
+  depenses?: number
+  remboursement?: number
+  creances?: number
+  synthese?: {
+    fondInitialEspeces?: number
     fondInitialMomo?: number
-    encaissementsEspeces: number
+    encaissementsEspeces?: number
     encaissementsMomo?: number
-    depensesEspeces: number
+    depensesEspeces?: number
     depensesMomo?: number
-    fondTheoriqueEspeces: number
+    fondTheoriqueEspeces?: number
     fondTheoriqueMomo?: number
-    fondReelEspeces: number
+    fondReelEspeces?: number
     fondReelMomo?: number
-    ecartEspeces: number
+    ecartEspeces?: number
     ecartMomo?: number
     caDuJour: number
     especesDuJour: number
     momoDuJour: number
-    // Métriques exigées :
     fondActuel?: number
     fondActuelEspeces?: number
     fondActuelMomo?: number
     totalDepensesJour?: number
+    totalRemboursementsJour?: number
+    remboursement?: number
     margeBruteJour?: number
     totalCreances?: number
   }
   top5Produits?: Array<{
     nom: string
-    quantite: number
-    totalVentes: number
+    quantite?: number
+    qte?: number
+    totalVentes?: number
+    montant?: number
   }>
+  top5?: Array<{ nom: string; qte: number; montant: number }>
   mouvements?: Array<{
     heure?: string
     type: string
@@ -77,162 +96,328 @@ export interface RapportCaisseData {
   notes?: string
 }
 
-const fmt = (n: number = 0) => formatFCFA(n)
+const fmt = (n: number = 0) => formatMontantFCFA(n)
 
 /**
- * Génère le document PDF officiel du Rapport de Caisse
- * comprenant les 12 sections obligatoires.
+ * Génère le document PDF officiel de Fermeture de Caisse
+ * Reproduisant à l'identique la structure moderne en carte de l'email :
+ * Palette : #0F1F3C (Bleu nuit), #0E9F6E (Vert), #FFFFFF (Blanc), #F3F4F6 (Gris clair), #111827 (Texte)
  */
 export function genererRapportCaissePDF(
   donnees: RapportCaisseData,
   options: { save?: boolean; fileName?: string } = { save: true }
 ): { doc: jsPDF; blob: Blob; fileName: string } {
-  const doc = new jsPDF()
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4'
+  })
+
   const dateObj = donnees.date instanceof Date ? donnees.date : new Date(donnees.date)
-  const dateStr = dateObj.toLocaleDateString('fr-BJ', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric'
-  })
-  const heureStr = donnees.heure || dateObj.toLocaleTimeString('fr-BJ', {
-    hour: '2-digit',
-    minute: '2-digit'
-  })
+  const dateStr = !isNaN(dateObj.getTime())
+    ? dateObj.toLocaleDateString('fr-BJ', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : String(donnees.date || '')
 
-  // 1. En-tête officiel
-  doc.setFillColor(15, 23, 42) // Slate 900
-  doc.rect(0, 0, 210, 26, 'F')
+  const heureStr = donnees.heure || (!isNaN(dateObj.getTime())
+    ? dateObj.toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
+    : '')
 
-  doc.setTextColor(255, 255, 255)
-  doc.setFontSize(14)
-  doc.setFont('helvetica', 'bold')
-  doc.text(`RAPPORT OFFICIEL DE CAISSE JOURNALIER`, 14, 11)
+  const dateHeureFormatted = donnees.dateHeure || (heureStr ? `${dateStr} à ${heureStr}` : dateStr)
 
-  doc.setFontSize(9)
-  doc.setFont('helvetica', 'normal')
-  doc.text(
-    `${donnees.company.name || 'GESTIO 229'} • Secteur : ${donnees.secteur.nom.toUpperCase()} • Édité le ${dateStr} à ${heureStr}`,
-    14,
-    19
-  )
+  const entreprise = donnees.entreprise || donnees.company?.name || 'GESTIO 229'
+  const caissiere = donnees.caissiere || donnees.user?.nom || 'Caissier'
+  const secteurNom = typeof donnees.secteur === 'string'
+    ? donnees.secteur
+    : (donnees.secteur?.nom || 'Général')
 
-  // 2. Bloc Métadonnées & Identification
-  doc.setTextColor(30, 41, 59)
-  doc.setFontSize(10)
-  doc.setFont('helvetica', 'bold')
-  doc.text(`1. Informations d'Exploitation`, 14, 34)
-
-  doc.setFontSize(8.5)
-  doc.setFont('helvetica', 'normal')
-  doc.text(`Date : ${dateStr}`, 14, 40)
-  doc.text(`Heure : ${heureStr}`, 14, 45)
-  doc.text(`Nom du Caissier : ${donnees.user.nom}`, 14, 50)
-  doc.text(`Secteur d'Activité : ${donnees.secteur.nom}`, 14, 55)
-
-  doc.text(`Point de Caisse : ${donnees.caisse.nom}`, 120, 40)
-  if (donnees.session?.id) doc.text(`Réf. Session : ${donnees.session.id.slice(0, 18)}`, 120, 45)
-  doc.text(`Entreprise : ${donnees.company.name || 'GESTIO 229'}`, 120, 50)
-  if (donnees.company.phone) doc.text(`Contact : ${donnees.company.phone}`, 120, 55)
-
-  // 3. Tableau Synthèse Financière Complète
-  const syn = donnees.synthese
-  const totalDepenses = syn.totalDepensesJour ?? (syn.depensesEspeces + (syn.depensesMomo || 0))
-  const fondActuelTotal = syn.fondActuel ?? ((syn.fondActuelEspeces || 0) + (syn.fondActuelMomo || 0))
-
-  const tableauSynthese = [
-    ['Chiffre d\'Affaires du Jour (CA)', fmt(syn.caDuJour), 'Total ventes facturées'],
-    ['Caisse Espèces du Jour', fmt(syn.especesDuJour), 'Encaissé en espèces'],
-    ['Caisse MoMo du Jour', fmt(syn.momoDuJour), 'Encaissé via Mobile Money'],
-    [
-      'Fond Actuel Persistant (Cumul)',
-      fmt(fondActuelTotal),
-      `Espèces : ${fmt(syn.fondActuelEspeces || 0)} | MoMo : ${fmt(syn.fondActuelMomo || 0)}`
-    ],
-    ['Total Dépenses du Jour', fmt(totalDepenses), 'Décaissements validés'],
-    ['Marge Brute du Jour', fmt(syn.margeBruteJour ?? 0), 'CA - Coût d\'achat des ventes'],
-    ['Total Créances Clients', fmt(syn.totalCreances ?? 0), 'Solde restant dû par les clients']
-  ]
-
-  autoTable(doc, {
-    startY: 60,
-    head: [['Indicateur Financier', 'Montant (FCFA)', 'Précision / Détail']],
-    body: tableauSynthese,
-    theme: 'striped',
-    headStyles: {
-      fillColor: [16, 185, 129], // Emerald 600
-      textColor: [255, 255, 255],
-      fontSize: 9,
-      fontStyle: 'bold'
-    },
-    bodyStyles: {
-      fontSize: 8.5,
-      textColor: [30, 41, 59]
-    },
-    columnStyles: {
-      0: { cellWidth: 80, fontStyle: 'bold' },
-      1: { cellWidth: 45, halign: 'right', fontStyle: 'bold' },
-      2: { cellWidth: 65, fontSize: 8, textColor: [100, 116, 139] }
-    },
-    alternateRowStyles: {
-      fillColor: [248, 250, 252]
-    }
-  })
-
-  let currentY = (doc as any).lastAutoTable?.finalY ? (doc as any).lastAutoTable.finalY + 8 : 130
-
-  // 4. Section : Top des 5 Meilleurs Produits Vendus
-  if (donnees.top5Produits && donnees.top5Produits.length > 0) {
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'bold')
-    doc.setTextColor(30, 41, 59)
-    doc.text(`2. Top des 5 Meilleurs Produits Vendus de la Journée`, 14, currentY)
-
-    const corpsTop5 = donnees.top5Produits.slice(0, 5).map((p, idx) => [
-      `#${idx + 1}`,
-      p.nom,
-      p.quantite.toLocaleString('fr-BJ'),
-      fmt(p.totalVentes)
-    ])
-
-    autoTable(doc, {
-      startY: currentY + 3,
-      head: [['Rang', 'Désignation Produit / Article', 'Quantité Vendue', 'Chiffre d\'Affaires (FCFA)']],
-      body: corpsTop5,
-      theme: 'grid',
-      headStyles: {
-        fillColor: [79, 70, 229], // Indigo 600
-        textColor: [255, 255, 255],
-        fontSize: 8.5,
-        fontStyle: 'bold'
-      },
-      bodyStyles: {
-        fontSize: 8,
-        textColor: [30, 41, 59]
-      },
-      columnStyles: {
-        0: { cellWidth: 15, halign: 'center', fontStyle: 'bold' },
-        1: { cellWidth: 95 },
-        2: { cellWidth: 35, halign: 'right' },
-        3: { cellWidth: 45, halign: 'right', fontStyle: 'bold' }
-      }
-    })
-
-    currentY = (doc as any).lastAutoTable?.finalY + 8
+  const syn = donnees.synthese || {
+    caDuJour: donnees.ca || 0,
+    especesDuJour: donnees.espece || 0,
+    momoDuJour: donnees.momo || 0
   }
 
-  // 5. Section : Détail des Opérations & Mouvements du Jour
+  const ca = Number(syn.caDuJour ?? donnees.ca ?? 0)
+  const espece = Number(syn.especesDuJour ?? donnees.espece ?? 0)
+  const momo = Number(syn.momoDuJour ?? donnees.momo ?? 0)
+  const depenses = Number(
+    syn.totalDepensesJour ??
+    ((syn.depensesEspeces || 0) + (syn.depensesMomo || 0)) ??
+    donnees.depenses ??
+    0
+  )
+  const remboursement = Number(
+    syn.totalRemboursementsJour ??
+    syn.remboursement ??
+    donnees.remboursement ??
+    0
+  )
+  const marge = Number(syn.margeBruteJour ?? donnees.marge ?? 0)
+  const margePercent = typeof donnees.margePercent === 'number'
+    ? donnees.margePercent
+    : (ca > 0 ? Math.round((marge / ca) * 100) : 0)
+  const creances = Number(syn.totalCreances ?? donnees.creances ?? 0)
+
+  const rawTop5 = donnees.top5 || donnees.top5Produits || []
+  const top5 = rawTop5.slice(0, 5).map((p: any) => ({
+    nom: p.nom || 'Produit',
+    qte: Number(p.qte ?? p.quantite ?? 1),
+    montant: Number(p.montant ?? p.totalVentes ?? 0)
+  }))
+
+  // 1. Fond général (#F3F4F6)
+  doc.setFillColor(243, 244, 246)
+  doc.rect(0, 0, 210, 297, 'F')
+
+  // Calcul dynamique de la hauteur de la carte
+  const top5BlockHeight = top5.length > 0 ? (top5.length * 8 + 4) : 14
+  const cardHeight = 175 + top5BlockHeight + 28
+
+  // 2. Carte principale (#FFFFFF) avec bordure fine (#E5E7EB)
+  const cardX = 18
+  const cardY = 12
+  const cardW = 174
+  const innerX = 24
+  const innerW = 162
+  const rightAlignX = 180
+
+  doc.setFillColor(255, 255, 255)
+  doc.setDrawColor(229, 231, 235)
+  doc.setLineWidth(0.4)
+  doc.roundedRect(cardX, cardY, cardW, cardHeight, 4, 4, 'FD')
+
+  // 3. Header BLEU NUIT (#0F1F3C)
+  doc.setFillColor(15, 31, 60)
+  doc.roundedRect(cardX, cardY, cardW, 26, 4, 4, 'F')
+  doc.rect(cardX, cardY + 12, cardW, 14, 'F') // Égaliser coins inférieurs
+
+  // Titres Header
+  doc.setTextColor(255, 255, 255)
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(15)
+  doc.text('Fermeture de Caisse', 105, 22, { align: 'center' })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.5)
+  doc.setTextColor(203, 213, 225)
+  doc.text(`${dateHeureFormatted} — ${caissiere}`, 105, 28.5, { align: 'center' })
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(148, 163, 184)
+  doc.text(`SECTEUR : `, 95, 34, { align: 'right' })
+  doc.setTextColor(255, 255, 255)
+  doc.text(`${secteurNom.toUpperCase()}`, 97, 34, { align: 'left' })
+
+  // 4. Section 1 - CHIFFRE D'AFFAIRES DU JOUR
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(15, 31, 60)
+  doc.text("CHIFFRE D'AFFAIRES DU JOUR", innerX, 45)
+
+  doc.setFillColor(248, 250, 252)
+  doc.setDrawColor(226, 232, 240)
+  doc.setLineWidth(0.3)
+  doc.roundedRect(innerX, 48, innerW, 18, 3, 3, 'FD')
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10)
+  doc.setTextColor(71, 85, 105)
+  doc.text("CA total du jour", innerX + 6, 59.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(17)
+  doc.setTextColor(15, 31, 60)
+  doc.text(fmt(ca), rightAlignX, 60, { align: 'right' })
+
+  // 5. Section 2 - DÉTAILS ENCAISSEMENTS
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(15, 31, 60)
+  doc.text("DÉTAILS ENCAISSEMENTS", innerX, 73)
+
+  doc.setFillColor(255, 255, 255)
+  doc.setDrawColor(229, 231, 235)
+  doc.setLineWidth(0.3)
+  doc.roundedRect(innerX, 76, innerW, 22, 3, 3, 'FD')
+
+  // Espèce
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.setTextColor(71, 85, 105)
+  doc.text("Espèce du jour", innerX + 6, 83.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9.5)
+  doc.setTextColor(17, 24, 39)
+  doc.text(fmt(espece), rightAlignX, 83.5, { align: 'right' })
+
+  // Séparateur
+  doc.setDrawColor(241, 245, 249)
+  doc.setLineWidth(0.2)
+  doc.line(innerX + 6, 87, rightAlignX, 87)
+
+  // MoMo
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.setTextColor(71, 85, 105)
+  doc.text("Momo du jour (MTN + Moov)", innerX + 6, 93.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9.5)
+  doc.setTextColor(17, 24, 39)
+  doc.text(fmt(momo), rightAlignX, 93.5, { align: 'right' })
+
+  // 6. Section 3 - RENTABILITÉ & SORTIES
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(15, 31, 60)
+  doc.text("RENTABILITÉ & SORTIES", innerX, 105)
+
+  doc.setFillColor(236, 253, 245)
+  doc.setDrawColor(167, 243, 208)
+  doc.setLineWidth(0.3)
+  doc.roundedRect(innerX, 108, innerW, 30, 3, 3, 'FD')
+
+  // Marge brute
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(6, 95, 70)
+  doc.text("Marge brute du jour", innerX + 6, 115.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9.5)
+  doc.setTextColor(14, 159, 110)
+  doc.text(`${fmt(marge)} (${margePercent}%)`, rightAlignX, 115.5, { align: 'right' })
+
+  // Séparateur
+  doc.setDrawColor(167, 243, 208)
+  doc.setLineWidth(0.2)
+  doc.line(innerX + 6, 119, rightAlignX, 119)
+
+  // Dépenses
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.setTextColor(55, 65, 81)
+  doc.text("Dépenses du jour", innerX + 6, 125.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9.5)
+  doc.setTextColor(17, 24, 39)
+  doc.text(fmt(depenses), rightAlignX, 125.5, { align: 'right' })
+
+  // Séparateur
+  doc.line(innerX + 6, 129, rightAlignX, 129)
+
+  // Remboursement
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(9)
+  doc.setTextColor(55, 65, 81)
+  doc.text("Remboursement du jour", innerX + 6, 134.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9.5)
+  doc.setTextColor(17, 24, 39)
+  doc.text(fmt(remboursement), rightAlignX, 134.5, { align: 'right' })
+
+  // 7. Section 4 - SITUATION CRÉANCES
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(15, 31, 60)
+  doc.text("SITUATION CRÉANCES", innerX, 145)
+
+  doc.setFillColor(255, 255, 255)
+  doc.setDrawColor(229, 231, 235)
+  doc.setLineWidth(0.3)
+  doc.roundedRect(innerX, 148, innerW, 18, 3, 3, 'FD')
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.5)
+  doc.setTextColor(71, 85, 105)
+  doc.text("Situation des créances actuel", innerX + 6, 156.5)
+  doc.setFontSize(7.5)
+  doc.setTextColor(148, 163, 184)
+  doc.text("(total restant dû clients à ce jour)", innerX + 6, 161.5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(10.5)
+  doc.setTextColor(17, 24, 39)
+  doc.text(fmt(creances), rightAlignX, 158.5, { align: 'right' })
+
+  // 8. Section 5 - TOP 5 PRODUITS VENDUS DU JOUR
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(15, 31, 60)
+  doc.text("TOP 5 PRODUITS VENDUS DU JOUR", innerX, 173)
+
+  doc.setFillColor(255, 255, 255)
+  doc.setDrawColor(229, 231, 235)
+  doc.setLineWidth(0.3)
+  doc.roundedRect(innerX, 176, innerW, top5BlockHeight, 3, 3, 'FD')
+
+  if (top5.length === 0) {
+    doc.setFont('helvetica', 'italic')
+    doc.setFontSize(8)
+    doc.setTextColor(156, 163, 175)
+    doc.text("Aucune vente enregistrée pour cette session.", 105, 184, { align: 'center' })
+  } else {
+    let rowY = 183
+    top5.forEach((p, idx) => {
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(8.5)
+      doc.setTextColor(15, 31, 60)
+      doc.text(`${idx + 1}.`, innerX + 6, rowY)
+
+      doc.setFont('helvetica', 'normal')
+      doc.setTextColor(17, 24, 39)
+      const nomCourt = p.nom.length > 36 ? p.nom.slice(0, 34) + '...' : p.nom
+      doc.text(nomCourt, innerX + 11, rowY)
+
+      doc.setFontSize(7.5)
+      doc.setTextColor(107, 114, 128)
+      doc.text(`— ${p.qte} vendus`, innerX + 13 + doc.getTextWidth(nomCourt), rowY)
+
+      doc.setFont('helvetica', 'bold')
+      doc.setFontSize(8.5)
+      doc.setTextColor(17, 24, 39)
+      doc.text(fmt(p.montant), rightAlignX, rowY, { align: 'right' })
+
+      if (idx < top5.length - 1) {
+        doc.setDrawColor(241, 245, 249)
+        doc.setLineWidth(0.2)
+        doc.line(innerX + 6, rowY + 3, rightAlignX, rowY + 3)
+      }
+      rowY += 8
+    })
+  }
+
+  // 9. Footer
+  const footerY = 176 + top5BlockHeight + 6
+  doc.setFillColor(248, 250, 252)
+  doc.setDrawColor(226, 232, 240)
+  doc.setLineWidth(0.3)
+  doc.roundedRect(innerX, footerY, innerW, 14, 2, 2, 'FD')
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(100, 116, 139)
+  doc.text(`Rapport généré par GESTIO 229 - ${entreprise}`, 105, footerY + 5.5, { align: 'center' })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7)
+  doc.setTextColor(148, 163, 184)
+  doc.text(`Plateforme de Gestion Commerciale, Caisse & Trésorerie • www.gestio229.com`, 105, footerY + 10, { align: 'center' })
+
+  // 10. Audit / Mouvements optionnels sur page suivante (traçabilité comptable)
   if (donnees.mouvements && donnees.mouvements.length > 0) {
-    if (currentY > 210) {
-      doc.addPage()
-      currentY = 20
-    }
-
-    doc.setFontSize(10)
+    doc.addPage()
+    doc.setFillColor(15, 31, 60)
+    doc.rect(0, 0, 210, 20, 'F')
+    doc.setTextColor(255, 255, 255)
+    doc.setFontSize(11)
     doc.setFont('helvetica', 'bold')
-    doc.setTextColor(30, 41, 59)
-    doc.text(`3. Mouvements & Opérations de Caisse du Jour (${donnees.mouvements.length} opérations)`, 14, currentY)
+    doc.text(`ANNEXE : JOURNAL DÉTAILLÉ DES MOUVEMENTS (${donnees.mouvements.length} opérations)`, 14, 13)
 
-    const corpsMouvements = donnees.mouvements.slice(0, 25).map((m) => [
+    const corpsMouvements = donnees.mouvements.slice(0, 40).map((m) => [
       m.heure || '--:--',
       m.type,
       fmt(m.montant),
@@ -242,12 +427,12 @@ export function genererRapportCaissePDF(
     ])
 
     autoTable(doc, {
-      startY: currentY + 3,
+      startY: 25,
       head: [['Heure', 'Type', 'Montant', 'Canal', 'Motif / Tiers', 'Référence']],
       body: corpsMouvements,
       theme: 'grid',
       headStyles: {
-        fillColor: [30, 41, 59], // Slate 800
+        fillColor: [15, 31, 60],
         textColor: [255, 255, 255],
         fontSize: 8,
         fontStyle: 'bold'
@@ -265,38 +450,12 @@ export function genererRapportCaissePDF(
         5: { cellWidth: 34 }
       }
     })
-
-    currentY = (doc as any).lastAutoTable?.finalY + 8
   }
-
-  // 6. Observations & Signatures
-  if (currentY > 240) {
-    doc.addPage()
-    currentY = 20
-  }
-
-  if (donnees.notes) {
-    doc.setFontSize(8.5)
-    doc.setFont('helvetica', 'bold')
-    doc.text('Observations de clôture :', 14, currentY)
-    doc.setFont('helvetica', 'normal')
-    doc.text(donnees.notes, 14, currentY + 5, { maxWidth: 180 })
-    currentY += 14
-  }
-
-  // Cadres Signatures
-  doc.setFontSize(8)
-  doc.setFont('helvetica', 'bold')
-  doc.setTextColor(71, 85, 105)
-  doc.line(14, currentY + 16, 75, currentY + 16)
-  doc.text(`Signature du Caissier\n(${donnees.user.nom})`, 14, currentY + 21)
-
-  doc.line(135, currentY + 16, 196, currentY + 16)
-  doc.text(`Visa Direction & Contrôle\n(Mention "Vérifié & Approuvé")`, 135, currentY + 21)
 
   // Nom de fichier normalisé
-  const cleanSecteur = (donnees.secteur.nom || donnees.secteur.slug).replace(/[^a-zA-Z0-9]/g, '_')
-  const fileName = options.fileName || `Rapport_Caisse_${cleanSecteur}_${dateObj.toISOString().slice(0, 10)}.pdf`
+  const cleanSecteur = (secteurNom).replace(/[^a-zA-Z0-9]/g, '_')
+  const cleanDateStr = dateStr.replace(/\//g, '-')
+  const fileName = options.fileName || `Fermeture_Caisse_${cleanSecteur}_${cleanDateStr}.pdf`
 
   if (options.save !== false) {
     doc.save(fileName)

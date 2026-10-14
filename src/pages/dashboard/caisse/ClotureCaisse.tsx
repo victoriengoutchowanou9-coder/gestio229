@@ -303,10 +303,20 @@ export const ClotureCaisse: React.FC = () => {
             pdfBase64,
             emails: targetEmails.length > 0 ? targetEmails : undefined,
             metadata: {
-              secteurNom: 'Synthèse Multi-Secteurs',
+              secteurNom: currentSectorSlug ? `Secteur ${currentSectorSlug.toUpperCase()}` : 'Synthèse Multi-Secteurs',
+              entreprise: user?.user_metadata?.company_name || 'GESTIO 229',
               totalReel: totalSolde,
               caDuJour: repData.synthese.caDuJour,
-              operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire'
+              especesDuJour: repData.synthese.especesDuJour,
+              momoDuJour: repData.synthese.momoDuJour,
+              totalDepensesJour: (repData.synthese.depensesEspeces || 0) + (repData.synthese.depensesMomo || 0),
+              totalRemboursementsJour: repData.synthese.totalRemboursementsJour || 0,
+              remboursement: 0,
+              margeBruteJour: repData.synthese.margeBruteJour || 0,
+              totalCreances: repData.synthese.totalCreances || 0,
+              nomCaissier: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+              operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+              top5Produits: repData.top5Produits || []
             }
           })
           const sentCount = res.recipients?.length || targetEmails.length
@@ -457,10 +467,20 @@ export const ClotureCaisse: React.FC = () => {
         pdfBase64,
         emails: destEmails,
         metadata: {
-          secteurNom: 'Synthèse Multi-Secteurs',
+          secteurNom: currentSectorSlug ? `Secteur ${currentSectorSlug.toUpperCase()}` : 'Synthèse Multi-Secteurs',
+          entreprise: user?.user_metadata?.company_name || 'GESTIO 229',
           totalReel: totalSoldeActuel,
           caDuJour: data.synthese.caDuJour,
-          operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire'
+          especesDuJour: data.synthese.especesDuJour,
+          momoDuJour: data.synthese.momoDuJour,
+          totalDepensesJour: (data.synthese.depensesEspeces || 0) + (data.synthese.depensesMomo || 0),
+          totalRemboursementsJour: data.synthese.totalRemboursementsJour || 0,
+          remboursement: 0,
+          margeBruteJour: data.synthese.margeBruteJour || 0,
+          totalCreances: data.synthese.totalCreances || 0,
+          nomCaissier: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+          operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+          top5Produits: data.top5Produits || []
         }
       })
 

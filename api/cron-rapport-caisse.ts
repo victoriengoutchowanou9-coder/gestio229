@@ -152,6 +152,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           totalDepensesJour += Number(d.montant || 0)
         })
 
+        // Remboursements du jour
+        let totalRemboursementsJour = 0
+        try {
+          const { data: rembs } = await supabase
+            .from('caisse_mouvements')
+            .select('montant')
+            .eq('company_id', company.id)
+            .in('type', ['remboursement', 'reglement_client', 'remboursement_creance'])
+            .gte('created_at', `${todayDate}T00:00:00`)
+            .lte('created_at', `${todayDate}T23:59:59`)
+
+          ;(rembs || []).forEach((r: any) => {
+            totalRemboursementsJour += Number(r.montant || 0)
+          })
+        } catch (_) {}
+
         // D. Fonds actuels persistants
         let fondActuel = 0
         const { data: fonds } = await supabase
@@ -175,7 +191,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
 
         // F. Top 5 des produits vendus de la journée
-        let top5: Array<{ nom: string; quantite: number; totalVentes: number }> = []
+        let top5: Array<{ nom: string; qte: number; montant: number }> = []
         if (orderIds.length > 0) {
           const { data: items } = await supabase
             .from('sales_order_items')
@@ -192,117 +208,278 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           })
 
           top5 = Array.from(aggMap.entries())
-            .map(([nom, val]) => ({ nom, quantite: val.quantite, totalVentes: val.totalVentes }))
-            .sort((a, b) => b.totalVentes - a.totalVentes)
+            .map(([nom, val]) => ({ nom, qte: val.quantite, montant: val.totalVentes }))
+            .sort((a, b) => b.montant - a.montant)
             .slice(0, 5)
         }
 
+        const margePercent = caDuJour > 0 ? Math.round((margeBruteJour / caDuJour) * 100) : 0
+
         // G. Construction du texte & HTML
         const top5Text = top5.length > 0
-          ? top5.map((p, i) => `  ${i + 1}. ${p.nom} : ${p.quantite} vendus (${formatFCFA(p.totalVentes)})`).join('\n')
-          : '  Aucune vente enregistrée aujourd\'hui.'
+          ? top5.map((p, i) => `  ${i + 1}. ${p.nom} - ${p.qte} vendus - ${formatFCFA(p.montant)}`).join('\n')
+          : '  Aucune vente enregistrée pour cette session.'
 
         const textBody = `
-RAPPORT DE CAISSE AUTOMATIQUE DE 23H00 - GESTIO 229
-===================================================
+Fermeture de Caisse GESTIO 229 (Arrêté Automatique de 23h00)
+===========================================================
+${dateFormatted} à ${heureFormatted} - Service Arrêté Automatique
 Entreprise : ${company.name}
-Date d'arrêté : ${dateFormatted} à ${heureFormatted}
 
-SYNTHÈSE FINANCIÈRE DE LA JOURNÉE :
------------------------------------
-- Chiffre d'Affaires du jour : ${formatFCFA(caDuJour)}
-- Caisse Espèces du jour : ${formatFCFA(espVentes)}
-- Caisse MoMo du jour : ${formatFCFA(momoVentes)}
-- Fond Actuel (Persistant) : ${formatFCFA(fondActuel)}
-- Total Dépenses du jour : ${formatFCFA(totalDepensesJour)}
-- Marge Brute du jour : ${formatFCFA(margeBruteJour)}
-- Total Créances Clients : ${formatFCFA(totalCreances)}
+CHIFFRE D'AFFAIRES DU JOUR :
+- CA total du jour : ${formatFCFA(caDuJour)}
 
-TOP DES 5 MEILLEURS PRODUITS VENDUS :
--------------------------------------
+DÉTAILS ENCAISSEMENTS :
+- Espèce du jour : ${formatFCFA(espVentes)}
+- Momo du jour (MTN + Moov) : ${formatFCFA(momoVentes)}
+
+RENTABILITÉ & SORTIES :
+- Marge brute du jour : ${formatFCFA(margeBruteJour)} (${margePercent}%)
+- Dépenses du jour : ${formatFCFA(totalDepensesJour)}
+- Remboursement du jour : ${formatFCFA(totalRemboursementsJour)}
+
+SITUATION CRÉANCES :
+- Situation des créances actuel : ${formatFCFA(totalCreances)} (total restant dû clients à ce jour)
+
+TOP 5 PRODUITS VENDUS DU JOUR :
 ${top5Text}
 
-Rapport généré et envoyé automatiquement par le service d'arrêté de caisse GESTIO 229 à 23h00 via Gmail SMTP.
+Rapport généré par GESTIO 229 - ${company.name}
         `.trim()
 
         const top5RowsHtml = top5.length > 0
           ? top5.map((p, i) => `
-            <tr style="border-bottom: 1px solid #e2e8f0;">
-              <td style="padding: 8px 12px; font-weight: bold; color: #4338ca;">#${i + 1}</td>
-              <td style="padding: 8px 12px; color: #1e293b;">${p.nom}</td>
-              <td style="padding: 8px 12px; text-align: right; color: #475569;">${p.quantite}</td>
-              <td style="padding: 8px 12px; text-align: right; font-weight: bold; color: #0f172a;">${formatFCFA(p.totalVentes)}</td>
+            <tr>
+              <td align="left" style="padding: 9px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #111827; ${i > 0 ? 'border-top: 1px solid #F1F5F9;' : ''}">
+                <strong style="color: #0F1F3C; margin-right: 6px;">${i + 1}.</strong>
+                <span>${p.nom || 'Produit'}</span>
+                <span style="color: #6B7280; font-size: 12px; margin-left: 6px;">— ${p.qte || 0} vendus</span>
+              </td>
+              <td align="right" style="padding: 9px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 800; color: #111827; white-space: nowrap; ${i > 0 ? 'border-top: 1px solid #F1F5F9;' : ''}">
+                ${formatFCFA(p.montant)}
+              </td>
             </tr>
           `).join('')
-          : '<tr><td colspan="4" style="padding: 12px; text-align: center; color: #94a3b8;">Aucune vente enregistrée</td></tr>'
+          : `
+            <tr>
+              <td colspan="2" align="center" style="padding: 12px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; color: #9CA3AF; font-style: italic;">
+                Aucune vente enregistrée pour cette session.
+              </td>
+            </tr>
+          `
 
         const htmlBody = `
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8" /></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
-  <div style="max-width: 640px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-    
-    <div style="background: linear-gradient(135deg, #0f172a 0%, #1e1b4b 100%); color: #ffffff; padding: 24px;">
-      <h1 style="margin: 0; font-size: 20px; font-weight: 800;">RAPPORT DE CAISSE AUTOMATIQUE DE 23H00</h1>
-      <p style="margin: 6px 0 0 0; font-size: 13px; color: #94a3b8;">${company.name} • Arrêté automatique du ${dateFormatted} à ${heureFormatted}</p>
-    </div>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Fermeture de Caisse - ${company.name}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #F3F4F6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
 
-    <div style="padding: 24px;">
-      <table style="width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 24px;">
-        <tbody>
-          <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 10px 12px; font-weight: 600;">Chiffre d'Affaires du Jour (CA)</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 800; color: #0f172a;">${formatFCFA(caDuJour)}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 10px 12px;">Caisse Espèces du Jour</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #166534;">+${formatFCFA(espVentes)}</td>
-          </tr>
-          <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 10px 12px;">Caisse MoMo du Jour</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #92400e;">+${formatFCFA(momoVentes)}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #e2e8f0; background: #ecfdf5;">
-            <td style="padding: 10px 12px; font-weight: 800; color: #065f46;">Fond Actuel (Persistant)</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 900; color: #065f46; font-size: 14px;">${formatFCFA(fondActuel)}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 10px 12px;">Total Dépenses du Jour</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #991b1b;">-${formatFCFA(totalDepensesJour)}</td>
-          </tr>
-          <tr style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 10px 12px;">Marge Brute du Jour</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #1e40af;">${formatFCFA(margeBruteJour)}</td>
-          </tr>
-          <tr style="border-bottom: 1px solid #e2e8f0;">
-            <td style="padding: 10px 12px;">Total Créances Clients</td>
-            <td style="padding: 10px 12px; text-align: right; font-weight: 700; color: #b45309;">${formatFCFA(totalCreances)}</td>
-          </tr>
-        </tbody>
-      </table>
+  <table width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #F3F4F6; margin: 0; padding: 24px 0;">
+    <tr>
+      <td align="center" style="padding: 0 12px;">
 
-      <h3 style="margin: 0 0 12px 0; font-size: 14px; text-transform: uppercase; color: #0f172a; font-weight: 800;">Top 5 Meilleurs Produits Vendus</h3>
-      <table style="width: 100%; border-collapse: collapse; font-size: 12px; border: 1px solid #e2e8f0; margin-bottom: 24px;">
-        <thead style="background: #e0e7ff; color: #3730a3; text-transform: uppercase;">
+        <table width="100%" border="0" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%; background-color: #FFFFFF; border-radius: 16px; overflow: hidden; border: 1px solid #E5E7EB; box-shadow: 0 4px 12px rgba(15, 31, 60, 0.05);">
+
+          <!-- HEADER BLEU NUIT (#0F1F3C) -->
           <tr>
-            <th style="padding: 8px 12px; text-align: left;">#</th>
-            <th style="padding: 8px 12px; text-align: left;">Produit</th>
-            <th style="padding: 8px 12px; text-align: right;">Quantité</th>
-            <th style="padding: 8px 12px; text-align: right;">Total Vente</th>
+            <td align="center" style="background-color: #0F1F3C; padding: 28px 24px; text-align: center;">
+              <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 22px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.3px; padding-bottom: 6px;">
+                    🏪 Fermeture de Caisse
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 500; color: #CBD5E1; padding-bottom: 4px;">
+                    ${dateFormatted} à ${heureFormatted} — <strong style="color: #FFFFFF;">Arrêté Automatique de 23h00</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px;">
+                    Entreprise : <span style="color: #FFFFFF;">${company.name}</span>
+                  </td>
+                </tr>
+              </table>
+            </td>
           </tr>
-        </thead>
-        <tbody>
-          ${top5RowsHtml}
-        </tbody>
-      </table>
-    </div>
 
-    <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 24px; text-align: center; font-size: 11px; color: #64748b;">
-      Rapport quotidien automatique envoyé à 23h00 par GESTIO 229 • <a href="https://www.gestio229.com" style="color: #4f46e5;">www.gestio229.com</a>
-    </div>
+          <!-- CORPS DU RAPPORT -->
+          <tr>
+            <td style="padding: 22px 24px 24px 24px;">
 
-  </div>
+              <!-- SECTION 1 - CHIFFRE D'AFFAIRES DU JOUR -->
+              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
+                <tr>
+                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
+                    💰 CHIFFRE D'AFFAIRES DU JOUR
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 18px 20px;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="left" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #475569;">
+                          CA total du jour
+                        </td>
+                        <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 26px; font-weight: 900; color: #0F1F3C; letter-spacing: -0.5px; white-space: nowrap;">
+                          ${formatFCFA(caDuJour)}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- SECTION 2 - DÉTAILS ENCAISSEMENTS -->
+              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
+                <tr>
+                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
+                    🏦 DÉTAILS ENCAISSEMENTS
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 6px 18px;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
+                          Espèce du jour
+                        </td>
+                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
+                          ${formatFCFA(espVentes)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="2" style="border-top: 1px solid #F1F5F9; height: 1px; padding: 0;"></td>
+                      </tr>
+                      <tr>
+                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
+                          Momo du jour <span style="font-size: 11px; color: #94A3B8;">(MTN + Moov)</span>
+                        </td>
+                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
+                          ${formatFCFA(momoVentes)}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- SECTION 3 - RENTABILITÉ & SORTIES -->
+              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
+                <tr>
+                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
+                    📈 RENTABILITÉ &amp; SORTIES
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 12px; padding: 6px 18px;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #065F46;">
+                          Marge brute du jour
+                        </td>
+                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #0E9F6E; white-space: nowrap;">
+                          ${formatFCFA(margeBruteJour)} <span style="font-size: 12px; font-weight: 800; color: #0E9F6E; margin-left: 4px;">(${margePercent}%)</span>
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="2" style="border-top: 1px solid #A7F3D0; height: 1px; padding: 0;"></td>
+                      </tr>
+                      <tr>
+                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #374151;">
+                          Dépenses du jour
+                        </td>
+                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
+                          ${formatFCFA(totalDepensesJour)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="2" style="border-top: 1px solid #A7F3D0; height: 1px; padding: 0;"></td>
+                      </tr>
+                      <tr>
+                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #374151;">
+                          Remboursement du jour
+                        </td>
+                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
+                          ${formatFCFA(totalRemboursementsJour)}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- SECTION 4 - SITUATION CRÉANCES -->
+              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
+                <tr>
+                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
+                    📋 SITUATION CRÉANCES
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 14px 18px;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                      <tr>
+                        <td align="left" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
+                          Situation des créances actuel<br/>
+                          <span style="font-size: 11px; color: #94A3B8;">(total restant dû clients à ce jour)</span>
+                        </td>
+                        <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; font-weight: 800; color: #111827; white-space: nowrap;">
+                          ${formatFCFA(totalCreances)}
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- SECTION 5 - TOP 5 PRODUITS VENDUS DU JOUR -->
+              <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
+                    🏆 TOP 5 PRODUITS VENDUS DU JOUR
+                  </td>
+                </tr>
+                <tr>
+                  <td style="background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 6px 18px;">
+                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                      ${top5RowsHtml}
+                    </table>
+                  </td>
+                </tr>
+              </table>
+
+            </td>
+          </tr>
+
+          <!-- FOOTER -->
+          <tr>
+            <td align="center" style="background-color: #F8FAFC; border-top: 1px solid #E2E8F0; padding: 18px 24px; text-align: center;">
+              <table width="100%" border="0" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; font-weight: 600; color: #64748B;">
+                    Rapport généré par GESTIO 229 — <strong style="color: #0F1F3C;">${company.name}</strong>
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 10px; color: #94A3B8; padding-top: 4px;">
+                    Plateforme de Gestion Commerciale, Caisse &amp; Trésorerie • www.gestio229.com
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+        </table>
+
+      </td>
+    </tr>
+  </table>
+
 </body>
 </html>
         `.trim()

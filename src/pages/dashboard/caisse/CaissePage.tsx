@@ -1134,6 +1134,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               fondActuelEspeces: Number(closingPhysicalCash),
               fondActuelMomo: momoDuJour,
               totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+              totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
+              remboursement: remboursementsEspeces + remboursementsMomo,
               margeBruteJour: margeBruteJour,
               totalCreances: totalCreances
             },
@@ -1163,11 +1165,14 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             metadata: {
               nomCaissier: closedBy,
               secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
+              entreprise: company?.name || 'GESTIO 229',
               caDuJour: caDuJour,
               especesDuJour: especesDuJour,
               momoDuJour: momoDuJour,
               fondActuel: Number(closingPhysicalCash) + momoDuJour,
               totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+              totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
+              remboursement: remboursementsEspeces + remboursementsMomo,
               margeBruteJour: margeBruteJour,
               totalCreances: totalCreances,
               top5Produits: top5ProduitsJour
@@ -1355,6 +1360,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           fondActuelEspeces: fondActuelEspeces,
           fondActuelMomo: fondActuelMomo,
           totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+          totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
+          remboursement: remboursementsEspeces + remboursementsMomo,
           margeBruteJour: margeBruteJour,
           totalCreances: totalCreances
         },
@@ -1386,11 +1393,14 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         metadata: {
           nomCaissier: activeReportClosure.closed_by || user?.full_name || 'Caissier',
           secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
+          entreprise: company?.name || 'GESTIO 229',
           caDuJour: caDuJour,
           especesDuJour: especesDuJour,
           momoDuJour: momoDuJour || activeReportClosure.fond_momo,
           fondActuel: fondActuelEspeces + fondActuelMomo,
           totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+          totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
+          remboursement: remboursementsEspeces + remboursementsMomo,
           margeBruteJour: margeBruteJour,
           totalCreances: totalCreances,
           top5Produits: top5ProduitsJour
