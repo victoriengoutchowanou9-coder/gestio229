@@ -38,6 +38,7 @@ import {
   buildAibReport,
   AibReportRow
 } from '../../../services/accountingService'
+import { synchroniserToutAutomatiquement } from '../../../services/compta_auto'
 import {
   calculateDgiFinancialStatements,
   generateDgiEdiXml,
@@ -112,7 +113,6 @@ export const SyscohadaPage: React.FC = () => {
   // Données réelles Supabase
   const [entries, setEntries] = useState<AccountingEntry[]>([])
   const [loading, setLoading] = useState(true)
-  const [isSyncing, setIsSyncing] = useState(false)
 
   // Détail d'une écriture
   const [viewingEntry, setViewingEntry] = useState<AccountingEntry | null>(null)
@@ -170,11 +170,14 @@ export const SyscohadaPage: React.FC = () => {
     { account_number: '571100', account_label: 'Caisse centrale espèces', description: '', debit: 0, credit: 0 }
   ])
 
-  // ─── 1. CHARGEMENT DU LIVRE JOURNAL RÉEL ────────────────────────────────────
-  const loadEntries = useCallback(async () => {
+  // ─── 1. CHARGEMENT AUTOMATIQUE DU LIVRE JOURNAL RÉEL ───────────────────────
+  const loadEntries = useCallback(async (autoSync = false) => {
     if (!compId) return
     setLoading(true)
     try {
+      if (autoSync) {
+        await synchroniserToutAutomatiquement(compId, activeSector, user?.id)
+      }
       const data = await fetchAccountingEntries(compId, activeSector, {
         journal: selectedJournal,
         startDate: startDate || undefined,
@@ -183,38 +186,41 @@ export const SyscohadaPage: React.FC = () => {
         account: selectedAccountFilter !== 'all' ? selectedAccountFilter : undefined
       })
       setEntries(data)
+
+      // Si aucune écriture trouvée et qu'on n'a pas encore fait de synchro, auto-réconcilier
+      if (data.length === 0 && !autoSync) {
+        const syncRes = await synchroniserToutAutomatiquement(compId, activeSector, user?.id)
+        if (syncRes.added > 0) {
+          const freshData = await fetchAccountingEntries(compId, activeSector, {
+            journal: selectedJournal,
+            startDate: startDate || undefined,
+            endDate: endDate || undefined,
+            search: search || undefined,
+            account: selectedAccountFilter !== 'all' ? selectedAccountFilter : undefined
+          })
+          setEntries(freshData)
+        }
+      }
     } catch (err: any) {
       toast.error('Erreur chargement écritures', err.message)
     } finally {
       setLoading(false)
     }
-  }, [compId, activeSector, selectedJournal, startDate, endDate, search, selectedAccountFilter, toast])
+  }, [compId, activeSector, selectedJournal, startDate, endDate, search, selectedAccountFilter, user?.id, toast])
 
   useEffect(() => {
-    loadEntries()
-  }, [loadEntries])
+    loadEntries(true)
 
-  // Synchronisation des flux opérationnels vers les journaux
-  const handleSyncOperational = async () => {
-    if (!compId) return
-    setIsSyncing(true)
-    try {
-      const res = await syncOperationalDataToAccounting(compId, activeSector, user?.id)
-      if (res.added > 0) {
-        toast.success(
-          'Synchronisation comptable réussie',
-          `${res.added} nouvelle(s) écriture(s) générée(s) (Engagement et Règlement séparés).`
-        )
-      } else {
-        toast.info('À jour', 'Toutes les opérations validées sont déjà comptabilisées (zéro doublon).')
-      }
-      await loadEntries()
-    } catch (err: any) {
-      toast.error('Erreur synchronisation', err.message)
-    } finally {
-      setIsSyncing(false)
+    const handleRemoteTransaction = () => {
+      loadEntries(false)
     }
-  }
+    window.addEventListener('gestio:sale_created', handleRemoteTransaction)
+    window.addEventListener('gestio:transaction_created', handleRemoteTransaction)
+    return () => {
+      window.removeEventListener('gestio:sale_created', handleRemoteTransaction)
+      window.removeEventListener('gestio:transaction_created', handleRemoteTransaction)
+    }
+  }, [loadEntries])
 
   // ─── GESTION BUDGET (CONSERVÉE) ─────────────────────────────────────────────
   const loadBudgets = useCallback(async () => {
@@ -692,15 +698,10 @@ export const SyscohadaPage: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={handleSyncOperational}
-            disabled={isSyncing}
-            className="px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-md disabled:opacity-50"
-            title="Génère automatiquement les écritures d'engagement (factures) et de règlement (trésorerie) sans doublon"
-          >
-            <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
-            {isSyncing ? 'Synchronisation...' : 'Synchroniser les Flux'}
-          </button>
+          <div className="px-3.5 py-2 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 rounded-xl text-xs font-bold flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-emerald-400" />
+            <span>Écritures Automatisées</span>
+          </div>
 
           <button
             onClick={() => setShowManualModal(true)}
@@ -861,9 +862,9 @@ export const SyscohadaPage: React.FC = () => {
           ) : entries.length === 0 ? (
             <div className="p-12 text-center text-slate-400">
               <BookOpen className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-              <p className="font-bold text-slate-700">Aucune écriture enregistrée pour ce filtre</p>
+              <p className="font-bold text-slate-700">Aucune opération comptable ce mois</p>
               <p className="text-xs text-slate-400 mt-1">
-                Cliquez sur « Synchroniser les Flux » pour comptabiliser automatiquement les ventes, achats et règlements.
+                Toutes les écritures de ventes, achats, encaissements et dépenses sont comptabilisées automatiquement en temps réel.
               </p>
             </div>
           ) : (

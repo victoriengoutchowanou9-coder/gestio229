@@ -10,6 +10,7 @@ import { useAuthStore } from '../../../store/authStore'
 import { isSectorSubscribed } from '../../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import { getRolesForSector, normalizeSectorSlug, getSectorAvailableModules } from '../../../core/team/sectorRoles'
+import { comptabiliserSalaireAuto } from '../../../services/compta_auto'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
@@ -961,6 +962,28 @@ const UtilisateursPage: React.FC = () => {
 
       if (expErr) {
         console.warn('Erreur insertion expenses :', expErr)
+      }
+
+      // Comptabilisation automatique SYSCOHADA Paie (Journal JS + Règlement)
+      try {
+        await comptabiliserSalaireAuto({
+          companyId: company.id,
+          sectorSlug: payingEmployee.sector || 'direction',
+          salaryId: expData?.id || expNum,
+          payrollPeriod: payrollPeriod,
+          employeeName: payingEmployee.fullName,
+          employeeId: payingEmployee.id,
+          grossSalary: gross,
+          netSalary: net,
+          cnssAmount: cnssSal + cnssPat,
+          taxSalaryAmount: vps,
+          advanceDeducted: adv,
+          isPaid: true,
+          paymentMethod: payMethod,
+          createdById: user?.id || null,
+        })
+      } catch (comptaSalErr) {
+        console.warn('[compta_auto] Erreur comptabilisation salaire:', comptaSalErr)
       }
 
       // 2. Décaissement en Caisse si espèces dans Supabase cash_registers

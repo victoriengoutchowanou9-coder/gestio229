@@ -21,6 +21,7 @@ import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../..
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
+import { comptabiliserEncaissementCreanceAuto } from '../../../services/compta_auto'
 import {
   BrasserieClientPrixPersonnalise,
   fetchClientPrixPersonnalises,
@@ -920,6 +921,24 @@ const ClientsPage: React.FC = () => {
           user_id: user?.id,
         })
       } catch (_) {}
+
+      // Comptabilisation automatique SYSCOHADA Recouvrement Créance (JC / JB)
+      try {
+        await comptabiliserEncaissementCreanceAuto({
+          companyId: currentCompanyId,
+          sectorSlug: currentSectorSlug,
+          paymentId: receiptNumber,
+          reference: receiptNumber,
+          paymentDate: payDateIso,
+          amount: paymentAmount,
+          customerName: selectedCustomer.name,
+          customerId: selectedCustomer.id,
+          paymentMethod: normalizedMethod,
+          createdById: user?.id || null,
+        })
+      } catch (comptaCreanceErr) {
+        console.warn('[compta_auto] Erreur comptabilisation créance:', comptaCreanceErr)
+      }
 
       // 8. Traçabilité Journal d'Audit
       await logAuditEvent({

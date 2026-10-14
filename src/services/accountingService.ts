@@ -149,14 +149,16 @@ export const SYSCOHADA_PLAN_2018: SyscohadaAccountDef[] = [
   { code: '419100', label: 'Clients, avances et acomptes reçus', classId: 4, type: 'PASSIF' },
   { code: '419400', label: 'Clients, dettes pour emballages et casiers consignés', classId: 4, type: 'PASSIF' },
   { code: '422000', label: 'Personnel, rémunérations directes dues', classId: 4, type: 'PASSIF' },
+  { code: '422200', label: 'Personnel, rémunérations nettes à payer', classId: 4, type: 'PASSIF' },
   { code: '428100', label: 'Personnel, dettes provisionnées pour congés', classId: 4, type: 'PASSIF' },
   { code: '431000', label: 'Sécurité Sociale (CNSS Bénin)', classId: 4, type: 'PASSIF' },
   { code: '441000', label: 'État, impôt sur les bénéfices (IS / IBS)', classId: 4, type: 'PASSIF' },
   { code: '442100', label: 'État, impôts retenus à la source (IPTS / VPS)', classId: 4, type: 'PASSIF' },
+  { code: '447200', label: 'État, impôts et taxes sur salaires (IPTS / VPS)', classId: 4, type: 'PASSIF' },
   { code: '443100', label: 'État, TVA facturée sur ventes (18%)', classId: 4, type: 'PASSIF' },
   { code: '444100', label: 'État, TVA due / à reverser au Trésor', classId: 4, type: 'PASSIF' },
   { code: '445100', label: 'État, TVA récupérable sur achats de marchandises', classId: 4, type: 'ACTIF' },
-  { code: '445200', label: 'État, TVA récupérable sur immobilisations', classId: 4, type: 'ACTIF' },
+  { code: '445200', label: 'État, TVA récupérable sur achats et immobilisations', classId: 4, type: 'ACTIF' },
   { code: '445400', label: 'État, TVA récupérable sur services et charges', classId: 4, type: 'ACTIF' },
   { code: '449200', label: 'État, AIB retenu à la source / collecté', classId: 4, type: 'PASSIF' },
   { code: '462000', label: 'Associés, comptes courants créditeurs', classId: 4, type: 'PASSIF' },
@@ -165,6 +167,7 @@ export const SYSCOHADA_PLAN_2018: SyscohadaAccountDef[] = [
   // CLASSE 5 : COMPTES DE TRÉSORERIE
   { code: '521100', label: 'Banques locales en FCFA', classId: 5, type: 'TRESORERIE' },
   { code: '521200', label: 'Banques devises étrangères', classId: 5, type: 'TRESORERIE' },
+  { code: '525100', label: 'Comptes Mobile Money (MTN / Moov / Wave)', classId: 5, type: 'TRESORERIE' },
   { code: '571100', label: 'Caisse centrale espèces', classId: 5, type: 'TRESORERIE' },
   { code: '571200', label: 'Caisses secondaires / Caisses caissières', classId: 5, type: 'TRESORERIE' },
   { code: '572100', label: 'Comptes Mobile Money (MTN / Moov / Wave)', classId: 5, type: 'TRESORERIE' },
@@ -187,6 +190,7 @@ export const SYSCOHADA_PLAN_2018: SyscohadaAccountDef[] = [
   { code: '641100', label: 'Rémunérations directes du personnel (Salaires)', classId: 6, type: 'CHARGE' },
   { code: '641300', label: 'Primes et gratifications du personnel', classId: 6, type: 'CHARGE' },
   { code: '646100', label: 'Charges sociales patronales CNSS & VPS', classId: 6, type: 'CHARGE' },
+  { code: '661100', label: 'Charges de personnel - Rémunérations directes brutes', classId: 6, type: 'CHARGE' },
   { code: '658100', label: 'Charges diverses d\'exploitation', classId: 6, type: 'CHARGE' },
   { code: '681100', label: 'Dotations aux amortissements d\'exploitation', classId: 6, type: 'CHARGE' },
 
@@ -214,7 +218,7 @@ export const JOURNAUX_CATALOG: { code: JournalCode; name: string; defaultAccount
   { code: 'JC', name: 'Journal de Caisse', defaultAccount: '571100' },
   { code: 'JB', name: 'Journal de Banque', defaultAccount: '521100' },
   { code: 'JOD', name: 'Journal des Opérations Diverses', defaultAccount: '471000' },
-  { code: 'JS', name: 'Journal des Salaires & Paie', defaultAccount: '641100' },
+  { code: 'JS', name: 'Journal des Salaires & Paie', defaultAccount: '661100' },
   { code: 'JR', name: 'Journal des Règlements Directs', defaultAccount: '571100' },
 ]
 
@@ -223,10 +227,16 @@ export function getAccountLabel(accountNumber: string): string {
   if (match) return match.label
   if (accountNumber.startsWith('411')) return 'Compte Client'
   if (accountNumber.startsWith('401')) return 'Compte Fournisseur'
+  if (accountNumber.startsWith('422')) return 'Personnel à payer'
+  if (accountNumber.startsWith('431')) return 'Sécurité Sociale (CNSS)'
+  if (accountNumber.startsWith('447')) return 'Impôts sur salaires (IPTS / VPS)'
   if (accountNumber.startsWith('701')) return 'Ventes Marchandises'
   if (accountNumber.startsWith('601')) return 'Achats Marchandises'
+  if (accountNumber.startsWith('661')) return 'Charges de personnel (Brut)'
+  if (accountNumber.startsWith('641')) return 'Rémunérations directes du personnel'
   if (accountNumber.startsWith('571')) return 'Caisse Espèces'
   if (accountNumber.startsWith('521')) return 'Banque'
+  if (accountNumber.startsWith('525') || accountNumber.startsWith('572')) return 'Mobile Money'
   if (accountNumber.startsWith('4492')) return 'État, AIB'
   if (accountNumber.startsWith('443')) return 'TVA facturée'
   if (accountNumber.startsWith('445')) return 'TVA récupérable'
@@ -238,7 +248,7 @@ export function getAccountLabel(accountNumber: string): string {
  */
 export async function fetchAccountingEntries(
   companyId: string,
-  sectorSlug: string,
+  sectorSlug?: string,
   filters?: {
     journal?: JournalCode | 'ALL'
     startDate?: string
@@ -254,9 +264,12 @@ export async function fetchAccountingEntries(
       .from('accounting_entries')
       .select('*, lines:accounting_entry_lines(*)')
       .eq('company_id', companyId)
-      .eq('sector_slug', sectorSlug)
       .order('entry_date', { ascending: false })
       .order('entry_number', { ascending: false })
+
+    if (sectorSlug && sectorSlug !== 'all' && sectorSlug !== 'ALL' && sectorSlug !== 'global') {
+      query = query.eq('sector_slug', sectorSlug)
+    }
 
     if (filters?.journal && filters.journal !== 'ALL') {
       query = query.eq('journal_code', filters.journal)

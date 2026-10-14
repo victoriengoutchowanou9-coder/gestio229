@@ -49,6 +49,7 @@ import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../se
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { isVraiCodeEmballage } from '../../../utils/emballages'
 import { getCachedData, setCachedData } from '../../../utils/cache'
+import { comptabiliserVenteAuto } from '../../../services/compta_auto'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -2412,6 +2413,25 @@ export const POSPage: React.FC = () => {
           ...emballageOps,
           ...restaurantOps,
           auditOp,
+          comptabiliserVenteAuto({
+            companyId: company?.id ?? companyId ?? '',
+            sectorSlug: currentSectorSlug,
+            saleId: savedDbSale.id,
+            orderNumber: orderNum,
+            orderDate: todayDate,
+            totalTtc: totalNetTTCSnapshot,
+            tvaAmount: cartFiscalSummarySnapshot.tva,
+            aibAmount: cartFiscalSummarySnapshot.aib,
+            customerName: custName,
+            customerId: selectedCustomerSnapshot?.id || null,
+            paymentMethod: primaryMethod,
+            paymentStatus: creditAmount >= totalNetTTCSnapshot ? 'credit' : primaryMethod,
+            paidAmount: totalNetTTCSnapshot - creditAmount,
+            creditAmount: creditAmount,
+            createdById: user?.id || null,
+            isMultiPayment: isMultiModeSnapshot,
+            payments: paymentsList
+          })
         ])
       } catch (bgErr: any) {
         console.error('[POSPage] Erreur synchronisation vente:', bgErr)

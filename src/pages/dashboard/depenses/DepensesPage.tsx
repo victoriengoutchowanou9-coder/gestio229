@@ -23,6 +23,7 @@ import {
   getSoldeFondActuel,
 } from '../../../services/caisseDepensesService'
 import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
+import { comptabiliserDepenseAuto } from '../../../services/compta_auto'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -297,8 +298,9 @@ export const DepensesPage: React.FC = () => {
       }
 
       // Synchronisation miroir dans expenses pour reporting général
+      let expNum = `DEP-${Date.now()}`
       try {
-        const expNum = await getNextSectorCode('expenses', 'DEP', companyId, secteurActif.slug)
+        expNum = await getNextSectorCode('expenses', 'DEP', companyId, secteurActif.slug)
         await supabase.from('expenses').insert({
           company_id: companyId,
           sector_slug: secteurActif.slug,
@@ -311,6 +313,25 @@ export const DepensesPage: React.FC = () => {
           created_by: user?.id || null
         })
       } catch (_) {}
+
+      // Comptabilisation automatique SYSCOHADA dans JC / JB
+      try {
+        await comptabiliserDepenseAuto({
+          companyId,
+          sectorSlug: secteurActif.slug,
+          expenseId: res.depense_id || expNum,
+          expenseNumber: expNum,
+          expenseDate: form.date_depense,
+          amount: numAmount,
+          category: form.categorie,
+          description: desc,
+          beneficiary: desc,
+          paymentMethod: form.mode_paiement === 'espece' ? 'especes' : form.mode_paiement,
+          createdById: user?.id || null
+        })
+      } catch (comptaErr) {
+        console.warn('[compta_auto] Erreur comptabilisation dépense:', comptaErr)
+      }
 
       // Mettre à jour le mouvement de caisse
       try {

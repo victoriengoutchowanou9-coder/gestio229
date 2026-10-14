@@ -21,6 +21,7 @@ import { PurchaseOrderModal, ReceiveBlModal, ModalPortal, NewSupplierModal } fro
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
+import { comptabiliserAchatAuto } from '../../../services/compta_auto'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -583,6 +584,28 @@ export const FournisseursPage: React.FC = () => {
         } catch (e) {}
       }
 
+      // Comptabilisation automatique SYSCOHADA Paiement Fournisseur (JC / JB)
+      if (companyId) {
+        try {
+          await comptabiliserAchatAuto({
+            companyId,
+            sectorSlug: currentSectorSlug,
+            purchaseId: `PAY-${Date.now()}`,
+            orderNumber: `REG-${selectedSupplierForPay.code || selectedSupplierForPay.id.slice(0, 6)}`,
+            orderDate: new Date().toISOString().slice(0, 10),
+            totalTtc: paymentAmount,
+            supplierName: selectedSupplierForPay.company_name || selectedSupplierForPay.name,
+            supplierId: selectedSupplierForPay.id,
+            isPaid: true,
+            paymentMethod: paymentMode,
+            paidAmount: paymentAmount,
+            createdById: user?.id || null
+          })
+        } catch (comptaPayErr) {
+          console.warn('[compta_auto] Erreur comptabilisation paiement fournisseur:', comptaPayErr)
+        }
+      }
+
       setSuppliers((prev) =>
         prev.map((s) => (s.id === selectedSupplierForPay.id ? { ...s, current_payable: updatedDebt, current_debt: updatedDebt } : s))
       )
@@ -651,6 +674,27 @@ export const FournisseursPage: React.FC = () => {
         })
       } catch (dfErr) {
         console.warn('Avertissement insertion dettes_fournisseurs:', dfErr)
+      }
+
+      // Comptabilisation automatique SYSCOHADA Engagement Facture Fournisseur (JA)
+      if (companyId) {
+        try {
+          const debtRefStr = newDebtRef.trim() || `DETTE-${Date.now()}`
+          await comptabiliserAchatAuto({
+            companyId,
+            sectorSlug: currentSectorSlug,
+            purchaseId: debtRefStr,
+            orderNumber: debtRefStr,
+            orderDate: new Date().toISOString().slice(0, 10),
+            totalTtc: newDebtAmount,
+            supplierName: targetSup.company_name || targetSup.name,
+            supplierId: targetSup.id,
+            isPaid: false,
+            createdById: user?.id || null
+          })
+        } catch (comptaJaErr) {
+          console.warn('[compta_auto] Erreur engagement achat:', comptaJaErr)
+        }
       }
 
       setSuppliers(prev => prev.map(s => s.id === targetSup.id ? { ...s, current_payable: updatedDebt, current_debt: updatedDebt } : s))
