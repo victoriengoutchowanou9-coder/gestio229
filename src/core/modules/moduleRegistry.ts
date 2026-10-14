@@ -258,7 +258,7 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
 
   'eleves': {
     id: 'eleves',
-    label: 'Élèves & Classes',
+    label: 'Élèves & Inscriptions',
     icon: 'GraduationCap',
     path: 'eleves',
     isCommon: false,
@@ -266,19 +266,19 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'gestion',
   },
 
-  'frais_scolaires': {
-    id: 'frais_scolaires',
-    label: 'Frais Scolaires',
-    icon: 'DollarSign',
-    path: 'frais',
+  'pedagogie': {
+    id: 'pedagogie',
+    label: 'Pédagogie & Planning',
+    icon: 'Calendar',
+    path: 'pedagogie',
     isCommon: false,
     sectorSlugs: ['ecole'],
-    group: 'finance',
+    group: 'gestion',
   },
 
   'notes_resultats': {
     id: 'notes_resultats',
-    label: 'Notes & Résultats',
+    label: 'Notes & Bulletins',
     icon: 'BookOpen',
     path: 'notes',
     isCommon: false,
@@ -288,9 +288,39 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
 
   'absences': {
     id: 'absences',
-    label: 'Absences',
+    label: 'Absences & Discipline',
     icon: 'CalendarX',
     path: 'absences',
+    isCommon: false,
+    sectorSlugs: ['ecole'],
+    group: 'gestion',
+  },
+
+  'frais_scolaires': {
+    id: 'frais_scolaires',
+    label: 'Frais & Scolarité',
+    icon: 'DollarSign',
+    path: 'frais',
+    isCommon: false,
+    sectorSlugs: ['ecole'],
+    group: 'finance',
+  },
+
+  'formations_pro': {
+    id: 'formations_pro',
+    label: 'Formations Pro & Certificats',
+    icon: 'Award',
+    path: 'formations-pro',
+    isCommon: false,
+    sectorSlugs: ['ecole'],
+    group: 'gestion',
+  },
+
+  'bibliotheque': {
+    id: 'bibliotheque',
+    label: 'Bibliothèque & Supports',
+    icon: 'Library',
+    path: 'bibliotheque',
     isCommon: false,
     sectorSlugs: ['ecole'],
     group: 'gestion',

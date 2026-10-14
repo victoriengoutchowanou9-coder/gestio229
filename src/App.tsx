@@ -167,9 +167,15 @@ const BtpMaintenancePage        = safeLazy(() => import('./pages/dashboard/garag
 const BtpCarburantPage          = safeLazy(() => import('./pages/dashboard/garage/btp/BtpCarburantPage'))
 const BtpChauffeursPage         = safeLazy(() => import('./pages/dashboard/garage/btp/BtpChauffeursPage'))
 const BtpCoutRevientPage        = safeLazy(() => import('./pages/dashboard/garage/btp/BtpCoutRevientPage'))
-
-
-
+// ── École & Centre de Formation Dédié ──
+const EcoleSectorDispatcher    = safeLazy(() => import('./pages/dashboard/ecole/EcoleSectorDispatcher'))
+const EcoleInscriptionsPage    = safeLazy(() => import('./pages/dashboard/ecole/EcoleInscriptionsPage'))
+const EcolePedagogiePage       = safeLazy(() => import('./pages/dashboard/ecole/EcolePedagogiePage'))
+const EcoleNotesBulletinsPage  = safeLazy(() => import('./pages/dashboard/ecole/EcoleNotesBulletinsPage'))
+const EcoleAbsencesPage        = safeLazy(() => import('./pages/dashboard/ecole/EcoleAbsencesPage'))
+const EcoleFinancesPage        = safeLazy(() => import('./pages/dashboard/ecole/EcoleFinancesPage'))
+const EcoleFormationsProPage   = safeLazy(() => import('./pages/dashboard/ecole/EcoleFormationsProPage'))
+const EcoleBibliothequePage    = safeLazy(() => import('./pages/dashboard/ecole/EcoleBibliothequePage'))
 
 // ─── Loader / Spinner ───────────────────────────────────────────────────────
 
@@ -275,6 +281,9 @@ const SectorAwareDashboard: React.FC = () => {
   }
   if (clean === 'garage' || clean === 'atelier' || clean === 'mecanique') {
     return <GarageSectorDispatcher />
+  }
+  if (clean === 'ecole' || clean === 'formation' || clean === 'centre-de-formation' || clean === 'education') {
+    return <EcoleSectorDispatcher />
   }
   return <DashboardPage />
 }
@@ -499,11 +508,15 @@ const AppRoutes: React.FC = () => {
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
         <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
         <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><SectorAwareGrilles /></ModuleGuard>} />
-        {/* ── Modules École ── */}
-        <Route path="eleves"   element={<ModuleGuard moduleId="eleves"><ElevesPage /></ModuleGuard>} />
-        <Route path="frais"    element={<ModuleGuard moduleId="frais_scolaires"><FraisScolairesPage /></ModuleGuard>} />
-        <Route path="notes"    element={<ModuleGuard moduleId="notes_resultats"><NotesResultatsPage /></ModuleGuard>} />
-        <Route path="absences" element={<ModuleGuard moduleId="absences"><AbsencesPage /></ModuleGuard>} />
+        {/* ── Modules École & Formation Dédié ── */}
+        <Route path="eleves"          element={<ModuleGuard moduleId="eleves"><EcoleInscriptionsPage /></ModuleGuard>} />
+        <Route path="inscriptions"    element={<ModuleGuard moduleId="eleves"><EcoleInscriptionsPage /></ModuleGuard>} />
+        <Route path="pedagogie"       element={<ModuleGuard moduleId="pedagogie"><EcolePedagogiePage /></ModuleGuard>} />
+        <Route path="frais"           element={<ModuleGuard moduleId="frais_scolaires"><EcoleFinancesPage /></ModuleGuard>} />
+        <Route path="notes"           element={<ModuleGuard moduleId="notes_resultats"><EcoleNotesBulletinsPage /></ModuleGuard>} />
+        <Route path="absences"        element={<ModuleGuard moduleId="absences"><EcoleAbsencesPage /></ModuleGuard>} />
+        <Route path="formations-pro"  element={<ModuleGuard moduleId="formations_pro"><EcoleFormationsProPage /></ModuleGuard>} />
+        <Route path="bibliotheque"    element={<ModuleGuard moduleId="bibliotheque"><EcoleBibliothequePage /></ModuleGuard>} />
         {/* ── Modules Supermarché ── */}
         <Route path="rayons"                  element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
         <Route path="promos-dlc"              element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />
@@ -638,11 +651,15 @@ const AppRoutes: React.FC = () => {
         <Route path="sante-isolation" element={<IsolationHealthPage />} />
         <Route path="consignation"    element={<ModuleGuard moduleId="consignation"><ConsignationPage /></ModuleGuard>} />
         <Route path="grilles"         element={<ModuleGuard moduleId="grilles_tarifaires"><SectorAwareGrilles /></ModuleGuard>} />
-        {/* ── Modules École ── */}
-        <Route path="eleves"   element={<ModuleGuard moduleId="eleves"><ElevesPage /></ModuleGuard>} />
-        <Route path="frais"    element={<ModuleGuard moduleId="frais_scolaires"><FraisScolairesPage /></ModuleGuard>} />
-        <Route path="notes"    element={<ModuleGuard moduleId="notes_resultats"><NotesResultatsPage /></ModuleGuard>} />
-        <Route path="absences" element={<ModuleGuard moduleId="absences"><AbsencesPage /></ModuleGuard>} />
+        {/* ── Modules École & Formation Dédié ── */}
+        <Route path="eleves"          element={<ModuleGuard moduleId="eleves"><EcoleInscriptionsPage /></ModuleGuard>} />
+        <Route path="inscriptions"    element={<ModuleGuard moduleId="eleves"><EcoleInscriptionsPage /></ModuleGuard>} />
+        <Route path="pedagogie"       element={<ModuleGuard moduleId="pedagogie"><EcolePedagogiePage /></ModuleGuard>} />
+        <Route path="frais"           element={<ModuleGuard moduleId="frais_scolaires"><EcoleFinancesPage /></ModuleGuard>} />
+        <Route path="notes"           element={<ModuleGuard moduleId="notes_resultats"><EcoleNotesBulletinsPage /></ModuleGuard>} />
+        <Route path="absences"        element={<ModuleGuard moduleId="absences"><EcoleAbsencesPage /></ModuleGuard>} />
+        <Route path="formations-pro"  element={<ModuleGuard moduleId="formations_pro"><EcoleFormationsProPage /></ModuleGuard>} />
+        <Route path="bibliotheque"    element={<ModuleGuard moduleId="bibliotheque"><EcoleBibliothequePage /></ModuleGuard>} />
         {/* ── Modules Supermarché ── */}
         <Route path="rayons"                  element={<ModuleGuard moduleId="rayons_gondoles"><RayonsPage /></ModuleGuard>} />
         <Route path="promos-dlc"              element={<ModuleGuard moduleId="promos_dlc_courtes"><PromosDLCPage /></ModuleGuard>} />

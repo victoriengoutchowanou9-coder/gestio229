@@ -6,7 +6,8 @@ import React, { useState, useEffect } from 'react'
 import {
   Building2, Save, ShieldCheck, Users, Plus, KeyRound, Check,
   X, AlertCircle, Lock, UserCheck, Shield, ToggleLeft, ToggleRight,
-  Briefcase, Store, Printer, Sparkles, Layers, Wrench, Truck, ArrowRightLeft, CheckCircle
+  Briefcase, Store, Printer, Sparkles, Layers, Wrench, Truck, ArrowRightLeft, CheckCircle,
+  GraduationCap, Award, BookOpen
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -21,6 +22,8 @@ import {
 } from '../../../core/team/sectorRoles'
 import { imprimerieService, ImprimerieConfig } from '../../../services/imprimerieService'
 import { useGarageConfig } from '../../../hooks/useGarageConfig'
+import { useEcoleConfig } from '../../../hooks/useEcoleConfig'
+import { EcoleTypeEtablissement } from '../../../services/ecoleService'
 
 // ─── MAPPING DES MODULES & PERMISSIONS DYNAMIQUES PAR SECTEUR ────────────────
 const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> = {
@@ -206,7 +209,7 @@ export const ConfigPage: React.FC = () => {
   const { sectorSlug: currentSectorSlug } = useTenant()
   const { toast } = useUIStore()
 
-  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'imprimerie' | 'garage'>('etablissement')
+  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'imprimerie' | 'garage' | 'ecole'>('etablissement')
 
   // ─── États Établissement ──────────────────────────────────────────────────
   const [saving, setSaving] = useState(false)
@@ -351,6 +354,57 @@ export const ConfigPage: React.FC = () => {
       toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
     } finally {
       setSwitchingGarage(false)
+    }
+  }
+
+  // ─── Configuration Métier : École & Centre de Formation ───────────────────
+  const isEcole = React.useMemo(() => {
+    const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
+    if (slug === 'ecole' || slug === 'formation' || slug === 'education') return true
+    return subscribedSectors.some((s) => s.slug === 'ecole' || s.slug === 'formation' || s.slug === 'education')
+  }, [currentSectorSlug, subscribedSectors])
+
+  const {
+    typeEtablissement: ecoleType,
+    isScolaire: isEcoleScolaire,
+    isFormationPro: isEcoleFormationPro,
+    isMixte: isEcoleMixte,
+    selectType: selectEcoleType,
+    loading: loadingEcoleConfig,
+    reload: reloadEcoleConfig
+  } = useEcoleConfig()
+
+  const [switchingEcoleModal, setSwitchingEcoleModal] = useState(false)
+  const [targetEcoleType, setTargetEcoleType] = useState<EcoleTypeEtablissement | null>(null)
+  const [switchingEcole, setSwitchingEcole] = useState(false)
+
+  const handleConfirmSwitchEcole = async () => {
+    if (!targetEcoleType) return
+    setSwitchingEcole(true)
+    try {
+      const ok = await selectEcoleType(targetEcoleType)
+      if (ok) {
+        toast.success(
+          'Profil mis à jour avec succès !',
+          targetEcoleType === 'SCOLAIRE'
+            ? 'Votre établissement est désormais en mode Établissement Scolaire.'
+            : targetEcoleType === 'FORMATION_PRO'
+            ? 'Votre établissement est désormais en mode Centre de Formation Pro.'
+            : 'Votre établissement est désormais en mode Établissement Mixte.'
+        )
+        setSwitchingEcoleModal(false)
+        await reloadEcoleConfig()
+        await refreshTenantContext()
+        setTimeout(() => {
+          window.location.reload()
+        }, 600)
+      } else {
+        toast.error('Erreur', 'Impossible de modifier le profil.')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
+    } finally {
+      setSwitchingEcole(false)
     }
   }
 
@@ -737,6 +791,19 @@ export const ConfigPage: React.FC = () => {
             >
               <Wrench className="w-4 h-4 text-amber-600" />
               <span>Version Garage & BTP</span>
+            </button>
+          )}
+          {isEcole && (
+            <button
+              onClick={() => setActiveTab('ecole')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                activeTab === 'ecole'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <GraduationCap className="w-4 h-4 text-lime-600" />
+              <span>Profil École & Formation</span>
             </button>
           )}
         </div>
@@ -1726,6 +1793,253 @@ export const ConfigPage: React.FC = () => {
                 className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-lg shadow-amber-600/20 transition flex items-center gap-2"
               >
                 {switchingGarage ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Mise à jour en cours...</span>
+                  </>
+                ) : (
+                  <span>Confirmer le basculement</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET 7 : ÉCOLE & CENTRE DE FORMATION                             */}
+      {/* =================================================================== */}
+      {activeTab === 'ecole' && (
+        <div className="space-y-6 animate-fadeIn">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
+              <div className="space-y-1">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-lime-500/10 text-lime-700 dark:text-lime-300 text-xs font-bold uppercase tracking-wider">
+                  <GraduationCap className="w-3.5 h-3.5" />
+                  <span>Secteur Éducation & Centre de Formation</span>
+                </div>
+                <h2 className="text-xl font-black text-slate-900 dark:text-white">
+                  Profil Actif :{' '}
+                  <span className="text-lime-600 dark:text-lime-400">
+                    {isEcoleScolaire && 'Établissement Scolaire (Cursus Général)'}
+                    {isEcoleFormationPro && 'Centre de Formation Professionnelle & Continue'}
+                    {isEcoleMixte && 'Établissement Mixte (Double Cursus)'}
+                  </span>
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 max-w-3xl">
+                  {isEcoleScolaire && 'Votre établissement fonctionne en mode Enseignement Général (Maternelle, Primaire, Collège, Lycée) : bulletins scolaires officiels, emploi du temps, assiduité et devoirs.'}
+                  {isEcoleFormationPro && 'Votre établissement fonctionne en mode Centre de Formation Professionnelle : modules certifiants, sessions calendaires et certificats vérifiables avec QR Code.'}
+                  {isEcoleMixte && 'Votre établissement combine les classes académiques annuelles et les formations professionnelles certifiantes.'}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setTargetEcoleType(isEcoleScolaire ? 'FORMATION_PRO' : isEcoleFormationPro ? 'MIXTE' : 'SCOLAIRE')
+                  setSwitchingEcoleModal(true)
+                }}
+                className="px-4 py-2.5 rounded-xl border-2 border-lime-600 text-lime-600 hover:bg-lime-50 dark:hover:bg-lime-950 font-bold text-xs shrink-0 flex items-center gap-2 transition"
+              >
+                <ArrowRightLeft className="w-4 h-4" />
+                <span>Changer de profil</span>
+              </button>
+            </div>
+
+            {/* Comparatif des 3 profils */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-2">
+              {/* Carte 1 : Scolaire */}
+              <div
+                className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                  isEcoleScolaire
+                    ? 'border-lime-500 bg-lime-50/50 dark:bg-lime-950/20 shadow-md ring-4 ring-lime-500/10'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 opacity-90'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-lime-100 dark:bg-lime-950 text-lime-600 flex items-center justify-center">
+                      <GraduationCap className="w-6 h-6" />
+                    </div>
+                    {isEcoleScolaire ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-lime-100 text-lime-800 dark:bg-lime-950 dark:text-lime-300">
+                        <CheckCircle className="w-3.5 h-3.5" /> Actif
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetEcoleType('SCOLAIRE')
+                          setSwitchingEcoleModal(true)
+                        }}
+                        className="text-xs font-bold text-lime-600 hover:underline"
+                      >
+                        Activer ce profil
+                      </button>
+                    )}
+                  </div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base mb-1">
+                    Profil 1 — Établissement Scolaire
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                    Idéal pour Primaires, Collèges, Lycées et Groupes Scolaires.
+                  </p>
+                  <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 pt-4">
+                    <li className="flex items-center gap-2">✓ Années académiques & trimestres/semestres</li>
+                    <li className="flex items-center gap-2">✓ Fiches élèves & matricules réglementaires</li>
+                    <li className="flex items-center gap-2">✓ Emploi du temps & détection conflits de salle</li>
+                    <li className="flex items-center gap-2">✓ Saisie notes, calcul moyennes & bulletins PDF</li>
+                    <li className="flex items-center gap-2">✓ Échéanciers de paiement & reçus officiels</li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Carte 2 : Formation Pro */}
+              <div
+                className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                  isEcoleFormationPro
+                    ? 'border-blue-500 bg-blue-50/50 dark:bg-blue-950/20 shadow-md ring-4 ring-blue-500/10'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 opacity-90'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-blue-100 dark:bg-blue-950 text-blue-600 flex items-center justify-center">
+                      <Award className="w-6 h-6" />
+                    </div>
+                    {isEcoleFormationPro ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                        <CheckCircle className="w-3.5 h-3.5" /> Actif
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetEcoleType('FORMATION_PRO')
+                          setSwitchingEcoleModal(true)
+                        }}
+                        className="text-xs font-bold text-blue-600 hover:underline"
+                      >
+                        Activer ce profil
+                      </button>
+                    )}
+                  </div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base mb-1">
+                    Profil 2 — Formation Professionnelle
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                    Idéal pour Cabinets, Instituts techniques et Académies de métiers.
+                  </p>
+                  <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 pt-4">
+                    <li className="flex items-center gap-2">✓ Catalogue des formations & modules certifiants</li>
+                    <li className="flex items-center gap-2">✓ Sessions calendaires et cohortes d'apprenants</li>
+                    <li className="flex items-center gap-2">✓ Attestations & parchemins avec numéro unique</li>
+                    <li className="flex items-center gap-2">✓ QR-Code de vérification anti-fraude</li>
+                    <li className="flex items-center gap-2">✓ Facturation par session ou forfait entreprise</li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Carte 3 : Établissement Mixte */}
+              <div
+                className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                  isEcoleMixte
+                    ? 'border-purple-500 bg-purple-50/50 dark:bg-purple-950/20 shadow-md ring-4 ring-purple-500/10'
+                    : 'border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 opacity-90'
+                }`}
+              >
+                <div>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="w-12 h-12 rounded-2xl bg-purple-100 dark:bg-purple-950 text-purple-600 flex items-center justify-center">
+                      <BookOpen className="w-6 h-6" />
+                    </div>
+                    {isEcoleMixte ? (
+                      <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300">
+                        <CheckCircle className="w-3.5 h-3.5" /> Actif
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setTargetEcoleType('MIXTE')
+                          setSwitchingEcoleModal(true)
+                        }}
+                        className="text-xs font-bold text-purple-600 hover:underline"
+                      >
+                        Activer ce profil
+                      </button>
+                    )}
+                  </div>
+                  <h3 className="font-bold text-slate-900 dark:text-white text-base mb-1">
+                    Profil 3 — Établissement Mixte
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                    Pour Universités, Grandes Écoles et Centres d'excellence hybrides.
+                  </p>
+                  <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 pt-4">
+                    <li className="flex items-center gap-2">✓ Tous les modules Scolaires et Formation réunis</li>
+                    <li className="flex items-center gap-2">✓ Classes régulières + Formations continues</li>
+                    <li className="flex items-center gap-2">✓ Bulletins de notes & Certificats de compétences</li>
+                    <li className="flex items-center gap-2">✓ Bibliothèque, supports de cours & prêts</li>
+                    <li className="flex items-center gap-2">✓ Trésorerie consolidée multi-activités</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMATION DU CHANGEMENT DE PROFIL ÉCOLE */}
+      {switchingEcoleModal && targetEcoleType && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 dark:border-slate-700 p-6 sm:p-8 space-y-5">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-lime-100 dark:bg-lime-950/80 text-lime-600 flex items-center justify-center shrink-0">
+                <ArrowRightLeft className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-black text-lg text-slate-900 dark:text-white">
+                  Changer le profil de l'établissement ?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Vous vous apprêtez à basculer vers :{' '}
+                  <strong className="text-lime-600 font-bold">
+                    {targetEcoleType === 'SCOLAIRE' && 'Établissement Scolaire'}
+                    {targetEcoleType === 'FORMATION_PRO' && 'Centre de Formation Pro'}
+                    {targetEcoleType === 'MIXTE' && 'Établissement Mixte'}
+                  </strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-2 text-xs text-slate-600 dark:text-slate-300">
+              <p className="font-semibold text-slate-900 dark:text-white">
+                Intégrité et sécurité des données :
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                <li>Tous vos élèves, apprenants, notes et reçus existants sont conservés sans aucune perte.</li>
+                <li>L'interface et les fonctionnalités s'adaptent instantanément au profil choisi.</li>
+                <li>Vous pourrez rebasculer ou ajuster ce choix à tout moment.</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={switchingEcole}
+                onClick={() => setSwitchingEcoleModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={switchingEcole}
+                onClick={handleConfirmSwitchEcole}
+                className="px-6 py-2.5 rounded-xl bg-lime-600 hover:bg-lime-700 text-white text-xs font-black shadow-lg shadow-lime-600/20 transition flex items-center gap-2"
+              >
+                {switchingEcole ? (
                   <>
                     <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     <span>Mise à jour en cours...</span>
