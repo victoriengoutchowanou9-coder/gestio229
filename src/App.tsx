@@ -151,6 +151,21 @@ const PlanningEvenementsPage = mod('reservations_dates')
 const MaterielPage           = mod('location_materiel')
 const TraiteurPage           = mod('traiteur_prestations')
 
+// ── Atelier, Garage & BTP Multisite Dédié ──
+const GarageSectorDispatcher    = safeLazy(() => import('./pages/dashboard/garage/GarageSectorDispatcher'))
+const GarageVehiculesPage       = safeLazy(() => import('./pages/dashboard/garage/GarageVehiculesPage'))
+const GarageReceptionPage       = safeLazy(() => import('./pages/dashboard/garage/GarageReceptionPage'))
+const GarageReparationsPage     = safeLazy(() => import('./pages/dashboard/garage/GarageReparationsPage'))
+const GaragePlanningPage        = safeLazy(() => import('./pages/dashboard/garage/GaragePlanningPage'))
+const GarageAssurancesPage      = safeLazy(() => import('./pages/dashboard/garage/GarageAssurancesPage'))
+const BtpSitesPage              = safeLazy(() => import('./pages/dashboard/garage/btp/BtpSitesPage'))
+const BtpMaterielPage           = safeLazy(() => import('./pages/dashboard/garage/btp/BtpMaterielPage'))
+const BtpChantiersPage          = safeLazy(() => import('./pages/dashboard/garage/btp/BtpChantiersPage'))
+const BtpMaintenancePage        = safeLazy(() => import('./pages/dashboard/garage/btp/BtpMaintenancePage'))
+const BtpCarburantPage          = safeLazy(() => import('./pages/dashboard/garage/btp/BtpCarburantPage'))
+const BtpChauffeursPage         = safeLazy(() => import('./pages/dashboard/garage/btp/BtpChauffeursPage'))
+const BtpCoutRevientPage        = safeLazy(() => import('./pages/dashboard/garage/btp/BtpCoutRevientPage'))
+
 
 
 
@@ -253,6 +268,9 @@ const SectorAwareDashboard: React.FC = () => {
   }
   if (clean === 'immobilier' || clean === 'location' || clean === 'gestion-locative' || clean === 'gestion_locative') {
     return <ImmobilierDashboardPage />
+  }
+  if (clean === 'garage' || clean === 'atelier' || clean === 'mecanique') {
+    return <GarageSectorDispatcher />
   }
   return <DashboardPage />
 }
@@ -509,9 +527,20 @@ const AppRoutes: React.FC = () => {
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
-        {/* ── Modules Garage ── */}
-        <Route path="vehicules"   element={<ModuleGuard moduleId="vehicules_reparations"><VehiculesPage /></ModuleGuard>} />
-        <Route path="reparations" element={<ModuleGuard moduleId="ordres_reparation"><ReparationsPage /></ModuleGuard>} />
+        {/* ── Modules Garage Classic ── */}
+        <Route path="vehicules"              element={<ModuleGuard moduleId="vehicules_reparations"><GarageVehiculesPage /></ModuleGuard>} />
+        <Route path="reception"              element={<ModuleGuard moduleId="reception_diagnostic"><GarageReceptionPage /></ModuleGuard>} />
+        <Route path="reparations"            element={<ModuleGuard moduleId="ordres_reparation"><GarageReparationsPage /></ModuleGuard>} />
+        <Route path="planning-atelier"       element={<ModuleGuard moduleId="planning_atelier"><GaragePlanningPage /></ModuleGuard>} />
+        <Route path="assurances-sinistres"   element={<ModuleGuard moduleId="assurances_sinistres"><GarageAssurancesPage /></ModuleGuard>} />
+        {/* ── Modules Garage BTP Multisite ── */}
+        <Route path="organisation-multisite" element={<ModuleGuard moduleId="btp_sites"><BtpSitesPage /></ModuleGuard>} />
+        <Route path="parc-materiel"          element={<ModuleGuard moduleId="btp_materiel"><BtpMaterielPage /></ModuleGuard>} />
+        <Route path="chantiers-affectations" element={<ModuleGuard moduleId="btp_chantiers"><BtpChantiersPage /></ModuleGuard>} />
+        <Route path="maintenance-preventive" element={<ModuleGuard moduleId="btp_maintenance"><BtpMaintenancePage /></ModuleGuard>} />
+        <Route path="carburant-lubrifiants"  element={<ModuleGuard moduleId="btp_carburant"><BtpCarburantPage /></ModuleGuard>} />
+        <Route path="chauffeurs-operateurs"  element={<ModuleGuard moduleId="btp_chauffeurs"><BtpChauffeursPage /></ModuleGuard>} />
+        <Route path="couts-revient"          element={<ModuleGuard moduleId="btp_couts"><BtpCoutRevientPage /></ModuleGuard>} />
         {/* ── Modules Microfinance / Tontine (ERP Dédié & Conforme UEMOA) ── */}
         <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
         <Route path="epargne" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
@@ -637,9 +666,20 @@ const AppRoutes: React.FC = () => {
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
-        {/* ── Modules Garage ── */}
-        <Route path="vehicules"   element={<ModuleGuard moduleId="vehicules_reparations"><VehiculesPage /></ModuleGuard>} />
-        <Route path="reparations" element={<ModuleGuard moduleId="ordres_reparation"><ReparationsPage /></ModuleGuard>} />
+        {/* ── Modules Garage Classic ── */}
+        <Route path="vehicules"              element={<ModuleGuard moduleId="vehicules_reparations"><GarageVehiculesPage /></ModuleGuard>} />
+        <Route path="reception"              element={<ModuleGuard moduleId="reception_diagnostic"><GarageReceptionPage /></ModuleGuard>} />
+        <Route path="reparations"            element={<ModuleGuard moduleId="ordres_reparation"><GarageReparationsPage /></ModuleGuard>} />
+        <Route path="planning-atelier"       element={<ModuleGuard moduleId="planning_atelier"><GaragePlanningPage /></ModuleGuard>} />
+        <Route path="assurances-sinistres"   element={<ModuleGuard moduleId="assurances_sinistres"><GarageAssurancesPage /></ModuleGuard>} />
+        {/* ── Modules Garage BTP Multisite ── */}
+        <Route path="organisation-multisite" element={<ModuleGuard moduleId="btp_sites"><BtpSitesPage /></ModuleGuard>} />
+        <Route path="parc-materiel"          element={<ModuleGuard moduleId="btp_materiel"><BtpMaterielPage /></ModuleGuard>} />
+        <Route path="chantiers-affectations" element={<ModuleGuard moduleId="btp_chantiers"><BtpChantiersPage /></ModuleGuard>} />
+        <Route path="maintenance-preventive" element={<ModuleGuard moduleId="btp_maintenance"><BtpMaintenancePage /></ModuleGuard>} />
+        <Route path="carburant-lubrifiants"  element={<ModuleGuard moduleId="btp_carburant"><BtpCarburantPage /></ModuleGuard>} />
+        <Route path="chauffeurs-operateurs"  element={<ModuleGuard moduleId="btp_chauffeurs"><BtpChauffeursPage /></ModuleGuard>} />
+        <Route path="couts-revient"          element={<ModuleGuard moduleId="btp_couts"><BtpCoutRevientPage /></ModuleGuard>} />
         {/* ── Modules Microfinance / Tontine (ERP Dédié & Conforme UEMOA) ── */}
         <Route path="membres" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />
         <Route path="epargne" element={<ModuleGuard moduleId="membres_epargne"><MembresEpargnePage /></ModuleGuard>} />

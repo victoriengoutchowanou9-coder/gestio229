@@ -656,6 +656,81 @@ export const SectorLoader = {
       return { grouped, flat: immobilierNav }
     }
 
+    // ── Menu spécifique Atelier, Garage & Mécanique (Double Version CLASSIC & BTP MULTISITE) ──
+    const isGarage = cleanSlug === 'garage' || cleanSlug === 'atelier' || cleanSlug === 'mecanique'
+    if (isGarage) {
+      let garageMode = 'CLASSIC'
+      try {
+        const allKeys = Object.keys(localStorage)
+        const modeKey = allKeys.find(k => k.startsWith('gestio229_garage_mode_'))
+        if (modeKey) {
+          const val = localStorage.getItem(modeKey)
+          if (val === 'BTP_MULTISITE' || val === 'CLASSIC') garageMode = val
+        }
+      } catch (e) {}
+
+      if (garageMode === 'BTP_MULTISITE') {
+        const btpNav: NavItem[] = [
+          // APERÇU FLOTTE
+          { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+          // PARC & CHANTIERS
+          { id: 'btp_materiel', label: 'Parc Matériel & Engins', icon: 'Truck', href: `${prefix}/parc-materiel`, group: 'commercial' },
+          { id: 'btp_chantiers', label: 'Chantiers & Affectations', icon: 'HardHat', href: `${prefix}/chantiers-affectations`, group: 'commercial' },
+          { id: 'btp_sites', label: 'Organisation Multisite', icon: 'Building2', href: `${prefix}/organisation-multisite`, group: 'commercial' },
+          { id: 'btp_chauffeurs', label: 'Chauffeurs & CACES', icon: 'UserCheck', href: `${prefix}/chauffeurs-operateurs`, group: 'commercial' },
+          // MAINTENANCE & CARBURANT
+          { id: 'btp_maintenance', label: 'Maintenance & Pannes', icon: 'Wrench', href: `${prefix}/maintenance-preventive`, group: 'gestion' },
+          { id: 'btp_carburant', label: 'Cuves & Carburant', icon: 'Fuel', href: `${prefix}/carburant-lubrifiants`, group: 'gestion' },
+          { id: 'stock', label: 'Stocks Pièces & Dépôts', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+          { id: 'fournisseurs', label: 'Fournisseurs & Concessionnaires', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+          // FINANCE & TCO
+          { id: 'btp_couts', label: 'Coûts de Revient & TCO', icon: 'DollarSign', href: `${prefix}/couts-revient`, group: 'finance' },
+          { id: 'caisse', label: 'Caisse & Régies Chantier', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+          { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+          { id: 'depenses', label: 'Dépenses Flotte', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+          { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+          // ADMINISTRATION
+          { id: 'rapports', label: 'Rapports & Audit Flotte', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+          { id: 'configuration', label: 'Configuration Parc & BTP', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+          { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+          { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+          { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+        ]
+        const grouped = groupNavItems(btpNav)
+        return { grouped, flat: btpNav }
+      }
+
+      // Mode CLASSIC
+      const classicNav: NavItem[] = [
+        // APERÇU ATELIER
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        // ATELIER & CLIENTS
+        { id: 'reception_diagnostic', label: 'Réception & Diagnostic', icon: 'ClipboardCheck', href: `${prefix}/reception`, group: 'commercial' },
+        { id: 'ordres_reparation', label: 'Ordres de Réparation (OR)', icon: 'Wrench', href: `${prefix}/reparations`, group: 'commercial' },
+        { id: 'vehicules_reparations', label: 'Véhicules & Fiches', icon: 'Car', href: `${prefix}/vehicules`, group: 'commercial' },
+        { id: 'clients', label: 'Clients & Flottes', icon: 'Users', href: `${prefix}/clients`, group: 'commercial' },
+        { id: 'planning_atelier', label: 'Planning & Mécaniciens', icon: 'Calendar', href: `${prefix}/planning-atelier`, group: 'commercial' },
+        { id: 'assurances_sinistres', label: 'Assurances & Sinistres', icon: 'ShieldAlert', href: `${prefix}/assurances-sinistres`, group: 'commercial' },
+        // PIÈCES & FOURNISSEURS
+        { id: 'stock', label: 'Pièces Détachées & Stock', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Commandes', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+        { id: 'ventes', label: 'Vente Pièces & Comptoir', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'gestion' },
+        // FINANCE & FACTURATION
+        { id: 'caisse', label: 'Caisse & Règlements OR', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Atelier', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+        // ADMINISTRATION
+        { id: 'rapports', label: 'Rapports & Rentabilité', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Atelier', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+      const grouped = groupNavItems(classicNav)
+      return { grouped, flat: classicNav }
+    }
+
     // ── Logique par défaut pour tous les autres secteurs (Strictement Inchangée) ──
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',

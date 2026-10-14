@@ -396,12 +396,22 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
 
   'vehicules_reparations': {
     id: 'vehicules_reparations',
-    label: 'Véhicules',
+    label: 'Véhicules & Fiches',
     icon: 'Car',
     path: 'vehicules',
     isCommon: false,
     sectorSlugs: ['garage', 'pieces-detachees'],
-    group: 'gestion',
+    group: 'commercial',
+  },
+
+  'reception_diagnostic': {
+    id: 'reception_diagnostic',
+    label: 'Réception & Diagnostic',
+    icon: 'ClipboardCheck',
+    path: 'reception',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
   },
 
   'ordres_reparation': {
@@ -412,6 +422,97 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     isCommon: false,
     sectorSlugs: ['garage'],
     group: 'commercial',
+  },
+
+  'planning_atelier': {
+    id: 'planning_atelier',
+    label: 'Planning & Mécaniciens',
+    icon: 'Calendar',
+    path: 'planning-atelier',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  'assurances_sinistres': {
+    id: 'assurances_sinistres',
+    label: 'Assurances & Sinistres',
+    icon: 'ShieldAlert',
+    path: 'assurances-sinistres',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  // ── Modules Spécifiques BTP Multisite ──
+  'btp_materiel': {
+    id: 'btp_materiel',
+    label: 'Parc Matériel & Engins',
+    icon: 'Truck',
+    path: 'parc-materiel',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  'btp_chantiers': {
+    id: 'btp_chantiers',
+    label: 'Chantiers & Affectations',
+    icon: 'HardHat',
+    path: 'chantiers-affectations',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  'btp_sites': {
+    id: 'btp_sites',
+    label: 'Organisation Multisite',
+    icon: 'Building2',
+    path: 'organisation-multisite',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  'btp_chauffeurs': {
+    id: 'btp_chauffeurs',
+    label: 'Chauffeurs & CACES',
+    icon: 'UserCheck',
+    path: 'chauffeurs-operateurs',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  'btp_maintenance': {
+    id: 'btp_maintenance',
+    label: 'Maintenance Préventive',
+    icon: 'Wrench',
+    path: 'maintenance-preventive',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'gestion',
+  },
+
+  'btp_carburant': {
+    id: 'btp_carburant',
+    label: 'Cuves & Carburant',
+    icon: 'Fuel',
+    path: 'carburant-lubrifiants',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'gestion',
+  },
+
+  'btp_couts': {
+    id: 'btp_couts',
+    label: 'Coûts de Revient & TCO',
+    icon: 'DollarSign',
+    path: 'couts-revient',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'finance',
   },
 
   // ══════════════════════════════════════════════════════════════════════

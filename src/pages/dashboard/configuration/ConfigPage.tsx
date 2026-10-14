@@ -6,7 +6,7 @@ import React, { useState, useEffect } from 'react'
 import {
   Building2, Save, ShieldCheck, Users, Plus, KeyRound, Check,
   X, AlertCircle, Lock, UserCheck, Shield, ToggleLeft, ToggleRight,
-  Briefcase, Store, Printer, Sparkles, Layers
+  Briefcase, Store, Printer, Sparkles, Layers, Wrench, Truck, ArrowRightLeft, CheckCircle
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -20,6 +20,7 @@ import {
   SectorRoleDefinition
 } from '../../../core/team/sectorRoles'
 import { imprimerieService, ImprimerieConfig } from '../../../services/imprimerieService'
+import { useGarageConfig } from '../../../hooks/useGarageConfig'
 
 // ─── MAPPING DES MODULES & PERMISSIONS DYNAMIQUES PAR SECTEUR ────────────────
 const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> = {
@@ -205,7 +206,7 @@ export const ConfigPage: React.FC = () => {
   const { sectorSlug: currentSectorSlug } = useTenant()
   const { toast } = useUIStore()
 
-  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'imprimerie'>('etablissement')
+  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'imprimerie' | 'garage'>('etablissement')
 
   // ─── États Établissement ──────────────────────────────────────────────────
   const [saving, setSaving] = useState(false)
@@ -302,6 +303,54 @@ export const ConfigPage: React.FC = () => {
       toast.error('Erreur', err.message || 'Impossible d\'enregistrer la configuration')
     } finally {
       setSavingImprimerie(false)
+    }
+  }
+
+  // ─── Configuration Métier : Atelier, Garage & BTP Multisite ───────────────
+  const isGarage = React.useMemo(() => {
+    const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
+    if (slug === 'garage' || slug === 'atelier' || slug === 'mecanique') return true
+    return subscribedSectors.some((s) => s.slug === 'garage' || s.slug === 'atelier' || s.slug === 'mecanique')
+  }, [currentSectorSlug, subscribedSectors])
+
+  const {
+    versionMode: garageMode,
+    isClassic: isGarageClassic,
+    isBtp: isGarageBtp,
+    selectVersion: selectGarageVersion,
+    loading: loadingGarageConfig,
+    reload: reloadGarageConfig
+  } = useGarageConfig()
+
+  const [switchingGarageModal, setSwitchingGarageModal] = useState(false)
+  const [targetGarageMode, setTargetGarageMode] = useState<'CLASSIC' | 'BTP_MULTISITE' | null>(null)
+  const [switchingGarage, setSwitchingGarage] = useState(false)
+
+  const handleConfirmSwitchVersion = async () => {
+    if (!targetGarageMode) return
+    setSwitchingGarage(true)
+    try {
+      const ok = await selectGarageVersion(targetGarageMode)
+      if (ok) {
+        toast.success(
+          'Version mise à jour avec succès !',
+          targetGarageMode === 'CLASSIC'
+            ? 'Votre établissement est désormais en mode Garage & Mécanique classique.'
+            : 'Votre établissement est désormais en mode Parc Matériel BTP & Maintenance Multisite.'
+        )
+        setSwitchingGarageModal(false)
+        await reloadGarageConfig()
+        await refreshTenantContext()
+        setTimeout(() => {
+          window.location.reload()
+        }, 600)
+      } else {
+        toast.error('Erreur', 'Impossible de modifier la version.')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
+    } finally {
+      setSwitchingGarage(false)
     }
   }
 
@@ -675,6 +724,19 @@ export const ConfigPage: React.FC = () => {
             >
               <Printer className="w-4 h-4 text-emerald-600" />
               <span>Atelier Imprimerie</span>
+            </button>
+          )}
+          {isGarage && (
+            <button
+              onClick={() => setActiveTab('garage')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                activeTab === 'garage'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Wrench className="w-4 h-4 text-amber-600" />
+              <span>Version Garage & BTP</span>
             </button>
           )}
         </div>
@@ -1472,6 +1534,209 @@ export const ConfigPage: React.FC = () => {
             </button>
           </div>
         </form>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET 6 : ATELIER, GARAGE & PARC BTP MULTISITE                    */}
+      {/* =================================================================== */}
+      {activeTab === 'garage' && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Bannière de la version active */}
+          <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-amber-500/10 border border-amber-500/30 text-amber-400">
+                <Wrench className="w-3.5 h-3.5" />
+                <span>Secteur Atelier, Garage & Mécanique</span>
+              </div>
+              <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+                <span>Version active : </span>
+                <span className={isGarageBtp ? 'text-amber-400' : 'text-emerald-400'}>
+                  {isGarageBtp
+                    ? 'Parc Matériel BTP & Maintenance Multisite'
+                    : 'Garage & Mécanique classique (Atelier Pro)'}
+                </span>
+              </h2>
+              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                {isGarageBtp
+                  ? "Votre établissement fonctionne en mode Flotte Lourde & Chantiers BTP : gestion multisite (agences, ateliers, dépôts), compteurs km et heures moteur, cuves de gasoil, chauffeurs CACES et TCO."
+                  : "Votre établissement fonctionne en mode Atelier Garage Automobile : réception & diagnostic, devis et ordres de réparation (OR), affectation mécaniciens, pièces détachées et assurances/sinistres."}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setTargetGarageMode(isGarageBtp ? 'CLASSIC' : 'BTP_MULTISITE')
+                setSwitchingGarageModal(true)
+              }}
+              className="flex items-center justify-center gap-2 px-5 py-3.5 bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white font-bold text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-amber-500/20 transition shrink-0 cursor-pointer"
+            >
+              <ArrowRightLeft className="w-4 h-4" />
+              <span>Changer de version</span>
+            </button>
+          </div>
+
+          {/* Comparatif et options de la version */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Version 1 */}
+            <div
+              className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                isGarageClassic
+                  ? 'border-emerald-500 bg-white dark:bg-slate-900 shadow-md ring-2 ring-emerald-500/20'
+                  : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 opacity-80'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 flex items-center justify-center">
+                    <Wrench className="w-5 h-5" />
+                  </div>
+                  {isGarageClassic ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                      <CheckCircle className="w-3.5 h-3.5" /> Actif
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTargetGarageMode('CLASSIC')
+                        setSwitchingGarageModal(true)
+                      }}
+                      className="text-xs font-bold text-emerald-600 hover:underline"
+                    >
+                      Activer cette version
+                    </button>
+                  )}
+                </div>
+                <h3 className="font-bold text-slate-900 dark:text-white text-base mb-1">
+                  Version 1 — Garage & Mécanique classique
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                  Idéal pour garages auto, carrosseries, ateliers moto et centres de service rapide.
+                </p>
+                <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 pt-4">
+                  <li className="flex items-center gap-2">✓ Fiches véhicules & historique complet</li>
+                  <li className="flex items-center gap-2">✓ Fiche de réception & diagnostic d'entrée</li>
+                  <li className="flex items-center gap-2">✓ Devis mécanique et conversion immédiate en OR</li>
+                  <li className="flex items-center gap-2">✓ Ordres de réparation (OR) & affectation mécaniciens</li>
+                  <li className="flex items-center gap-2">✓ Suivi des sinistres et règlements assurances</li>
+                  <li className="flex items-center gap-2">✓ Calcul automatique de marge brute par réparation</li>
+                </ul>
+              </div>
+            </div>
+
+            {/* Version 2 */}
+            <div
+              className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                isGarageBtp
+                  ? 'border-amber-500 bg-white dark:bg-slate-900 shadow-md ring-2 ring-amber-500/20'
+                  : 'border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/50 opacity-80'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-600 flex items-center justify-center">
+                    <Truck className="w-5 h-5" />
+                  </div>
+                  {isGarageBtp ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                      <CheckCircle className="w-3.5 h-3.5" /> Actif
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTargetGarageMode('BTP_MULTISITE')
+                        setSwitchingGarageModal(true)
+                      }}
+                      className="text-xs font-bold text-amber-600 hover:underline"
+                    >
+                      Activer cette version
+                    </button>
+                  )}
+                </div>
+                <h3 className="font-bold text-slate-900 dark:text-white text-base mb-1">
+                  Version 2 — Parc Matériel BTP & Multisite
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mb-4 leading-relaxed">
+                  Idéal pour entreprises BTP, terrassement, transport lourd et carrières.
+                </p>
+                <ul className="space-y-2 text-xs text-slate-600 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 pt-4">
+                  <li className="flex items-center gap-2">✓ Organisation multisite (dépôts, ateliers, bases)</li>
+                  <li className="flex items-center gap-2">✓ Relevés compteurs (heures moteur & kilomètres)</li>
+                  <li className="flex items-center gap-2">✓ Maintenance préventive déclenchée par seuils</li>
+                  <li className="flex items-center gap-2">✓ Dépannage sur chantier & arrêts de production</li>
+                  <li className="flex items-center gap-2">✓ Cuves à gasoil & contrôle surconsommation L/100, L/h</li>
+                  <li className="flex items-center gap-2">✓ Conducteurs d'engins, CACES R482 & visites médicales</li>
+                  <li className="flex items-center gap-2">✓ Coût horaire de revient réel & TCO machine</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMATION DU CHANGEMENT DE VERSION GARAGE */}
+      {switchingGarageModal && targetGarageMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-slate-800 rounded-3xl max-w-lg w-full shadow-2xl border border-slate-200 dark:border-slate-700 p-6 sm:p-8 space-y-5">
+            <div className="flex items-start gap-4">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 flex items-center justify-center shrink-0">
+                <ArrowRightLeft className="w-6 h-6" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="font-black text-lg text-slate-900 dark:text-white">
+                  Changer la version du sous-logiciel ?
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Vous vous apprêtez à basculer vers :{' '}
+                  <strong className="text-amber-600 font-bold">
+                    {targetGarageMode === 'CLASSIC'
+                      ? 'Garage & Mécanique classique'
+                      : 'Parc Matériel BTP & Maintenance Multisite'}
+                  </strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-2 text-xs text-slate-600 dark:text-slate-300">
+              <p className="font-semibold text-slate-900 dark:text-white">
+                Protection et intégrité de vos données :
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                <li>Aucune donnée historique ne sera supprimée.</li>
+                <li>Les menus de navigation et tableaux de bord seront immédiatement adaptés.</li>
+                <li>Vous pourrez rebasculer à tout moment entre les deux versions sans contrainte.</li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-3 pt-2">
+              <button
+                type="button"
+                disabled={switchingGarage}
+                onClick={() => setSwitchingGarageModal(false)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={switchingGarage}
+                onClick={handleConfirmSwitchVersion}
+                className="px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-black shadow-lg shadow-amber-600/20 transition flex items-center gap-2"
+              >
+                {switchingGarage ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>Mise à jour en cours...</span>
+                  </>
+                ) : (
+                  <span>Confirmer le basculement</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* =================================================================== */}
