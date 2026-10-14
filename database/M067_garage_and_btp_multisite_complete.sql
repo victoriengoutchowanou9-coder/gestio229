@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS public.garage_mecaniciens (
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+ALTER TABLE public.garage_mecaniciens
+    ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS statut VARCHAR(30) DEFAULT 'DISPONIBLE';
+
 CREATE INDEX IF NOT EXISTS idx_garage_mec_comp 
     ON public.garage_mecaniciens(company_id, statut);
 
@@ -134,38 +138,71 @@ CREATE INDEX IF NOT EXISTS idx_garage_dev_lignes
 -- Ordres de Réparation (OR) complets
 CREATE TABLE IF NOT EXISTS public.garage_ordres_reparation (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    company_id UUID NOT NULL REFERENCES public.companies(id) ON DELETE CASCADE,
-    numero_or VARCHAR(50) NOT NULL,
-    devis_id UUID REFERENCES public.garage_devis(id) ON DELETE SET NULL,
-    reception_id UUID REFERENCES public.garage_receptions(id) ON DELETE SET NULL,
-    vehicule_id UUID REFERENCES public.garage_clients_vehicules(id) ON DELETE SET NULL,
-    immatriculation VARCHAR(50) NOT NULL,
-    client_nom VARCHAR(255) NOT NULL,
-    client_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,
-    mecanicien_id UUID REFERENCES public.garage_mecaniciens(id) ON DELETE SET NULL,
-    mecanicien_nom VARCHAR(150),
-    statut VARCHAR(40) DEFAULT 'PLANIFIE', -- PLANIFIE, EN_COURS, ATTENTE_PIECES, CONTROLE_QUALITE, PRET_A_LIVRER, FACTURE, LIVRE, CLOTURE, ANNULE
-    date_entree TIMESTAMPTZ DEFAULT NOW(),
-    date_livraison_prevue TIMESTAMPTZ,
-    date_cloture TIMESTAMPTZ,
-    km_entree NUMERIC(12,1) DEFAULT 0,
-    description_travaux TEXT,
-    total_pieces_ht NUMERIC(15,2) DEFAULT 0,
-    total_mo_ht NUMERIC(15,2) DEFAULT 0,
-    total_ss_traitance_ht NUMERIC(15,2) DEFAULT 0,
-    remise_totale NUMERIC(15,2) DEFAULT 0,
-    taux_tva NUMERIC(5,2) DEFAULT 18.00,
-    montant_tva NUMERIC(15,2) DEFAULT 0,
-    montant_ttc NUMERIC(15,2) DEFAULT 0,
-    cout_revient_interne NUMERIC(15,2) DEFAULT 0, -- Pièces au coût d'achat + MO au coût horaire
-    marge_brute NUMERIC(15,2) DEFAULT 0,
-    pieces_destockees BOOLEAN DEFAULT FALSE,
-    facture_id UUID,
-    controle_qualite_valide BOOLEAN DEFAULT FALSE,
-    notes_mecanicien TEXT,
-    created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW()
+    company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE,
+    numero_or VARCHAR(50),
+    immatriculation VARCHAR(50),
+    created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Garantir la présence de toutes les colonnes requises (si la table existait déjà avec un ancien schéma)
+ALTER TABLE public.garage_ordres_reparation 
+    ADD COLUMN IF NOT EXISTS company_id UUID REFERENCES public.companies(id) ON DELETE CASCADE,
+    ADD COLUMN IF NOT EXISTS numero_or VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS devis_id UUID REFERENCES public.garage_devis(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS reception_id UUID REFERENCES public.garage_receptions(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS vehicule_id UUID REFERENCES public.garage_clients_vehicules(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS immatriculation VARCHAR(50),
+    ADD COLUMN IF NOT EXISTS client_nom VARCHAR(255) DEFAULT '',
+    ADD COLUMN IF NOT EXISTS client_id UUID REFERENCES public.customers(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS mecanicien_id UUID REFERENCES public.garage_mecaniciens(id) ON DELETE SET NULL,
+    ADD COLUMN IF NOT EXISTS mecanicien_nom VARCHAR(150),
+    ADD COLUMN IF NOT EXISTS statut VARCHAR(40) DEFAULT 'PLANIFIE',
+    ADD COLUMN IF NOT EXISTS date_entree TIMESTAMPTZ DEFAULT NOW(),
+    ADD COLUMN IF NOT EXISTS date_livraison_prevue TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS date_cloture TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS km_entree NUMERIC(12,1) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS description_travaux TEXT,
+    ADD COLUMN IF NOT EXISTS total_pieces_ht NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS total_mo_ht NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS total_ss_traitance_ht NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS remise_totale NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS taux_tva NUMERIC(5,2) DEFAULT 18.00,
+    ADD COLUMN IF NOT EXISTS montant_tva NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS montant_ttc NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS cout_revient_interne NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS marge_brute NUMERIC(15,2) DEFAULT 0,
+    ADD COLUMN IF NOT EXISTS pieces_destockees BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS facture_id UUID,
+    ADD COLUMN IF NOT EXISTS controle_qualite_valide BOOLEAN DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS notes_mecanicien TEXT,
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+-- Migration rétroactive des statuts et associations d'anciens enregistrements
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+          AND table_name = 'garage_ordres_reparation' 
+          AND column_name = 'statut_reparation'
+    ) THEN
+        UPDATE public.garage_ordres_reparation
+        SET statut = COALESCE(statut_reparation, 'PLANIFIE')
+        WHERE statut IS NULL;
+    END IF;
+
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns 
+        WHERE table_schema = 'public' 
+          AND table_name = 'garage_ordres_reparation' 
+          AND column_name = 'activity_id'
+    ) THEN
+        UPDATE public.garage_ordres_reparation g
+        SET company_id = a.company_id
+        FROM public.company_activities a
+        WHERE g.activity_id = a.id AND g.company_id IS NULL;
+    END IF;
+END $$;
 
 CREATE INDEX IF NOT EXISTS idx_garage_or_comp_num 
     ON public.garage_ordres_reparation(company_id, numero_or);
