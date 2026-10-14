@@ -1492,6 +1492,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           type: 'retrait_tresorerie', // VIREMENT INTERNE — PAS une dépense
           sens: 'sortie_vers_tresorerie',
           montant: req.amount,
+          montant_total: req.amount,
           montant_especes: modeP === 'especes' ? req.amount : 0,
           montant_momo: modeP === 'momo' ? req.amount : 0,
           motif: `Demande de virement vers Trésorerie — ${req.reason}`,

@@ -79,14 +79,14 @@ export const TresoreriePage: React.FC = () => {
     const hasMomo = list.some((a) => a.type === 'mobile_money')
 
     if (!hasVault) {
+      let createdVault: TreasuryAccount | null = null
       try {
-        const { data: vault } = await supabase
+        const { data: vault, error } = await supabase
           .from('treasury_accounts')
           .insert({
             company_id: compId,
             name: 'COFFRE-FORT (Espèces)',
             type: 'vault',
-            institution: 'Trésorerie Centrale',
             account_number: 'COFFRE-PRINCIPAL',
             balance: 0,
             syscohada_code: '571000',
@@ -95,28 +95,44 @@ export const TresoreriePage: React.FC = () => {
           .select()
           .maybeSingle()
         if (vault) {
-          list.push({
+          createdVault = {
             id: vault.id,
-            name: vault.name,
+            name: vault.name || 'COFFRE-FORT (Espèces)',
             type: 'vault',
-            institution: vault.institution,
-            account_number: vault.account_number,
+            institution: 'Trésorerie Centrale',
+            account_number: vault.account_number || 'COFFRE-PRINCIPAL',
             balance: Number(vault.balance) || 0,
             alert_threshold: 50000
-          })
+          }
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn('Erreur insertion Supabase Coffre-Fort:', err)
+      }
+
+      // Si l'insertion Supabase n'a pas renvoyé de ligne, fallback déterministe pour ne jamais bloquer l'affichage
+      if (!createdVault) {
+        createdVault = {
+          id: `${compId}-vault`,
+          name: 'COFFRE-FORT (Espèces)',
+          type: 'vault',
+          institution: 'Trésorerie Centrale',
+          account_number: 'COFFRE-PRINCIPAL',
+          balance: 0,
+          alert_threshold: 50000
+        }
+      }
+      list.push(createdVault)
     }
 
     if (!hasMomo) {
+      let createdMomo: TreasuryAccount | null = null
       try {
-        const { data: momo } = await supabase
+        const { data: momo, error } = await supabase
           .from('treasury_accounts')
           .insert({
             company_id: compId,
             name: 'MOMO MARCHANDS Central',
             type: 'mobile_money',
-            institution: 'MTN / Moov Central',
             account_number: 'MOMO-CENTRAL',
             balance: 0,
             syscohada_code: '521100',
@@ -125,17 +141,33 @@ export const TresoreriePage: React.FC = () => {
           .select()
           .maybeSingle()
         if (momo) {
-          list.push({
+          createdMomo = {
             id: momo.id,
-            name: momo.name,
+            name: momo.name || 'MOMO MARCHANDS Central',
             type: 'mobile_money',
-            institution: momo.institution,
-            account_number: momo.account_number,
+            institution: 'MTN / Moov Central',
+            account_number: momo.account_number || 'MOMO-CENTRAL',
             balance: Number(momo.balance) || 0,
             alert_threshold: 10000
-          })
+          }
         }
-      } catch (_) {}
+      } catch (err) {
+        console.warn('Erreur insertion Supabase MoMo Marchands:', err)
+      }
+
+      // Si l'insertion Supabase n'a pas renvoyé de ligne, fallback déterministe
+      if (!createdMomo) {
+        createdMomo = {
+          id: `${compId}-momo`,
+          name: 'MOMO MARCHANDS Central',
+          type: 'mobile_money',
+          institution: 'MTN / Moov Central',
+          account_number: 'MOMO-CENTRAL',
+          balance: 0,
+          alert_threshold: 10000
+        }
+      }
+      list.push(createdMomo)
     }
 
     return list
@@ -148,7 +180,7 @@ export const TresoreriePage: React.FC = () => {
     setLoading(true)
     try {
       // 1. Charger les comptes réels de l'entreprise (Trésorerie Centrale non restreinte par secteur)
-      const { data: dbAccounts, error } = await supabase
+      const { data: dbAccounts } = await supabase
         .from('treasury_accounts')
         .select('*')
         .eq('company_id', compId)
@@ -158,11 +190,24 @@ export const TresoreriePage: React.FC = () => {
         id: a.id,
         name: a.name,
         type: a.type,
-        institution: a.institution || '',
+        institution: a.institution || (a.type === 'vault' ? 'Trésorerie Centrale' : a.type === 'mobile_money' ? 'MTN / Moov Central' : 'Établissement Financier'),
         account_number: a.account_number || '',
         balance: Number(a.balance) || 0,
         alert_threshold: Number(a.alert_threshold) || 50000
       }))
+
+      // Fallback local storage si la base est vide (ex: offline ou RLS)
+      if (rawAccounts.length === 0) {
+        try {
+          const cached = localStorage.getItem(`gestio_treasury_accounts_${compId}`)
+          if (cached) {
+            const parsed = JSON.parse(cached)
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              rawAccounts = parsed
+            }
+          }
+        } catch (_) {}
+      }
 
       // Garantir l'existence d'au moins 1 Coffre-Fort et 1 MoMo Marchands
       rawAccounts = await ensureDefaultAccounts(compId, rawAccounts)
@@ -243,9 +288,10 @@ export const TresoreriePage: React.FC = () => {
         }
       } catch (_) {}
 
-      // 3. Réconciliation IDEMPOTENTE : chaque retrait validé est crédité UNE SEULE FOIS.
-      //    Marqueur : ligne caisse_mouvements (source_module = 'tresorerie_credit', source_id = id du retrait).
-      //    → aucun double comptage, et les décaissements ne sont jamais "annulés" au rechargement.
+      // 3. Réconciliation IDEMPOTENTE : chaque retrait validé est crédité dans le bon compte de trésorerie.
+      //    Espèces -> COFFRE-FORT (Espèces)
+      //    MoMo -> MOMO MARCHANDS Central
+      //    Marqueur : caisse_mouvements (source_module = 'tresorerie_credit', source_id = id du retrait).
       const validatedTransfers = allTransfers.filter((t) => t.status === 'APPROVED')
       let creditedIds = new Set<string>()
       try {
@@ -257,17 +303,45 @@ export const TresoreriePage: React.FC = () => {
         creditedIds = new Set((markers || []).map((m: any) => String(m.source_id)))
       } catch (_) {}
 
+      // Charger aussi les marqueurs locaux
+      try {
+        const localCredited = JSON.parse(localStorage.getItem(`gestio_credited_transfer_ids_${compId}`) || '[]')
+        if (Array.isArray(localCredited)) {
+          localCredited.forEach((id: string) => creditedIds.add(String(id)))
+        }
+      } catch (_) {}
+
       const finalAccounts = [...rawAccounts]
       const reconcileChannel = async (channel: 'Espèces' | 'MoMo', accType: 'vault' | 'mobile_money') => {
-        const idx = finalAccounts.findIndex((a) => a.type === accType)
-        if (idx === -1) return
+        let idx = finalAccounts.findIndex((a) => a.type === accType)
+        if (idx === -1) {
+          const fallbackAcc: TreasuryAccount = accType === 'vault' ? {
+            id: `${compId}-vault`,
+            name: 'COFFRE-FORT (Espèces)',
+            type: 'vault',
+            institution: 'Trésorerie Centrale',
+            account_number: 'COFFRE-PRINCIPAL',
+            balance: 0,
+            alert_threshold: 50000
+          } : {
+            id: `${compId}-momo`,
+            name: 'MOMO MARCHANDS Central',
+            type: 'mobile_money',
+            institution: 'MTN / Moov Central',
+            account_number: 'MOMO-CENTRAL',
+            balance: 0,
+            alert_threshold: 10000
+          }
+          finalAccounts.push(fallbackAcc)
+          idx = finalAccounts.length - 1
+        }
+
         const acc = finalAccounts[idx]
         const channelApproved = validatedTransfers.filter((t) => t.type === channel)
         const unmarked = channelApproved.filter((t) => !creditedIds.has(String(t.id)))
         if (unmarked.length === 0) return
 
-        // Retraits validés jamais crédités (bug 0 FCFA) : on crédite le manque réel.
-        // Si l'ancien code avait déjà crédité une partie, le solde la contient déjà → pas de doublon.
+        // Retraits validés jamais crédités : on crédite le manque réel dans le compte correspondant
         const sumAllApproved = channelApproved.reduce((s, t) => s + (Number(t.amount) || 0), 0)
         const sumUnmarked = unmarked.reduce((s, t) => s + (Number(t.amount) || 0), 0)
         const currentBal = Number(acc.balance) || 0
@@ -275,31 +349,42 @@ export const TresoreriePage: React.FC = () => {
 
         if (toCredit > 0) {
           const newBal = currentBal + toCredit
-          await supabase
-            .from('treasury_accounts')
-            .update({ balance: newBal, updated_at: new Date().toISOString() })
-            .eq('id', acc.id)
+          try {
+            await supabase
+              .from('treasury_accounts')
+              .update({ balance: newBal, updated_at: new Date().toISOString() })
+              .eq('id', acc.id)
+          } catch (updErr) {
+            console.warn('Mise à jour solde treasury_accounts:', updErr)
+          }
           finalAccounts[idx] = { ...acc, balance: newBal }
         }
 
         // Poser le marqueur pour chaque retrait afin qu'il ne soit plus jamais recrédité
-        await supabase.from('caisse_mouvements').insert(
-          unmarked.map((t) => ({
-            company_id: compId,
-            sector_slug: 'tresorerie',
-            type: 'reception_caisse',
-            sens: 'entree_depuis_caisse',
-            montant: t.amount,
-            montant_especes: channel === 'Espèces' ? t.amount : 0,
-            montant_momo: channel === 'MoMo' ? t.amount : 0,
-            motif: `Crédit ${acc.name} — retrait caisse validé`,
-            source_module: 'tresorerie_credit',
-            source_id: t.id,
-            statut: 'valide',
-            user_name: 'Réconciliation automatique'
-          }))
-        )
+        try {
+          await supabase.from('caisse_mouvements').insert(
+            unmarked.map((t) => ({
+              company_id: compId,
+              sector_slug: 'tresorerie',
+              type: 'reception_caisse',
+              sens: 'entree_depuis_caisse',
+              montant: t.amount,
+              montant_total: t.amount,
+              montant_especes: channel === 'Espèces' ? t.amount : 0,
+              montant_momo: channel === 'MoMo' ? t.amount : 0,
+              motif: `Crédit ${acc.name} — retrait caisse validé (${t.motif || ''})`,
+              source_module: 'tresorerie_credit',
+              source_id: String(t.id),
+              statut: 'valide',
+              user_name: 'Réconciliation automatique'
+            }))
+          )
+        } catch (_) {}
+
         unmarked.forEach((t) => creditedIds.add(String(t.id)))
+        try {
+          localStorage.setItem(`gestio_credited_transfer_ids_${compId}`, JSON.stringify(Array.from(creditedIds)))
+        } catch (_) {}
       }
 
       try {
@@ -309,12 +394,27 @@ export const TresoreriePage: React.FC = () => {
         console.warn('[Trésorerie] Réconciliation des soldes:', recErr)
       }
 
+      // Sauvegarde dans le localStorage pour persistance hors-ligne et rechargement immédiat
+      try {
+        localStorage.setItem(`gestio_treasury_accounts_${compId}`, JSON.stringify(finalAccounts))
+      } catch (_) {}
+
       setAccounts(finalAccounts)
       setAllTransfersHistory(allTransfers)
       setPendingTransfers(allTransfers.filter((t) => t.status === 'EN_ATTENTE'))
     } catch (err: any) {
       console.error('Erreur chargement trésorerie :', err)
-      setAccounts([])
+      // En cas d'erreur de requête, tenter de charger le cache local
+      try {
+        const cached = localStorage.getItem(`gestio_treasury_accounts_${compId}`)
+        if (cached) {
+          setAccounts(JSON.parse(cached))
+        } else {
+          setAccounts([])
+        }
+      } catch (_) {
+        setAccounts([])
+      }
       setPendingTransfers([])
     } finally {
       setLoading(false)
@@ -325,9 +425,15 @@ export const TresoreriePage: React.FC = () => {
     loadTreasuryData()
   }, [loadTreasuryData])
 
-  // Mettre à jour les comptes dans l'état local
+  // Mettre à jour les comptes dans l'état local et dans le localStorage
   const saveAccounts = (updated: TreasuryAccount[]) => {
     setAccounts(updated)
+    const compId = currentCompanyId || company?.id
+    if (compId) {
+      try {
+        localStorage.setItem(`gestio_treasury_accounts_${compId}`, JSON.stringify(updated))
+      } catch (_) {}
+    }
   }
 
   // Ajouter un nouveau compte réel
@@ -407,14 +513,36 @@ export const TresoreriePage: React.FC = () => {
     const compId = currentCompanyId || company?.id
     const isEspeces = /esp|cash/i.test(String(transfer.type || ''))
 
-    // 1. Trouver le compte de destination correspondant
+    // 1. Trouver le compte de destination correspondant (Coffre-Fort pour Espèces, MoMo Marchands pour MoMo)
     let target = accounts.find((a) =>
       isEspeces ? a.type === 'vault' : a.type === 'mobile_money'
     )
     if (!target) {
       target = isEspeces
-        ? accounts.find((a) => a.name.toLowerCase().includes('coffre')) || accounts[0]
-        : accounts.find((a) => a.name.toLowerCase().includes('momo')) || accounts[0]
+        ? accounts.find((a) => a.name.toLowerCase().includes('coffre'))
+        : accounts.find((a) => a.name.toLowerCase().includes('momo'))
+    }
+
+    // Si le compte cible n'existe pas encore dans l'état, le créer d'office pour ne JAMAIS perdre l'encaissement !
+    if (!target && compId) {
+      target = isEspeces ? {
+        id: `${compId}-vault`,
+        name: 'COFFRE-FORT (Espèces)',
+        type: 'vault',
+        institution: 'Trésorerie Centrale',
+        account_number: 'COFFRE-PRINCIPAL',
+        balance: 0,
+        alert_threshold: 50000
+      } : {
+        id: `${compId}-momo`,
+        name: 'MOMO MARCHANDS Central',
+        type: 'mobile_money',
+        institution: 'MTN / Moov Central',
+        account_number: 'MOMO-CENTRAL',
+        balance: 0,
+        alert_threshold: 10000
+      }
+      accounts.push(target)
     }
 
     if (target && compId) {
@@ -426,10 +554,20 @@ export const TresoreriePage: React.FC = () => {
           .select('id')
           .eq('company_id', compId)
           .eq('source_module', 'tresorerie_credit')
-          .eq('source_id', transfer.id)
+          .eq('source_id', String(transfer.id))
           .limit(1)
         alreadyCredited = !!(existing && existing.length > 0)
       } catch (_) {}
+
+      // Vérifier aussi dans le cache local
+      if (!alreadyCredited) {
+        try {
+          const localCredited = JSON.parse(localStorage.getItem(`gestio_credited_transfer_ids_${compId}`) || '[]')
+          if (Array.isArray(localCredited) && localCredited.includes(String(transfer.id))) {
+            alreadyCredited = true
+          }
+        } catch (_) {}
+      }
 
       if (!alreadyCredited) {
         // Lire le solde réel en base (évite d'écraser avec un état React périmé)
@@ -444,32 +582,46 @@ export const TresoreriePage: React.FC = () => {
         } catch (_) {}
 
         const newBal = baseBal + Number(transfer.amount)
-        saveAccounts(accounts.map((a) => (a.id === target!.id ? { ...a, balance: newBal } : a)))
+        const nextAccounts = accounts.map((a) => (a.id === target!.id ? { ...a, balance: newBal } : a))
+        saveAccounts(nextAccounts)
 
         try {
           await supabase
             .from('treasury_accounts')
             .update({ balance: newBal, updated_at: new Date().toISOString() })
             .eq('id', target.id)
-          // Marqueur de crédit : ce retrait ne sera plus jamais recrédité
+        } catch (updErr) {
+          console.warn('Mise à jour solde treasury_accounts:', updErr)
+        }
+
+        // Marqueur de crédit : ce retrait ne sera plus jamais recrédité
+        try {
           await supabase.from('caisse_mouvements').insert({
             company_id: compId,
             sector_slug: 'tresorerie',
             type: 'reception_caisse',
             sens: 'entree_depuis_caisse',
             montant: transfer.amount,
+            montant_total: transfer.amount,
             montant_especes: isEspeces ? transfer.amount : 0,
             montant_momo: isEspeces ? 0 : transfer.amount,
             motif: `Crédit ${target.name} — ${transfer.motif}`,
             source_module: 'tresorerie_credit',
-            source_id: transfer.id,
+            source_id: String(transfer.id),
             statut: 'valide',
             user_name: user?.full_name || 'Admin',
-            user_id: user?.id
+            user_id: user?.id && /^[0-9a-f-]{36}$/i.test(user.id) ? user.id : null
           })
-        } catch (updErr) {
-          console.warn('Mise à jour solde treasury_accounts:', updErr)
-        }
+        } catch (_) {}
+
+        // Enregistrer dans le cache local des crédits
+        try {
+          const localCredited = JSON.parse(localStorage.getItem(`gestio_credited_transfer_ids_${compId}`) || '[]')
+          if (Array.isArray(localCredited) && !localCredited.includes(String(transfer.id))) {
+            localCredited.push(String(transfer.id))
+            localStorage.setItem(`gestio_credited_transfer_ids_${compId}`, JSON.stringify(localCredited))
+          }
+        } catch (_) {}
       }
     }
 
@@ -543,45 +695,46 @@ export const TresoreriePage: React.FC = () => {
 
   // Rejeter une demande — libère le montant bloqué
   const handleRejectTransfer = async (transferId: string) => {
+    const compId = currentCompanyId || company?.id
     setPendingTransfers((prev) => prev.filter((t) => t.id !== transferId))
     setAllTransfersHistory((prev) => prev.map((t) => t.id === transferId ? { ...t, status: 'REJECTED' } : t))
 
-    if (company?.id) {
+    if (compId) {
       try {
         await supabase
           .from('treasury_transfers')
           .update({ status: 'REJECTED', rejected_at: new Date().toISOString() })
           .eq('id', transferId)
       } catch (e) {}
+
+      // Libérer le montant côté caisse_mouvements
+      try {
+        await supabase
+          .from('caisse_mouvements')
+          .update({ statut: 'refuse', updated_at: new Date().toISOString() })
+          .eq('source_id', String(transferId))
+          .eq('type', 'retrait_tresorerie')
+      } catch (_) {}
+
+      // Mettre à jour demandes_retrait
+      try {
+        await supabase
+          .from('demandes_retrait')
+          .update({ statut: 'refuse', updated_at: new Date().toISOString() })
+          .eq('id', transferId)
+      } catch (_) {}
+
+      await logAuditEvent({
+        companyId: compId,
+        userId: user?.id,
+        userName: user?.full_name,
+        userRole: user?.role,
+        action: 'REJET_TRANSFERT_CAISSE',
+        module: 'TRESORERIE',
+        sector: currentSectorSlug.toUpperCase(),
+        description: `Rejet de la demande de transfert de caisse réf: ${transferId}. Montant libéré.`
+      })
     }
-
-    // Libérer le montant côté caisse_mouvements
-    try {
-      await supabase
-        .from('caisse_mouvements')
-        .update({ statut: 'refuse', updated_at: new Date().toISOString() })
-        .eq('source_id', transferId)
-        .eq('type', 'retrait_tresorerie')
-    } catch (_) {}
-
-    // Mettre à jour demandes_retrait
-    try {
-      await supabase
-        .from('demandes_retrait')
-        .update({ statut: 'refuse', updated_at: new Date().toISOString() })
-        .eq('id', transferId)
-    } catch (_) {}
-
-    await logAuditEvent({
-      companyId: company?.id,
-      userId: user?.id,
-      userName: user?.full_name,
-      userRole: user?.role,
-      action: 'REJET_TRANSFERT_CAISSE',
-      module: 'TRESORERIE',
-      sector: currentSectorSlug.toUpperCase(),
-      description: `Rejet de la demande de transfert de caisse réf: ${transferId}. Montant libéré.`
-    })
 
     toast.info('Demande rejetée', 'Le montant bloqué a été libéré. Le caissier a été notifié.')
   }
