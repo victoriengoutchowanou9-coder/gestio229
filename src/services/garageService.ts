@@ -474,3 +474,182 @@ export interface BtpTransfertIntersite {
   notes?: string
   created_at?: string
 }
+
+// ─── 4. NOUVEAUX TYPES ÉTENDUS POUR LE PARC BTP (M068) ────────────────────────
+
+export type BtpOrStatut =
+  | 'BROUILLON'
+  | 'EN_ATTENTE_VALIDATION'
+  | 'VALIDE'
+  | 'MECANICIEN_AFFECTE'
+  | 'EN_DIAGNOSTIC'
+  | 'EN_COURS'
+  | 'ATTENTE_PIECES'
+  | 'VALIDATION_TECHNIQUE'
+  | 'REPARE'
+  | 'TEST_EFFECTUE'
+  | 'CLOTURE'
+  | 'ANNULE'
+
+export interface BtpOrdreReparation {
+  id: string
+  company_id: string
+  numero_or: string
+  date_ouverture: string
+  site_id?: string
+  chantier_id?: string
+  materiel_id: string
+  code_materiel?: string
+  immatriculation?: string
+  marque?: string
+  modele?: string
+  numero_serie?: string
+  compteur_valeur: number
+  demandeur_nom?: string
+  description_panne: string
+  symptomes_constates?: string
+  priorite: 'FAIBLE' | 'NORMALE' | 'ELEVEE' | 'URGENTE'
+  type_intervention: 'CORRECTIVE' | 'PREVENTIVE' | 'DIAGNOSTIC' | 'REVISION' | 'CONTROLE_TECHNIQUE'
+  diagnostic_mecanicien?: string
+  travaux_a_effectuer?: string
+  cout_previsionnel: number
+  cout_reel_mo: number
+  cout_reel_pieces: number
+  cout_reel_consommables: number
+  cout_reel_sous_traitance: number
+  cout_reel_total: number
+  date_debut_prevue?: string
+  date_fin_prevue?: string
+  date_debut_reelle?: string
+  date_fin_reelle?: string
+  statut: BtpOrStatut
+  motif_annulation?: string
+  essais_techniques_details?: string
+  essais_reussis?: boolean
+  autorisation_remise_en_service?: boolean
+  valide_par?: string
+  cloture_par?: string
+  pieces_destockees?: boolean
+  documents?: any[]
+  observations?: string
+  sinistre_id?: string
+  created_at?: string
+  updated_at?: string
+  materiel?: BtpMateriel
+  site?: BtpSite
+  chantier?: BtpChantier
+}
+
+export interface BtpReparationMecanicien {
+  id: string
+  company_id: string
+  ordre_id: string
+  mecanicien_id?: string
+  nom_mecanicien: string
+  specialite: string
+  fonction_intervention: string
+  date_affectation: string
+  date_debut_travail?: string
+  date_fin_travail?: string
+  temps_prevu_heures: number
+  temps_reel_heures: number
+  taches_attribuees?: string
+  compte_rendu?: string
+  difficultes_rencontrees?: string
+  statut_tache: 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'SUSPENDU'
+  observations_chef_atelier?: string
+  created_at?: string
+}
+
+export interface BtpReparationPiece {
+  id: string
+  company_id: string
+  ordre_id: string
+  product_id?: string
+  reference?: string
+  designation: string
+  quantite_prevue: number
+  quantite_utilisee: number
+  prix_unitaire_ht: number
+  cout_total_ht: number
+  est_destocke: boolean
+  date_sortie_stock?: string
+  created_at?: string
+}
+
+export interface BtpAssuranceContrat {
+  id: string
+  company_id: string
+  numero_contrat: string
+  compagnie_assurance: string
+  courtier_intermediaire?: string
+  type_assurance: string
+  engins_couverts: string[]
+  garanties_souscrites?: string
+  plafond_garantie: number
+  franchise: number
+  date_souscription: string
+  date_prise_effet: string
+  date_expiration: string
+  montant_prime_annuelle: number
+  frequence_paiement: 'ANNUELLE' | 'SEMESTRIELLE' | 'TRIMESTRIELLE' | 'MENSUELLE'
+  statut: 'EN_PREPARATION' | 'EN_ATTENTE_VALIDATION' | 'ACTIF' | 'ECHEANCE_PROCHE' | 'PAIEMENT_EN_ATTENTE' | 'EXPIRE' | 'RESILIE'
+  delai_alerte_jours: number
+  montant_total_paye: number
+  solde_restant: number
+  contact_assureur?: string
+  documents?: any[]
+  notes?: string
+  created_at?: string
+  updated_at?: string
+}
+
+export interface BtpAssurancePaiement {
+  id: string
+  company_id: string
+  contrat_id: string
+  echeance_label?: string
+  montant_du: number
+  montant_paye: number
+  solde_echeance: number
+  date_paiement: string
+  mode_paiement: string
+  reference_transaction?: string
+  statut_validation: string
+  utilisateur_nom?: string
+  justificatif_url?: string
+  notes?: string
+  created_at?: string
+}
+
+export interface BtpSinistre {
+  id: string
+  company_id: string
+  numero_declaration: string
+  contrat_id?: string
+  materiel_id?: string
+  ordre_reparation_id?: string
+  code_materiel?: string
+  immatriculation?: string
+  date_incident: string
+  lieu_incident?: string
+  description_faits: string
+  personnes_impliquees?: string
+  responsable_declaration?: string
+  reference_assureur?: string
+  estimation_dommages: number
+  montant_reclame: number
+  franchise_applicable: number
+  montant_propose_assureur: number
+  montant_indemnise: number
+  statut: 'DECLARE' | 'EN_COURS_CONSTITUTION' | 'TRANSMIS_ASSUREUR' | 'EN_EXPERTISE' | 'ATTENTE_DECISION' | 'ACCEPTE' | 'INDEMNISE' | 'CONTESTE' | 'CLOTURE'
+  prise_en_charge_confirmee: boolean
+  date_expertise?: string
+  date_accord?: string
+  date_indemnisation?: string
+  photos_justificatifs?: any[]
+  notes?: string
+  created_at?: string
+  updated_at?: string
+}
+

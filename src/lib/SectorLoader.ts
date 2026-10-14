@@ -628,36 +628,51 @@ export const SectorLoader = {
     // ── Menu spécifique Atelier, Garage & Mécanique (Double Version CLASSIC & BTP MULTISITE) ──
     const isGarage = cleanSlug === 'garage' || cleanSlug === 'atelier' || cleanSlug === 'mecanique'
     if (isGarage) {
-      let garageMode = 'CLASSIC'
+      let garageMode = (company as any)?.garage_version_mode || 'CLASSIC'
       try {
-        const allKeys = Object.keys(localStorage)
-        const modeKey = allKeys.find(k => k.startsWith('gestio229_garage_mode_'))
-        if (modeKey) {
-          const val = localStorage.getItem(modeKey)
-          if (val === 'BTP_MULTISITE' || val === 'CLASSIC') garageMode = val
+        const key = company?.id ? `gestio229_garage_mode_${company.id}` : null
+        const val = key ? localStorage.getItem(key) : null
+        if (val === 'BTP_MULTISITE' || val === 'CLASSIC') {
+          garageMode = val
+        } else if (!garageMode || garageMode === 'CLASSIC') {
+          const allKeys = Object.keys(localStorage)
+          const modeKey = allKeys.find(k => k.startsWith('gestio229_garage_mode_'))
+          if (modeKey) {
+            const v = localStorage.getItem(modeKey)
+            if (v === 'BTP_MULTISITE' || v === 'CLASSIC') garageMode = v
+          }
         }
       } catch (e) {}
 
       if (garageMode === 'BTP_MULTISITE') {
         const btpNav: NavItem[] = [
-          // APERÇU FLOTTE
+          // APERÇU FLOTTE & LOGISTIQUE
           { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
-          // PARC & CHANTIERS
+          { id: 'btp_logistique', label: 'Gestion Logistique Parc', icon: 'Layers', href: `${prefix}/logistique-parc`, group: 'apercu' },
+
+          // PARC, CHANTIERS & TRANSFERTS
           { id: 'btp_materiel', label: 'Parc Matériel & Engins', icon: 'Truck', href: `${prefix}/parc-materiel`, group: 'commercial' },
           { id: 'btp_chantiers', label: 'Chantiers & Affectations', icon: 'HardHat', href: `${prefix}/chantiers-affectations`, group: 'commercial' },
+          { id: 'btp_transferts', label: 'Mouvements & Transferts', icon: 'Repeat', href: `${prefix}/transferts-intersites`, group: 'commercial' },
           { id: 'btp_sites', label: 'Organisation Multisite', icon: 'Building2', href: `${prefix}/organisation-multisite`, group: 'commercial' },
           { id: 'btp_chauffeurs', label: 'Chauffeurs & CACES', icon: 'UserCheck', href: `${prefix}/chauffeurs-operateurs`, group: 'commercial' },
-          // MAINTENANCE & CARBURANT
-          { id: 'btp_maintenance', label: 'Maintenance & Pannes', icon: 'Wrench', href: `${prefix}/maintenance-preventive`, group: 'gestion' },
+
+          // MAINTENANCE, RÉPARATIONS & ASSURANCES
+          { id: 'ordres_reparation', label: 'Ordres de Réparation (OR)', icon: 'Wrench', href: `${prefix}/reparations`, group: 'gestion' },
+          { id: 'btp_mecaniciens', label: 'Affectation des Mécaniciens', icon: 'Users', href: `${prefix}/affectation-mecaniciens`, group: 'gestion' },
+          { id: 'btp_maintenance', label: 'Maintenance Préventive', icon: 'Clock', href: `${prefix}/maintenance-preventive`, group: 'gestion' },
           { id: 'btp_carburant', label: 'Cuves & Carburant', icon: 'Fuel', href: `${prefix}/carburant-lubrifiants`, group: 'gestion' },
+          { id: 'assurances_sinistres', label: 'Assurances & Sinistres', icon: 'Shield', href: `${prefix}/assurances-sinistres`, group: 'gestion' },
           { id: 'stock', label: 'Stocks Pièces & Dépôts', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
           { id: 'fournisseurs', label: 'Fournisseurs & Concessionnaires', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+
           // FINANCE & TCO
           { id: 'btp_couts', label: 'Coûts de Revient & TCO', icon: 'DollarSign', href: `${prefix}/couts-revient`, group: 'finance' },
           { id: 'caisse', label: 'Caisse & Régies Chantier', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
           { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
           { id: 'depenses', label: 'Dépenses Flotte', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
           { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+
           // ADMINISTRATION
           { id: 'rapports', label: 'Rapports & Audit Flotte', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
           { id: 'configuration', label: 'Configuration Parc & BTP', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },

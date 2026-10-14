@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   Truck, HardHat, Building2, Fuel, Wrench, AlertTriangle,
   CheckCircle2, Clock, DollarSign, Plus, ArrowUpRight, Shield,
-  Layers, RefreshCw, ChevronRight, BarChart3, MapPin
+  Layers, RefreshCw, ChevronRight, BarChart3, MapPin, Repeat
 } from 'lucide-react'
 import { useTenant } from '../../../../hooks/useTenant'
 import { useUIStore } from '../../../../store/uiStore'
@@ -26,6 +26,9 @@ export const BtpDashboardPage: React.FC = () => {
   const [materiels, setMateriels] = useState<BtpMateriel[]>([])
   const [chantiers, setChantiers] = useState<BtpChantier[]>([])
   const [ordresMaintenance, setOrdresMaintenance] = useState<BtpOrdreMaintenance[]>([])
+  const [ordresReparation, setOrdresReparation] = useState<any[]>([])
+  const [contratsAssurance, setContratsAssurance] = useState<any[]>([])
+  const [transfertsTransit, setTransfertsTransit] = useState<any[]>([])
   const [totalCarburantLitres, setTotalCarburantLitres] = useState(0)
   const [totalCarburantCout, setTotalCarburantCout] = useState(0)
   const [alertesMaintenanceCount, setAlertesMaintenanceCount] = useState(0)
@@ -36,17 +39,23 @@ export const BtpDashboardPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [matRes, chtRes, omRes, carbRes] = await Promise.all([
+      const [matRes, chtRes, omRes, carbRes, orRes, assRes, trRes] = await Promise.all([
         supabaseTenant('btp_materiels').select('*').order('code_materiel'),
         supabaseTenant('btp_chantiers').select('*').order('created_at', { ascending: false }),
         supabaseTenant('btp_ordres_maintenance').select('*').order('created_at', { ascending: false }).limit(20),
-        supabaseTenant('btp_carburant_pleins').select('quantite_litres, montant_total, est_surconsommation_anormale').limit(200)
+        supabaseTenant('btp_carburant_pleins').select('quantite_litres, montant_total, est_surconsommation_anormale').limit(200),
+        supabaseTenant('btp_ordres_reparation').select('*').order('created_at', { ascending: false }).limit(20),
+        supabaseTenant('btp_assurances_contrats').select('*').limit(50),
+        supabaseTenant('btp_transferts_intersites').select('*').eq('statut', 'EN_TRANSIT')
       ])
 
       const mats: BtpMateriel[] = matRes.data || []
       setMateriels(mats)
       setChantiers(chtRes.data || [])
       setOrdresMaintenance(omRes.data || [])
+      setOrdresReparation(orRes.data || [])
+      setContratsAssurance(assRes.data || [])
+      setTransfertsTransit(trRes.data || [])
 
       // Alertes de maintenance (si compteur actuel >= compteur prochaine maintenance)
       const alerts = mats.filter(m => {
@@ -104,22 +113,36 @@ export const BtpDashboardPage: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2.5">
           <Link
-            to={`${prefix}/parc-materiel`}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md shadow-amber-600/30 transition cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            Ajouter un Matériel
-          </Link>
-          <Link
-            to={`${prefix}/maintenance-preventive`}
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 shadow-md transition cursor-pointer"
+            to={`${prefix}/reparations`}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs shadow-md shadow-amber-600/30 transition cursor-pointer"
           >
             <Wrench className="w-4 h-4" />
-            Ordre de Maintenance
+            <span>Ordres de Réparation</span>
+          </Link>
+          <Link
+            to={`${prefix}/transferts-intersites`}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 shadow-md transition cursor-pointer"
+          >
+            <Repeat className="w-4 h-4" />
+            <span>Transferts ({transfertsTransit.length})</span>
+          </Link>
+          <Link
+            to={`${prefix}/assurances-sinistres`}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 shadow-md transition cursor-pointer"
+          >
+            <Shield className="w-4 h-4" />
+            <span>Assurances ({contratsAssurance.length})</span>
+          </Link>
+          <Link
+            to={`${prefix}/parc-materiel`}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs border border-slate-700 shadow-md transition cursor-pointer"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Ajouter Matériel</span>
           </Link>
           <button
             onClick={loadData}
-            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition"
+            className="p-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-700 transition cursor-pointer"
             title="Actualiser"
           >
             <RefreshCw className={clsx('w-4 h-4', loading && 'animate-spin')} />

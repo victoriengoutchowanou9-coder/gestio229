@@ -157,9 +157,9 @@ const TraiteurPage           = mod('traiteur_prestations')
 const GarageSectorDispatcher    = safeLazy(() => import('./pages/dashboard/garage/GarageSectorDispatcher'))
 const GarageVehiculesPage       = safeLazy(() => import('./pages/dashboard/garage/GarageVehiculesPage'))
 const GarageReceptionPage       = safeLazy(() => import('./pages/dashboard/garage/GarageReceptionPage'))
-const GarageReparationsPage     = safeLazy(() => import('./pages/dashboard/garage/GarageReparationsPage'))
+const GarageReparationsPage     = safeLazy(() => import('./pages/dashboard/garage/GarageReparationsDispatcher'))
 const GaragePlanningPage        = safeLazy(() => import('./pages/dashboard/garage/GaragePlanningPage'))
-const GarageAssurancesPage      = safeLazy(() => import('./pages/dashboard/garage/GarageAssurancesPage'))
+const GarageAssurancesPage      = safeLazy(() => import('./pages/dashboard/garage/GarageAssurancesDispatcher'))
 const BtpSitesPage              = safeLazy(() => import('./pages/dashboard/garage/btp/BtpSitesPage'))
 const BtpMaterielPage           = safeLazy(() => import('./pages/dashboard/garage/btp/BtpMaterielPage'))
 const BtpChantiersPage          = safeLazy(() => import('./pages/dashboard/garage/btp/BtpChantiersPage'))
@@ -167,6 +167,9 @@ const BtpMaintenancePage        = safeLazy(() => import('./pages/dashboard/garag
 const BtpCarburantPage          = safeLazy(() => import('./pages/dashboard/garage/btp/BtpCarburantPage'))
 const BtpChauffeursPage         = safeLazy(() => import('./pages/dashboard/garage/btp/BtpChauffeursPage'))
 const BtpCoutRevientPage        = safeLazy(() => import('./pages/dashboard/garage/btp/BtpCoutRevientPage'))
+const BtpTransfertsPage         = safeLazy(() => import('./pages/dashboard/garage/btp/BtpTransfertsPage'))
+const BtpMecaniciensPage        = safeLazy(() => import('./pages/dashboard/garage/btp/BtpMecaniciensAffectationPage'))
+const BtpLogistiquePage         = safeLazy(() => import('./pages/dashboard/garage/btp/BtpLogistiquePage'))
 // ── École & Centre de Formation Dédié ──
 const EcoleSectorDispatcher    = safeLazy(() => import('./pages/dashboard/ecole/EcoleSectorDispatcher'))
 const EcoleInscriptionsPage    = safeLazy(() => import('./pages/dashboard/ecole/EcoleInscriptionsPage'))
@@ -560,6 +563,9 @@ const AppRoutes: React.FC = () => {
         <Route path="organisation-multisite" element={<ModuleGuard moduleId="btp_sites"><BtpSitesPage /></ModuleGuard>} />
         <Route path="parc-materiel"          element={<ModuleGuard moduleId="btp_materiel"><BtpMaterielPage /></ModuleGuard>} />
         <Route path="chantiers-affectations" element={<ModuleGuard moduleId="btp_chantiers"><BtpChantiersPage /></ModuleGuard>} />
+        <Route path="transferts-intersites"  element={<ModuleGuard moduleId="btp_transferts"><BtpTransfertsPage /></ModuleGuard>} />
+        <Route path="affectation-mecaniciens" element={<ModuleGuard moduleId="btp_mecaniciens"><BtpMecaniciensPage /></ModuleGuard>} />
+        <Route path="logistique-parc"        element={<ModuleGuard moduleId="btp_logistique"><BtpLogistiquePage /></ModuleGuard>} />
         <Route path="maintenance-preventive" element={<ModuleGuard moduleId="btp_maintenance"><BtpMaintenancePage /></ModuleGuard>} />
         <Route path="carburant-lubrifiants"  element={<ModuleGuard moduleId="btp_carburant"><BtpCarburantPage /></ModuleGuard>} />
         <Route path="chauffeurs-operateurs"  element={<ModuleGuard moduleId="btp_chauffeurs"><BtpChauffeursPage /></ModuleGuard>} />
@@ -703,6 +709,9 @@ const AppRoutes: React.FC = () => {
         <Route path="organisation-multisite" element={<ModuleGuard moduleId="btp_sites"><BtpSitesPage /></ModuleGuard>} />
         <Route path="parc-materiel"          element={<ModuleGuard moduleId="btp_materiel"><BtpMaterielPage /></ModuleGuard>} />
         <Route path="chantiers-affectations" element={<ModuleGuard moduleId="btp_chantiers"><BtpChantiersPage /></ModuleGuard>} />
+        <Route path="transferts-intersites"  element={<ModuleGuard moduleId="btp_transferts"><BtpTransfertsPage /></ModuleGuard>} />
+        <Route path="affectation-mecaniciens" element={<ModuleGuard moduleId="btp_mecaniciens"><BtpMecaniciensPage /></ModuleGuard>} />
+        <Route path="logistique-parc"        element={<ModuleGuard moduleId="btp_logistique"><BtpLogistiquePage /></ModuleGuard>} />
         <Route path="maintenance-preventive" element={<ModuleGuard moduleId="btp_maintenance"><BtpMaintenancePage /></ModuleGuard>} />
         <Route path="carburant-lubrifiants"  element={<ModuleGuard moduleId="btp_carburant"><BtpCarburantPage /></ModuleGuard>} />
         <Route path="chauffeurs-operateurs"  element={<ModuleGuard moduleId="btp_chauffeurs"><BtpChauffeursPage /></ModuleGuard>} />

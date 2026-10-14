@@ -335,6 +335,13 @@ export const ConfigPage: React.FC = () => {
     try {
       const ok = await selectGarageVersion(targetGarageMode)
       if (ok) {
+        // Enregistrement synchrone localstorage pour basculement immédiat du menu
+        try {
+          if (company?.id) {
+            localStorage.setItem(`gestio229_garage_mode_${company.id}`, targetGarageMode)
+          }
+        } catch (_) {}
+
         toast.success(
           'Version mise à jour avec succès !',
           targetGarageMode === 'CLASSIC'
@@ -342,16 +349,32 @@ export const ConfigPage: React.FC = () => {
             : 'Votre établissement est désormais en mode Parc Matériel BTP & Maintenance Multisite.'
         )
         setSwitchingGarageModal(false)
-        await reloadGarageConfig()
-        await refreshTenantContext()
+
+        try {
+          if (typeof reloadGarageConfig === 'function') {
+            await reloadGarageConfig()
+          }
+        } catch (e) {
+          console.warn('[ConfigPage] Avertissement reload garage config:', e)
+        }
+
+        try {
+          if (typeof refreshTenantContext === 'function') {
+            await refreshTenantContext()
+          }
+        } catch (e) {
+          console.warn('[ConfigPage] Avertissement refresh tenant context:', e)
+        }
+
         setTimeout(() => {
           window.location.reload()
-        }, 600)
+        }, 500)
       } else {
         toast.error('Erreur', 'Impossible de modifier la version.')
       }
     } catch (err: any) {
-      toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
+      console.error('[handleConfirmSwitchVersion] Erreur:', err)
+      toast.error('Erreur de basculement', err?.message || 'Une anomalie est survenue lors du basculement.')
     } finally {
       setSwitchingGarage(false)
     }
@@ -384,6 +407,12 @@ export const ConfigPage: React.FC = () => {
     try {
       const ok = await selectEcoleType(targetEcoleType)
       if (ok) {
+        try {
+          if (company?.id) {
+            localStorage.setItem(`gestio229_ecole_type_${company.id}`, targetEcoleType)
+          }
+        } catch (_) {}
+
         toast.success(
           'Profil mis à jour avec succès !',
           targetEcoleType === 'SCOLAIRE'
@@ -393,16 +422,32 @@ export const ConfigPage: React.FC = () => {
             : 'Votre établissement est désormais en mode Établissement Mixte.'
         )
         setSwitchingEcoleModal(false)
-        await reloadEcoleConfig()
-        await refreshTenantContext()
+
+        try {
+          if (typeof reloadEcoleConfig === 'function') {
+            await reloadEcoleConfig()
+          }
+        } catch (e) {
+          console.warn('[ConfigPage] Avertissement reload ecole config:', e)
+        }
+
+        try {
+          if (typeof refreshTenantContext === 'function') {
+            await refreshTenantContext()
+          }
+        } catch (e) {
+          console.warn('[ConfigPage] Avertissement refresh tenant context:', e)
+        }
+
         setTimeout(() => {
           window.location.reload()
-        }, 600)
+        }, 500)
       } else {
         toast.error('Erreur', 'Impossible de modifier le profil.')
       }
     } catch (err: any) {
-      toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
+      console.error('[handleConfirmSwitchEcole] Erreur:', err)
+      toast.error('Erreur de mise à jour', err?.message || 'Une anomalie est survenue lors de la mise à jour.')
     } finally {
       setSwitchingEcole(false)
     }

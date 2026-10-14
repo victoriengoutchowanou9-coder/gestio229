@@ -545,6 +545,36 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'finance',
   },
 
+  'btp_logistique': {
+    id: 'btp_logistique',
+    label: 'Gestion Logistique Parc',
+    icon: 'Layers',
+    path: 'logistique-parc',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'apercu',
+  },
+
+  'btp_transferts': {
+    id: 'btp_transferts',
+    label: 'Mouvements & Transferts',
+    icon: 'Repeat',
+    path: 'transferts-intersites',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'commercial',
+  },
+
+  'btp_mecaniciens': {
+    id: 'btp_mecaniciens',
+    label: 'Affectation des Mécaniciens',
+    icon: 'Users',
+    path: 'affectation-mecaniciens',
+    isCommon: false,
+    sectorSlugs: ['garage'],
+    group: 'gestion',
+  },
+
   // ══════════════════════════════════════════════════════════════════════
   // MODULES SPÉCIFIQUES — HÔTEL
   // ══════════════════════════════════════════════════════════════════════
