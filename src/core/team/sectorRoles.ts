@@ -35,6 +35,7 @@ export function normalizeSectorSlug(slug?: string | null): string {
   if (clean === 'agro-business' || clean === 'agro') return 'agrobusiness'
   if (clean === 'bar-restaurant-maquis' || clean === 'maquis' || clean === 'fast-food') return 'restaurant'
   if (clean === 'impression') return 'imprimerie'
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') return 'flotte-geolocalisation'
   return clean
 }
 
@@ -1203,6 +1204,100 @@ export const SECTOR_ROLES_CATALOG: Record<string, SectorRoleDefinition[]> = {
       },
     },
   ],
+
+  // 21. GÉOLOCALISATION ET FLOTTE
+  'flotte-geolocalisation': [
+    {
+      id: 'gestionnaire_flotte',
+      label: 'Gestionnaire de Flotte & Télématique',
+      description: 'Supervision globale, suivi GPS en temps réel, affectations et alertes',
+      defaultRoute: 'carte',
+      defaultPermissions: {
+        ventes: true,
+        caisse: true,
+        stock: true,
+        clients: true,
+        fournisseurs: true,
+        depenses: true,
+        reporting: true,
+        finances: true,
+        syscohada: true,
+        admin: true,
+      },
+    },
+    {
+      id: 'repartiteur_flotte',
+      label: 'Régulateur / Dispatcher de Missions',
+      description: 'Attribution des missions, suivi des trajets et tournées de livraison',
+      defaultRoute: 'missions',
+      defaultPermissions: {
+        ventes: true,
+        caisse: false,
+        stock: false,
+        clients: true,
+        fournisseurs: false,
+        depenses: false,
+        reporting: true,
+        finances: false,
+        syscohada: false,
+        admin: false,
+      },
+    },
+    {
+      id: 'chauffeur_conducteur',
+      label: 'Conducteur / Chauffeur Dédié',
+      description: 'Consulte ses missions, inspections avant départ et carnet de bord',
+      defaultRoute: 'missions',
+      defaultPermissions: {
+        ventes: false,
+        caisse: false,
+        stock: false,
+        clients: false,
+        fournisseurs: false,
+        depenses: false,
+        reporting: false,
+        finances: false,
+        syscohada: false,
+        admin: false,
+      },
+    },
+    {
+      id: 'mecanicien_flotte',
+      label: 'Responsable Entretien & Ateliers',
+      description: 'Planification maintenance, vidanges, pneus et ordres de réparation',
+      defaultRoute: 'maintenance',
+      defaultPermissions: {
+        ventes: false,
+        caisse: false,
+        stock: true,
+        clients: false,
+        fournisseurs: true,
+        depenses: true,
+        reporting: true,
+        finances: false,
+        syscohada: false,
+        admin: false,
+      },
+    },
+    {
+      id: 'controleur_carburant',
+      label: 'Contrôleur Carburant & Télématique',
+      description: 'Audit consommations, pleins, détection de siphonnage et TCO',
+      defaultRoute: 'carburant',
+      defaultPermissions: {
+        ventes: false,
+        caisse: false,
+        stock: false,
+        clients: false,
+        fournisseurs: true,
+        depenses: true,
+        reporting: true,
+        finances: true,
+        syscohada: false,
+        admin: false,
+      },
+    },
+  ],
 }
 
 /**
@@ -1226,6 +1321,26 @@ export interface SectorModuleItem {
  */
 export function getSectorAvailableModules(sectorSlug?: string | null): SectorModuleItem[] {
   const norm = normalizeSectorSlug(sectorSlug)
+
+  if (norm === 'flotte-geolocalisation' || norm === 'flotte') {
+    return [
+      { id: 'flotte_carte', label: 'Carte GPS en Direct', category: 'commercial' },
+      { id: 'flotte_vehicules', label: 'Parc Véhicules', category: 'commercial' },
+      { id: 'flotte_conducteurs', label: 'Conducteurs & Permis', category: 'commercial' },
+      { id: 'flotte_missions', label: 'Missions & Itinéraires', category: 'commercial' },
+      { id: 'flotte_carburant', label: 'Carburant & Consommation', category: 'gestion' },
+      { id: 'flotte_maintenance', label: 'Entretien & Maintenance', category: 'gestion' },
+      { id: 'flotte_geofences', label: 'Zones Géographiques (Geofences)', category: 'gestion' },
+      { id: 'flotte_alertes', label: 'Alertes & Incidents GPS', category: 'admin' },
+      { id: 'flotte_capteurs', label: 'Capteurs & Chaîne du Froid', category: 'gestion' },
+      { id: 'flotte_documents', label: 'Assurances & Documents', category: 'gestion' },
+      { id: 'flotte_reservations', label: 'Autopartage & Réservations', category: 'commercial' },
+      { id: 'flotte_inspections', label: 'Inspections & Contrôles', category: 'commercial' },
+      { id: 'flotte_rapports', label: 'Rapports & Télématique', category: 'admin' },
+      { id: 'flotte_integrations', label: 'Traceurs & Ingestion GPS', category: 'admin' },
+      { id: 'flotte_parametres', label: 'Paramètres Géolocalisation', category: 'admin' },
+    ]
+  }
 
   if (norm === 'hotel') {
     return [

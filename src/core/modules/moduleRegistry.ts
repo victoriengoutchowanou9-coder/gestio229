@@ -887,6 +887,160 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     sectorSlugs: ['brasserie'],
     group: 'commercial',
   },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // MODULES SPÉCIFIQUES — 20ᵉ ACTIVITÉ : GÉOLOCALISATION & FLOTTE
+  // ══════════════════════════════════════════════════════════════════════
+
+  'flotte_carte': {
+    id: 'flotte_carte',
+    label: 'Carte GPS en Direct',
+    icon: 'MapPin',
+    path: 'carte',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'apercu',
+  },
+
+  'flotte_vehicules': {
+    id: 'flotte_vehicules',
+    label: 'Parc Véhicules',
+    icon: 'Truck',
+    path: 'vehicules',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'commercial',
+  },
+
+  'flotte_conducteurs': {
+    id: 'flotte_conducteurs',
+    label: 'Conducteurs & Permis',
+    icon: 'UserCheck',
+    path: 'conducteurs',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'commercial',
+  },
+
+  'flotte_missions': {
+    id: 'flotte_missions',
+    label: 'Missions & Itinéraires',
+    icon: 'Route',
+    path: 'missions',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'commercial',
+  },
+
+  'flotte_carburant': {
+    id: 'flotte_carburant',
+    label: 'Carburant & Consommation',
+    icon: 'Fuel',
+    path: 'carburant',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'gestion',
+  },
+
+  'flotte_maintenance': {
+    id: 'flotte_maintenance',
+    label: 'Entretien & Maintenance',
+    icon: 'Wrench',
+    path: 'maintenance',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'gestion',
+  },
+
+  'flotte_geofences': {
+    id: 'flotte_geofences',
+    label: 'Zones Géographiques (Geofences)',
+    icon: 'Shield',
+    path: 'geofences',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'gestion',
+  },
+
+  'flotte_alertes': {
+    id: 'flotte_alertes',
+    label: 'Alertes & Incidents GPS',
+    icon: 'AlertTriangle',
+    path: 'alertes',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'admin',
+  },
+
+  'flotte_capteurs': {
+    id: 'flotte_capteurs',
+    label: 'Capteurs & Chaîne du Froid',
+    icon: 'Thermometer',
+    path: 'capteurs',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'gestion',
+  },
+
+  'flotte_documents': {
+    id: 'flotte_documents',
+    label: 'Assurances & Documents',
+    icon: 'FileText',
+    path: 'documents',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'gestion',
+  },
+
+  'flotte_reservations': {
+    id: 'flotte_reservations',
+    label: 'Autopartage & Réservations',
+    icon: 'Calendar',
+    path: 'reservations',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'commercial',
+  },
+
+  'flotte_inspections': {
+    id: 'flotte_inspections',
+    label: 'Inspections & Contrôles',
+    icon: 'ClipboardCheck',
+    path: 'inspections',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'commercial',
+  },
+
+  'flotte_rapports': {
+    id: 'flotte_rapports',
+    label: 'Rapports & Télématique',
+    icon: 'BarChart3',
+    path: 'rapports-flotte',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'admin',
+  },
+
+  'flotte_integrations': {
+    id: 'flotte_integrations',
+    label: 'Traceurs & Ingestion GPS',
+    icon: 'Radio',
+    path: 'integrations-gps',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'admin',
+  },
+
+  'flotte_parametres': {
+    id: 'flotte_parametres',
+    label: 'Paramètres Géolocalisation',
+    icon: 'Settings',
+    path: 'parametres-gps',
+    isCommon: false,
+    sectorSlugs: ['flotte-geolocalisation', 'flotte', 'geolocalisation'],
+    group: 'admin',
+  },
 }
 
 
@@ -944,8 +1098,15 @@ export function resolveModulesForSector(
     }
   }
 
-  // 2. Modules spécifiques du secteur (Phase 2 future)
-  for (const moduleId of specificModules) {
+  // 2. Modules spécifiques du secteur (Phase 2 & Secteurs Spécialisés)
+  const candidateSpecific = (specificModules && specificModules.length > 0)
+    ? specificModules
+    : Object.keys(MODULE_REGISTRY).filter((id) => {
+        const m = MODULE_REGISTRY[id]
+        return m && !m.isCommon && (m.sectorSlugs?.includes(sectorSlug) ?? false)
+      })
+
+  for (const moduleId of candidateSpecific) {
     const mod = MODULE_REGISTRY[moduleId]
     if (
       mod &&
@@ -1037,6 +1198,7 @@ export const ALL_SECTORS_CATALOG: SectorDefinition[] = [
   { code: 'BOUTIQUE', slug: 'boutique', name: 'Boutique & Magasin', label: 'Boutique & Magasin', category: 'Commerce Détail', emoji: '🏪', icon: 'Store', color: '#3b82f6', badge: 'Commerce & Détail', description: 'Vente au détail, prêt-à-porter, alimentation générale, bazar et accessoires.' },
   { code: 'BOULANGERIE', slug: 'boulangerie', name: 'Boulangerie & Pâtisserie', label: 'Boulangerie & Pâtisserie', category: 'Artisanat Alimentaire', emoji: '🥐', icon: 'Croissant', color: '#d97706', badge: 'Boulangerie & Pâtisserie', description: 'Pains, viennoiseries, pâtisseries, gestion des fournées et invendus.' },
   { code: 'TRANSPORT', slug: 'transport', name: 'Transport & Logistique', label: 'Transport & Logistique', category: 'Transport & Logistique', emoji: '🚚', icon: 'Truck', color: '#2563eb', badge: 'Transport & Fret', description: 'Flotte de véhicules, suivi des trajets, bordereaux de livraison et fret.' },
+  { code: 'FLOTTE', slug: 'flotte-geolocalisation', name: 'GÉOLOCALISATION ET FLOTTE', label: 'Géolocalisation & Flotte', category: 'Transport & Télématique', emoji: '🛰️', icon: 'Navigation', color: '#0284c7', badge: 'GPS & Flotte IoT', description: 'Gestion de flotte en temps réel, géolocalisation GPS, suivi des trajets, carburant, maintenance et alertes IoT.' },
 ]
 
 

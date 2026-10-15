@@ -67,6 +67,7 @@ export function canonicalSectorSlug(slug?: string | null): string {
   if (clean === 'cosmetique' || clean === 'cosmetiques') return 'cosmetiques'
   if (clean === 'supermarche' || clean === 'superette' || clean === 'supermarche-alimentation' || clean === 'supermarché' || clean === 'supérette') return 'supermarche'
   if (clean === 'boutique' || clean === 'commerce-general' || clean === 'general') return 'boutique'
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geolocalisation-flotte' || clean === 'geoloc') return 'flotte-geolocalisation'
   return clean
 }
 

@@ -179,6 +179,24 @@ const EcoleAbsencesPage        = safeLazy(() => import('./pages/dashboard/ecole/
 const EcoleFinancesPage        = safeLazy(() => import('./pages/dashboard/ecole/EcoleFinancesPage'))
 const EcoleFormationsProPage   = safeLazy(() => import('./pages/dashboard/ecole/EcoleFormationsProPage'))
 const EcoleBibliothequePage    = safeLazy(() => import('./pages/dashboard/ecole/EcoleBibliothequePage'))
+// ── Géolocalisation & Flotte Dédié (20ᵉ Activité) ──
+const FlotteSectorDispatcher   = safeLazy(() => import('./pages/dashboard/flotte/FlotteSectorDispatcher'))
+const FlotteDashboardPage      = safeLazy(() => import('./pages/dashboard/flotte/FlotteDashboardPage'))
+const FlotteLiveMapPage        = safeLazy(() => import('./pages/dashboard/flotte/FlotteLiveMapPage'))
+const FlotteVehiculesPage      = safeLazy(() => import('./pages/dashboard/flotte/FlotteVehiculesPage'))
+const FlotteConducteursPage    = safeLazy(() => import('./pages/dashboard/flotte/FlotteConducteursPage'))
+const FlotteMissionsPage       = safeLazy(() => import('./pages/dashboard/flotte/FlotteMissionsPage'))
+const FlotteCarburantPage      = safeLazy(() => import('./pages/dashboard/flotte/FlotteCarburantPage'))
+const FlotteMaintenancePage    = safeLazy(() => import('./pages/dashboard/flotte/FlotteMaintenancePage'))
+const FlotteDocumentsPage      = safeLazy(() => import('./pages/dashboard/flotte/FlotteDocumentsPage'))
+const FlotteGeofencesPage      = safeLazy(() => import('./pages/dashboard/flotte/FlotteGeofencesPage'))
+const FlotteAlertesPage        = safeLazy(() => import('./pages/dashboard/flotte/FlotteAlertesPage'))
+const FlotteCapteursPage       = safeLazy(() => import('./pages/dashboard/flotte/FlotteCapteursPage'))
+const FlotteReservationsPage   = safeLazy(() => import('./pages/dashboard/flotte/FlotteReservationsPage'))
+const FlotteInspectionsPage    = safeLazy(() => import('./pages/dashboard/flotte/FlotteInspectionsPage'))
+const FlotteRapportsPage       = safeLazy(() => import('./pages/dashboard/flotte/FlotteRapportsPage'))
+const FlotteIntegrationsGpsPage = safeLazy(() => import('./pages/dashboard/flotte/FlotteIntegrationsGpsPage'))
+const FlotteParametresGpsPage  = safeLazy(() => import('./pages/dashboard/flotte/FlotteParametresGpsPage'))
 
 // ─── Loader / Spinner ───────────────────────────────────────────────────────
 
@@ -288,6 +306,9 @@ const SectorAwareDashboard: React.FC = () => {
   if (clean === 'ecole' || clean === 'formation' || clean === 'centre-de-formation' || clean === 'education') {
     return <EcoleSectorDispatcher />
   }
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') {
+    return <FlotteSectorDispatcher />
+  }
   return <DashboardPage />
 }
 
@@ -355,6 +376,46 @@ const SectorAwareGrilles: React.FC = () => {
     return <BrasserieGrillesPage />
   }
   return <GrillesPage />
+}
+
+// ─── Véhicules conditionnels (Garage vs Flotte GPS) ──────────────────────────
+const SectorAwareVehicules: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') {
+    return <FlotteVehiculesPage />
+  }
+  return <GarageVehiculesPage />
+}
+
+// ─── Réservations conditionnelles (Bar/Resto/Hôtel vs Autopartage Flotte) ────
+const SectorAwareReservations: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') {
+    return <FlotteReservationsPage />
+  }
+  return <ReservationsPage />
+}
+
+// ─── Alertes conditionnelles (Immobilier vs Flotte GPS) ──────────────────────
+const SectorAwareAlertes: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') {
+    return <FlotteAlertesPage />
+  }
+  return <AlertesImmoPage />
+}
+
+// ─── Documents conditionnels (Flotte vs Général) ─────────────────────────────
+const SectorAwareDocuments: React.FC = () => {
+  const { sectorSlug } = useTenant()
+  const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
+  if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') {
+    return <FlotteDocumentsPage />
+  }
+  return <FlotteDocumentsPage />
 }
 
 // ─── Initialisation globale ─────────────────────────────────────────────────
@@ -546,7 +607,7 @@ const AppRoutes: React.FC = () => {
         <Route path="tables"       element={<TablesPlanPage />} />
         <Route path="cuisine-bar"  element={<CuisineBarKDSPage />} />
         <Route path="recettes"     element={<RecettesFichesPage />} />
-        <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="reservations" element={<SectorAwareReservations />} />
         <Route path="pertes"       element={<PertesGaspillagePage />} />
         <Route path="serveurs"     element={<ServeursPersonnelPage />} />
         <Route path="evenements"   element={<EvenementsPage />} />
@@ -554,7 +615,7 @@ const AppRoutes: React.FC = () => {
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
         {/* ── Modules Garage Classic ── */}
-        <Route path="vehicules"              element={<ModuleGuard moduleId="vehicules_reparations"><GarageVehiculesPage /></ModuleGuard>} />
+        <Route path="vehicules"              element={<SectorAwareVehicules />} />
         <Route path="reception"              element={<ModuleGuard moduleId="reception_diagnostic"><GarageReceptionPage /></ModuleGuard>} />
         <Route path="reparations"            element={<ModuleGuard moduleId="ordres_reparation"><GarageReparationsPage /></ModuleGuard>} />
         <Route path="planning-atelier"       element={<ModuleGuard moduleId="planning_atelier"><GaragePlanningPage /></ModuleGuard>} />
@@ -593,7 +654,7 @@ const AppRoutes: React.FC = () => {
         <Route path="cautions"           element={<ModuleGuard moduleId="cautions_depots"><CautionsPage /></ModuleGuard>} />
         <Route path="quittances"         element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
         <Route path="maintenances"       element={<ModuleGuard moduleId="maintenances_travaux"><MaintenancesPage /></ModuleGuard>} />
-        <Route path="alertes"            element={<ModuleGuard moduleId="alertes_immo"><AlertesImmoPage /></ModuleGuard>} />
+        <Route path="alertes"            element={<SectorAwareAlertes />} />
         <Route path="modeles-documents"  element={<ModuleGuard moduleId="modeles_documents"><ModelesDocumentsPage /></ModuleGuard>} />
         {/* ── Modules Poissonnerie ── */}
         <Route path="chambres-froides" element={<ModuleGuard moduleId="chambres_froides"><ChambresFroidesPage /></ModuleGuard>} />
@@ -607,6 +668,21 @@ const AppRoutes: React.FC = () => {
         <Route path="planning-evenements" element={<ModuleGuard moduleId="reservations_dates"><PlanningEvenementsPage /></ModuleGuard>} />
         <Route path="materiel"            element={<ModuleGuard moduleId="location_materiel"><MaterielPage /></ModuleGuard>} />
         <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
+        {/* ── Modules Géolocalisation & Flotte (20ᵉ Activité) ── */}
+        <Route path="carte"            element={<FlotteLiveMapPage />} />
+        <Route path="flotte-carte"     element={<FlotteLiveMapPage />} />
+        <Route path="parc-vehicules"   element={<FlotteVehiculesPage />} />
+        <Route path="conducteurs"      element={<FlotteConducteursPage />} />
+        <Route path="missions"         element={<FlotteMissionsPage />} />
+        <Route path="carburant"        element={<FlotteCarburantPage />} />
+        <Route path="maintenance"      element={<FlotteMaintenancePage />} />
+        <Route path="documents"        element={<SectorAwareDocuments />} />
+        <Route path="geofences"        element={<FlotteGeofencesPage />} />
+        <Route path="capteurs"         element={<FlotteCapteursPage />} />
+        <Route path="inspections"      element={<FlotteInspectionsPage />} />
+        <Route path="rapports-flotte"  element={<FlotteRapportsPage />} />
+        <Route path="integrations-gps" element={<FlotteIntegrationsGpsPage />} />
+        <Route path="parametres-gps"   element={<FlotteParametresGpsPage />} />
       </Route>
 
       {/* Route directe normalisée Caisse Universelle /app/:companyId/secteur/:sectorKey/caisse */}
@@ -692,7 +768,7 @@ const AppRoutes: React.FC = () => {
         <Route path="tables"       element={<TablesPlanPage />} />
         <Route path="cuisine-bar"  element={<CuisineBarKDSPage />} />
         <Route path="recettes"     element={<RecettesFichesPage />} />
-        <Route path="reservations" element={<ReservationsPage />} />
+        <Route path="reservations" element={<SectorAwareReservations />} />
         <Route path="pertes"       element={<PertesGaspillagePage />} />
         <Route path="serveurs"     element={<ServeursPersonnelPage />} />
         <Route path="evenements"   element={<EvenementsPage />} />
@@ -700,7 +776,7 @@ const AppRoutes: React.FC = () => {
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
         {/* ── Modules Garage Classic ── */}
-        <Route path="vehicules"              element={<ModuleGuard moduleId="vehicules_reparations"><GarageVehiculesPage /></ModuleGuard>} />
+        <Route path="vehicules"              element={<SectorAwareVehicules />} />
         <Route path="reception"              element={<ModuleGuard moduleId="reception_diagnostic"><GarageReceptionPage /></ModuleGuard>} />
         <Route path="reparations"            element={<ModuleGuard moduleId="ordres_reparation"><GarageReparationsPage /></ModuleGuard>} />
         <Route path="planning-atelier"       element={<ModuleGuard moduleId="planning_atelier"><GaragePlanningPage /></ModuleGuard>} />
@@ -739,7 +815,7 @@ const AppRoutes: React.FC = () => {
         <Route path="cautions"           element={<ModuleGuard moduleId="cautions_depots"><CautionsPage /></ModuleGuard>} />
         <Route path="quittances"         element={<ModuleGuard moduleId="quittances"><QuittancesPage /></ModuleGuard>} />
         <Route path="maintenances"       element={<ModuleGuard moduleId="maintenances_travaux"><MaintenancesPage /></ModuleGuard>} />
-        <Route path="alertes"            element={<ModuleGuard moduleId="alertes_immo"><AlertesImmoPage /></ModuleGuard>} />
+        <Route path="alertes"            element={<SectorAwareAlertes />} />
         <Route path="modeles-documents"  element={<ModuleGuard moduleId="modeles_documents"><ModelesDocumentsPage /></ModuleGuard>} />
         {/* ── Modules Poissonnerie ── */}
         <Route path="chambres-froides" element={<ModuleGuard moduleId="chambres_froides"><ChambresFroidesPage /></ModuleGuard>} />
@@ -753,6 +829,21 @@ const AppRoutes: React.FC = () => {
         <Route path="planning-evenements" element={<ModuleGuard moduleId="reservations_dates"><PlanningEvenementsPage /></ModuleGuard>} />
         <Route path="materiel"            element={<ModuleGuard moduleId="location_materiel"><MaterielPage /></ModuleGuard>} />
         <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
+        {/* ── Modules Géolocalisation & Flotte (20ᵉ Activité) ── */}
+        <Route path="carte"            element={<FlotteLiveMapPage />} />
+        <Route path="flotte-carte"     element={<FlotteLiveMapPage />} />
+        <Route path="parc-vehicules"   element={<FlotteVehiculesPage />} />
+        <Route path="conducteurs"      element={<FlotteConducteursPage />} />
+        <Route path="missions"         element={<FlotteMissionsPage />} />
+        <Route path="carburant"        element={<FlotteCarburantPage />} />
+        <Route path="maintenance"      element={<FlotteMaintenancePage />} />
+        <Route path="documents"        element={<SectorAwareDocuments />} />
+        <Route path="geofences"        element={<FlotteGeofencesPage />} />
+        <Route path="capteurs"         element={<FlotteCapteursPage />} />
+        <Route path="inspections"      element={<FlotteInspectionsPage />} />
+        <Route path="rapports-flotte"  element={<FlotteRapportsPage />} />
+        <Route path="integrations-gps" element={<FlotteIntegrationsGpsPage />} />
+        <Route path="parametres-gps"   element={<FlotteParametresGpsPage />} />
       </Route>
 
       {/* Rétrocompatibilité /dashboard */}
