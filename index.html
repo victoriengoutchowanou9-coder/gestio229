@@ -4,15 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
   <title>GESTIO 229 ERP - Version Entreprise V3.0 (Bénin & UEMOA)</title>
-  <meta name="theme-color" content="#0B1220" />
+
+  <!-- PWA & Métadonnées Standard -->
+  <meta name="theme-color" content="#0a1931" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png" />
+  <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="GESTIO 229" />
   <meta name="application-name" content="GESTIO 229" />
-  <link rel="manifest" href="/manifest.json" />
-  <link rel="icon" type="image/png" sizes="96x96" href="/icons/favicon.png" />
-  <link rel="apple-touch-icon" sizes="180x180" href="/icons/apple-touch-icon.png" />
+
   <script>
     // Capture anticipée du prompt d'installation PWA avant l'hydratation React
     window.__gestio_deferred_prompt = null;
@@ -28,7 +32,62 @@
     });
   </script>
 </head>
-<body class="h-full m-0 p-0">
+<body class="h-full m-0 p-0" style="background-color: #0a1931;">
+  <!-- Splash Screen Natif Ultra-Rapide (< 50ms) : Élimine l'écran noir Chrome -->
+  <div id="gestio-pwa-splash" style="position:fixed;inset:0;width:100%;height:100%;background-color:#0a1931;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999999;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#ffffff;margin:0;padding:0;overflow:hidden;transition:opacity 0.35s ease,visibility 0.35s ease;">
+    <style>
+      @keyframes gestioPulse {
+        0%, 100% { transform: scale(1); opacity: 1; }
+        50% { transform: scale(1.05); opacity: 0.92; }
+      }
+      @keyframes gestioSpin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .gestio-splash-logo-box {
+        width: 110px;
+        height: 110px;
+        border-radius: 26px;
+        background: #0f244a;
+        box-shadow: 0 16px 36px rgba(0,0,0,0.5), 0 0 0 1px rgba(16,185,129,0.3);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        animation: gestioPulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        margin-bottom: 20px;
+      }
+      .gestio-splash-spinner {
+        width: 20px;
+        height: 20px;
+        border: 2.5px solid rgba(255,255,255,0.15);
+        border-top-color: #10b981;
+        border-radius: 50%;
+        animation: gestioSpin 0.75s linear infinite;
+      }
+    </style>
+
+    <div class="gestio-splash-logo-box">
+      <img src="/icon-192.png" alt="GESTIO 229" width="90" height="90" style="border-radius: 20px; object-fit: contain;" />
+    </div>
+
+    <div style="font-size: 26px; font-weight: 900; letter-spacing: -0.5px; margin-bottom: 4px; display: flex; align-items: center; gap: 6px;">
+      <span>GESTIO</span><span style="color: #fbbf24;">229</span>
+    </div>
+
+    <div style="font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #94a3b8; text-transform: uppercase; margin-bottom: 24px;">
+      STE GESTIO SARL
+    </div>
+
+    <div style="display: flex; align-items: center; gap: 10px; margin-top: 6px;">
+      <div class="gestio-splash-spinner"></div>
+      <span style="font-size: 13px; font-weight: 500; color: #cbd5e1; letter-spacing: 0.5px;">Chargement...</span>
+    </div>
+
+    <div style="position: absolute; bottom: 24px; font-size: 10px; font-weight: 600; color: #64748b; letter-spacing: 1.5px; text-transform: uppercase;">
+      RÉPUBLIQUE DU BÉNIN &bull; ERP & CAISSE
+    </div>
+  </div>
+
   <div id="root"></div>
   <script type="module" src="/src/main.tsx"></script>
 </body>

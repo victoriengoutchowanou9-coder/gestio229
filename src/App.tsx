@@ -18,6 +18,7 @@ import { useAppCacheStore } from './store/appCacheStore'
 import { preloadCommonModules } from './lib/modulePreloader'
 import HubSkeleton from './components/ui/HubSkeleton'
 import { ModuleSkeleton } from './components/ui/Skeleton'
+import SplashScreen from './components/common/SplashScreen'
 
 // ─── GESTIO 229 ADMIN — Back-Office Super Administrateur ──────────────────
 import AdminLoginPage from './pages/admin/AdminLoginPage'
@@ -201,12 +202,7 @@ const FlotteParametresGpsPage  = safeLazy(() => import('./pages/dashboard/flotte
 // ─── Loader / Spinner ───────────────────────────────────────────────────────
 
 const FullPageLoader = () => (
-  <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-emerald-50 to-slate-100">
-    <div className="text-center">
-      <div className="w-16 h-16 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto mb-4" />
-      <p className="text-slate-600 font-medium">Chargement GESTIO 229...</p>
-    </div>
-  </div>
+  <SplashScreen message="Chargement GESTIO 229..." />
 )
 
 // ─── Guards ─────────────────────────────────────────────────────────────────
@@ -427,6 +423,18 @@ const AppInitializer: React.FC = () => {
   useEffect(() => {
     initialize()
   }, [initialize])
+
+  // Dissoudre en douceur le Splash Screen natif HTML dès que React est monté
+  useEffect(() => {
+    const splash = document.getElementById('gestio-pwa-splash')
+    if (splash) {
+      splash.style.opacity = '0'
+      splash.style.pointerEvents = 'none'
+      setTimeout(() => {
+        splash.remove()
+      }, 400)
+    }
+  }, [])
 
   // Au repos (idle), précharger les modules fréquents sans bloquer le fil d'exécution
   useEffect(() => {
