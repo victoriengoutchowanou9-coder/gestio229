@@ -72,79 +72,88 @@ END;
 $$;
 
 -- ══════════════════════════════════════════════════════════════════════════════
--- 4. MIGRATION RÉTROACTIVE DES ENTREPRISES EXISTANTES
+-- 4. MIGRATION RÉTROACTIVE DES ENTREPRISES EXISTANTES (Compatible JSONB & Tableaux)
 -- ══════════════════════════════════════════════════════════════════════════════
-DO $$
-DECLARE
-    r RECORD;
-    v_sector_code TEXT;
-    v_raw_sectors TEXT[];
-    v_status TEXT;
-    v_debut TIMESTAMPTZ;
-    v_fin TIMESTAMPTZ;
-BEGIN
-    FOR r IN SELECT id, name, created_at, subscription_status, selected_sectors, sectors, active_sector FROM public.companies LOOP
-        -- Calcul dates
-        v_debut := COALESCE(r.created_at, NOW());
-        v_fin := v_debut + INTERVAL '30 days';
-        v_status := CASE 
-            WHEN r.subscription_status = 'active' THEN 'actif'
-            WHEN r.subscription_status = 'expired' OR (r.subscription_status = 'trial' AND NOW() > v_fin) THEN 'expire'
-            ELSE 'essai'
-        END;
 
-        -- 1. Insérer abonnements_global si pas encore présent
-        INSERT INTO public.abonnements_global (
-            entreprise_id,
-            date_debut_global,
-            date_fin_global,
-            statut_global
-        ) VALUES (
-            r.id,
-            v_debut,
-            v_fin,
-            v_status
-        )
-        ON CONFLICT (entreprise_id) DO NOTHING;
+-- 4.1. Insérer l'abonnement global pour chaque entreprise existante
+INSERT INTO public.abonnements_global (
+    entreprise_id,
+    date_debut_global,
+    date_fin_global,
+    statut_global
+)
+SELECT
+    c.id,
+    COALESCE(c.created_at, NOW()),
+    COALESCE(c.created_at, NOW()) + INTERVAL '30 days',
+    CASE 
+        WHEN c.subscription_status = 'active' THEN 'actif'
+        WHEN c.subscription_status = 'expired' OR (c.subscription_status = 'trial' AND NOW() > (COALESCE(c.created_at, NOW()) + INTERVAL '30 days')) THEN 'expire'
+        ELSE 'essai'
+    END
+FROM public.companies c
+ON CONFLICT (entreprise_id) DO NOTHING;
 
-        -- 2. Récupérer la liste des secteurs initiaux
-        v_raw_sectors := ARRAY[]::TEXT[];
-        IF r.selected_sectors IS NOT NULL AND array_length(r.selected_sectors, 1) > 0 THEN
-            v_raw_sectors := r.selected_sectors;
-        ELSIF r.sectors IS NOT NULL AND array_length(r.sectors, 1) > 0 THEN
-            v_raw_sectors := r.sectors;
-        ELSIF r.active_sector IS NOT NULL AND r.active_sector <> '' THEN
-            v_raw_sectors := ARRAY[r.active_sector];
-        ELSE
-            v_raw_sectors := ARRAY['boutique'];
-        END IF;
+-- 4.2. Insérer les secteurs initiaux depuis companies.selected_sectors (JSONB/Array/Text)
+INSERT INTO public.abonnements_secteurs (
+    entreprise_id,
+    secteur_code,
+    date_debut_specifique,
+    date_fin_specifique,
+    statut_specifique,
+    is_premiere_activation,
+    rattache_au_global
+)
+SELECT DISTINCT
+    c.id AS entreprise_id,
+    UPPER(TRIM(REPLACE(slug_raw, 'sec-', ''))) AS secteur_code,
+    COALESCE(c.created_at, NOW()) AS date_debut_specifique,
+    COALESCE(c.created_at, NOW()) + INTERVAL '30 days' AS date_fin_specifique,
+    'rattache_global' AS statut_specifique,
+    true AS is_premiere_activation,
+    true AS rattache_au_global
+FROM public.companies c,
+LATERAL (
+    SELECT jsonb_array_elements_text(
+        CASE
+            WHEN c.selected_sectors IS NOT NULL 
+                 AND jsonb_typeof(to_jsonb(c.selected_sectors)) = 'array' 
+                 AND jsonb_array_length(to_jsonb(c.selected_sectors)) > 0
+                THEN to_jsonb(c.selected_sectors)
+            WHEN c.sectors IS NOT NULL 
+                 AND jsonb_typeof(to_jsonb(c.sectors)) = 'array' 
+                 AND jsonb_array_length(to_jsonb(c.sectors)) > 0
+                THEN to_jsonb(c.sectors)
+            WHEN c.active_sector IS NOT NULL AND c.active_sector <> ''
+                THEN jsonb_build_array(c.active_sector)
+            ELSE '["boutique"]'::jsonb
+        END
+    ) AS slug_raw
+) sub
+WHERE slug_raw IS NOT NULL AND TRIM(slug_raw) <> ''
+ON CONFLICT (entreprise_id, secteur_code) DO NOTHING;
 
-        -- 3. Insérer les secteurs choisis à l'inscription en tant que rattachés au global
-        FOREACH v_sector_code IN ARRAY v_raw_sectors LOOP
-            IF v_sector_code IS NOT NULL AND TRIM(v_sector_code) <> '' THEN
-                INSERT INTO public.abonnements_secteurs (
-                    entreprise_id,
-                    secteur_code,
-                    date_debut_specifique,
-                    date_fin_specifique,
-                    statut_specifique,
-                    is_premiere_activation,
-                    rattache_au_global
-                ) VALUES (
-                    r.id,
-                    UPPER(TRIM(REPLACE(v_sector_code, 'sec-', ''))),
-                    v_debut,
-                    v_fin,
-                    'rattache_global',
-                    true,
-                    true
-                )
-                ON CONFLICT (entreprise_id, secteur_code) DO NOTHING;
-            END IF;
-        END LOOP;
-    END LOOP;
-END;
-$$;
+-- 4.3. Rallier également tout secteur déjà actif dans company_activities
+INSERT INTO public.abonnements_secteurs (
+    entreprise_id,
+    secteur_code,
+    date_debut_specifique,
+    date_fin_specifique,
+    statut_specifique,
+    is_premiere_activation,
+    rattache_au_global
+)
+SELECT DISTINCT
+    ca.company_id AS entreprise_id,
+    UPPER(TRIM(REPLACE(ca.sector_slug, 'sec-', ''))) AS secteur_code,
+    COALESCE(ca.created_at, NOW()) AS date_debut_specifique,
+    COALESCE(ca.created_at, NOW()) + INTERVAL '30 days' AS date_fin_specifique,
+    'rattache_global' AS statut_specifique,
+    true AS is_premiere_activation,
+    true AS rattache_au_global
+FROM public.company_activities ca
+WHERE ca.sector_slug IS NOT NULL AND TRIM(ca.sector_slug) <> ''
+ON CONFLICT (entreprise_id, secteur_code) DO NOTHING;
 
 -- ══════════════════════════════════════════════════════════════════════════════
 -- 5. SÉCURITÉ ROW LEVEL SECURITY (RLS) MULTI-TENANT
