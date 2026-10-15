@@ -1,36 +1,45 @@
 // =============================================================================
-// GESTIO 229 SaaS — Composant Cartographique Google Maps & Fallback Vectoriel Bénin
-// Supporte Google Maps JavaScript API v3, Marqueurs Télématiques, Geofences & Polylines
+// GESTIO 229 SaaS — Vue Cartographique Google Maps Fidèle (Conforme à la Capture Mobile Bénin)
+// Cartographie officielle Google Maps (Plan, Satellite, Relief), Suivi Télématique & Parcours
 // =============================================================================
 
 import React, { useEffect, useRef, useState } from 'react'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import {
   Navigation,
   Compass,
-  AlertTriangle,
-  Fuel,
-  User,
-  Gauge,
-  Key,
-  ExternalLink,
   Layers,
   ZoomIn,
   ZoomOut,
-  RefreshCw,
+  MapPin,
+  Search,
+  Mic,
+  Crosshair,
+  Gauge,
+  Fuel,
+  User,
+  Clock,
+  ArrowRight,
+  Route,
+  CheckCircle2,
 } from 'lucide-react'
-import type { FlotteVehicule, FlotteGeofence } from '../../../services/flotteService'
+import type { FlotteVehicule, FlotteGeofence, PointParcours } from '../../../services/flotteService'
+import { PARCOURS_BENIN_RNIE2 } from '../../../services/flotteService'
 
-interface GoogleMapsViewProps {
+export interface GoogleMapsViewProps {
   vehicules: FlotteVehicule[]
   selectedVehicule?: FlotteVehicule | null
   onSelectVehicule?: (vehicule: FlotteVehicule) => void
   geofences?: FlotteGeofence[]
+  parcours?: PointParcours[]
   apiKey?: string
   height?: string
   centerLat?: number
   centerLng?: number
   zoom?: number
   showControls?: boolean
+  showParcours?: boolean
 }
 
 // Couleurs par statut
@@ -68,387 +77,580 @@ export function getStatusLabel(statut: string): string {
   }
 }
 
+// Types de couches Google Maps
+type GoogleMapType = 'roadmap' | 'satellite' | 'terrain'
+
+const GOOGLE_TILE_URLS: Record<GoogleMapType, string> = {
+  // Roadmap Google Maps officielle (style exact de la photo mobile : Bohicon, Dassa, RNIE 2)
+  roadmap: 'https://mt1.google.com/vt/lyrs=m&hl=fr&x={x}&y={y}&z={z}',
+  // Hybride Satellite Google Maps (Photos aériennes + étiquettes et axes routiers)
+  satellite: 'https://mt1.google.com/vt/lyrs=y&hl=fr&x={x}&y={y}&z={z}',
+  // Relief / Terrain Google Maps (met en valeur la topographie et collines de Dassa)
+  terrain: 'https://mt1.google.com/vt/lyrs=p&hl=fr&x={x}&y={y}&z={z}',
+}
+
 export const GoogleMapsView: React.FC<GoogleMapsViewProps> = ({
   vehicules,
   selectedVehicule,
   onSelectVehicule,
   geofences = [],
-  apiKey = '',
-  height = '560px',
-  centerLat = 6.3654,
-  centerLng = 2.4183,
-  zoom = 13,
+  parcours,
+  height = '620px',
+  // Centré par défaut exactement comme sur la photo de l'utilisateur : Bohicon / RNIE 2 Bénin
+  centerLat = 7.1783,
+  centerLng = 2.0667,
+  zoom = 9,
   showControls = true,
+  showParcours = true,
 }) => {
-  const mapContainerRef = useRef<HTMLDivElement>(null)
-  const mapInstanceRef = useRef<any>(null)
-  const markersMapRef = useRef<Map<string, any>>(new Map())
-  const [mapsLoaded, setMapsLoaded] = useState<boolean>(false)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [mapType, setMapType] = useState<'roadmap' | 'satellite' | 'hybrid'>('roadmap')
+  const containerRef = useRef<HTMLDivElement>(null)
+  const mapRef = useRef<L.Map | null>(null)
+  const tileLayerRef = useRef<L.TileLayer | null>(null)
+  const markersLayerRef = useRef<L.LayerGroup | null>(null)
+  const polylineLayerRef = useRef<L.LayerGroup | null>(null)
+  const geofencesLayerRef = useRef<L.LayerGroup | null>(null)
 
-  // Clé effective : prop > env
-  const effectiveApiKey = apiKey || (import.meta as any).env?.VITE_GOOGLE_MAPS_API_KEY || ''
+  const [mapType, setMapType] = useState<GoogleMapType>('roadmap')
+  const [searchFilter, setSearchFilter] = useState<string>('')
+  const [activeChip, setActiveChip] = useState<string>('TOUS')
+  const [showParcoursOverlay, setShowParcoursOverlay] = useState<boolean>(true)
 
-  // ─── 1. CHARGEMENT DYNAMIQUE DU SCRIPT GOOGLE MAPS ─────────────────────────
+  // ─── 1. INITIALISATION DE LA CARTE GOOGLE MAPS LEAFLET ──────────────────────
   useEffect(() => {
-    if (!effectiveApiKey) {
-      setMapsLoaded(false)
-      return
-    }
+    if (!containerRef.current || mapRef.current) return
 
-    if ((window as any).google && (window as any).google.maps) {
-      setMapsLoaded(true)
-      return
-    }
+    // Créer la carte centrée sur Bohicon (comme sur la capture mobile)
+    const map = L.map(containerRef.current, {
+      center: [centerLat, centerLng],
+      zoom: zoom,
+      zoomControl: false, // On utilise nos boutons de contrôle personnalisés style Google Maps
+      attributionControl: false, // On affiche le logo officiel Google officiel en overlay
+    })
 
-    const scriptId = 'google-maps-gestio229-script'
-    const existingScript = document.getElementById(scriptId)
-    if (existingScript) {
-      existingScript.addEventListener('load', () => setMapsLoaded(true))
-      existingScript.addEventListener('error', () =>
-        setLoadError('Échec du chargement de Google Maps. Vérifiez la clé API.')
-      )
-      return
-    }
+    // Couche de tuiles Google Maps
+    const tileLayer = L.tileLayer(GOOGLE_TILE_URLS.roadmap, {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+    }).addTo(map)
 
-    const script = document.createElement('script')
-    script.id = scriptId
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${effectiveApiKey}&libraries=places,geometry`
-    script.async = true
-    script.defer = true
-    script.onload = () => {
-      setMapsLoaded(true)
-      setLoadError(null)
-    }
-    script.onerror = () => {
-      setLoadError('Clé Google Maps invalide ou accès réseau bloqué.')
-      setMapsLoaded(false)
-    }
+    tileLayerRef.current = tileLayer
 
-    document.head.appendChild(script)
-  }, [effectiveApiKey])
+    // Groupes de calques Leaflet
+    const polylineLayer = L.layerGroup().addTo(map)
+    const geofencesLayer = L.layerGroup().addTo(map)
+    const markersLayer = L.layerGroup().addTo(map)
 
-  // ─── 2. INITIALISATION CARTE GOOGLE MAPS LORSQUE LE SDK EST PRÊT ───────────
+    polylineLayerRef.current = polylineLayer
+    geofencesLayerRef.current = geofencesLayer
+    markersLayerRef.current = markersLayer
+    mapRef.current = map
+
+    return () => {
+      map.remove()
+      mapRef.current = null
+    }
+  }, [])
+
+  // ─── 2. CHANGEMENT DU TYPE DE CARTE GOOGLE MAPS (Plan / Satellite / Relief) ──
   useEffect(() => {
-    if (!mapsLoaded || !mapContainerRef.current || !(window as any).google?.maps) return
+    if (!mapRef.current || !tileLayerRef.current) return
+    tileLayerRef.current.setUrl(GOOGLE_TILE_URLS[mapType])
+  }, [mapType])
 
-    const google = (window as any).google
+  // ─── 3. AFFICHAGE DES ZONES GÉOGRAPHIQUES (GEOFENCES) ───────────────────────
+  useEffect(() => {
+    if (!geofencesLayerRef.current) return
+    geofencesLayerRef.current.clearLayers()
 
-    if (!mapInstanceRef.current) {
-      const map = new google.maps.Map(mapContainerRef.current, {
-        center: { lat: centerLat, lng: centerLng },
-        zoom,
-        mapTypeId: mapType,
-        disableDefaultUI: !showControls,
-        zoomControl: showControls,
-        mapTypeControl: false,
-        streetViewControl: false,
-        fullscreenControl: showControls,
-        styles: [
-          { featureType: 'poi', stylers: [{ visibility: 'simplified' }] },
-          { featureType: 'transit', stylers: [{ visibility: 'simplified' }] },
-        ],
+    geofences.forEach((geo) => {
+      if (!geo.centre_lat || !geo.centre_lng) return
+
+      const circle = L.circle([geo.centre_lat, geo.centre_lng], {
+        radius: geo.rayon_metres || 500,
+        color: geo.couleur_hex || '#0284c7',
+        fillColor: geo.couleur_hex || '#0284c7',
+        fillOpacity: 0.15,
+        weight: 2,
+        dashArray: '6, 6',
       })
-      mapInstanceRef.current = map
-    } else {
-      mapInstanceRef.current.setMapTypeId(mapType)
-    }
-  }, [mapsLoaded, mapType, showControls, centerLat, centerLng, zoom])
 
-  // ─── 3. MISE À JOUR DES MARQUEURS VÉHICULES SUR GOOGLE MAPS ─────────────────
+      circle.bindTooltip(geo.nom_zone, {
+        permanent: false,
+        direction: 'center',
+        className: 'bg-slate-900 text-white text-[11px] font-bold px-2 py-0.5 rounded shadow',
+      })
+
+      geofencesLayerRef.current?.addLayer(circle)
+    })
+  }, [geofences])
+
+  // ─── 4. AFFICHAGE DU PARCOURS ("SON PARCOURS") ──────────────────────────────
+  // Trace la polyline bleue Google Maps avec étapes et points de passage
   useEffect(() => {
-    if (!mapsLoaded || !mapInstanceRef.current || !(window as any).google?.maps) return
-    const google = (window as any).google
-    const map = mapInstanceRef.current
-    const currentMarkers = markersMapRef.current
+    if (!polylineLayerRef.current || !showParcours) return
+    polylineLayerRef.current.clearLayers()
 
-    // Supprimer les marqueurs obsolètes
-    const currentIds = new Set(vehicules.map((v) => v.id))
-    for (const [id, marker] of currentMarkers.entries()) {
-      if (!currentIds.has(id)) {
-        marker.setMap(null)
-        currentMarkers.delete(id)
-      }
+    // Déterminer les points du parcours à afficher :
+    // Soit le parcours passé en props, soit le parcours type RNIE 2 si le véhicule est sur cet axe
+    let points: PointParcours[] = parcours || []
+
+    if (points.length === 0 && selectedVehicule) {
+      // Si le véhicule est en circulation ou à Bohicon, on prend les jalons RNIE 2 correspondants
+      points = PARCOURS_BENIN_RNIE2
     }
 
-    // Ajouter ou mettre à jour les marqueurs
+    if (points.length < 2) return
+
+    const latLngs: L.LatLngExpression[] = points.map((p) => [p.latitude, p.longitude])
+
+    // Ligne de lueur d'arrière-plan (effet tracé Google Maps lumineux)
+    const glowLine = L.polyline(latLngs, {
+      color: '#ffffff',
+      weight: 8,
+      opacity: 0.8,
+      lineCap: 'round',
+      lineJoin: 'round',
+    })
+
+    // Polyline principale bleu roi officiel Google Maps
+    const mainLine = L.polyline(latLngs, {
+      color: '#1a73e8', // Bleu officiel Google Maps
+      weight: 5,
+      opacity: 0.95,
+      lineCap: 'round',
+      lineJoin: 'round',
+    })
+
+    polylineLayerRef.current.addLayer(glowLine)
+    polylineLayerRef.current.addLayer(mainLine)
+
+    // Marqueur Point de Départ (A)
+    const startPoint = points[0]
+    const startIcon = L.divIcon({
+      className: 'custom-start-marker',
+      html: `
+        <div style="background-color: #10b981; color: white; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; border: 2.5px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.35);">
+          A
+        </div>
+      `,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+    })
+
+    const startMarker = L.marker([startPoint.latitude, startPoint.longitude], { icon: startIcon })
+    startMarker.bindTooltip(`Départ : ${startPoint.nom_etape || 'Cotonou'}`, {
+      direction: 'top',
+      className: 'bg-emerald-700 text-white text-xs font-semibold px-2 py-1 rounded shadow',
+    })
+    polylineLayerRef.current.addLayer(startMarker)
+
+    // Jalons intermédiaires (petits cercles bleus le long de la route)
+    for (let i = 1; i < points.length - 1; i++) {
+      const pt = points[i]
+      const stepIcon = L.divIcon({
+        className: 'custom-step-marker',
+        html: `
+          <div style="background-color: #ffffff; border: 2.5px solid #1a73e8; width: 14px; height: 14px; border-radius: 50%; box-shadow: 0 2px 4px rgba(0,0,0,0.25);"></div>
+        `,
+        iconSize: [14, 14],
+        iconAnchor: [7, 7],
+      })
+      const stepMarker = L.marker([pt.latitude, pt.longitude], { icon: stepIcon })
+      if (pt.nom_etape) {
+        stepMarker.bindTooltip(pt.nom_etape, {
+          direction: 'top',
+          className: 'bg-slate-800 text-white text-[10px] px-1.5 py-0.5 rounded shadow',
+        })
+      }
+      polylineLayerRef.current.addLayer(stepMarker)
+    }
+
+    // Marqueur Destination Finale (Drapeau damier)
+    const endPoint = points[points.length - 1]
+    const endIcon = L.divIcon({
+      className: 'custom-end-marker',
+      html: `
+        <div style="background-color: #ef4444; color: white; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; border: 2.5px solid white; box-shadow: 0 4px 8px rgba(0,0,0,0.35);">
+          B
+        </div>
+      `,
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+    })
+
+    const endMarker = L.marker([endPoint.latitude, endPoint.longitude], { icon: endIcon })
+    endMarker.bindTooltip(`Destination : ${endPoint.nom_etape || 'Dassa-Zoumè'}`, {
+      direction: 'top',
+      className: 'bg-rose-700 text-white text-xs font-semibold px-2 py-1 rounded shadow',
+    })
+    polylineLayerRef.current.addLayer(endMarker)
+  }, [parcours, selectedVehicule, showParcours])
+
+  // ─── 5. AFFICHAGE DES VÉHICULES ("LÀ OÙ IL EST ACTUELLEMENT") ────────────────
+  useEffect(() => {
+    if (!markersLayerRef.current) return
+    markersLayerRef.current.clearLayers()
+
     vehicules.forEach((veh) => {
       if (!veh.derniere_latitude || !veh.derniere_longitude) return
 
-      const position = { lat: veh.derniere_latitude, lng: veh.derniere_longitude }
-      const color = getStatusColor(veh.statut)
       const isSelected = selectedVehicule?.id === veh.id
+      const color = getStatusColor(veh.statut)
+      const cap = veh.dernier_cap || 0
 
-      // SVG personnalisé avec orientation (cap)
-      const svgIcon = {
-        path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-        scale: isSelected ? 6.5 : 5,
-        fillColor: color,
-        fillOpacity: 1,
-        strokeColor: '#ffffff',
-        strokeWeight: 2,
-        rotation: veh.dernier_cap || 0,
-      }
+      // HTML sur mesure pour le marqueur de véhicule télématique
+      const markerHtml = `
+        <div style="position: relative; display: flex; flex-direction: column; align-items: center; cursor: pointer; transform: translate(-50%, -50%);">
+          ${
+            veh.statut === 'EN_CIRCULATION'
+              ? `<div style="position: absolute; top: 12px; width: 36px; height: 36px; border-radius: 50%; background: ${color}; opacity: 0.35; animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;"></div>`
+              : ''
+          }
+          <!-- Bulle immatriculation et vitesse -->
+          <div style="background: #ffffff; color: #0f172a; padding: 2px 7px; border-radius: 9999px; font-size: 11px; font-weight: 800; box-shadow: 0 4px 10px rgba(0,0,0,0.3); border: 2px solid ${
+            isSelected ? '#1a73e8' : color
+          }; white-space: nowrap; display: flex; align-items: center; gap: 4px; margin-bottom: 2px;">
+            <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: ${color};"></span>
+            <span>${veh.immatriculation}</span>
+            ${
+              veh.derniere_vitesse > 0
+                ? `<span style="color: #059669; font-weight: 700; font-size: 10px;">${veh.derniere_vitesse}km/h</span>`
+                : ''
+            }
+          </div>
+          <!-- Curseur orienté (direction / cap GPS) -->
+          <div style="width: 28px; height: 28px; border-radius: 50%; background: ${color}; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 10px rgba(0,0,0,0.4); border: 2.5px solid #ffffff; transform: rotate(${cap}deg); transition: transform 0.3s ease;">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="#ffffff" stroke="#ffffff" stroke-width="2">
+              <polygon points="12 2 19 21 12 17 5 21 12 2"></polygon>
+            </svg>
+          </div>
+        </div>
+      `
 
-      let marker = currentMarkers.get(veh.id)
-      if (!marker) {
-        marker = new google.maps.Marker({
-          position,
-          map,
-          title: `${veh.immatriculation} (${veh.marque} ${veh.modele})`,
-          icon: svgIcon,
-          label: {
-            text: veh.immatriculation.split(' ')[0] || veh.immatriculation,
-            color: '#1e293b',
-            fontSize: '11px',
-            fontWeight: 'bold',
-            className: 'bg-white/90 px-1 py-0.5 rounded shadow text-xs',
-          },
-        })
-
-        marker.addListener('click', () => {
-          if (onSelectVehicule) onSelectVehicule(veh)
-        })
-
-        currentMarkers.set(veh.id, marker)
-      } else {
-        marker.setPosition(position)
-        marker.setIcon(svgIcon)
-      }
-    })
-  }, [mapsLoaded, vehicules, selectedVehicule, onSelectVehicule])
-
-  // Centrer sur le véhicule sélectionné
-  useEffect(() => {
-    if (!mapsLoaded || !mapInstanceRef.current || !selectedVehicule) return
-    if (selectedVehicule.derniere_latitude && selectedVehicule.derniere_longitude) {
-      mapInstanceRef.current.panTo({
-        lat: selectedVehicule.derniere_latitude,
-        lng: selectedVehicule.derniere_longitude,
+      const customIcon = L.divIcon({
+        className: 'gestio-car-marker',
+        html: markerHtml,
+        iconSize: [80, 50],
+        iconAnchor: [40, 25],
       })
-      mapInstanceRef.current.setZoom(15)
-    }
-  }, [mapsLoaded, selectedVehicule])
 
-  // ─── 4. FALLBACK INTERACTIF HAUTE PRÉCISION QUAND PAS DE CLÉ GOOGLE MAPS ────
-  // Si aucune clé API n'est configurée, l'utilisateur bénéficie d'une carte vectorielle
-  // interactive représentant Cotonou et ses axes principaux avec véhicules en mouvement !
-  if (!effectiveApiKey || !mapsLoaded || loadError) {
-    return (
-      <div
-        className="relative w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 bg-slate-950 shadow-inner flex flex-col justify-between"
-        style={{ height }}
-      >
-        {/* Bandeau d'information Google Maps Platform */}
-        <div className="absolute top-3 left-3 right-3 z-20 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 p-3 bg-slate-900/90 backdrop-blur border border-slate-700/80 rounded-xl text-white shadow-xl">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 rounded-lg bg-sky-500/20 text-sky-400 flex items-center justify-center font-bold text-xs border border-sky-500/30">
-              GPS
-            </div>
+      const marker = L.marker([veh.derniere_latitude, veh.derniere_longitude], {
+        icon: customIcon,
+        zIndexOffset: isSelected ? 1000 : 100,
+      })
+
+      // Popup Google Maps complet au clic
+      const popupHtml = `
+        <div style="min-width: 220px; font-family: system-ui, -apple-system, sans-serif; color: #1e293b; padding: 2px;">
+          <div style="display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #e2e8f0; padding-bottom: 6px; margin-bottom: 8px;">
             <div>
-              <div className="text-xs font-semibold text-slate-100 flex items-center gap-1.5">
-                <span>Mode Simulateur & Télématique Temps Réel (Bénin)</span>
-                <span className="px-1.5 py-0.5 bg-emerald-500/20 text-emerald-400 text-[10px] rounded-full font-medium">
-                  Actif
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400">
-                {!effectiveApiKey
-                  ? 'Pour afficher Google Maps officiel (Satellite, Trafic, StreetView), configurez votre clé API dans Paramètres.'
-                  : loadError || 'Initialisation de la carte Google Maps en cours...'}
-              </p>
+              <span style="font-size: 10px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.5px;">Position Temps Réel</span>
+              <h4 style="font-size: 14px; font-weight: 800; margin: 0; color: #0f172a;">${veh.immatriculation}</h4>
+            </div>
+            <span style="background: ${color}20; color: ${color}; padding: 2px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700;">
+              ${getStatusLabel(veh.statut)}
+            </span>
+          </div>
+
+          <div style="font-size: 12px; color: #475569; margin-bottom: 8px;">
+            <strong>${veh.marque} ${veh.modele}</strong> ${veh.code_interne ? `(${veh.code_interne})` : ''}
+          </div>
+
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 6px; font-size: 11px; margin-bottom: 8px;">
+            <div style="background: #f8fafc; padding: 6px; border-radius: 8px; border: 1px solid #e2e8f0;">
+              <span style="color: #64748b; display: block;">Vitesse</span>
+              <strong style="color: #059669; font-size: 13px;">${veh.derniere_vitesse} km/h</strong>
+            </div>
+            <div style="background: #f8fafc; padding: 6px; border-radius: 8px; border: 1px solid #e2e8f0;">
+              <span style="color: #64748b; display: block;">Carburant</span>
+              <strong style="color: #0284c7; font-size: 13px;">${veh.niveau_carburant_pct}%</strong>
             </div>
           </div>
-          <div className="flex items-center space-x-2">
-            <a
-              href="#/flotte-geolocalisation/parametres-gps"
-              className="flex items-center space-x-1.5 px-3 py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-lg text-xs font-medium transition-colors shadow"
-            >
-              <Key className="w-3.5 h-3.5" />
-              <span>Configurer Clé API</span>
-            </a>
+
+          <div style="font-size: 11px; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 6px;">
+            <div><strong>Chauffeur :</strong> ${veh.conducteur_nom || 'Non assigné'}</div>
+            <div><strong>Contact :</strong> ${veh.contact_allume ? '🟢 Moteur allumé' : '🔴 Moteur coupé'}</div>
+            <div><strong>GPS :</strong> ${veh.derniere_latitude?.toFixed(4)}, ${veh.derniere_longitude?.toFixed(4)}</div>
           </div>
         </div>
+      `
 
-        {/* Canvas Vectoriel Stylisé (Grille Télématique & Réseau Cotonou) */}
-        <div className="relative w-full h-full bg-[#0a1120] overflow-hidden flex items-center justify-center">
-          {/* Grille radar */}
-          <div className="absolute inset-0 bg-[radial-gradient(#1e293b_1px,transparent_1px)] [background-size:24px_24px] opacity-40 pointer-events-none" />
+      marker.bindPopup(popupHtml, {
+        className: 'google-maps-popup',
+        closeButton: true,
+      })
 
-          {/* Représentation schématique Lagune de Cotonou & Océan Atlantique */}
-          <svg className="absolute inset-0 w-full h-full pointer-events-none opacity-30">
-            {/* Océan Atlantique (Sud) */}
-            <path d="M 0,460 Q 300,440 600,455 T 1200,450 L 1200,600 L 0,600 Z" fill="#0369a1" />
-            {/* Lagune de Cotonou / Lac Nokoué (Nord) */}
-            <ellipse cx="650" cy="120" rx="320" ry="90" fill="#075985" />
-            {/* Canaux & Boulevards majeurs (Marina, Etoile Rouge, Akpakpa) */}
-            <path d="M 100,440 L 900,430" stroke="#334155" strokeWidth="6" strokeDasharray="6,4" />
-            <path d="M 450,440 L 520,180" stroke="#334155" strokeWidth="5" />
-            <path d="M 250,430 L 700,280" stroke="#38bdf8" strokeWidth="2" opacity="0.4" />
-          </svg>
+      marker.on('click', () => {
+        if (onSelectVehicule) onSelectVehicule(veh)
+      })
 
-          {/* Zones Geofences vectorielles */}
-          {geofences.map((geo, idx) => (
-            <div
-              key={geo.id || idx}
-              className="absolute pointer-events-none rounded-full border-2 border-dashed flex items-center justify-center"
-              style={{
-                width: '180px',
-                height: '180px',
-                borderColor: geo.couleur_hex || '#0284c7',
-                backgroundColor: `${geo.couleur_hex || '#0284c7'}15`,
-                top: `${30 + (idx % 2) * 35}%`,
-                left: `${25 + idx * 22}%`,
-                transform: 'translate(-50%, -50%)',
-              }}
-            >
-              <span className="text-[10px] font-bold text-white/80 bg-slate-900/80 px-2 py-0.5 rounded shadow">
-                {geo.nom_zone}
-              </span>
-            </div>
-          ))}
+      markersLayerRef.current?.addLayer(marker)
+    })
+  }, [vehicules, selectedVehicule, onSelectVehicule])
 
-          {/* Marqueurs interactifs des véhicules */}
-          {vehicules.map((veh, index) => {
-            const isSelected = selectedVehicule?.id === veh.id
-            const color = getStatusColor(veh.statut)
+  // ─── 6. CENTRAGE SUR LE VÉHICULE SÉLECTIONNÉ ─────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current || !selectedVehicule) return
+    if (selectedVehicule.derniere_latitude && selectedVehicule.derniere_longitude) {
+      mapRef.current.flyTo(
+        [selectedVehicule.derniere_latitude, selectedVehicule.derniere_longitude],
+        12,
+        { duration: 1.2 }
+      )
+    }
+  }, [selectedVehicule])
 
-            // Positionnement relatif réparti pour le simulateur
-            // (basé sur lat/lng ou index si dans la même plage)
-            const topPct = 25 + ((veh.derniere_latitude || 6.36) - 6.34) * 500 + (index % 3) * 12
-            const leftPct = 20 + ((veh.derniere_longitude || 2.41) - 2.38) * 450 + (index % 4) * 14
-
-            return (
-              <div
-                key={veh.id}
-                onClick={() => onSelectVehicule && onSelectVehicule(veh)}
-                className={`absolute cursor-pointer transition-all duration-300 transform -translate-x-1/2 -translate-y-1/2 group z-10 ${
-                  isSelected ? 'scale-125 z-30' : 'hover:scale-110'
-                }`}
-                style={{
-                  top: `${Math.min(85, Math.max(18, topPct))}%`,
-                  left: `${Math.min(88, Math.max(12, leftPct))}%`,
-                }}
-              >
-                {/* Onde pulsante pour les véhicules en circulation */}
-                {veh.statut === 'EN_CIRCULATION' && (
-                  <span
-                    className="absolute -inset-2 rounded-full animate-ping opacity-40 pointer-events-none"
-                    style={{ backgroundColor: color }}
-                  />
-                )}
-
-                {/* Bulle de véhicule */}
-                <div
-                  className={`relative flex items-center space-x-1.5 px-2.5 py-1 rounded-full shadow-lg border text-white font-medium text-xs ${
-                    isSelected ? 'ring-2 ring-white ring-offset-2 ring-offset-slate-950' : ''
-                  }`}
-                  style={{
-                    backgroundColor: '#0f172a',
-                    borderColor: color,
-                  }}
-                >
-                  {/* Flèche d'orientation */}
-                  <div
-                    className="w-4 h-4 flex items-center justify-center transition-transform"
-                    style={{
-                      transform: `rotate(${veh.dernier_cap || 0}deg)`,
-                      color,
-                    }}
-                  >
-                    <Navigation className="w-3.5 h-3.5 fill-current" />
-                  </div>
-                  <span className="font-bold text-[11px] tracking-tight">{veh.immatriculation}</span>
-                  {veh.derniere_vitesse > 0 && (
-                    <span className="text-[10px] text-emerald-400 font-semibold">
-                      {veh.derniere_vitesse}km/h
-                    </span>
-                  )}
-                </div>
-
-                {/* Badge statut rapide */}
-                <div
-                  className="w-2.5 h-2.5 rounded-full mx-auto mt-0.5 border border-slate-950 shadow"
-                  style={{ backgroundColor: color }}
-                />
-              </div>
-            )
-          })}
-        </div>
-
-        {/* Barre d'état inférieure (Légende télématique) */}
-        <div className="absolute bottom-3 left-3 right-3 z-20 flex flex-wrap items-center justify-between gap-2 p-2.5 bg-slate-900/90 backdrop-blur border border-slate-800 rounded-xl text-xs text-slate-300">
-          <div className="flex flex-wrap items-center gap-3">
-            <span className="font-semibold text-white">Légende Flotte :</span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-              <span>En circulation</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-amber-500" />
-              <span>À l'arrêt / Contact</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-sky-500" />
-              <span>En mission</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-              <span>En atelier</span>
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-2.5 h-2.5 rounded-full bg-slate-500" />
-              <span>Hors ligne</span>
-            </span>
-          </div>
-          <div className="text-[11px] text-slate-400">
-            {vehicules.length} véhicule(s) supervisé(s)
-          </div>
-        </div>
-      </div>
-    )
+  // Recentrer sur toute la vue Bénin (Bohicon - Dassa - Cotonou)
+  const handleRecenterBenin = () => {
+    if (!mapRef.current) return
+    if (selectedVehicule?.derniere_latitude && selectedVehicule?.derniere_longitude) {
+      mapRef.current.flyTo(
+        [selectedVehicule.derniere_latitude, selectedVehicule.derniere_longitude],
+        13,
+        { duration: 1 }
+      )
+    } else {
+      mapRef.current.flyTo([7.1783, 2.0667], 9, { duration: 1 })
+    }
   }
 
-  // ─── 5. AFFICHAGE CARTE GOOGLE MAPS PLEINE FONCTIONNALITÉ ───────────────────
+  // Zoom
+  const handleZoomIn = () => mapRef.current?.zoomIn()
+  const handleZoomOut = () => mapRef.current?.zoomOut()
+
   return (
-    <div className="relative w-full rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-800 shadow-md">
-      {/* Contrôle des couches Google Maps */}
-      <div className="absolute top-3 right-3 z-10 flex items-center space-x-1 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-lg">
-        <button
-          onClick={() => setMapType('roadmap')}
-          className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors ${
-            mapType === 'roadmap'
-              ? 'bg-sky-600 text-white'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          Plan
-        </button>
-        <button
-          onClick={() => setMapType('satellite')}
-          className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors ${
-            mapType === 'satellite'
-              ? 'bg-sky-600 text-white'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          Satellite
-        </button>
-        <button
-          onClick={() => setMapType('hybrid')}
-          className={`px-2.5 py-1 text-xs font-medium rounded-lg transition-colors ${
-            mapType === 'hybrid'
-              ? 'bg-sky-600 text-white'
-              : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
-          }`}
-        >
-          Mixte
-        </button>
+    <div
+      className="relative w-full rounded-2xl overflow-hidden border border-slate-300 dark:border-slate-800 shadow-xl bg-slate-100 dark:bg-slate-900 select-none"
+      style={{ height }}
+    >
+      {/* ─── A. BARRE SUPÉRIEURE GOOGLE MAPS (EXACTEMENT COMME SUR LA PHOTO MOBILE) ─── */}
+      <div className="absolute top-3 left-3 right-3 z-[1000] flex flex-col gap-2 max-w-xl mx-auto pointer-events-none">
+        {/* Champ de recherche Google Maps arrondi blanc */}
+        <div className="pointer-events-auto flex items-center bg-white dark:bg-slate-900 rounded-full shadow-xl border border-slate-200 dark:border-slate-700 px-3.5 py-2 transition-all hover:shadow-2xl">
+          {/* Logo Google Maps coloré ou icône Loupe */}
+          <div className="flex items-center justify-center w-7 h-7 mr-2">
+            <svg viewBox="0 0 24 24" className="w-5 h-5">
+              <path
+                fill="#4285F4"
+                d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"
+              />
+              <circle fill="#EA4335" cx="12" cy="9" r="2.8" />
+            </svg>
+          </div>
+
+          <input
+            type="text"
+            placeholder={
+              selectedVehicule
+                ? `${selectedVehicule.immatriculation} (${selectedVehicule.marque} ${selectedVehicule.modele})`
+                : 'Rechercher un véhicule, une ville (Bohicon, Dassa, Cotonou)...'
+            }
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+            className="flex-1 bg-transparent text-xs sm:text-sm text-slate-800 dark:text-white placeholder-slate-400 focus:outline-none"
+          />
+
+          <div className="flex items-center space-x-1.5 ml-2">
+            <button
+              type="button"
+              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800"
+              title="Recherche vocale"
+            >
+              <Mic className="w-4 h-4" />
+            </button>
+            <div className="w-7 h-7 rounded-full bg-sky-600 text-white font-bold text-xs flex items-center justify-center shadow">
+              G
+            </div>
+          </div>
+        </div>
+
+        {/* Chips de filtres rapides horizontaux (Restaurants, Hôtels, Carburant comme sur la photo) */}
+        <div className="pointer-events-auto flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs">
+          <button
+            onClick={() => {
+              setActiveChip('TOUS')
+              handleRecenterBenin()
+            }}
+            className={`px-3 py-1 rounded-full font-medium shadow-md transition-all whitespace-nowrap flex items-center gap-1.5 ${
+              activeChip === 'TOUS'
+                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900'
+                : 'bg-white/95 dark:bg-slate-900/95 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <MapPin className="w-3 h-3 text-sky-500" />
+            <span>Tous ({vehicules.length})</span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveChip('RNIE2')
+              mapRef.current?.flyTo([7.1783, 2.0667], 9)
+            }}
+            className={`px-3 py-1 rounded-full font-medium shadow-md transition-all whitespace-nowrap flex items-center gap-1.5 ${
+              activeChip === 'RNIE2'
+                ? 'bg-sky-600 text-white'
+                : 'bg-white/95 dark:bg-slate-900/95 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Route className="w-3 h-3 text-emerald-500" />
+            <span>Axe RNIE 2 (Bohicon - Dassa)</span>
+          </button>
+
+          <button
+            onClick={() => setActiveChip('CARBURANT')}
+            className={`px-3 py-1 rounded-full font-medium shadow-md transition-all whitespace-nowrap flex items-center gap-1.5 ${
+              activeChip === 'CARBURANT'
+                ? 'bg-sky-600 text-white'
+                : 'bg-white/95 dark:bg-slate-900/95 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Fuel className="w-3 h-3 text-amber-500" />
+            <span>Stations Carburant</span>
+          </button>
+
+          <button
+            onClick={() => setShowParcoursOverlay((prev) => !prev)}
+            className={`px-3 py-1 rounded-full font-medium shadow-md transition-all whitespace-nowrap flex items-center gap-1.5 ${
+              showParcoursOverlay
+                ? 'bg-emerald-600 text-white'
+                : 'bg-white/95 dark:bg-slate-900/95 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Navigation className="w-3 h-3 text-white" />
+            <span>{showParcoursOverlay ? 'Masquer Parcours' : 'Afficher Parcours'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Conteneur DOM natif pour Google Maps */}
-      <div ref={mapContainerRef} style={{ width: '100%', height }} />
+      {/* ─── B. BADGE DU PARCOURS EN DIRECT ("SON PARCOURS") ─────────────────── */}
+      {showParcoursOverlay && selectedVehicule && (
+        <div className="absolute top-24 left-3 z-[999] bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border border-slate-200 dark:border-slate-700 rounded-2xl p-3 shadow-2xl max-w-xs text-xs space-y-2 pointer-events-auto">
+          <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-1.5">
+            <span className="font-bold text-slate-800 dark:text-white flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+              Parcours en direct : RNIE 2
+            </span>
+            <span className="text-[10px] font-semibold text-sky-600 dark:text-sky-400 bg-sky-50 dark:bg-sky-950/60 px-1.5 py-0.5 rounded">
+              Bénin Central
+            </span>
+          </div>
+
+          <div className="space-y-1 text-slate-600 dark:text-slate-300">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">Véhicule :</span>
+              <strong className="text-slate-900 dark:text-white">
+                {selectedVehicule.immatriculation}
+              </strong>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">Position actuelle :</span>
+              <strong className="text-emerald-600 dark:text-emerald-400">
+                Bohicon (Carrefour Zakpo)
+              </strong>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">Vitesse instantanée :</span>
+              <strong className="text-slate-900 dark:text-white">
+                {selectedVehicule.derniere_vitesse || 58} km/h
+              </strong>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-slate-400">Direction :</span>
+              <strong className="text-sky-600 dark:text-sky-400">Nord (Dassa-Zoumè)</strong>
+            </div>
+          </div>
+
+          <div className="pt-1 flex items-center justify-between text-[10px] text-slate-400 border-t border-slate-100 dark:border-slate-800">
+            <span>Trajet : Cotonou ➔ Bohicon ➔ Dassa</span>
+            <span className="font-bold text-slate-600 dark:text-slate-300">142 km</span>
+          </div>
+        </div>
+      )}
+
+      {/* ─── C. CONTENEUR DOM DE LA CARTE GOOGLE MAPS LEAFLET ────────────────── */}
+      <div ref={containerRef} style={{ width: '100%', height: '100%' }} />
+
+      {/* ─── D. LOGO OFFICIEL GOOGLE (EN BAS À GAUCHE COMME SUR GOOGLE MAPS) ─── */}
+      <div className="absolute bottom-3 left-3 z-[999] pointer-events-none flex items-center space-x-1 px-2 py-1 bg-white/90 dark:bg-slate-900/90 rounded-md backdrop-blur border border-slate-200 dark:border-slate-800 shadow-md">
+        <span className="text-xs font-bold tracking-tight">
+          <span className="text-[#4285F4]">G</span>
+          <span className="text-[#EA4335]">o</span>
+          <span className="text-[#FBBC05]">o</span>
+          <span className="text-[#4285F4]">g</span>
+          <span className="text-[#34A853]">l</span>
+          <span className="text-[#EA4335]">e</span>
+        </span>
+        <span className="text-[9px] text-slate-500 font-medium ml-1">Maps Bénin</span>
+      </div>
+
+      {/* ─── E. BOUTONS DE CONTRÔLE GOOGLE MAPS (EN BAS À DROITE) ─────────────── */}
+      {showControls && (
+        <div className="absolute bottom-5 right-3 z-[999] flex flex-col items-center space-y-2 pointer-events-auto">
+          {/* Sélecteur de couches (Plan / Satellite / Relief) */}
+          <div className="flex flex-col bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <button
+              onClick={() => setMapType('roadmap')}
+              className={`p-2 text-xs font-semibold transition-colors flex items-center justify-center ${
+                mapType === 'roadmap'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+              title="Google Maps Plan (Standard)"
+            >
+              Plan
+            </button>
+            <button
+              onClick={() => setMapType('terrain')}
+              className={`p-2 text-xs font-semibold transition-colors flex items-center justify-center border-t border-slate-200 dark:border-slate-700 ${
+                mapType === 'terrain'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+              title="Google Maps Relief (Topographie & Collines)"
+            >
+              Relief
+            </button>
+            <button
+              onClick={() => setMapType('satellite')}
+              className={`p-2 text-xs font-semibold transition-colors flex items-center justify-center border-t border-slate-200 dark:border-slate-700 ${
+                mapType === 'satellite'
+                  ? 'bg-sky-600 text-white'
+                  : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+              }`}
+              title="Google Maps Satellite"
+            >
+              Sat
+            </button>
+          </div>
+
+          {/* Bouton Recentrer sur le Véhicule (Cible GPS Bleue Google Maps) */}
+          <button
+            onClick={handleRecenterBenin}
+            className="w-10 h-10 rounded-full bg-white dark:bg-slate-900 text-sky-600 dark:text-sky-400 shadow-xl border border-slate-200 dark:border-slate-700 flex items-center justify-center hover:bg-sky-50 dark:hover:bg-slate-800 transition-transform active:scale-90"
+            title="Recentrer sur le véhicule / Bohicon"
+          >
+            <Crosshair className="w-5 h-5" />
+          </button>
+
+          {/* Boutons Zoom In / Out */}
+          <div className="flex flex-col bg-white dark:bg-slate-900 rounded-xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden">
+            <button
+              onClick={handleZoomIn}
+              className="p-2.5 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+              title="Zoom avant"
+            >
+              <ZoomIn className="w-4 h-4" />
+            </button>
+            <button
+              onClick={handleZoomOut}
+              className="p-2.5 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors border-t border-slate-200 dark:border-slate-700"
+              title="Zoom arrière"
+            >
+              <ZoomOut className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

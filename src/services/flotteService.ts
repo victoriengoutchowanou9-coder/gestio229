@@ -337,142 +337,28 @@ export interface FlotteParametres {
   created_at?: string
 }
 
-// ─── 2. SEED INITIAL COORDONNÉES RÉELLES BÉNIN / COTONOU ──────────────────────
-// Permet d'avoir un environnement vivant et professionnel dès le 1er affichage
+// ─── 2. MODÈLE DU PARCOURS & COORDONNÉES RÉELLES BÉNIN ───────────────────────
+// Trajet officiel sur la RNIE 2 (Cotonou -> Bohicon -> Dassa-Zoumè)
 
-const INITIAL_VEHICULES_BENIN = [
-  {
-    immatriculation: 'AY 8940 RB',
-    code_interne: 'FL-01',
-    marque: 'Toyota',
-    modele: 'Hilux Double Cabine 4x4',
-    annee: 2023,
-    type_vehicule: 'UTILITAIRE' as FlotteTypeVehicule,
-    type_carburant: 'GASOIL' as FlotteTypeCarburant,
-    capacite_reservoir_litres: 80,
-    consommation_reference_100km: 9.2,
-    kilometrage_actuel: 48250,
-    statut: 'EN_CIRCULATION' as FlotteStatutVehicule,
-    derniere_latitude: 6.3654,
-    derniere_longitude: 2.4183, // Boulevard de la Marina, Cotonou
-    derniere_vitesse: 48,
-    dernier_cap: 85,
-    contact_allume: true,
-    niveau_carburant_pct: 72,
-    conducteur_nom: 'Bio Séro KORA',
-    tracker_imei: '862904041289401',
-    derniere_mise_a_jour_gps: new Date().toISOString(),
-  },
-  {
-    immatriculation: 'BL 2045 RB',
-    code_interne: 'FL-02',
-    marque: 'Renault',
-    modele: 'Trafic Grand Confort',
-    annee: 2022,
-    type_vehicule: 'UTILITAIRE' as FlotteTypeVehicule,
-    type_carburant: 'GASOIL' as FlotteTypeCarburant,
-    capacite_reservoir_litres: 75,
-    consommation_reference_100km: 7.8,
-    kilometrage_actuel: 64120,
-    statut: 'EN_CIRCULATION' as FlotteStatutVehicule,
-    derniere_latitude: 6.3721,
-    derniere_longitude: 2.3985, // Cadjèhoun / Haie Vive, Cotonou
-    derniere_vitesse: 35,
-    dernier_cap: 220,
-    contact_allume: true,
-    niveau_carburant_pct: 55,
-    conducteur_nom: 'Aimé DOSSA',
-    tracker_imei: '862904041289402',
-    derniere_mise_a_jour_gps: new Date().toISOString(),
-  },
-  {
-    immatriculation: 'BK 1198 RB',
-    code_interne: 'FL-03',
-    marque: 'Scania',
-    modele: 'P380 Frigorifique 26T',
-    annee: 2021,
-    type_vehicule: 'FRIGORIFIQUE' as FlotteTypeVehicule,
-    type_carburant: 'GASOIL' as FlotteTypeCarburant,
-    capacite_reservoir_litres: 350,
-    consommation_reference_100km: 28.5,
-    kilometrage_actuel: 142800,
-    statut: 'EN_MISSION' as FlotteStatutVehicule,
-    derniere_latitude: 6.4258,
-    derniere_longitude: 2.3394, // Abomey-Calavi / Carrefour Arconville
-    derniere_vitesse: 62,
-    dernier_cap: 340,
-    contact_allume: true,
-    niveau_carburant_pct: 82,
-    conducteur_nom: 'Rodrigue AGOSSOU',
-    tracker_imei: '862904041289403',
-    derniere_mise_a_jour_gps: new Date().toISOString(),
-  },
-  {
-    immatriculation: 'AZ 5530 RB',
-    code_interne: 'FL-04',
-    marque: 'Toyota',
-    modele: 'Corolla Sedan 1.8L',
-    annee: 2024,
-    type_vehicule: 'VOITURE' as FlotteTypeVehicule,
-    type_carburant: 'ESSENCE' as FlotteTypeCarburant,
-    capacite_reservoir_litres: 50,
-    consommation_reference_100km: 6.5,
-    kilometrage_actuel: 19800,
-    statut: 'A_L_ARRET' as FlotteStatutVehicule,
-    derniere_latitude: 6.3578,
-    derniere_longitude: 2.4352, // Port Autonome de Cotonou
-    derniere_vitesse: 0,
-    dernier_cap: 110,
-    contact_allume: false,
-    niveau_carburant_pct: 90,
-    conducteur_nom: 'Carine HOUNNOU',
-    tracker_imei: '862904041289404',
-    derniere_mise_a_jour_gps: new Date(Date.now() - 15 * 60 * 1000).toISOString(),
-  },
-  {
-    immatriculation: 'BB 9012 RB',
-    code_interne: 'FL-05',
-    marque: 'Mercedes-Benz',
-    modele: 'Actros 3340 Benne 6x4',
-    annee: 2020,
-    type_vehicule: 'ENGIN_BTP' as FlotteTypeVehicule,
-    type_carburant: 'GASOIL' as FlotteTypeCarburant,
-    capacite_reservoir_litres: 400,
-    consommation_reference_100km: 34.0,
-    kilometrage_actuel: 189500,
-    statut: 'EN_MAINTENANCE' as FlotteStatutVehicule,
-    derniere_latitude: 6.3812,
-    derniere_longitude: 2.4589, // Akpakpa PK3, Cotonou
-    derniere_vitesse: 0,
-    dernier_cap: 0,
-    contact_allume: false,
-    niveau_carburant_pct: 30,
-    conducteur_nom: 'Gérard TCHIBOZO',
-    tracker_imei: '862904041289405',
-    derniere_mise_a_jour_gps: new Date(Date.now() - 120 * 60 * 1000).toISOString(),
-  },
-  {
-    immatriculation: 'AH 3301 RB',
-    code_interne: 'FL-06',
-    marque: 'Haojue',
-    modele: 'HJ125-8E Moto Express',
-    annee: 2023,
-    type_vehicule: 'MOTO' as FlotteTypeVehicule,
-    type_carburant: 'ESSENCE' as FlotteTypeCarburant,
-    capacite_reservoir_litres: 12,
-    consommation_reference_100km: 2.8,
-    kilometrage_actuel: 24300,
-    statut: 'EN_CIRCULATION' as FlotteStatutVehicule,
-    derniere_latitude: 6.3688,
-    derniere_longitude: 2.4285, // Ganhi Centre Commercial, Cotonou
-    derniere_vitesse: 28,
-    dernier_cap: 180,
-    contact_allume: true,
-    niveau_carburant_pct: 68,
-    conducteur_nom: 'Sylvestre DAKO',
-    tracker_imei: '862904041289406',
-    derniere_mise_a_jour_gps: new Date().toISOString(),
-  },
+export interface PointParcours {
+  latitude: number
+  longitude: number
+  vitesse_kmh?: number
+  horodatage?: string
+  nom_etape?: string
+  est_arret?: boolean
+}
+
+// Axe RNIE 2 visible sur Google Maps (conformément à la photo envoyée : Bohicon au centre, Dassa au nord)
+export const PARCOURS_BENIN_RNIE2: PointParcours[] = [
+  { latitude: 6.3654, longitude: 2.4183, vitesse_kmh: 0, nom_etape: 'Départ : Cotonou Marina (RNIE 2)', est_arret: true },
+  { latitude: 6.4258, longitude: 2.3394, vitesse_kmh: 48, nom_etape: 'Abomey-Calavi' },
+  { latitude: 6.6654, longitude: 2.1513, vitesse_kmh: 65, nom_etape: 'Allada Centre' },
+  { latitude: 6.8450, longitude: 2.0830, vitesse_kmh: 72, nom_etape: 'Toffo' },
+  { latitude: 7.0200, longitude: 2.0720, vitesse_kmh: 68, nom_etape: 'Zogbodomey' },
+  { latitude: 7.1783, longitude: 2.0667, vitesse_kmh: 54, nom_etape: 'Bohicon Carrefour Zakpo (Position Actuelle)' },
+  { latitude: 7.3500, longitude: 2.1100, vitesse_kmh: 75, nom_etape: 'Covè / Zou Nord' },
+  { latitude: 7.7558, longitude: 2.1831, vitesse_kmh: 0, nom_etape: 'Destination : Dassa-Zoumè (Collines)', est_arret: true },
 ]
 
 // ─── 3. GESTION DU STORAGE LOCAL ROBUSTE (MULTI-TENANT CACHE) ─────────────────
@@ -499,6 +385,55 @@ function saveLocal<T>(companyId: string, resource: string, data: T): void {
   }
 }
 
+/**
+ * Nettoie toutes les valeurs fictives résiduelles du module flotte dans le stockage local et Supabase
+ */
+export async function nettoyerValeursFictivesFlotte(companyId: string): Promise<void> {
+  if (!companyId) return
+  const resources = [
+    'vehicules',
+    'conducteurs',
+    'missions',
+    'carburant',
+    'maintenance',
+    'documents',
+    'geofences',
+    'alertes',
+    'capteurs',
+    'reservations',
+    'inspections',
+    'balises',
+    'positions_gps',
+  ]
+
+  for (const res of resources) {
+    const key = getLocalKey(companyId, res)
+    try {
+      const raw = localStorage.getItem(key)
+      if (raw) {
+        if (
+          raw.includes('seed-') ||
+          raw.includes('AY 8940') ||
+          raw.includes('Bio Séro') ||
+          raw.includes('BL 2045') ||
+          raw.includes('BK 1198') ||
+          raw.includes('AZ 5530') ||
+          raw.includes('BB 9012') ||
+          raw.includes('AH 3301')
+        ) {
+          localStorage.removeItem(key)
+        }
+      }
+    } catch {}
+  }
+
+  try {
+    await supabase.from('flotte_vehicules').delete().eq('company_id', companyId).ilike('id', 'v-seed-%')
+    await supabase.from('flotte_conducteurs').delete().eq('company_id', companyId).ilike('id', 'c-seed-%')
+    await supabase.from('flotte_missions').delete().eq('company_id', companyId).ilike('id', 'm-seed-%')
+  } catch {}
+}
+
 // ─── 4. PARC VÉHICULES ────────────────────────────────────────────────────────
 
 export async function getVehiculesFlotte(companyId: string): Promise<FlotteVehicule[]> {
@@ -509,6 +444,7 @@ export async function getVehiculesFlotte(companyId: string): Promise<FlotteVehic
       .from('flotte_vehicules')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'v-seed-%')
       .order('immatriculation', { ascending: true })
 
     if (error) {
@@ -516,46 +452,29 @@ export async function getVehiculesFlotte(companyId: string): Promise<FlotteVehic
       throw error
     }
 
-    if (data && data.length > 0) {
-      saveLocal(companyId, 'vehicules', data)
-      return data as FlotteVehicule[]
+    if (data) {
+      const realData = (data as FlotteVehicule[]).filter((v) => !v.id.includes('seed-'))
+      saveLocal(companyId, 'vehicules', realData)
+      return realData
     }
   } catch {
     // Fallback localstorage
   }
 
   const cached = loadLocal<FlotteVehicule[]>(companyId, 'vehicules', [])
-  if (cached.length > 0) return cached
+  const realCached = cached.filter(
+    (v) =>
+      !v.id.includes('seed-') &&
+      !['AY 8940 RB', 'BL 2045 RB', 'BK 1198 RB', 'AZ 5530 RB', 'BB 9012 RB', 'AH 3301 RB'].includes(
+        v.immatriculation
+      )
+  )
 
-  // Si premier démarrage pour cette entreprise, initialiser le parc de démonstration
-  const seeded: FlotteVehicule[] = INITIAL_VEHICULES_BENIN.map((v, idx) => ({
-    id: `v-seed-${companyId.slice(0, 4)}-${idx + 1}`,
-    company_id: companyId,
-    immatriculation: v.immatriculation,
-    code_interne: v.code_interne,
-    marque: v.marque,
-    modele: v.modele,
-    annee: v.annee,
-    type_vehicule: v.type_vehicule,
-    type_carburant: v.type_carburant,
-    capacite_reservoir_litres: v.capacite_reservoir_litres,
-    consommation_reference_100km: v.consommation_reference_100km,
-    kilometrage_actuel: v.kilometrage_actuel,
-    statut: v.statut,
-    derniere_latitude: v.derniere_latitude,
-    derniere_longitude: v.derniere_longitude,
-    derniere_vitesse: v.derniere_vitesse,
-    dernier_cap: v.dernier_cap,
-    contact_allume: v.contact_allume,
-    niveau_carburant_pct: v.niveau_carburant_pct,
-    conducteur_nom: v.conducteur_nom,
-    tracker_imei: v.tracker_imei,
-    derniere_mise_a_jour_gps: v.derniere_mise_a_jour_gps,
-    created_at: new Date().toISOString(),
-  }))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'vehicules', realCached)
+  }
 
-  saveLocal(companyId, 'vehicules', seeded)
-  return seeded
+  return realCached
 }
 
 export async function saveVehiculeFlotte(
@@ -636,76 +555,21 @@ export async function getConducteursFlotte(companyId: string): Promise<FlotteCon
       .from('flotte_conducteurs')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'c-seed-%')
       .order('nom_complet')
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'conducteurs', data)
-      return data as FlotteConducteur[]
+    if (!error && data) {
+      const realData = (data as FlotteConducteur[]).filter((c) => !c.id.includes('seed-'))
+      saveLocal(companyId, 'conducteurs', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteConducteur[]>(companyId, 'conducteurs', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteConducteur[] = [
-    {
-      id: `c-seed-${companyId.slice(0, 4)}-1`,
-      company_id: companyId,
-      nom_complet: 'Bio Séro KORA',
-      telephone: '+229 97 12 34 56',
-      email: 'kora.bio@gestio229.bj',
-      numero_permis: 'BJ-2018-094812',
-      categories_permis: 'B-C-D',
-      date_expiration_permis: '2028-06-15',
-      date_visite_medicale: '2027-02-10',
-      points_permis: 12,
-      statut: 'ACTIF',
-      vehicule_immatriculation: 'AY 8940 RB',
-    },
-    {
-      id: `c-seed-${companyId.slice(0, 4)}-2`,
-      company_id: companyId,
-      nom_complet: 'Aimé DOSSA',
-      telephone: '+229 95 88 44 22',
-      email: 'aime.dossa@gestio229.bj',
-      numero_permis: 'BJ-2016-041278',
-      categories_permis: 'B-C',
-      date_expiration_permis: '2027-11-20',
-      date_visite_medicale: '2026-12-05',
-      points_permis: 11,
-      statut: 'ACTIF',
-      vehicule_immatriculation: 'BL 2045 RB',
-    },
-    {
-      id: `c-seed-${companyId.slice(0, 4)}-3`,
-      company_id: companyId,
-      nom_complet: 'Rodrigue AGOSSOU',
-      telephone: '+229 66 33 21 00',
-      email: 'rodrigue.a@gestio229.bj',
-      numero_permis: 'BJ-2014-009823',
-      categories_permis: 'C-D-E (Poids Lourds)',
-      date_expiration_permis: '2029-01-30',
-      date_visite_medicale: '2026-10-18',
-      points_permis: 12,
-      statut: 'EN_MISSION',
-      vehicule_immatriculation: 'BK 1198 RB',
-    },
-    {
-      id: `c-seed-${companyId.slice(0, 4)}-4`,
-      company_id: companyId,
-      nom_complet: 'Sylvestre DAKO',
-      telephone: '+229 96 45 78 12',
-      email: 'sylvestre.dako@gestio229.bj',
-      numero_permis: 'BJ-2021-087654',
-      categories_permis: 'A-B',
-      date_expiration_permis: '2026-11-05', // Imminente
-      date_visite_medicale: '2026-09-01',
-      points_permis: 10,
-      statut: 'ACTIF',
-      vehicule_immatriculation: 'AH 3301 RB',
-    },
-  ]
-  saveLocal(companyId, 'conducteurs', seeded)
-  return seeded
+  const realCached = cached.filter((c) => !c.id.includes('seed-') && !['Bio Séro KORA', 'Aimé DOSSA', 'Rodrigue AGOSSOU', 'Sylvestre DAKO'].includes(c.nom_complet))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'conducteurs', realCached)
+  }
+  return realCached
 }
 
 export async function saveConducteurFlotte(
@@ -742,6 +606,55 @@ export async function saveConducteurFlotte(
   else list.unshift(record)
   saveLocal(companyId, 'conducteurs', list)
   return record
+}
+
+/**
+ * Récupère le parcours GPS complet d'un véhicule (ordonné chronologiquement)
+ * Utilisé pour tracer la polyline Google Maps "son parcours"
+ */
+export async function getParcoursVehicule(
+  companyId: string,
+  vehiculeId: string
+): Promise<PointParcours[]> {
+  if (!companyId || !vehiculeId) return []
+
+  try {
+    const { data, error } = await supabase
+      .from('flotte_positions_gps')
+      .select('latitude, longitude, vitesse_kmh, horodatage, adresse_approximative')
+      .eq('company_id', companyId)
+      .eq('vehicule_id', vehiculeId)
+      .order('horodatage', { ascending: true })
+      .limit(200)
+
+    if (!error && data && data.length > 0) {
+      return data.map((d: any) => ({
+        latitude: Number(d.latitude),
+        longitude: Number(d.longitude),
+        vitesse_kmh: Number(d.vitesse_kmh || 0),
+        horodatage: d.horodatage,
+        nom_etape: d.adresse_approximative,
+      }))
+    }
+  } catch {}
+
+  // Fallback cache local des positions enregistrées
+  const localPositions = loadLocal<FlottePositionGps[]>(companyId, 'positions_gps', [])
+  const vehPositions = localPositions
+    .filter((p) => p.vehicule_id === vehiculeId)
+    .sort((a, b) => new Date(a.horodatage).getTime() - new Date(b.horodatage).getTime())
+
+  if (vehPositions.length > 0) {
+    return vehPositions.map((p) => ({
+      latitude: p.latitude,
+      longitude: p.longitude,
+      vitesse_kmh: p.vitesse_kmh,
+      horodatage: p.horodatage,
+      nom_etape: p.adresse_approximative,
+    }))
+  }
+
+  return []
 }
 
 // ─── 6. GESTION DES POSITIONS GPS EN TEMPS RÉEL & HISTORIQUE ──────────────────
@@ -828,51 +741,21 @@ export async function getMissionsFlotte(companyId: string): Promise<FlotteMissio
       .from('flotte_missions')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'm-seed-%')
       .order('created_at', { ascending: false })
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'missions', data)
-      return data as FlotteMission[]
+    if (!error && data) {
+      const realData = (data as FlotteMission[]).filter((m) => !m.id.includes('seed-'))
+      saveLocal(companyId, 'missions', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteMission[]>(companyId, 'missions', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteMission[] = [
-    {
-      id: `m-seed-${companyId.slice(0, 4)}-1`,
-      company_id: companyId,
-      numero_ordre: 'MSN-2026-081',
-      titre_mission: 'Livraison Produits Frais & Poissons surgelés',
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-3`,
-      vehicule_immat: 'BK 1198 RB',
-      conducteur_nom: 'Rodrigue AGOSSOU',
-      depart_lieu: 'Port Autonome de Cotonou',
-      destination_lieu: 'Entrepôt Central Abomey-Calavi',
-      date_depart_prevue: new Date().toISOString(),
-      statut: 'EN_COURS',
-      kilometrage_depart: 142760,
-      description_chargement: '12 Palettes Poissons Bar & Capitaine (-18°C)',
-    },
-    {
-      id: `m-seed-${companyId.slice(0, 4)}-2`,
-      company_id: companyId,
-      numero_ordre: 'MSN-2026-080',
-      titre_mission: 'Navette administrative & Courriers officiels',
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-1`,
-      vehicule_immat: 'AY 8940 RB',
-      conducteur_nom: 'Bio Séro KORA',
-      depart_lieu: 'Siège Social Ganhi',
-      destination_lieu: 'Ministères & Présidence de la République',
-      date_depart_prevue: new Date(Date.now() - 4 * 3600 * 1000).toISOString(),
-      statut: 'TERMINEE',
-      kilometrage_depart: 48210,
-      kilometrage_arrivee: 48250,
-      distance_parcourue_km: 40,
-    },
-  ]
-  saveLocal(companyId, 'missions', seeded)
-  return seeded
+  const realCached = cached.filter((m) => !m.id.includes('seed-') && !m.numero_ordre?.includes('MSN-2026-08'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'missions', realCached)
+  }
+  return realCached
 }
 
 export async function saveMissionFlotte(
@@ -925,52 +808,21 @@ export async function getCarburantLogs(companyId: string): Promise<FlotteCarbura
       .from('flotte_carburant')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'carb-%')
       .order('date_plein', { ascending: false })
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'carburant', data)
-      return data as FlotteCarburant[]
+    if (!error && data) {
+      const realData = (data as FlotteCarburant[]).filter((c) => !c.id.startsWith('carb-'))
+      saveLocal(companyId, 'carburant', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteCarburant[]>(companyId, 'carburant', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteCarburant[] = [
-    {
-      id: `carb-1`,
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-1`,
-      vehicule_immat: 'AY 8940 RB',
-      conducteur_nom: 'Bio Séro KORA',
-      date_plein: new Date().toISOString().slice(0, 10),
-      kilometrage_au_plein: 48250,
-      litres_achetes: 65,
-      prix_litre_fcfa: 700,
-      montant_total_fcfa: 45500,
-      station_nom: 'TotalEnergies Carrefour Etoile Rouge',
-      type_carburant: 'GASOIL',
-      consommation_calculee_100km: 9.1,
-      alerte_consommation_anormale: false,
-    },
-    {
-      id: `carb-2`,
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-3`,
-      vehicule_immat: 'BK 1198 RB',
-      conducteur_nom: 'Rodrigue AGOSSOU',
-      date_plein: new Date(Date.now() - 3 * 86400 * 1000).toISOString().slice(0, 10),
-      kilometrage_au_plein: 142100,
-      litres_achetes: 280,
-      prix_litre_fcfa: 700,
-      montant_total_fcfa: 196000,
-      station_nom: 'Benin Petro Akpakpa',
-      type_carburant: 'GASOIL',
-      consommation_calculee_100km: 29.4,
-      alerte_consommation_anormale: false,
-    },
-  ]
-  saveLocal(companyId, 'carburant', seeded)
-  return seeded
+  const realCached = cached.filter((c) => !c.id.startsWith('carb-') && !c.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'carburant', realCached)
+  }
+  return realCached
 }
 
 export async function saveCarburantLog(
@@ -1019,52 +871,21 @@ export async function getMaintenanceFlotte(companyId: string): Promise<FlotteMai
       .from('flotte_maintenance')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'maint-%')
       .order('date_intervention', { ascending: false })
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'maintenance', data)
-      return data as FlotteMaintenance[]
+    if (!error && data) {
+      const realData = (data as FlotteMaintenance[]).filter((m) => !m.id.startsWith('maint-'))
+      saveLocal(companyId, 'maintenance', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteMaintenance[]>(companyId, 'maintenance', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteMaintenance[] = [
-    {
-      id: 'maint-1',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-1`,
-      vehicule_immat: 'AY 8940 RB',
-      type_intervention: 'VIDANGE_HUILE',
-      description: 'Vidange moteur 5W30 + Remplacement filtres huile, gasoil et air',
-      kilometrage_declenchement: 45000,
-      prochain_kilometrage_prevu: 55000,
-      date_intervention: '2026-08-14',
-      prochaine_date_prevue: '2026-11-14',
-      cout_pieces_fcfa: 48000,
-      cout_main_oeuvre_fcfa: 15000,
-      cout_total_fcfa: 63000,
-      garage_prestataire: 'Garage Central CFAO Cotonou',
-      statut: 'TERMINE',
-    },
-    {
-      id: 'maint-2',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-5`,
-      vehicule_immat: 'BB 9012 RB',
-      type_intervention: 'FREINAGE',
-      description: 'Révision compresseur air et garnitures freins essieu arrière',
-      kilometrage_declenchement: 189500,
-      date_intervention: new Date().toISOString().slice(0, 10),
-      cout_pieces_fcfa: 120000,
-      cout_main_oeuvre_fcfa: 45000,
-      cout_total_fcfa: 165000,
-      garage_prestataire: 'Atelier Poids Lourds PK3',
-      statut: 'EN_COURS',
-    },
-  ]
-  saveLocal(companyId, 'maintenance', seeded)
-  return seeded
+  const realCached = cached.filter((m) => !m.id.startsWith('maint-') && !m.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'maintenance', realCached)
+  }
+  return realCached
 }
 
 export async function saveMaintenanceFlotte(
@@ -1115,64 +936,21 @@ export async function getDocumentsFlotte(companyId: string): Promise<FlotteDocum
       .from('flotte_documents')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'doc-%')
       .order('date_expiration', { ascending: true })
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'documents', data)
-      return data as FlotteDocument[]
+    if (!error && data) {
+      const realData = (data as FlotteDocument[]).filter((d) => !d.id.startsWith('doc-'))
+      saveLocal(companyId, 'documents', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteDocument[]>(companyId, 'documents', [])
-  if (cached.length > 0) return cached
-
-  const today = new Date()
-  const d30 = new Date(today.getTime() + 18 * 86400 * 1000).toISOString().slice(0, 10)
-  const d90 = new Date(today.getTime() + 90 * 86400 * 1000).toISOString().slice(0, 10)
-  const dExpired = new Date(today.getTime() - 5 * 86400 * 1000).toISOString().slice(0, 10)
-
-  const seeded: FlotteDocument[] = [
-    {
-      id: 'doc-1',
-      company_id: companyId,
-      vehicule_immat: 'AY 8940 RB',
-      type_document: 'ASSURANCE',
-      numero_police_ou_titre: 'NSIA-AUTO-2025-8819',
-      organisme_emetteur: 'NSIA Assurances Bénin',
-      date_emission: '2025-10-30',
-      date_expiration: d30, // Expiration imminente (18j)
-      jours_avant_expiration: 18,
-      cout_fcfa: 245000,
-      statut_alerte: 'EXPIRATION_IMMINENTE',
-    },
-    {
-      id: 'doc-2',
-      company_id: companyId,
-      vehicule_immat: 'BK 1198 RB',
-      type_document: 'VISITE_TECHNIQUE',
-      numero_police_ou_titre: 'CNSR-VT-2026-0041',
-      organisme_emetteur: 'Centre National de Sécurité Routière (CNSR)',
-      date_emission: '2025-11-15',
-      date_expiration: d90,
-      jours_avant_expiration: 90,
-      cout_fcfa: 35000,
-      statut_alerte: 'VALIDE',
-    },
-    {
-      id: 'doc-3',
-      company_id: companyId,
-      vehicule_immat: 'BB 9012 RB',
-      type_document: 'TVM',
-      numero_police_ou_titre: 'DGI-TVM-2025-99',
-      organisme_emetteur: 'Direction Générale des Impôts (DGI Bénin)',
-      date_emission: '2025-01-10',
-      date_expiration: dExpired,
-      jours_avant_expiration: -5,
-      cout_fcfa: 60000,
-      statut_alerte: 'EXPIRE',
-    },
-  ]
-  saveLocal(companyId, 'documents', seeded)
-  return seeded
+  const realCached = cached.filter((d) => !d.id.startsWith('doc-') && !d.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'documents', realCached)
+  }
+  return realCached
 }
 
 export async function saveDocumentFlotte(
@@ -1219,62 +997,21 @@ export async function getGeofencesFlotte(companyId: string): Promise<FlotteGeofe
       .from('flotte_geofences')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'geo-%')
       .order('nom_zone')
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'geofences', data)
-      return data as FlotteGeofence[]
+    if (!error && data) {
+      const realData = (data as FlotteGeofence[]).filter((g) => !g.id.startsWith('geo-'))
+      saveLocal(companyId, 'geofences', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteGeofence[]>(companyId, 'geofences', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteGeofence[] = [
-    {
-      id: 'geo-1',
-      company_id: companyId,
-      nom_zone: 'Dépôt Principal Ganhi (Siège)',
-      type_zone: 'CERCLE',
-      type_usage: 'DEPOT',
-      centre_lat: 6.3654,
-      centre_lng: 2.4285,
-      rayon_metres: 350,
-      couleur_hex: '#10b981', // Vert
-      alerter_sur_entree: true,
-      alerter_sur_sortie: true,
-      actif: true,
-    },
-    {
-      id: 'geo-2',
-      company_id: companyId,
-      nom_zone: 'Zone Portuaire & Terminal Conteneurs',
-      type_zone: 'CERCLE',
-      type_usage: 'PORT',
-      centre_lat: 6.3578,
-      centre_lng: 2.4352,
-      rayon_metres: 800,
-      couleur_hex: '#0284c7', // Bleu
-      alerter_sur_entree: true,
-      alerter_sur_sortie: true,
-      actif: true,
-    },
-    {
-      id: 'geo-3',
-      company_id: companyId,
-      nom_zone: 'Entrepôt Logistique Calavi',
-      type_zone: 'CERCLE',
-      type_usage: 'ZONE_LIVRAISON',
-      centre_lat: 6.4258,
-      centre_lng: 2.3394,
-      rayon_metres: 600,
-      couleur_hex: '#8b5cf6', // Violet
-      alerter_sur_entree: true,
-      alerter_sur_sortie: true,
-      actif: true,
-    },
-  ]
-  saveLocal(companyId, 'geofences', seeded)
-  return seeded
+  const realCached = cached.filter((g) => !g.id.startsWith('geo-') && !g.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'geofences', realCached)
+  }
+  return realCached
 }
 
 export async function saveGeofenceFlotte(
@@ -1320,51 +1057,22 @@ export async function getAlertesFlotte(companyId: string): Promise<FlotteAlerte[
       .from('flotte_alertes')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'alt-%')
       .order('created_at', { ascending: false })
       .limit(50)
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'alertes', data)
-      return data as FlotteAlerte[]
+    if (!error && data) {
+      const realData = (data as FlotteAlerte[]).filter((a) => !a.id.startsWith('alt-'))
+      saveLocal(companyId, 'alertes', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteAlerte[]>(companyId, 'alertes', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteAlerte[] = [
-    {
-      id: 'alt-1',
-      company_id: companyId,
-      vehicule_immat: 'AY 8940 RB',
-      type_alerte: 'EXCES_VITESSE',
-      gravite: 'AVERTISSEMENT',
-      message: 'Vitesse de 88 km/h détectée en zone urbaine (limite: 50 km/h)',
-      valeur_mesuree: '88 km/h',
-      valeur_seuil: '50 km/h',
-      latitude: 6.3654,
-      longitude: 2.4183,
-      est_acquittee: false,
-      created_at: new Date(Date.now() - 35 * 60 * 1000).toISOString(),
-    },
-    {
-      id: 'alt-2',
-      company_id: companyId,
-      vehicule_immat: 'BB 9012 RB',
-      type_alerte: 'BATTERIE_FAIBLE',
-      gravite: 'INFO',
-      message: 'Tension batterie traceur 11.4V — Véhicule immobilisé atelier',
-      valeur_mesuree: '11.4 V',
-      valeur_seuil: '12.0 V',
-      latitude: 6.3812,
-      longitude: 2.4589,
-      est_acquittee: true,
-      acquittee_par: 'Gérard TCHIBOZO',
-      acquittee_at: new Date(Date.now() - 90 * 60 * 1000).toISOString(),
-      created_at: new Date(Date.now() - 110 * 60 * 1000).toISOString(),
-    },
-  ]
-  saveLocal(companyId, 'alertes', seeded)
-  return seeded
+  const realCached = cached.filter((a) => !a.id.startsWith('alt-') && !a.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'alertes', realCached)
+  }
+  return realCached
 }
 
 export async function acquitterAlerteFlotte(
@@ -1404,61 +1112,20 @@ export async function getCapteursFlotte(companyId: string): Promise<FlotteCapteu
       .from('flotte_capteurs')
       .select('*')
       .eq('company_id', companyId)
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'capteurs', data)
-      return data as FlotteCapteur[]
+      .not('id', 'ilike', 'cap-%')
+    if (!error && data) {
+      const realData = (data as FlotteCapteur[]).filter((c) => !c.id.startsWith('cap-'))
+      saveLocal(companyId, 'capteurs', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteCapteur[]>(companyId, 'capteurs', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteCapteur[] = [
-    {
-      id: 'cap-1',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-3`,
-      vehicule_immat: 'BK 1198 RB',
-      nom_capteur: 'Sonde Température Caisse Frigo N°1',
-      type_capteur: 'TEMPERATURE',
-      identifiant_mac: 'BLE:E4:7F:32:01:8A',
-      valeur_actuelle: -18.4,
-      unite: '°C',
-      seuil_min: -25.0,
-      seuil_max: -15.0,
-      alerte_active: false,
-      derniere_mesure_at: new Date().toISOString(),
-    },
-    {
-      id: 'cap-2',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-3`,
-      vehicule_immat: 'BK 1198 RB',
-      nom_capteur: 'Capteur Porte Arrière Frigo',
-      type_capteur: 'PORTE',
-      identifiant_mac: 'BLE:E4:7F:32:01:8B',
-      valeur_actuelle: 0, // 0 = Fermée, 1 = Ouverte
-      unite: 'statut',
-      alerte_active: false,
-      derniere_mesure_at: new Date().toISOString(),
-    },
-    {
-      id: 'cap-3',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-1`,
-      vehicule_immat: 'AY 8940 RB',
-      nom_capteur: 'Sonde Niveau Réservoir Carburant',
-      type_capteur: 'NIVEAU_CARBURANT',
-      identifiant_mac: 'DUT-E-CAN-091',
-      valeur_actuelle: 72.0,
-      unite: '%',
-      seuil_min: 15.0,
-      alerte_active: false,
-      derniere_mesure_at: new Date().toISOString(),
-    },
-  ]
-  saveLocal(companyId, 'capteurs', seeded)
-  return seeded
+  const realCached = cached.filter((c) => !c.id.startsWith('cap-') && !c.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'capteurs', realCached)
+  }
+  return realCached
 }
 
 // ─── 14. AUTOPARTAGE & RÉSERVATIONS ───────────────────────────────────────────
@@ -1470,36 +1137,21 @@ export async function getReservationsFlotte(companyId: string): Promise<FlotteRe
       .from('flotte_reservations')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'res-%')
       .order('date_debut_prevue', { ascending: false })
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'reservations', data)
-      return data as FlotteReservation[]
+    if (!error && data) {
+      const realData = (data as FlotteReservation[]).filter((r) => !r.id.startsWith('res-'))
+      saveLocal(companyId, 'reservations', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteReservation[]>(companyId, 'reservations', [])
-  if (cached.length > 0) return cached
-
-  const tomorrow = new Date(Date.now() + 86400 * 1000)
-  const seeded: FlotteReservation[] = [
-    {
-      id: 'res-1',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-4`,
-      vehicule_immat: 'AZ 5530 RB',
-      demandeur_nom: 'Mme Christine SOSSOU',
-      demandeur_departement: 'Direction Financière',
-      demandeur_telephone: '+229 97 44 11 00',
-      motif_deplacement: 'Audit comptable agences Porto-Novo & Sèmè-Podji',
-      destination_prevue: 'Porto-Novo',
-      date_debut_prevue: tomorrow.toISOString(),
-      date_fin_prevue: new Date(tomorrow.getTime() + 8 * 3600 * 1000).toISOString(),
-      statut: 'VALIDEE',
-      valide_par: 'Direction des Opérations',
-    },
-  ]
-  saveLocal(companyId, 'reservations', seeded)
-  return seeded
+  const realCached = cached.filter((r) => !r.id.startsWith('res-') && !r.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'reservations', realCached)
+  }
+  return realCached
 }
 
 export async function saveReservationFlotte(
@@ -1545,42 +1197,21 @@ export async function getInspectionsFlotte(companyId: string): Promise<FlotteIns
       .from('flotte_inspections')
       .select('*')
       .eq('company_id', companyId)
+      .not('id', 'ilike', 'insp-%')
       .order('date_inspection', { ascending: false })
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'inspections', data)
-      return data as FlotteInspection[]
+    if (!error && data) {
+      const realData = (data as FlotteInspection[]).filter((i) => !i.id.startsWith('insp-'))
+      saveLocal(companyId, 'inspections', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteInspection[]>(companyId, 'inspections', [])
-  if (cached.length > 0) return cached
-
-  const seeded: FlotteInspection[] = [
-    {
-      id: 'insp-1',
-      company_id: companyId,
-      vehicule_id: `v-seed-${companyId.slice(0, 4)}-1`,
-      vehicule_immat: 'AY 8940 RB',
-      conducteur_nom: 'Bio Séro KORA',
-      type_inspection: 'DEPART',
-      date_inspection: new Date().toISOString(),
-      kilometrage_inspecte: 48250,
-      niveau_carburant_pct: 75,
-      niveau_huile_moteur: true,
-      liquide_refroidissement: true,
-      pression_pneus_conforme: true,
-      feux_et_phares_ok: true,
-      freins_ok: true,
-      proprete_generale: true,
-      presence_roue_secours: true,
-      presence_cric_et_cle: true,
-      presence_triangle_gilet: true,
-      statut_validation: 'CONFORME',
-      inspecte_par: 'Bio Séro KORA',
-    },
-  ]
-  saveLocal(companyId, 'inspections', seeded)
-  return seeded
+  const realCached = cached.filter((i) => !i.id.startsWith('insp-') && !i.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'inspections', realCached)
+  }
+  return realCached
 }
 
 export async function saveInspectionFlotte(
@@ -1633,31 +1264,65 @@ export async function getBalisesFlotte(companyId: string): Promise<FlotteBalise[
       .from('flotte_balises')
       .select('*')
       .eq('company_id', companyId)
-    if (!error && data && data.length > 0) {
-      saveLocal(companyId, 'balises', data)
-      return data as FlotteBalise[]
+      .not('id', 'ilike', 'bal-%')
+    if (!error && data) {
+      const realData = (data as FlotteBalise[]).filter((b) => !b.id.startsWith('bal-'))
+      saveLocal(companyId, 'balises', realData)
+      return realData
     }
   } catch {}
 
   const cached = loadLocal<FlotteBalise[]>(companyId, 'balises', [])
-  if (cached.length > 0) return cached
+  const realCached = cached.filter((b) => !b.id.startsWith('bal-') && !b.id.includes('seed-'))
+  if (realCached.length !== cached.length) {
+    saveLocal(companyId, 'balises', realCached)
+  }
+  return realCached
+}
 
-  const seeded: FlotteBalise[] = INITIAL_VEHICULES_BENIN.map((v, idx) => ({
-    id: `bal-${idx + 1}`,
-    company_id: companyId,
-    imei: v.tracker_imei,
-    modele: 'Teltonika FMB920 (BLE / 2G)',
-    numero_sim: `+229 97 00 ${10 + idx} ${20 + idx}`,
-    operateur_sim: 'MTN BENIN M2M',
-    vehicule_immat: v.immatriculation,
-    statut: idx === 4 ? 'HORS_LIGNE' : 'EN_LIGNE',
-    derniere_trame_at: v.derniere_mise_a_jour_gps,
-    niveau_batterie_pct: idx === 4 ? 22 : 98,
-    firmware_version: '03.28.02.Rev.01',
-    created_at: new Date().toISOString(),
-  }))
-  saveLocal(companyId, 'balises', seeded)
-  return seeded
+/**
+ * Crée un véhicule témoin sur la RNIE 2 (Bohicon - Dassa) UNIQUEMENT sur demande explicite de l'utilisateur
+ * Permet de visualiser immédiatement la carte Google Maps, son parcours et sa position en direct
+ */
+export async function creerVehiculeDemonstrationRnie2(companyId: string): Promise<FlotteVehicule> {
+  const v = await saveVehiculeFlotte(companyId, {
+    immatriculation: 'AY 9901 RB',
+    code_interne: 'FL-TEST',
+    marque: 'Toyota',
+    modele: 'Hilux Double Cabine 4x4',
+    annee: 2024,
+    type_vehicule: 'UTILITAIRE',
+    type_carburant: 'GASOIL',
+    capacite_reservoir_litres: 80,
+    consommation_reference_100km: 9.0,
+    kilometrage_actuel: 12450,
+    statut: 'EN_CIRCULATION',
+    conducteur_nom: 'Chauffeur Flotte Bénin',
+    derniere_latitude: 7.1783, // Bohicon (exactement le centre de la photo Google Maps envoyée !)
+    derniere_longitude: 2.0667,
+    derniere_vitesse: 58,
+    dernier_cap: 355,
+    contact_allume: true,
+    niveau_carburant_pct: 78,
+  })
+
+  // Enregistrer le parcours initial Cotonou -> Allada -> Bohicon
+  const points = PARCOURS_BENIN_RNIE2.slice(0, 6)
+  for (let i = 0; i < points.length; i++) {
+    const pt = points[i]
+    await enregistrerPositionGps(companyId, {
+      vehicule_id: v.id,
+      latitude: pt.latitude,
+      longitude: pt.longitude,
+      vitesse_kmh: pt.vitesse_kmh || 50,
+      cap_degres: 355,
+      contact_allume: true,
+      adresse_approximative: pt.nom_etape,
+      horodatage: new Date(Date.now() - (6 - i) * 20 * 60 * 1000).toISOString(),
+    })
+  }
+
+  return v
 }
 
 export async function saveBaliseFlotte(
@@ -1761,10 +1426,12 @@ export async function simulerAvanceeVehicule(
   const v = vehicules.find((veh) => veh.id === vehiculeId)
   if (!v) return null
 
-  // Déplacement incrémental réaliste autour de Cotonou
-  const lat = v.derniere_latitude || 6.3654
-  const lng = v.derniere_longitude || 2.4183
-  const cap = (v.dernier_cap + (Math.random() * 20 - 10) + 360) % 360
+  // Déplacement le long de l'axe routier Bénin (RNIE 2 vers le nord Bohicon / Dassa)
+  const lat = v.derniere_latitude || 7.1783
+  const lng = v.derniere_longitude || 2.0667
+
+  // Progression orientée nord/nord-est le long de la RNIE 2 (axe Cotonou - Bohicon - Dassa)
+  const cap = v.dernier_cap !== undefined && v.dernier_cap !== 0 ? (v.dernier_cap + (Math.random() * 10 - 5) + 360) % 360 : 355
   const rad = (cap * Math.PI) / 180
 
   // 1 degre de lat ~= 111 km
@@ -1773,7 +1440,7 @@ export async function simulerAvanceeVehicule(
 
   const newLat = Number((lat + deltaLat).toFixed(6))
   const newLng = Number((lng + deltaLng).toFixed(6))
-  const speed = Math.floor(35 + Math.random() * 45) // 35 à 80 km/h
+  const speed = Math.floor(45 + Math.random() * 35) // 45 à 80 km/h
 
   v.derniere_latitude = newLat
   v.derniere_longitude = newLng
