@@ -4,7 +4,9 @@
 // Calculs rigoureux basés exclusivement sur les données réelles
 // CA, Marge brute (HT), Marge nette, Total créances, Total stock, Dépenses
 // Filtre de période complet (Aujourd'hui, Hier, Semaine, Mois, Personnalisé)
-// Marge par produit détaillée
+// Fuseau horaire Africa/Porto-Novo (Bénin UTC+1)
+// Marge par produit détaillée avec réconciliation stricte
+// Traçabilité totale : clic sur chaque indicateur pour consulter le détail
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
@@ -13,7 +15,7 @@ import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, ArrowUpRight, ArrowDownRight,
   RefreshCw, Calendar, Printer, Filter, Users, Package,
   CreditCard, Smartphone, CheckCircle2, ShoppingBag, PieChart,
-  ArrowRight, FileText, Layers
+  ArrowRight, FileText, Layers, Eye
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -22,7 +24,9 @@ import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorCl
 import { calculateTaxFromTTC } from '../../../utils/tax'
 import { getAllAvoirs, FactureAvoirRecord } from '../../../services/factureAvoirService'
 import { calculateStockValuation } from '../../../lib/stockCalcul'
-import { computeOrderMargin, computeConsolidatedFinancials } from '../../../lib/financialCalcul'
+import { computeOrderMargin, computeConsolidatedFinancials, isTrueOperatingExpense } from '../../../lib/financialCalcul'
+import { extractCotonouDate, getCotonouDates } from '../../../services/hubFinancialService'
+import { FinancialDetailModal, FinancialDetailType } from '../../../components/modals/FinancialDetailModal'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -33,41 +37,58 @@ interface SaleRecord {
   order_date?: string
   created_at: string
   total_amount: number
-  total_ht?: number
-  total_tax?: number
+  subtotal_ht: number
+  total_ht: number
+  total_tax: number
   payment_method: string
   customer_name?: string
   customer_id?: string
   status?: string
   lines?: any[]
+  total_cost?: number
+  gross_margin?: number
+  notes?: any
 }
 
 interface ExpenseRecord {
   id: string
+  reference?: string
   expense_date: string
   amount: number
   category: string
   description?: string
   title?: string
+  payment_method?: string
+  caisse_name?: string
+  status?: string
+  created_by_name?: string
   created_at?: string
+  source?: 'expenses' | 'caisse_mouvements'
 }
 
 interface CustomerRecord {
   id: string
   name: string
+  code?: string
+  phone?: string
   current_debt: number
+  solde_creance?: number
 }
 
 interface ProductRecord {
   id: string
   name: string
+  code?: string
   category?: string
   current_stock?: number
   warehouse_stock?: number
   cost_price?: number
   purchase_price?: number
+  selling_price?: number
   selling_price_ttc?: number
   unit_price_ttc?: number
+  coef?: number
+  sector_meta?: Record<string, any>
 }
 
 export const ReportingPage: React.FC = () => {
@@ -76,7 +97,7 @@ export const ReportingPage: React.FC = () => {
   const params = useParams<{ sectorSlug?: string }>()
   const currentSectorSlug = params.sectorSlug || getActiveSectorSlug()
 
-  // Filtre Période Exigé (Point 15) : Aujourd'hui | Hier | Cette semaine | Ce mois | Période personnalisée
+  // Filtre Période Exigé : Aujourd'hui | Hier | Cette semaine | Ce mois | Période personnalisée
   const [periodPreset, setPeriodPreset] = useState<'today' | 'yesterday' | 'week' | 'month' | 'custom'>('month')
   const [customStartDate, setCustomStartDate] = useState<string>('')
   const [customEndDate, setCustomEndDate] = useState<string>('')
@@ -85,10 +106,12 @@ export const ReportingPage: React.FC = () => {
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('all')
   const [loading, setLoading] = useState(true)
 
+  // Modale de traçabilité et justification des indicateurs (Point 7)
+  const [activeModalType, setActiveModalType] = useState<FinancialDetailType | null>(null)
+
   // Données réelles
   const [sales, setSales] = useState<SaleRecord[]>([])
   const [expenses, setExpenses] = useState<ExpenseRecord[]>([])
-  const [caisseDepenses, setCaisseDepenses] = useState<{montant: number; created_at: string; sector_slug?: string}[]>([])
   const [customers, setCustomers] = useState<CustomerRecord[]>([])
   const [products, setProducts] = useState<ProductRecord[]>([])
   const [avoirs, setAvoirs] = useState<FactureAvoirRecord[]>([])
@@ -108,22 +131,23 @@ export const ReportingPage: React.FC = () => {
           .from('sales_orders')
           .select('id, order_number, order_date, created_at, total_amount, subtotal_ht, total_cost, tva_amount, aib_amount, status, payment_status, payment_method, sector_slug, notes, customer_name, customer:customers(id, name)')
           .eq('company_id', company.id)
+          .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
           .order('created_at', { ascending: false })
-          .limit(300),
+          .limit(1000),
         supabase
           .from('expenses')
-          .select('id, reference_number, category, amount, payment_method, expense_date, description, created_at')
+          .select('id, reference_number, category, amount, payment_method, expense_date, description, created_at, sector_slug')
           .eq('company_id', company.id)
           .order('created_at', { ascending: false })
-          .limit(200),
+          .limit(500),
         supabase
           .from('customers')
           .select('id, name, code, phone, current_debt, is_active')
           .eq('company_id', company.id)
-          .limit(200),
+          .limit(500),
         supabase
           .from('products')
-          .select('id, name, code, selling_price, cost_price, is_active, sector_meta')
+          .select('id, name, code, selling_price, cost_price, is_active, sector_meta, category_id')
           .eq('company_id', company.id)
           .limit(500)
       ])
@@ -137,6 +161,26 @@ export const ReportingPage: React.FC = () => {
       const sectorCustomers = filterItemsForSector(custData || [], currentSectorSlug)
       const sectorProducts = filterItemsForSector(prodData || [], currentSectorSlug)
 
+      // Lecture des dépenses de caisse enregistrées dans caisse_mouvements
+      let caisseDepensesData: any[] = []
+      try {
+        const caisseQuery = supabase
+          .from('caisse_mouvements')
+          .select('id, montant, created_at, sector_slug, secteur_slug, sens, type, motif, user_name, caisse_id, source_id, source_module')
+          .eq('company_id', company.id)
+          .order('created_at', { ascending: false })
+          .limit(500)
+
+        const { data: cData } = currentSectorSlug
+          ? await caisseQuery.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
+          : await caisseQuery
+
+        caisseDepensesData = cData || []
+      } catch (cErr) {
+        console.warn('[ReportingPage] Erreur lecture caisse_mouvements:', cErr)
+      }
+
+      // Parser les ventes avec précision HT/TTC (Bénin & UEMOA)
       const parsedSales: SaleRecord[] = sectorSales.map((s: any) => {
         let meta: any = {}
         if (s.notes) {
@@ -152,74 +196,133 @@ export const ReportingPage: React.FC = () => {
                 const [k, v] = p.split(':')
                 if (k === 'PAY') meta.pm = v
                 if (k === 'CL') meta.cn = v
+                if (k === 'ST') meta.st = v
               })
             }
           } catch (e) {}
         }
 
         const pm = meta.pm || s.payment_method || (s.payment_status === 'credit' ? 'credit' : (s.payment_status || 'especes'))
-        const cName = s.customer?.name || s.customer_name || meta.customer_name || meta.cn || 'Client'
+        const cName = s.customer?.name || s.customer_name || meta.customer_name || meta.cn || 'Client Comptoir'
+        const totalAmount = Number(s.total_amount) || 0
+        const taxAmount = Number(s.tva_amount) || 0
+
+        // Si subtotal_ht > 0, on l'utilise directement
+        // Si la vente est exonérée de TVA (taxAmount === 0), subtotal_ht = total_amount
+        // Sinon (soumis à 18%), HT = total_amount / 1.18
+        const subtotalHT = Number(s.subtotal_ht) > 0
+          ? Number(s.subtotal_ht)
+          : (taxAmount === 0 ? totalAmount : Math.round((totalAmount / 1.18) * 100) / 100)
+
+        const linesList = (Array.isArray(s.items) && s.items.length > 0)
+          ? s.items
+          : (Array.isArray(meta?.lines) ? meta.lines : [])
 
         return {
           id: s.id,
           order_number: s.order_number,
           order_date: s.order_date,
           created_at: s.created_at,
-          total_amount: Number(s.total_amount) || 0,
-          total_ht: Number(s.subtotal_ht) || 0,
-          total_tax: Number(s.tva_amount) || 0,
+          total_amount: totalAmount,
+          subtotal_ht: subtotalHT,
+          total_ht: subtotalHT,
+          total_tax: taxAmount,
           payment_method: pm,
           customer_name: cName,
           customer_id: s.customer_id,
           status: s.status || meta.st || 'COMPLET',
-          lines: (Array.isArray(s.items) && s.items.length > 0)
-            ? s.items
-            : (Array.isArray(meta?.lines) ? meta.lines : []),
+          lines: linesList,
           total_cost: Number(s.total_cost) || 0,
           gross_margin: typeof s.gross_margin === 'number' ? s.gross_margin : undefined,
           notes: s.notes
         }
       })
 
+      // Unifier et assainir les dépenses d'exploitation
+      const unifiedExpenses: ExpenseRecord[] = [];
+      const processedExpenseIds = new Set<string>();
+
+      // 1. Ajouter depuis la table expenses
+      const rawSectorExpenses = sectorExpenses || [];
+      rawSectorExpenses.forEach((e: any) => {
+        processedExpenseIds.add(String(e.id));
+        unifiedExpenses.push({
+          id: e.id,
+          reference: e.reference_number || `DEP-${e.id.slice(0, 6)}`,
+          expense_date: e.expense_date || e.created_at,
+          amount: Number(e.amount) || 0,
+          category: e.category || 'Autres charges',
+          description: e.description || e.title,
+          title: e.title,
+          payment_method: e.payment_method || 'Espèces',
+          caisse_name: 'Caisse principale',
+          status: 'Validé',
+          created_by_name: 'Utilisateur',
+          created_at: e.created_at,
+          source: 'expenses'
+        });
+      });
+
+      // 2. Ajouter depuis caisse_mouvements uniquement les véritables charges d'exploitation
+      const rawCaisseDepenses = caisseDepensesData || [];
+      rawCaisseDepenses.forEach((m: any) => {
+        if (m.source_id && processedExpenseIds.has(String(m.source_id))) return;
+        if (processedExpenseIds.has(String(m.id))) return;
+
+        const mType = String(m.type || '').toLowerCase().trim()
+        const mSens = String(m.sens || '').toLowerCase().trim()
+        const mMotif = String(m.motif || m.description || '').toLowerCase().trim()
+
+        // EXCLUSION STRICTE : Ne JAMAIS compter clôtures, ouvertures, transferts, règlements de stock
+        const isExcluded =
+          mType === 'cloture' || mType === 'clôture' ||
+          mType === 'ouverture' ||
+          mType === 'transfert' ||
+          mType === 'vente' ||
+          mType === 'reglement_client' ||
+          mMotif.includes('cloture') || mMotif.includes('clôture') ||
+          mMotif.includes('transfert') ||
+          mMotif.includes('ouverture')
+
+        if (isExcluded) return
+
+        const isTrueDepense =
+          mType === 'depense' || mType === 'expense' ||
+          m.source_module === 'depenses' ||
+          (mSens === 'sortie' && mType === 'depense')
+
+        if (!isTrueDepense) return
+
+        processedExpenseIds.add(String(m.id))
+
+        let cat = 'Autres charges'
+        const matchCat = m.motif ? m.motif.match(/\(([^)]+)\)$/) : null
+        if (matchCat && matchCat[1]) {
+          cat = matchCat[1]
+        } else if (m.motif) {
+          cat = m.motif.replace(/^Dépense:\s*/i, '')
+        }
+
+        unifiedExpenses.push({
+          id: m.id,
+          reference: `CAISSE-${m.id.slice(0, 6)}`,
+          expense_date: m.created_at,
+          amount: Number(m.montant) || 0,
+          category: cat,
+          description: m.motif,
+          payment_method: 'Espèces',
+          caisse_name: 'Tiroir caisse',
+          status: 'Validé',
+          created_by_name: m.user_name || 'Caissier',
+          created_at: m.created_at,
+          source: 'caisse_mouvements'
+        })
+      })
+
       setSales(parsedSales)
-      setExpenses((sectorExpenses as any) || [])
+      setExpenses(unifiedExpenses)
       setCustomers((sectorCustomers as any) || [])
       setProducts((sectorProducts as any) || [])
-
-      // ─── Fallback dépenses : caisse_mouvements (données réelles) ─────────────
-      // Si la table expenses est vide (0 rows), lire caisse_mouvements avec sens=debit
-      if (!expData || expData.length === 0) {
-        try {
-          const caisseQuery = supabase
-            .from('caisse_mouvements')
-            .select('id, montant, created_at, sector_slug, sens, type')
-            .eq('company_id', company.id)
-            .order('created_at', { ascending: false })
-            .limit(500)
-
-          // Filtrer par secteur si disponible
-          const { data: caisseData } = currentSectorSlug
-            ? await caisseQuery.eq('sector_slug', currentSectorSlug)
-            : await caisseQuery
-
-          const depSorties = (caisseData || []).filter((m: any) => {
-            const isSortie =
-              (m.sens && ['debit', 'DEBIT', 'sortie', 'SORTIE'].includes(m.sens)) ||
-              (m.type && ['SORTIE', 'depense', 'DEPENSE', 'expense'].includes(m.type))
-            return isSortie
-          }).map((m: any) => ({
-            montant: Number(m.montant) || 0,
-            created_at: m.created_at,
-            sector_slug: m.sector_slug
-          }))
-          setCaisseDepenses(depSorties)
-        } catch (cErr) {
-          console.warn('[ReportingPage] Erreur lecture caisse_mouvements:', cErr)
-          setCaisseDepenses([])
-        }
-      } else {
-        setCaisseDepenses([])
-      }
 
       try {
         const allAvoirs = await getAllAvoirs(company.id, currentSectorSlug)
@@ -239,35 +342,36 @@ export const ReportingPage: React.FC = () => {
     loadData()
   }, [loadData])
 
-  // ─── Calcul de la Plage de Dates Réelle ────────────────────────────────────
+  // ─── Calcul de la Plage de Dates Réelle selon fuseau horaire Cotonou (UTC+1) ─
   const { dateRangeStart, dateRangeEnd } = useMemo(() => {
-    const now = new Date()
-    const todayStr = now.toISOString().split('T')[0]
+    const { todayStr, monthStartStr } = getCotonouDates()
 
     if (periodPreset === 'today') {
       return { dateRangeStart: todayStr, dateRangeEnd: todayStr }
     }
     if (periodPreset === 'yesterday') {
+      const now = new Date()
       const y = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      const yStr = y.toISOString().split('T')[0]
-      return { dateRangeStart: yStr, dateRangeEnd: yStr }
+      const yesterdayStr = extractCotonouDate(null, y.toISOString())
+      return { dateRangeStart: yesterdayStr, dateRangeEnd: yesterdayStr }
     }
     if (periodPreset === 'week') {
+      const now = new Date()
       const w = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
-      return { dateRangeStart: w.toISOString().split('T')[0], dateRangeEnd: todayStr }
+      const weekStartStr = extractCotonouDate(null, w.toISOString())
+      return { dateRangeStart: weekStartStr, dateRangeEnd: todayStr }
     }
     if (periodPreset === 'month') {
-      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
-      return { dateRangeStart: firstDayOfMonth, dateRangeEnd: todayStr }
+      return { dateRangeStart: monthStartStr, dateRangeEnd: todayStr }
     }
     // Custom
     return { dateRangeStart: customStartDate, dateRangeEnd: customEndDate }
   }, [periodPreset, customStartDate, customEndDate])
 
-  // ─── Ventes Filtrées par Période et Filtres Pertinents ────────────────────
+  // ─── Ventes Filtrées par Période (Heure locale Cotonou) ───────────────────
   const filteredSales = useMemo(() => {
     return sales.filter((s) => {
-      const sDate = (s.order_date || s.created_at || '').split('T')[0]
+      const sDate = extractCotonouDate(s.order_date, s.created_at)
       if (dateRangeStart && sDate < dateRangeStart) return false
       if (dateRangeEnd && sDate > dateRangeEnd) return false
       if (selectedPaymentMethod !== 'all' && s.payment_method !== selectedPaymentMethod) return false
@@ -275,37 +379,21 @@ export const ReportingPage: React.FC = () => {
     })
   }, [sales, dateRangeStart, dateRangeEnd, selectedPaymentMethod])
 
-  // ─── Dépenses Filtrées par Période ────────────────────────────────────────
+  // ─── Dépenses Filtrées par Période (Strictement respecté, zéro absorption historique)
   const filteredExpenses = useMemo(() => {
-    if (expenses && expenses.length > 0) {
-      return expenses.filter((e) => {
-        const eDate = (e.expense_date || e.created_at || '').split('T')[0]
-        if (dateRangeStart && eDate < dateRangeStart) return false
-        if (dateRangeEnd && eDate > dateRangeEnd) return false
-        return true
-      })
-    }
-    // Fallback caisse_mouvements
-    return (caisseDepenses || []).filter((e) => {
-      const eDate = (e.created_at || '').split('T')[0]
+    return expenses.filter((e) => {
+      const eDate = extractCotonouDate(e.expense_date, e.created_at)
       if (dateRangeStart && eDate < dateRangeStart) return false
       if (dateRangeEnd && eDate > dateRangeEnd) return false
       return true
-    }).map((m) => ({
-      id: m.created_at,
-      expense_date: m.created_at,
-      amount: m.montant,
-      category: 'Caisse (Sortie)',
-      created_at: m.created_at,
-    }))
-  }, [expenses, caisseDepenses, dateRangeStart, dateRangeEnd])
+    })
+  }, [expenses, dateRangeStart, dateRangeEnd])
 
   // ─── Avoirs Filtrés par Période ───────────────────────────────────────────
   const filteredAvoirs = useMemo(() => {
     return (avoirs || []).filter((a) => {
       if (a?.statut === 'annule') return false
-      const aDate = a?.date_avoir ? a.date_avoir.slice(0, 10) : ''
-      if (!aDate) return true
+      const aDate = extractCotonouDate(a?.date_avoir, a?.created_at)
       if (dateRangeStart && aDate < dateRangeStart) return false
       if (dateRangeEnd && aDate > dateRangeEnd) return false
       return true
@@ -316,9 +404,9 @@ export const ReportingPage: React.FC = () => {
     return (filteredAvoirs || []).reduce((sum, a) => sum + (Number(a?.montant_total_avoir) || 0), 0)
   }, [filteredAvoirs])
 
-  // ─── Indicateurs Spécifiés au Point 14 ─────────────────────────────────────
+  // ─── Indicateurs Financiers Certifiés OHADA ───────────────────────────────
 
-  // 1. Chiffre d'Affaires (CA) réel Brut et Net
+  // 1. Chiffre d'Affaires Réel Brut et Net
   const totalRevenue = useMemo(() => {
     return (filteredSales || []).reduce((sum, s) => sum + (Number(s.total_amount) || 0), 0)
   }, [filteredSales])
@@ -326,7 +414,7 @@ export const ReportingPage: React.FC = () => {
   const totalRevenueBrut = totalRevenue
   const totalRevenueNet = Math.max(0, totalRevenue - totalAvoirsValides)
 
-  // 2. Total des Dépenses Réelles
+  // 2. Total des Dépenses Réelles Décaissées (Strictement 0 si aucune dépense dans la période)
   const totalExpenses = useMemo(() => {
     return (filteredExpenses || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0)
   }, [filteredExpenses])
@@ -335,48 +423,44 @@ export const ReportingPage: React.FC = () => {
   const financialSummary = useMemo(() => {
     return computeConsolidatedFinancials({
       sales: filteredSales as any[],
-      expenses: (filteredExpenses.length > 0 ? filteredExpenses : caisseDepenses) as any[],
+      expenses: filteredExpenses as any[], // Passage strict des dépenses filtrées de la période
       avoirs: filteredAvoirs as any[],
       sectorSlug: currentSectorSlug
     })
-  }, [filteredSales, filteredExpenses, caisseDepenses, filteredAvoirs, currentSectorSlug])
+  }, [filteredSales, filteredExpenses, filteredAvoirs, currentSectorSlug])
 
   const totalRevenueHT = financialSummary.netRevenueHT
   const totalCogsHT = financialSummary.cogsHT
   const grossMargin = financialSummary.grossMargin
-
-  // 4. Marge Nette = Marge Brute - Dépenses réelles d'exploitation (Point 14 & OHADA)
   const netMargin = financialSummary.netMargin
 
-  // 5. Total Créances réelles non soldées (Point 14)
+  // 4. Total Créances Réelles Non Soldées
   const totalReceivables = useMemo(() => {
     return (customers || []).reduce((sum, c: any) => sum + (Number(c.current_debt ?? c.solde_creance ?? 0)), 0)
   }, [customers])
 
-  // 6. Total Stock réel valorisé (Source unique de calcul lib/stockCalcul.ts)
+  // 5. Total Stock Réel Valorisé (Source unique de calcul lib/stockCalcul.ts)
   const stockValuation = useMemo(() => {
     return calculateStockValuation(products || [])
   }, [products])
   const totalStockValue = stockValuation.totalStockValAchat
 
-  // ─── Table Marge par Produit (Exigence Point 7) ───────────────────────────
-  // Formule officielle obligatoire :
-  // Marge nette = (prix_vente - prix_achat) * quantité vendue
-  // Taux de marge = (marge nette / (prix_achat * quantité)) * 100
+  // ─── Table Marge par Produit (Réconciliation Totale avec la Marge Brute) ────
   const productMargins = useMemo(() => {
     return products.map((prod: any) => {
       const meta = prod.sector_meta || {}
       const defaultSell = Number(prod.selling_price || prod.selling_price_ttc || prod.unit_price_ttc || meta.price_vente_uv_ttc || 0)
-      const unitSale = defaultSell ?? 0
+      const coef = Number(meta.coef || prod.coef || 1)
+      const isTaxed = Boolean(prod.is_vat_subject ?? (Number(prod.tva_rate || prod.vat_rate) > 0))
+      const vatRate = isTaxed ? Number(prod.tva_rate || prod.vat_rate || 18) : 0
 
-      let costPrice = Number(prod.cost_price || prod.purchase_price || meta.price_achat_ht || 0)
-      // Ajustement si le produit a un conditionnement gros/détail (ex: coef 20 pour Tonne vers sacs)
-      if (meta.coef && Number(meta.coef) > 1 && costPrice > defaultSell) {
-        costPrice = Math.round((costPrice / Number(meta.coef)) * 100) / 100
-      }
+      // Coût d'achat unitaire de référence par UV
+      let rawCost = Number(prod.cost_price || prod.purchase_price || meta.price_achat_ht || 0)
+      let costPriceUv = coef > 1 ? (rawCost / coef) : rawCost
 
       let realQtySold = 0
-      let realCaTTC = 0
+      let realCaHT = 0
+      let realCogsHT = 0
 
       filteredSales.forEach((s) => {
         if (s.lines && Array.isArray(s.lines)) {
@@ -384,49 +468,60 @@ export const ReportingPage: React.FC = () => {
             if (l.product_id === prod.id || l.product?.id === prod.id || l.product_name === prod.name) {
               const q = Number(l.quantity ?? l.qty) || 0
               realQtySold += q
-              realCaTTC += Number(l.total_ttc ?? (q * (l.unit_price || l.unitPrice || defaultSell))) || 0
-              if (l.unit_cost && Number(l.unit_cost) > 0 && Number(l.unit_cost) <= Number(l.unit_price || defaultSell)) {
-                costPrice = Number(l.unit_cost)
-              }
+
+              const unitPrice = Number(l.unit_price || l.unitPrice || defaultSell)
+              const lineRevenueTTC = Number(l.total_ttc ?? (q * unitPrice))
+              const lineRevenueHT = isTaxed ? (lineRevenueTTC / (1 + vatRate / 100)) : lineRevenueTTC
+              realCaHT += lineRevenueHT
+
+              const lineUnitCost = Number(l.unit_cost) > 0 ? Number(l.unit_cost) : costPriceUv
+              const lineCogsHT = isTaxed ? (q * lineUnitCost / (1 + vatRate / 100)) : (q * lineUnitCost)
+              realCogsHT += lineCogsHT
             }
           })
         }
       })
 
-      // Calcul des quantités retournées par avoirs pour ce produit
+      // Déduction des retours/avoirs pour ce produit
       let qtyAvoiree = 0
+      let avoirsCaHT = 0
+      let avoirsCogsHT = 0
+
       filteredAvoirs.forEach((av: any) => {
         const lignes = Array.isArray(av.lignes) ? av.lignes : []
         lignes.forEach((al: any) => {
           if (al.article_id === prod.id || al.article_nom === prod.name) {
-            qtyAvoiree += Number(al.qte_retournee || 0)
+            const qAv = Number(al.qte_retournee || 0)
+            qtyAvoiree += qAv
+            const avTTC = Number(al.montant_total || (qAv * defaultSell))
+            const avHT = isTaxed ? (avTTC / (1 + vatRate / 100)) : avTTC
+            avoirsCaHT += avHT
+            const avCogs = qAv * (Number(al.prix_achat_unitaire || costPriceUv))
+            avoirsCogsHT += avCogs
           }
         })
       })
 
       const netQtySold = Math.max(0, realQtySold - qtyAvoiree)
-      const totalPurchases = netQtySold * costPrice
-      const totalSales = netQtySold > 0 ? (unitSale * netQtySold) : 0
+      const netCaHT = Math.max(0, Math.round((realCaHT - avoirsCaHT) * 100) / 100)
+      const netCogsHT = Math.max(0, Math.round((realCogsHT - avoirsCogsHT) * 100) / 100)
+      const netMargin = Math.round((netCaHT - netCogsHT) * 100) / 100
 
-      // Marge brute = (prix_vente - prix_achat) * quantité vendue nette
-      const netMargin = (unitSale - costPrice) * netQtySold
-
-      // Taux de marge = (marge brute / (prix_achat * quantité)) * 100
-      const marginRate = totalPurchases > 0
-        ? ((netMargin / totalPurchases) * 100).toFixed(1)
+      const marginRate = netCaHT > 0
+        ? ((netMargin / netCaHT) * 100).toFixed(1)
         : (netMargin > 0 ? '100.0' : '0.0')
 
       return {
         id: prod.id,
         name: prod.name,
         category: prod.category || 'Général',
-        costPrice,
-        sellingPrice: unitSale,
+        costPrice: Math.round(costPriceUv * 100) / 100,
+        sellingPrice: defaultSell,
         qtySold: realQtySold,
         qtyAvoiree,
         netQtySold,
-        totalPurchases,
-        totalSales,
+        netCaHT,
+        netCogsHT,
         netMargin,
         marginRate
       }
@@ -475,14 +570,14 @@ export const ReportingPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Filtres de Période Complets Exigés au Point 15 ─────────────────────── */}
+      {/* ── Filtres de Période Complets ──────────────────────────────────────── */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
           <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
             <Calendar className="w-3.5 h-3.5 text-emerald-600" />
             Sélection de la Période d'Analyse
           </span>
-          <span className="text-xs text-slate-400">Recalcul immédiat des marges & totaux</span>
+          <span className="text-xs text-slate-400">Recalcul immédiat et strict des marges & totaux</span>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -507,7 +602,7 @@ export const ReportingPage: React.FC = () => {
           ))}
         </div>
 
-        {/* Champs Période Personnalisée : Du [jour] au [jour] */}
+        {/* Champs Période Personnalisée */}
         {periodPreset === 'custom' && (
           <div className="p-4 bg-emerald-50/40 border border-emerald-200 rounded-2xl grid grid-cols-1 sm:grid-cols-2 gap-3 animate-fadeIn">
             <div>
@@ -532,10 +627,13 @@ export const ReportingPage: React.FC = () => {
         )}
       </div>
 
-      {/* ── 6 Indicateurs Majeurs Exigés par le Point 14 ──────────────────────── */}
+      {/* ── 6 Indicateurs Majeurs Cliquables avec Traçabilité Totale (Point 7) ── */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
         {/* Indicateur Spécial : Avoirs Validés */}
-        <div className="bg-white rounded-3xl border border-rose-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('avoirs')}
+          className="bg-white rounded-3xl border border-rose-200 p-5 shadow-sm cursor-pointer hover:border-rose-400 hover:shadow-md transition group"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-rose-700">Avoirs Validés (Déduits)</span>
             <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center font-bold">
@@ -547,10 +645,17 @@ export const ReportingPage: React.FC = () => {
             <span>CA Brut : {fmt(totalRevenueBrut)}</span>
             <strong className="text-emerald-700">CA Net : {fmt(totalRevenueNet)}</strong>
           </div>
+          <div className="mt-2 pt-1 border-t border-rose-100 flex items-center justify-between text-[10px] text-rose-600 font-bold group-hover:underline">
+            <span>Voir justificatifs avoirs</span>
+            <span>→</span>
+          </div>
         </div>
 
         {/* 1. Chiffre d'Affaires */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('revenue')}
+          className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-emerald-400 hover:shadow-md transition group"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-slate-400">Chiffre d'Affaires (CA)</span>
             <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
@@ -562,25 +667,41 @@ export const ReportingPage: React.FC = () => {
             <span>Volume transactions :</span>
             <strong className="text-emerald-700">{filteredSales.length} vente(s)</strong>
           </div>
+          <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-emerald-700 font-bold group-hover:underline">
+            <span>Voir le détail des ventes</span>
+            <span>→</span>
+          </div>
         </div>
 
         {/* 2. Marge Brute */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('gross_margin')}
+          className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-indigo-400 hover:shadow-md transition group"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-slate-400">Marge Brute d'Exploitation</span>
             <div className="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
               <TrendingUp className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-indigo-700 font-mono">{fmt(grossMargin)}</p>
+          <p className={`text-2xl font-black font-mono ${grossMargin >= 0 ? 'text-indigo-700' : 'text-rose-600'}`}>
+            {fmt(grossMargin)}
+          </p>
           <div className="mt-2 text-[11px] text-slate-500 flex justify-between border-t border-slate-100 pt-1.5">
             <span>Coût d'achat (COGS) :</span>
             <span className="font-mono text-slate-700 font-semibold">{totalCogsHT > 0 ? fmt(totalCogsHT) : '0 FCFA'}</span>
           </div>
+          <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-indigo-700 font-bold group-hover:underline">
+            <span>Détail calcul marge brute</span>
+            <span>→</span>
+          </div>
         </div>
 
         {/* 3. Marge Nette */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('net_margin')}
+          className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-emerald-400 hover:shadow-md transition group"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-slate-400">Marge Nette (Brute - Dépenses)</span>
             <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${netMargin >= 0 ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
@@ -594,10 +715,17 @@ export const ReportingPage: React.FC = () => {
             <span>Dépenses déduites :</span>
             <span className="text-rose-600 font-mono font-bold">-{fmt(totalExpenses)}</span>
           </div>
+          <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-emerald-700 font-bold group-hover:underline">
+            <span>Rapprochement résultat net</span>
+            <span>→</span>
+          </div>
         </div>
 
         {/* 4. Dépenses d'Exploitation */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('expenses')}
+          className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-rose-400 hover:shadow-md transition group"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-slate-400">Dépenses Réelles Décaissées</span>
             <div className="w-8 h-8 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center">
@@ -609,10 +737,17 @@ export const ReportingPage: React.FC = () => {
             <span>Pièces comptables :</span>
             <span>{filteredExpenses.length} justificatif(s)</span>
           </div>
+          <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-rose-600 font-bold group-hover:underline">
+            <span>Consulter les pièces sources</span>
+            <span>→</span>
+          </div>
         </div>
 
         {/* 5. Total Créances Clients Non Soldées */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('receivables')}
+          className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-amber-400 hover:shadow-md transition group"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-slate-400">Total Créances Non Soldées</span>
             <div className="w-8 h-8 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center">
@@ -624,25 +759,38 @@ export const ReportingPage: React.FC = () => {
             <span>Encours clients :</span>
             <span>{customers.filter((c) => c.current_debt > 0).length} client(s) débiteur(s)</span>
           </div>
+          <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-amber-700 font-bold group-hover:underline">
+            <span>Liste des clients débiteurs</span>
+            <span>→</span>
+          </div>
         </div>
 
         {/* 6. Total Valeur Stock Valorisé */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm">
+        <div
+          onClick={() => setActiveModalType('stock')}
+          className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm cursor-pointer hover:border-blue-400 hover:shadow-md transition group sm:col-span-2 lg:col-span-3"
+        >
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold uppercase text-slate-400">Valeur Totale Stock (Au Coût)</span>
             <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
               <Package className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-blue-700 font-mono">{fmt(totalStockValue)}</p>
-          <div className="mt-2 text-[11px] text-slate-500 flex justify-between border-t border-slate-100 pt-1.5">
-            <span>Valeur Commerciale ({stockValuation.totalStockUv} UV) :</span>
-            <span className="font-bold text-emerald-700 font-mono">{fmt(stockValuation.totalStockValVente)}</span>
+          <div className="flex flex-col sm:flex-row sm:items-baseline justify-between gap-2">
+            <p className="text-2xl font-black text-blue-700 font-mono">{fmt(totalStockValue)}</p>
+            <div className="text-xs text-slate-500">
+              Valeur Commerciale ({stockValuation.totalStockUv} UV) :{' '}
+              <strong className="text-emerald-700 font-mono font-bold">{fmt(stockValuation.totalStockValVente)}</strong>
+            </div>
+          </div>
+          <div className="mt-2 pt-1 border-t border-slate-100 flex items-center justify-between text-[10px] text-blue-600 font-bold group-hover:underline">
+            <span>Consulter la décomposition du stock par article</span>
+            <span>→</span>
           </div>
         </div>
       </div>
 
-      {/* ── Table Détaillée : Marge par Produit (Point 16) ─────────────────────── */}
+      {/* ── Table Détaillée : Marge par Produit ──────────────────────────────── */}
       <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <div>
@@ -651,7 +799,7 @@ export const ReportingPage: React.FC = () => {
               <span>Marge par Produit (Sur la Période Sélectionnée)</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Quantité vendue, CA, coût d'achat unitaire, marge brute dégagée et taux de marge
+              Quantité vendue nette, CA net HT, coût réel des ventes (COGS), marge brute dégagée et taux de marge
             </p>
           </div>
           <span className="text-xs text-slate-400 font-mono">{productMargins.length} produit(s)</span>
@@ -667,12 +815,14 @@ export const ReportingPage: React.FC = () => {
               <thead className="bg-slate-50 text-slate-700 font-bold border-b border-slate-200 uppercase text-[11px]">
                 <tr>
                   <th className="p-4">Produit</th>
-                  <th className="p-4 text-right">Coût d'achat</th>
-                  <th className="p-4 text-right">Prix de vente</th>
+                  <th className="p-4 text-right">Coût d'achat (UV)</th>
+                  <th className="p-4 text-right">Prix de vente (UV)</th>
                   <th className="p-4 text-center">Quantité vendue</th>
                   <th className="p-4 text-center text-rose-600">Avoirs (Retour)</th>
-                  <th className="p-4 text-right">Marge nette</th>
-                  <th className="p-4 text-center">Taux de marge</th>
+                  <th className="p-4 text-right">CA Net HT</th>
+                  <th className="p-4 text-right">Coût Réel (COGS)</th>
+                  <th className="p-4 text-right">Marge Brute</th>
+                  <th className="p-4 text-center">Taux (%)</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 font-sans">
@@ -685,7 +835,11 @@ export const ReportingPage: React.FC = () => {
                     <td className="p-4 text-right font-mono font-medium text-slate-600">{fmt(item.costPrice)}</td>
                     <td className="p-4 text-right font-mono font-bold text-slate-900">{fmt(item.sellingPrice)}</td>
                     <td className="p-4 text-center font-mono font-bold text-slate-700">{item.qtySold}</td>
-                    <td className="p-4 text-center font-mono font-bold text-rose-600">{item.qtyAvoiree > 0 ? `-${item.qtyAvoiree}` : '0'}</td>
+                    <td className="p-4 text-center font-mono font-bold text-rose-600">
+                      {item.qtyAvoiree > 0 ? `-${item.qtyAvoiree}` : '0'}
+                    </td>
+                    <td className="p-4 text-right font-mono font-bold text-slate-900">{fmt(item.netCaHT)}</td>
+                    <td className="p-4 text-right font-mono font-medium text-slate-600">{fmt(item.netCogsHT)}</td>
                     <td className={`p-4 text-right font-mono font-black ${item.netMargin >= 0 ? 'text-emerald-700' : 'text-rose-600'}`}>
                       {fmt(item.netMargin)}
                     </td>
@@ -705,6 +859,21 @@ export const ReportingPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* ── Modale Universelle de Traçabilité Financière (Point 7) ────────────── */}
+      <FinancialDetailModal
+        isOpen={Boolean(activeModalType)}
+        onClose={() => setActiveModalType(null)}
+        type={activeModalType}
+        periodLabel={periodDisplayLabel}
+        sales={filteredSales}
+        expenses={filteredExpenses}
+        avoirs={filteredAvoirs}
+        products={products}
+        customers={customers}
+        financialSummary={financialSummary}
+        stockValuation={stockValuation}
+      />
     </div>
   )
 }

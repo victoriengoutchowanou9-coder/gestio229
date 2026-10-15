@@ -48,7 +48,7 @@ import { destockerMatieresPlat } from '../../../services/restaurantService'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { isVraiCodeEmballage } from '../../../utils/emballages'
-import { getCachedData, setCachedData } from '../../../utils/cache'
+import { getCachedData, setCachedData, invalidateCache } from '../../../utils/cache'
 import { comptabiliserVenteAuto } from '../../../services/compta_auto'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -2152,14 +2152,24 @@ export const POSPage: React.FC = () => {
           }
         })
 
-        // Mises à jour des produits physiques en stock
-        const productUpdates = physicalCartItems.map(line => {
+        // Mises à jour des produits physiques en stock (sector_meta)
+        const productUpdates = physicalCartItems.map(async (line) => {
           const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
           const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
           const currentMeta = line.product.sector_meta || {}
           const updatedMeta = { ...currentMeta, stock_vente: newStockVente }
-          return supabase.from('products').update({ stock_vente: newStockVente, sector_meta: updatedMeta }).eq('id', line.product.id)
+          const res = await supabase
+            .from('products')
+            .update({ sector_meta: updatedMeta, updated_at: new Date().toISOString() })
+            .eq('id', line.product.id)
+          if (res.error) {
+            console.error('[POSPage] Erreur mise à jour stock produit:', line.product.id, res.error)
+          }
+          return res
         })
+
+        // Invalidation du cache des produits pour que les pages Stocks et Rapports voient le nouveau stock immédiatement
+        invalidateCache(`prods_`)
 
         // Mouvements de caisse
         const paidCash = isMultiModeSnapshot

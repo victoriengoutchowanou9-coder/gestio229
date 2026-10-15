@@ -115,22 +115,32 @@ export function isTrueOperatingExpense(item: FinancialExpense): boolean {
 
   const type = String(item.type || '').toLowerCase().trim();
   const sens = String(item.sens || '').toLowerCase().trim();
-  const cat = String(item.categorie || '').toLowerCase().trim();
-  const desc = String(item.description || '').toLowerCase().trim();
+  const cat = String(item.categorie || (item as any).category || '').toLowerCase().trim();
+  const desc = String(item.description || (item as any).notes || (item as any).motif || (item as any).title || '').toLowerCase().trim();
   const source = String(item.source_module || '').toLowerCase().trim();
 
-  // Exclusions formelles de trésorerie
+  // Exclusions formelles de trésorerie, clôtures et flux hors exploitation
   const treasuryBlacklist = [
     'transfert',
     'transfert_caisse_coffre',
     'alimentation_coffre',
     'reception_coffre',
     'cloture',
+    'clôture',
+    'ouverture',
     'versement_banque',
     'retrait_banque',
     'tresorerie',
+    'trésorerie',
+    'achat_stock',
+    'achat_marchandise',
+    'achat_marchandises',
+    'approvisionnement',
     'paiement_fournisseur_stock',
-    'achat_marchandise_stock' // Les achats de stock entrent dans le stock et le COGS, pas en charges directes doublement
+    'achat_marchandise_stock',
+    'vente',
+    'reglement_client',
+    'remboursement'
   ];
 
   for (const b of treasuryBlacklist) {
@@ -139,8 +149,8 @@ export function isTrueOperatingExpense(item: FinancialExpense): boolean {
     }
   }
 
-  // Si c'est dans caisse_mouvements
-  if (type === 'cloture' || type === 'ouverture' || type === 'transfert') {
+  // Exclusion stricte des mouvements de caisse qui ne sont pas des dépenses
+  if (['cloture', 'clôture', 'ouverture', 'transfert', 'vente', 'reglement_client', 'remboursement'].includes(type)) {
     return false;
   }
 
@@ -149,7 +159,12 @@ export function isTrueOperatingExpense(item: FinancialExpense): boolean {
     return false;
   }
 
-  // C'est une sortie de fonds ?
+  // Si le type est explicitement une dépense ou charge d'exploitation
+  if (['depense', 'expense', 'charge'].includes(type) || ['depenses', 'depense'].includes(source)) {
+    return true;
+  }
+
+  // C'est une sortie de fonds d'exploitation ?
   const isSortie = ['sortie', 'debit'].includes(sens) || ['depense', 'expense', 'debit', 'sortie'].includes(type) || !sens;
 
   return isSortie;
@@ -161,18 +176,25 @@ export function isTrueOperatingExpense(item: FinancialExpense): boolean {
 export function computeOrderCOGS(order: FinancialSaleOrder): { cogsHT: number; hasKnownCost: boolean } {
   if (!order) return { cogsHT: 0, hasKnownCost: false };
 
-  // 1. Si gross_margin et subtotal_ht sont présents et cohérents
-  const subtotalHT = safeNum(order.subtotal_ht) > 0
-    ? safeNum(order.subtotal_ht)
-    : Math.round((safeNum(order.total_amount) / 1.18) * 100) / 100;
+  // 1. Détermination du CA HT de la commande (support subtotal_ht et total_ht)
+  const givenHT = safeNum(order.subtotal_ht ?? (order as any).total_ht);
+  const taxAmount = safeNum(order.tva_amount ?? (order as any).total_tax);
+  const totalAmount = safeNum(order.total_amount);
+
+  let subtotalHT = givenHT > 0 ? givenHT : 0;
+  if (subtotalHT === 0) {
+    if (taxAmount === 0 && totalAmount > 0) {
+      // Produit/Vente non assujetti ou exonéré de TVA (ex: poissonnerie, denrées de base)
+      subtotalHT = totalAmount;
+    } else {
+      subtotalHT = Math.round((totalAmount / 1.18) * 100) / 100;
+    }
+  }
 
   // Si le total_cost est directement stocké dans la commande et est valide (> 0)
   const directCost = safeNum(order.total_cost);
   if (directCost > 0) {
-    // Si le coût est aberrant par rapport au HT (ex: bug de vente à perte anormale x100), vérifier les lignes
-    if (directCost <= subtotalHT * 2) {
-      return { cogsHT: directCost, hasKnownCost: true };
-    }
+    return { cogsHT: directCost, hasKnownCost: true };
   }
 
   // Si gross_margin est stockée dans la table (colonne générée ou calculée)
@@ -209,7 +231,8 @@ export function computeOrderCOGS(order: FinancialSaleOrder): { cogsHT: number; h
       if (rawCost > 0) {
         const isTaxed = Boolean(prod.is_vat_subject ?? (safeNum(prod.vat_rate ?? prod.tva_rate) > 0));
         const vatRate = isTaxed ? safeNum(prod.vat_rate ?? prod.tva_rate, 18) : 0;
-        const uvCostTTC = rawCost / coef;
+        const isFromLine = safeNum(line.unit_cost, 0) > 0;
+        const uvCostTTC = isFromLine ? safeNum(line.unit_cost) : rawCost / coef;
         const uvCostHT = isTaxed ? uvCostTTC / (1 + vatRate / 100) : uvCostTTC;
         recoveredCost += qty * uvCostHT;
         foundCostCount++;
@@ -233,9 +256,18 @@ export function computeOrderCOGS(order: FinancialSaleOrder): { cogsHT: number; h
  */
 export function computeOrderMargin(order: FinancialSaleOrder): OrderMarginResult {
   const revenueTTC = safeNum(order.total_amount);
-  const revenueHT = safeNum(order.subtotal_ht) > 0
-    ? safeNum(order.subtotal_ht)
-    : Math.round((revenueTTC / 1.18) * 100) / 100;
+  const givenHT = safeNum(order.subtotal_ht ?? (order as any).total_ht);
+  const taxAmount = safeNum(order.tva_amount ?? (order as any).total_tax);
+
+  let revenueHT = givenHT > 0 ? givenHT : 0;
+  if (revenueHT === 0) {
+    if (taxAmount === 0 && revenueTTC > 0) {
+      // Vente exonérée de TVA : HT = TTC
+      revenueHT = revenueTTC;
+    } else {
+      revenueHT = Math.round((revenueTTC / 1.18) * 100) / 100;
+    }
+  }
 
   const { cogsHT, hasKnownCost } = computeOrderCOGS(order);
   const grossMargin = Math.round((revenueHT - cogsHT) * 100) / 100;

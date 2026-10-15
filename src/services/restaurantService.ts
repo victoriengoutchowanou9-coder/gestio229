@@ -183,18 +183,10 @@ export async function destockerMatieresPlat(params: {
             const newStockVente = Math.max(0, Math.round((currentStockVente - qteStockADeduire) * 1000) / 1000)
             const currentMeta = prod.sector_meta || {}
             const updatedMeta = { ...currentMeta, stock_vente: newStockVente }
-
-            let updRes = await supabase
+            await supabase
               .from('products')
-              .update({ stock_vente: newStockVente, sector_meta: updatedMeta })
+              .update({ sector_meta: updatedMeta, updated_at: new Date().toISOString() })
               .eq('id', prod.id)
-
-            if (updRes.error && updRes.error.code === 'PGRST204') {
-              await supabase
-                .from('products')
-                .update({ sector_meta: updatedMeta })
-                .eq('id', prod.id)
-            }
           }
         } catch (stockErr) {
           console.warn('[RestaurantService] Erreur mise à jour stock produit cuisine:', stockErr)
