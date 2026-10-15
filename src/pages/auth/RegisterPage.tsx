@@ -24,6 +24,7 @@ import { createConfirmedUser } from '../../lib/authAdminHelper'
 import SectorSelector, { ALL_SECTORS } from '../../components/auth/SectorSelector'
 import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
 import { rateLimiter } from '../../lib/rateLimiter'
+import { initialiserAbonnementInscription } from '../../services/abonnementService'
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
@@ -213,6 +214,13 @@ export const RegisterPage: React.FC = () => {
           notes: `Période d'essai gratuit de 30 jours (0 FCFA) - Formule ${planCalc.name}`
         })
       } catch (e) {}
+
+      // Initialiser abonnements_global et abonnements_secteurs (Règles 1 & 2 CDC)
+      try {
+        await initialiserAbonnementInscription(company.id, form.selected_sectors, planCalc.slug)
+      } catch (e) {
+        console.warn('[Register] Notice init abonnements_global_et_secteurs:', e)
+      }
 
       setTrialDetails({
         planName: planCalc.name,

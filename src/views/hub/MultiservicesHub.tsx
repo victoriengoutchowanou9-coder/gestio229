@@ -32,6 +32,16 @@ import { supabase } from '../../lib/supabase';
 import { fetchHubFinancialMetrics, HubFinancialTotals } from '../../services/hubFinancialService';
 import { useUIStore } from '../../store/uiStore';
 import { formatNumber, formatFCFA } from '../../utils/formatters';
+import {
+  getAbonnementGlobal,
+  getAbonnementsSecteurs,
+  calcDaysRemaining,
+  matchesSectorCode,
+  activerEssaiIndividuelSecteur,
+  AbonnementGlobal,
+  AbonnementSecteur,
+} from '../../services/abonnementService';
+import { ActiverSecteurModal } from '../../components/subscription/ActiverSecteurModal';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TYPES & ÉTATS (PARTIE 9 — POLITIQUE DE CONSERVATION DES DONNÉES)
@@ -200,6 +210,95 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // Totaux financiers réels consolidés
   const [hubTotals, setHubTotals] = useState<HubFinancialTotals | null>(null);
+
+  // ── Abonnements Global + Par Secteur (Règles Métier CDC) ──────────────────
+  const [globalSub, setGlobalSub] = useState<AbonnementGlobal | null>(null);
+  const [sectorSubs, setSectorSubs] = useState<AbonnementSecteur[]>([]);
+  const [activationModalData, setActivationModalData] = useState<{
+    slug: string;
+    name?: string;
+  } | null>(null);
+
+  const loadSubscriptions = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const [gSub, sSubs] = await Promise.all([
+        getAbonnementGlobal(companyId, company),
+        getAbonnementsSecteurs(companyId, company),
+      ]);
+      setGlobalSub(gSub);
+      setSectorSubs(sSubs);
+    } catch (err) {
+      console.warn('[Hub] Erreur chargement abonnements:', err);
+    }
+  }, [companyId, company]);
+
+  useEffect(() => {
+    loadSubscriptions();
+  }, [loadSubscriptions]);
+
+  const globalDaysRemaining = useMemo(() => {
+    return calcDaysRemaining(globalSub?.date_fin_global);
+  }, [globalSub]);
+
+  // Badge Global en haut du HUB (Règle 6) : Essai J-23 (ou Actif / Expiré)
+  const globalBadgeText = useMemo(() => {
+    if (!globalSub) return 'Essai J-30';
+    if (globalSub.statut_global === 'actif') return 'Abonnement Actif';
+    if (globalSub.statut_global === 'expire' || globalDaysRemaining <= 0) return 'Abonnement Expiré';
+    return `Essai J-${globalDaysRemaining}`;
+  }, [globalSub, globalDaysRemaining]);
+
+  // Badge sur chaque tuile secteur (Règle 6) :
+  // - Brasserie : Inclus dans global J-23
+  // - Transport & Logistique : Essai individuel J-30 (vert) puis après 30j : Inclus dans global
+  const getSectorBadgeInfo = useCallback((sectorSlug: string) => {
+    const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, sectorSlug));
+    const now = new Date();
+
+    if (!sub) {
+      return {
+        label: 'Essai 30j disponible',
+        isIndividuel: false,
+        isRattache: false,
+        isNonActive: true,
+        days: 30,
+        badgeClass: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30',
+      };
+    }
+
+    // Essai individuel en cours (vert vif)
+    if (!sub.rattache_au_global && sub.date_fin_specifique) {
+      const fin = new Date(sub.date_fin_specifique);
+      if (now.getTime() <= fin.getTime()) {
+        const days = calcDaysRemaining(sub.date_fin_specifique);
+        return {
+          label: `Essai individuel J-${days}`,
+          isIndividuel: true,
+          isRattache: false,
+          isNonActive: false,
+          days,
+          badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-black shadow-sm ring-1 ring-emerald-500/30',
+        };
+      }
+    }
+
+    // Rattaché au global (après 30j ou dès l'inscription)
+    const label = globalSub?.statut_global === 'essai'
+      ? `Inclus dans global J-${globalDaysRemaining}`
+      : 'Inclus dans global';
+
+    return {
+      label,
+      isIndividuel: false,
+      isRattache: true,
+      isNonActive: false,
+      days: globalDaysRemaining,
+      badgeClass: darkMode
+        ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 font-bold'
+        : 'bg-blue-50 text-blue-700 border-blue-200 font-bold',
+    };
+  }, [sectorSubs, globalSub, globalDaysRemaining, darkMode]);
 
   // Date du jour formatée en heure locale Cotonou (Africa/Porto-Novo)
   const todayDateDisplay = useMemo(() => {
@@ -735,6 +834,14 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         } catch (cErr) {
           console.warn('[Hub] Notice update selected_sectors:', cErr);
         }
+
+        // Règle 3 CDC : Activer l'essai individuel 30j pour ce nouveau secteur
+        try {
+          await activerEssaiIndividuelSecteur(companyId, meta.slug, form.name.trim().toUpperCase());
+          await loadSubscriptions();
+        } catch (subErr) {
+          console.warn('[Hub] Notice activation essai individuel:', subErr);
+        }
       }
 
       const newEntry: ActivityEntry = {
@@ -918,12 +1025,32 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   };
 
-  // ── Action : Ouvrir l'application métier (PARTIE 8) ────────────────────────
+  // ── Action : Ouvrir l'application métier (PARTIE 8 & Règle 3 CDC) ───────────
   const handleOpenActivity = (act: ActivityEntry) => {
+    const badgeInfo = getSectorBadgeInfo(act.sectorSlug);
+    if (badgeInfo.isNonActive) {
+      setActivationModalData({
+        slug: act.sectorSlug,
+        name: act.name,
+      });
+      return;
+    }
+
     if (onSelectSector) {
       onSelectSector(act.sectorSlug, act.id, act.name, act.location);
     } else {
       navigate(`/app/${act.sectorSlug}?activityId=${act.id}`);
+    }
+  };
+
+  const handleSectorActivated = async (activatedSlug: string) => {
+    await Promise.all([loadSubscriptions(), loadActivitiesFromSupabase()]);
+    setActivationModalData(null);
+    const act = activities.find((a) => a.sectorSlug === activatedSlug);
+    if (onSelectSector && act) {
+      onSelectSector(act.sectorSlug, act.id, act.name, act.location);
+    } else {
+      navigate(`/app/${activatedSlug}`);
     }
   };
 
@@ -932,6 +1059,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     await Promise.all([
       loadActivitiesFromSupabase(),
       loadFinancialMetrics(),
+      loadSubscriptions(),
     ]);
     setTimeout(() => setIsRefreshing(false), 300);
   };
@@ -953,6 +1081,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             <div className="flex items-center gap-2.5 flex-wrap">
               <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-500 border border-emerald-500/30">
                 HUB CENTRAL MULTISERVICES — GESTIO 229
+              </span>
+              {/* Badge global en haut : Essai J-23 (Règle 6 CDC) */}
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 shadow-sm">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>{globalBadgeText}</span>
               </span>
               <span className={`text-xs font-mono ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Bénin • UEMOA (FCFA)</span>
             </div>
@@ -1319,36 +1452,38 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     : 'bg-white border-slate-200 hover:border-slate-300 shadow-md'
                 }`}
               >
-                {/* 5.1 En-tête de la carte : Nom de l'activité & Lieu */}
+                {/* 5.1 En-tête de la carte : Nom de l'activité, Lieu & Badge Abonnement (Règle 6 CDC) */}
                 <div>
-                  <div className="flex items-start justify-between gap-3 mb-2">
-                    <div className="flex-1 min-w-0">
-                      <h4 className={`text-base font-black uppercase tracking-tight leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                        {act.name}
-                      </h4>
-                      <div className={`text-xs flex items-center gap-1 mt-1 font-medium ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                        <MapPin size={12} className={darkMode ? "text-slate-500 shrink-0" : "text-slate-400 shrink-0"} />
-                        <span>{act.location || 'Lieu non spécifié'}</span>
-                      </div>
-                    </div>
+                  {(() => {
+                    const badgeInfo = getSectorBadgeInfo(act.sectorSlug);
+                    return (
+                      <>
+                        <div className="flex items-start justify-between gap-3 mb-2">
+                          <div className="flex-1 min-w-0">
+                            <h4 className={`text-base font-black uppercase tracking-tight leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {act.name}
+                            </h4>
+                            <div className={`text-xs flex items-center gap-1 mt-1 font-medium ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                              <MapPin size={12} className={darkMode ? "text-slate-500 shrink-0" : "text-slate-400 shrink-0"} />
+                              <span>{act.location || 'Lieu non spécifié'}</span>
+                            </div>
+                          </div>
 
-                    {/* Badge de statut (PARTIE 9) */}
-                    <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider border ${
-                        act.status === 'ACTIVE'
-                          ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                          : act.status === 'SUSPENDUE'
-                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/30'
-                          : darkMode ? 'bg-slate-800 text-slate-400 border-slate-700' : 'bg-slate-100 text-slate-600 border-slate-200'
-                      }`}
-                    >
-                      {act.status}
-                    </span>
-                  </div>
+                          {/* Badge de Souscription (Règle 6 : Inclus dans global J-X ou Essai individuel J-X en vert) */}
+                          <span
+                            className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider border shadow-sm ${badgeInfo.badgeClass}`}
+                          >
+                            {badgeInfo.label}
+                          </span>
+                        </div>
 
-                  <div className={`text-[11px] mb-4 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                    {act.sectorLabel}
-                  </div>
+                        <div className={`text-[11px] mb-4 flex items-center justify-between ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                          <span>{act.sectorLabel}</span>
+                          <span className="text-[10px] opacity-75 font-mono">{act.status}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
 
                   {/* 5.1 Corps financier obligatoire : CA, Dépenses, Marge Nette (Cumul mensuel Cotonou UTC+1) */}
                   <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
@@ -1705,6 +1840,18 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             <InfoRow label="Sauvegarde" value="Locale + Cloud Supabase" />
           </div>
         </Modal>
+      )}
+
+      {/* ══ MODAL ACTIVATION NOUVEAU SECTEUR (RÈGLE 3 CDC) ════════════════ */}
+      {activationModalData && (
+        <ActiverSecteurModal
+          isOpen={Boolean(activationModalData)}
+          sectorSlugOrCode={activationModalData.slug}
+          sectorName={activationModalData.name}
+          companyId={companyId}
+          onClose={() => setActivationModalData(null)}
+          onActivated={handleSectorActivated}
+        />
       )}
 
     </div>

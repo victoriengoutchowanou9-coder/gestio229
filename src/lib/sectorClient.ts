@@ -94,6 +94,11 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
   if (Array.isArray((company as any).company_sectors)) {
     rawList.push(...(company as any).company_sectors)
   }
+  if (Array.isArray((company as any).abonnements_secteurs)) {
+    for (const sub of (company as any).abonnements_secteurs) {
+      if (sub?.secteur_code) rawList.push(sub.secteur_code)
+    }
+  }
 
   if (rawList.length === 0) return true
 
