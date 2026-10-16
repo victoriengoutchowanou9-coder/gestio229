@@ -390,10 +390,12 @@ export const SectorLoader = {
       }
     }
 
-    // Cas : compte suspendu
+    // Cas : compte suspendu, bloqué ou supprimé
     if (
       company.subscription_status === 'suspended' ||
-      company.subscription_status === 'expired'
+      company.subscription_status === 'deleted' ||
+      company.subscription_status === 'expired' ||
+      company.is_active === false
     ) {
       return {
         type: 'SUSPENDED' as RoutingType,

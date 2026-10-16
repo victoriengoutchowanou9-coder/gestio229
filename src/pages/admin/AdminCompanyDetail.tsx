@@ -9,7 +9,7 @@ import { adminApiFetch } from '../../store/adminStore'
 import {
   ArrowLeft, Building2, Phone, Mail, MapPin, Calendar, CreditCard,
   Users, RefreshCw, CheckCircle2, XCircle, Clock, AlertTriangle,
-  Shield, History, ChevronDown, ChevronUp
+  Shield, History, ChevronDown, ChevronUp, Lock, Unlock, Trash2, RotateCcw, Copy, Check
 } from 'lucide-react'
 
 function formatDate(d: string | null | undefined): string {
@@ -251,14 +251,124 @@ const AdminCompanyDetail: React.FC = () => {
   const [showReactivation, setShowReactivation] = useState(false)
   const [showHistory, setShowHistory] = useState(false)
   const [successMsg, setSuccessMsg] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [actionLoading, setActionLoading] = useState(false)
+  const [copiedId, setCopiedId] = useState(false)
 
   const company = data?.company
+  const users = data?.users || []
+  const mainAdmin = users.find((u: any) => u.role === 'administrateur' || u.role === 'super_admin') || users[0]
 
   const handleReactivationSuccess = () => {
     setShowReactivation(false)
     setSuccessMsg('✅ Abonnement réactivé avec succès.')
     reload()
     setTimeout(() => setSuccessMsg(''), 5000)
+  }
+
+  const handleCopyId = () => {
+    if (!company?.id) return
+    navigator.clipboard?.writeText(company.id)
+    setCopiedId(true)
+    setTimeout(() => setCopiedId(false), 2000)
+  }
+
+  const handleBlock = async () => {
+    const reason = window.prompt(`Motif du blocage de l'accès pour « ${company.name} » :`, "Défaut de paiement / suspension administrative")
+    if (reason === null) return
+    if (!reason.trim()) { alert("Le motif de blocage est obligatoire."); return }
+    setActionLoading(true)
+    setActionError('')
+    try {
+      const res = await adminApiFetch('/api/admin-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'block', company_id: company.id, reason: reason.trim() })
+      })
+      const json = await res.json()
+      if (json.success) {
+        setSuccessMsg(json.message)
+        reload()
+      } else {
+        setActionError(json.error || 'Erreur lors du blocage.')
+      }
+    } catch (e: any) {
+      setActionError(e.message || 'Erreur réseau.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleUnblock = async () => {
+    const reason = window.prompt(`Motif ou note de déblocage pour « ${company.name} » :`, "Régularisation effectuée / Rétablissement d'accès")
+    if (reason === null) return
+    setActionLoading(true)
+    setActionError('')
+    try {
+      const res = await adminApiFetch('/api/admin-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'unblock', company_id: company.id, reason: reason.trim() })
+      })
+      const json = await res.json()
+      if (json.success) {
+        setSuccessMsg(json.message)
+        reload()
+      } else {
+        setActionError(json.error || 'Erreur lors du déblocage.')
+      }
+    } catch (e: any) {
+      setActionError(e.message || 'Erreur réseau.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleSoftDelete = async () => {
+    const reason = window.prompt(`ATTENTION : Suppression logique de « ${company.name} ».\n\nSes accès seront bloqués mais toutes ses données seront conservées.\n\nSaisissez le motif obligatoire :`)
+    if (reason === null) return
+    if (!reason.trim()) { alert("Le motif de la suppression est obligatoire."); return }
+    setActionLoading(true)
+    setActionError('')
+    try {
+      const res = await adminApiFetch('/api/admin-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'delete_soft', company_id: company.id, reason: reason.trim() })
+      })
+      const json = await res.json()
+      if (json.success) {
+        setSuccessMsg(json.message)
+        reload()
+      } else {
+        setActionError(json.error || 'Erreur lors de la suppression logique.')
+      }
+    } catch (e: any) {
+      setActionError(e.message || 'Erreur réseau.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  const handleRestore = async () => {
+    const reason = window.prompt(`Restauration de l'entreprise « ${company.name} ».\n\nSes accès seront rétablis.\n\nMotif ou note :`, "Restauration par le Super Administrateur")
+    if (reason === null) return
+    setActionLoading(true)
+    setActionError('')
+    try {
+      const res = await adminApiFetch('/api/admin-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'restore', company_id: company.id, reason: reason.trim() })
+      })
+      const json = await res.json()
+      if (json.success) {
+        setSuccessMsg(json.message)
+        reload()
+      } else {
+        setActionError(json.error || 'Erreur lors de la restauration.')
+      }
+    } catch (e: any) {
+      setActionError(e.message || 'Erreur réseau.')
+    } finally {
+      setActionLoading(false)
+    }
   }
 
   if (loading) return (
@@ -274,7 +384,14 @@ const AdminCompanyDetail: React.FC = () => {
     </div>
   )
 
-  const statusBadge = getStatusBadge(company.subscription_status)
+  const isSuspended = company.subscription_status === 'suspended' || company.is_active === false
+  const isDeleted = company.subscription_status === 'deleted'
+  const statusBadge = isDeleted
+    ? 'bg-red-950/60 text-red-400 border-red-800'
+    : isSuspended
+    ? 'bg-amber-950/60 text-amber-400 border-amber-800'
+    : getStatusBadge(company.subscription_status)
+
   const sectors = (company.selected_sectors || company.sectors || []).map((s: string) => s.replace(/^sec-/, '').toLowerCase())
 
   return (
@@ -286,34 +403,116 @@ const AdminCompanyDetail: React.FC = () => {
       </Link>
 
       {successMsg && (
-        <div className="bg-emerald-900/30 border border-emerald-600 rounded-xl px-4 py-3 text-emerald-300 text-sm font-semibold">
+        <div className="bg-emerald-950/80 border border-emerald-600 rounded-xl px-4 py-3 text-emerald-200 text-sm font-semibold animate-fadeIn">
           {successMsg}
         </div>
       )}
 
+      {actionError && (
+        <div className="bg-red-950/80 border border-red-600 rounded-xl px-4 py-3 text-red-200 text-sm font-semibold animate-fadeIn">
+          {actionError}
+        </div>
+      )}
+
       {/* En-tête entreprise */}
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
-        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className="w-14 h-14 bg-emerald-900/40 rounded-2xl flex items-center justify-center text-emerald-400 font-black text-2xl flex-shrink-0">
+            <div className="w-14 h-14 bg-emerald-900/40 border border-emerald-700/50 rounded-2xl flex items-center justify-center text-emerald-400 font-black text-2xl flex-shrink-0">
               {company.name?.charAt(0)?.toUpperCase() || 'E'}
             </div>
             <div>
-              <h1 className="text-white text-xl font-black">{company.name}</h1>
-              <p className="text-slate-400 text-sm">{company.legal_form || 'SARL'} · {company.city || 'Bénin'}</p>
-              <span className={`inline-flex items-center gap-1 mt-2 text-xs font-bold px-2.5 py-1 rounded-lg border ${statusBadge}`}>
-                {getStatusEmoji(company.subscription_status)} {(company.subscription_status || 'trial').toUpperCase()}
-              </span>
+              <div className="flex items-center gap-2">
+                <h1 className="text-white text-xl font-black">{company.name}</h1>
+                <span className={`inline-flex items-center gap-1 text-xs font-bold px-2.5 py-0.5 rounded-lg border ${statusBadge}`}>
+                  {isDeleted ? '🗑️ SUPPRIMÉ' : isSuspended ? '🔒 SUSPENDU' : `${getStatusEmoji(company.subscription_status)} ${(company.subscription_status || 'trial').toUpperCase()}`}
+                </span>
+              </div>
+              <p className="text-slate-400 text-xs mt-0.5">{company.legal_form || 'SARL'} · {company.city || 'Bénin'}</p>
+              <div className="flex items-center gap-1.5 mt-2">
+                <span className="text-slate-500 text-xs">Identifiant unique :</span>
+                <span className="font-mono text-emerald-400 text-xs bg-slate-800 px-2 py-0.5 rounded border border-slate-700/60">{company.id}</span>
+                <button
+                  onClick={handleCopyId}
+                  className="text-slate-400 hover:text-white p-1 rounded transition"
+                  title="Copier l'identifiant unique complet"
+                >
+                  {copiedId ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
             </div>
           </div>
-          <button
-            onClick={() => setShowReactivation(!showReactivation)}
-            className="flex items-center gap-2 bg-emerald-700 hover:bg-emerald-600 text-white px-4 py-2.5 rounded-xl text-sm font-bold transition shadow-md"
-          >
-            <RefreshCw className="w-4 h-4" />
-            RÉACTIVER L'ABONNEMENT
-          </button>
+
+          {/* Boutons d'actions rapides */}
+          <div className="flex flex-wrap items-center gap-2">
+            {!isDeleted && (
+              <>
+                {isSuspended ? (
+                  <button
+                    onClick={handleUnblock}
+                    disabled={actionLoading}
+                    className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    DÉBLOQUER L'ACCÈS
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleBlock}
+                    disabled={actionLoading}
+                    className="flex items-center gap-1.5 bg-amber-700 hover:bg-amber-600 disabled:opacity-50 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+                  >
+                    <Lock className="w-3.5 h-3.5" />
+                    BLOQUER L'ACCÈS
+                  </button>
+                )}
+              </>
+            )}
+
+            {isDeleted ? (
+              <button
+                onClick={handleRestore}
+                disabled={actionLoading}
+                className="flex items-center gap-1.5 bg-cyan-700 hover:bg-cyan-600 disabled:opacity-50 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                RESTAURER L'ENTREPRISE
+              </button>
+            ) : (
+              <button
+                onClick={handleSoftDelete}
+                disabled={actionLoading}
+                className="flex items-center gap-1.5 bg-red-950/60 hover:bg-red-900 border border-red-800 disabled:opacity-50 text-red-300 px-3 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                SUPPRIMER
+              </button>
+            )}
+
+            <button
+              onClick={() => setShowReactivation(!showReactivation)}
+              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+            >
+              <RefreshCw className="w-3.5 h-3.5 text-emerald-400" />
+              RÉACTIVER L'ABONNEMENT
+            </button>
+          </div>
         </div>
+
+        {/* Alerte si suspendu ou supprimé */}
+        {(isSuspended || isDeleted) && (
+          <div className="mt-4 pt-4 border-t border-slate-800 flex items-start gap-3 bg-amber-950/20 p-3 rounded-xl border border-amber-800/40">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="text-xs">
+              <span className="font-bold text-amber-300">
+                {isDeleted ? 'Cette entreprise est supprimée logiquement.' : 'L\'accès de cette entreprise est actuellement bloqué.'}
+              </span>
+              {company.suspension_reason && (
+                <p className="text-slate-300 mt-0.5">Motif enregistré : {company.suspension_reason}</p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Formulaire de réactivation */}
@@ -328,19 +527,24 @@ const AdminCompanyDetail: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
           <h3 className="text-white font-bold flex items-center gap-2">
             <Building2 className="w-4 h-4 text-blue-400" />
-            Informations
+            Informations générales
           </h3>
           {[
+            { label: 'Identifiant unique (ID)', value: company.id },
+            {
+              label: 'Responsable principal',
+              value: mainAdmin ? `${mainAdmin.full_name || mainAdmin.username || 'Admin'} (${mainAdmin.email})` : (company.responsible_name || '—')
+            },
             { label: 'IFU', value: company.ifu_number },
             { label: 'RCCM', value: company.rccm_number },
             { label: 'Téléphone', value: company.phone },
             { label: 'Email', value: company.email },
             { label: 'Adresse', value: company.address ? `${company.address}, ${company.city}` : company.city },
-            { label: 'Inscription', value: formatDateShort(company.created_at) },
+            { label: 'Date d\'inscription', value: formatDateShort(company.created_at) },
           ].map(({ label, value }) => (
             <div key={label} className="flex justify-between border-b border-slate-800 pb-2">
               <span className="text-slate-500 text-xs">{label}</span>
-              <span className="text-slate-200 text-xs font-medium">{value || '—'}</span>
+              <span className="text-slate-200 text-xs font-medium truncate max-w-[250px]">{value || '—'}</span>
             </div>
           ))}
         </div>
@@ -349,7 +553,7 @@ const AdminCompanyDetail: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-3">
           <h3 className="text-white font-bold flex items-center gap-2">
             <CreditCard className="w-4 h-4 text-emerald-400" />
-            Abonnement
+            Abonnement & Licence
           </h3>
           {(data?.subscriptions || []).length === 0 ? (
             <p className="text-slate-500 text-sm">Aucun abonnement enregistré (essai gratuit actif)</p>

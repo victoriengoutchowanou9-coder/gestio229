@@ -153,19 +153,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (error) throw error
 
-      // Ajouter les utilisateurs de chaque entreprise
-      const { data: users } = await sb.from('user_profiles').select('id, email, role, company_id, last_login')
+      // Ajouter les utilisateurs et le responsable principal de chaque entreprise
+      const { data: users } = await sb.from('user_profiles').select('id, email, full_name, username, phone, role, company_id, last_login')
       const usersMap: Record<string, any[]> = {}
       for (const u of (users || [])) {
         if (!usersMap[u.company_id]) usersMap[u.company_id] = []
         usersMap[u.company_id].push(u)
       }
 
-      const result = (companies || []).map((c: any) => ({
-        ...c,
-        users: usersMap[c.id] || [],
-        userCount: (usersMap[c.id] || []).length,
-      }))
+      const result = (companies || []).map((c: any) => {
+        const compUsers = usersMap[c.id] || []
+        const mainAdmin = compUsers.find((u: any) => u.role === 'administrateur' || u.role === 'super_admin') || compUsers[0]
+        return {
+          ...c,
+          users: compUsers,
+          userCount: compUsers.length,
+          primaryAdmin: mainAdmin ? {
+            id: mainAdmin.id,
+            name: mainAdmin.full_name || mainAdmin.username || mainAdmin.email,
+            email: mainAdmin.email,
+            phone: mainAdmin.phone,
+            role: mainAdmin.role
+          } : (c.responsible_name ? { name: c.responsible_name, email: c.email, phone: c.phone, role: 'administrateur' } : null)
+        }
+      })
 
       return res.status(200).json({ success: true, data: result })
     }

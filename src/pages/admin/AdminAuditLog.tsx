@@ -68,11 +68,33 @@ const AdminAuditLog: React.FC = () => {
                   <tr key={log.id} className="border-b border-slate-800/50 hover:bg-slate-800/30 transition">
                     <td className="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">{formatDate(log.created_at)}</td>
                     <td className="px-4 py-3">
-                      <span className="text-white text-xs font-semibold font-mono bg-slate-800 px-2 py-0.5 rounded">
-                        {log.action}
-                      </span>
+                      {log.action === 'BLOCAGE_ACCES' ? (
+                        <span className="text-amber-300 bg-amber-950/60 border border-amber-800 text-xs font-semibold px-2 py-0.5 rounded">
+                          🔒 BLOCAGE ACCÈS
+                        </span>
+                      ) : log.action === 'DEBLOCAGE_ACCES' ? (
+                        <span className="text-emerald-300 bg-emerald-950/60 border border-emerald-800 text-xs font-semibold px-2 py-0.5 rounded">
+                          🔓 DÉBLOCAGE ACCÈS
+                        </span>
+                      ) : log.action === 'SUPPRESSION_LOGIQUE' ? (
+                        <span className="text-red-300 bg-red-950/60 border border-red-800 text-xs font-semibold px-2 py-0.5 rounded">
+                          🗑️ SUPPRESSION LOGIQUE
+                        </span>
+                      ) : log.action === 'RESTAURATION_ENTREPRISE' ? (
+                        <span className="text-cyan-300 bg-cyan-950/60 border border-cyan-800 text-xs font-semibold px-2 py-0.5 rounded">
+                          🔄 RESTAURATION
+                        </span>
+                      ) : log.action === 'SUPPRESSION_DEFINITIVE' ? (
+                        <span className="text-rose-300 bg-rose-950/80 border border-rose-800 text-xs font-semibold px-2 py-0.5 rounded">
+                          ⚠️ SUPPR. DÉFINITIVE
+                        </span>
+                      ) : (
+                        <span className="text-white text-xs font-semibold font-mono bg-slate-800 px-2 py-0.5 rounded">
+                          {log.action}
+                        </span>
+                      )}
                     </td>
-                    <td className="px-4 py-3 text-slate-300 text-xs">{log.company_name || '—'}</td>
+                    <td className="px-4 py-3 text-slate-300 text-xs font-medium">{log.company_name || '—'}</td>
                     <td className="px-4 py-3 text-slate-400 text-xs">{log.sector_slug || '—'}</td>
                     <td className="px-4 py-3">
                       {log.result === 'success' ? (
@@ -90,10 +112,18 @@ const AdminAuditLog: React.FC = () => {
                       )}
                     </td>
                     <td className="px-4 py-3 text-slate-500 text-xs font-mono">{log.ip_address || '—'}</td>
-                    <td className="px-4 py-3 text-slate-500 text-xs max-w-[200px] truncate">
-                      {log.details && typeof log.details === 'object'
-                        ? Object.entries(log.details).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(', ')
-                        : ''}
+                    <td className="px-4 py-3 text-xs max-w-[260px] truncate">
+                      {log.details?.motif || log.details?.reason ? (
+                        <span className="text-slate-300 font-medium">
+                          Motif : <strong className="text-amber-200">{log.details.motif || log.details.reason}</strong>
+                        </span>
+                      ) : log.details && typeof log.details === 'object' ? (
+                        <span className="text-slate-500">
+                          {Object.entries(log.details).filter(([, v]) => v).map(([k, v]) => `${k}: ${v}`).join(', ')}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

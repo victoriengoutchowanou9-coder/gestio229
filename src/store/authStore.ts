@@ -43,6 +43,33 @@ interface AuthState {
 }
 
 // =============================================================================
+// CONTRÔLE D'ACCÈS ENTREPRISE (BLOCAGE / SUSPENSION / SUPPRESSION)
+// =============================================================================
+
+export function checkCompanyAccess(company: Company | null | undefined): { allowed: boolean; error?: string } {
+  if (!company) return { allowed: true }
+
+  // 1. Entreprise supprimée logiquement
+  if (company.subscription_status === 'deleted') {
+    return {
+      allowed: false,
+      error: `L'accès à l'entreprise « ${company.name} » a été désactivé ou supprimé par l'administrateur de la plateforme GESTIO229. Vos données restent conservées en toute sécurité. Veuillez contacter le support.`
+    }
+  }
+
+  // 2. Entreprise bloquée / suspendue
+  if (company.subscription_status === 'suspended' || company.is_active === false) {
+    const motif = (company as any).suspension_reason ? ` (Motif : ${(company as any).suspension_reason})` : ''
+    return {
+      allowed: false,
+      error: `L'accès à l'entreprise « ${company.name} » est actuellement suspendu par le Super Administrateur${motif}. Veuillez contacter l'administrateur de la plateforme pour régulariser votre compte.`
+    }
+  }
+
+  return { allowed: true }
+}
+
+// =============================================================================
 // STORE
 // =============================================================================
 
@@ -68,10 +95,15 @@ export const useAuthStore = create<AuthState>()(
           return
         }
 
-        // Si nous avons un état persisté valide, l'activer immédiatement sans attendre le réseau (0ms)
+        // Si nous avons un état persisté valide, vérifier d'abord que l'entreprise n'est pas bloquée
         const persistedUser = get().user
         const persistedCompany = get().company
         if (persistedUser && persistedCompany) {
+          const accessCheck = checkCompanyAccess(persistedCompany)
+          if (!accessCheck.allowed) {
+            set({ status: 'unauthenticated', user: null, company: null, tenantCtx: null, errorMessage: accessCheck.error })
+            return
+          }
           set({ status: 'authenticated' })
         } else {
           set({ status: 'loading' })
@@ -102,6 +134,19 @@ export const useAuthStore = create<AuthState>()(
             }
 
             if (ctx && ctx.user && ctx.company) {
+              const accessCheck = checkCompanyAccess(ctx.company)
+              if (!accessCheck.allowed) {
+                await supabase.auth.signOut().catch(() => {})
+                set({
+                  status: 'unauthenticated',
+                  user: null,
+                  company: null,
+                  tenantCtx: null,
+                  errorMessage: accessCheck.error,
+                })
+                return
+              }
+
               set({
                 status: 'authenticated',
                 user: ctx.user,
@@ -124,6 +169,18 @@ export const useAuthStore = create<AuthState>()(
             )
 
             if (ctx && ctx.user && ctx.company) {
+              const accessCheck = checkCompanyAccess(ctx.company)
+              if (!accessCheck.allowed) {
+                set({
+                  status: 'unauthenticated',
+                  user: null,
+                  company: null,
+                  tenantCtx: null,
+                  errorMessage: accessCheck.error,
+                })
+                return
+              }
+
               set({
                 status: 'authenticated',
                 user: ctx.user,
@@ -220,6 +277,12 @@ export const useAuthStore = create<AuthState>()(
                     fallbackUser
                   )
                   if (ctx && ctx.company) {
+                    const accessCheck = checkCompanyAccess(ctx.company)
+                    if (!accessCheck.allowed) {
+                      set({ status: 'unauthenticated', user: null, company: null, tenantCtx: null, errorMessage: accessCheck.error })
+                      return { success: false, error: accessCheck.error }
+                    }
+
                     if (fallbackUser.id) {
                       supabase
                         .from('user_profiles')
@@ -364,6 +427,20 @@ export const useAuthStore = create<AuthState>()(
               return { success: false, error: msg }
             }
 
+            // Contrôle d'accès : blocage, suspension ou suppression
+            const accessCheck = checkCompanyAccess(ctx.company)
+            if (!accessCheck.allowed) {
+              await supabase.auth.signOut().catch(() => {})
+              set({
+                status: 'unauthenticated',
+                user: null,
+                company: null,
+                tenantCtx: null,
+                errorMessage: accessCheck.error,
+              })
+              return { success: false, error: accessCheck.error }
+            }
+
             // Mettre à jour last_login en tâche de fond (non bloquant)
             if (ctx.user?.id) {
               supabase
@@ -446,6 +523,19 @@ export const useAuthStore = create<AuthState>()(
               errorMessage: 'Entreprise rattachée introuvable pour ce profil ou accès restreint par les politiques de sécurité (RLS).',
             })
             return { success: false, error: 'Entreprise introuvable' }
+          }
+
+          // Contrôle d'accès : blocage, suspension ou suppression de l'entreprise
+          const accessCheck = checkCompanyAccess(ctx.company)
+          if (!accessCheck.allowed) {
+            set({
+              status: 'unauthenticated',
+              user: null,
+              company: null,
+              tenantCtx: null,
+              errorMessage: accessCheck.error,
+            })
+            return { success: false, error: accessCheck.error }
           }
 
           // Mettre à jour last_login en tâche de fond (non bloquant)

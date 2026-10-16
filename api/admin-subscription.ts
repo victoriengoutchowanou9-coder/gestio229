@@ -89,6 +89,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     reason,
     comment,
     new_status,
+    confirm_name,
   } = req.body || {}
 
   if (!company_id) {
@@ -204,47 +205,230 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
-    // ── SUSPENSION ────────────────────────────────────────────────────────
-    if (action === 'suspend') {
+    // ── 1. BLOQUER L'ACCÈS / SUSPENSION ──────────────────────────────────
+    if (action === 'block' || action === 'suspend') {
+      const blockReason = (reason || comment || 'Blocage d\'accès par Super Administrateur').trim()
+
+      // Suspension appliquée côté serveur : désactive l'entreprise et coupe l'accès
       await sb.from('companies').update({
         subscription_status: 'suspended',
         is_active: false,
         suspended_at: new Date().toISOString(),
-        suspension_reason: reason || '',
+        suspension_reason: blockReason,
         updated_at: new Date().toISOString(),
       }).eq('id', company_id)
 
-      await sb.from('subscriptions').update({ status: 'suspended', updated_at: new Date().toISOString() })
-        .eq('company_id', company_id)
+      await sb.from('subscriptions').update({
+        status: 'suspended',
+        updated_at: new Date().toISOString()
+      }).eq('company_id', company_id)
 
       await sb.from('subscription_history').insert({
         company_id,
         company_name: company.name,
-        action: 'suspension',
-        reason: reason || 'Suspension par Super Admin',
+        action: 'blocage',
+        reason: blockReason,
         comment: comment || '',
         performed_by: 'Super Admin',
       })
 
-      await logAdminAction(sb, 'SUSPENSION_ENTREPRISE', company_id, company.name, 'success', { reason }, clientIp)
+      // Inscription obligatoire dans le journal d'audit sécurisé
+      await logAdminAction(sb, 'BLOCAGE_ACCES', company_id, company.name, 'success', {
+        reason: blockReason,
+        previous_status: company.subscription_status,
+        new_status: 'suspended',
+        motif: blockReason,
+      }, clientIp)
 
-      return res.status(200).json({ success: true, message: `${company.name} suspendu.` })
+      return res.status(200).json({
+        success: true,
+        message: `L'accès à l'entreprise ${company.name} a été bloqué avec succès. Toutes ses données restent intégralement préservées.`
+      })
     }
 
-    // ── MISE À JOUR DU STATUT ─────────────────────────────────────────────
+    // ── 2. DÉBLOQUER L'ACCÈS ──────────────────────────────────────────────
+    if (action === 'unblock') {
+      const unblockReason = (reason || comment || 'Rétablissement d\'accès par Super Administrateur').trim()
+
+      await sb.from('companies').update({
+        subscription_status: 'active',
+        is_active: true,
+        suspended_at: null,
+        suspension_reason: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      await sb.from('subscriptions').update({
+        status: 'active',
+        updated_at: new Date().toISOString()
+      }).eq('company_id', company_id)
+
+      await sb.from('subscription_history').insert({
+        company_id,
+        company_name: company.name,
+        action: 'deblocage',
+        reason: unblockReason,
+        comment: comment || '',
+        performed_by: 'Super Admin',
+      })
+
+      await logAdminAction(sb, 'DEBLOCAGE_ACCES', company_id, company.name, 'success', {
+        reason: unblockReason,
+        previous_status: company.subscription_status,
+        new_status: 'active',
+        motif: unblockReason,
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `L'accès à l'entreprise ${company.name} a été rétabli avec succès.`
+      })
+    }
+
+    // ── 3. SUPPRESSION LOGIQUE (SOFT DELETE) ──────────────────────────────
+    if (action === 'delete_soft') {
+      if (!reason || !reason.trim()) {
+        return res.status(400).json({ success: false, error: 'Le motif de la suppression est obligatoire.' })
+      }
+      const delReason = reason.trim()
+
+      // L'entreprise passe au statut 'deleted', son accès est bloqué mais ses données comptables/historiques sont 100% conservées
+      await sb.from('companies').update({
+        subscription_status: 'deleted',
+        is_active: false,
+        suspended_at: new Date().toISOString(),
+        suspension_reason: `[SUPPRIMÉ] ${delReason}`,
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      await sb.from('subscriptions').update({
+        status: 'deleted',
+        updated_at: new Date().toISOString()
+      }).eq('company_id', company_id)
+
+      await sb.from('subscription_history').insert({
+        company_id,
+        company_name: company.name,
+        action: 'suppression_logique',
+        reason: delReason,
+        comment: comment || '',
+        performed_by: 'Super Admin',
+      })
+
+      await logAdminAction(sb, 'SUPPRESSION_LOGIQUE', company_id, company.name, 'success', {
+        reason: delReason,
+        motif: delReason,
+        previous_status: company.subscription_status,
+        new_status: 'deleted',
+        data_preserved: true,
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `L'entreprise ${company.name} a été supprimée logiquement. Ses données historiques et comptables sont conservées et une restauration est possible.`
+      })
+    }
+
+    // ── 4. RESTAURATION D'UNE ENTREPRISE SUPPRIMÉE LOGIQUEMENT ───────────
+    if (action === 'restore') {
+      const restReason = (reason || comment || 'Restauration par le Super Administrateur').trim()
+
+      await sb.from('companies').update({
+        subscription_status: 'active',
+        is_active: true,
+        suspended_at: null,
+        suspension_reason: null,
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      await sb.from('subscriptions').update({
+        status: 'active',
+        updated_at: new Date().toISOString()
+      }).eq('company_id', company_id)
+
+      await sb.from('subscription_history').insert({
+        company_id,
+        company_name: company.name,
+        action: 'restauration',
+        reason: restReason,
+        comment: comment || '',
+        performed_by: 'Super Admin',
+      })
+
+      await logAdminAction(sb, 'RESTAURATION_ENTREPRISE', company_id, company.name, 'success', {
+        reason: restReason,
+        motif: restReason,
+        previous_status: company.subscription_status,
+        new_status: 'active',
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `L'entreprise ${company.name} a été restaurée avec succès et son accès est rétabli.`
+      })
+    }
+
+    // ── 5. SUPPRESSION DÉFINITIVE (HARD DELETE ULTRA-SÉCURISÉE) ────────────
+    if (action === 'delete_hard') {
+      if (!confirm_name || confirm_name.trim().toLowerCase() !== company.name.trim().toLowerCase()) {
+        return res.status(400).json({
+          success: false,
+          error: `Nom de confirmation incorrect. Saisissez exactement « ${company.name} » pour confirmer.`
+        })
+      }
+      if (!reason || !reason.trim()) {
+        return res.status(400).json({ success: false, error: 'Le motif légal/justificatif de suppression définitive est obligatoire.' })
+      }
+
+      // Suppression strictement cantonnée à l'entreprise ciblée (aucune interférence avec d'autres entreprises)
+      try {
+        await sb.from('sales_order_items').delete().eq('company_id', company_id)
+        await sb.from('sales_orders').delete().eq('company_id', company_id)
+        await sb.from('stock_movements').delete().eq('company_id', company_id)
+        await sb.from('expenses').delete().eq('company_id', company_id)
+        await sb.from('cash_sessions').delete().eq('company_id', company_id)
+        await sb.from('products').delete().eq('company_id', company_id)
+        await sb.from('customers').delete().eq('company_id', company_id)
+        await sb.from('suppliers').delete().eq('company_id', company_id)
+        await sb.from('subscription_history').delete().eq('company_id', company_id)
+        await sb.from('subscriptions').delete().eq('company_id', company_id)
+        await sb.from('user_profiles').delete().eq('company_id', company_id)
+        await sb.from('companies').delete().eq('id', company_id)
+      } catch (delErr: any) {
+        console.error('[HardDelete] Erreur suppression dépendances:', delErr.message)
+      }
+
+      await logAdminAction(sb, 'SUPPRESSION_DEFINITIVE', company_id, company.name, 'success', {
+        reason: reason.trim(),
+        motif: reason.trim(),
+        company_name: company.name,
+        hard_deleted: true,
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `L'entreprise ${company.name} et ses données associées ont été définitivement supprimées.`
+      })
+    }
+
+    // ── 6. MISE À JOUR DU STATUT DIRECT ───────────────────────────────────
     if (action === 'update_status' && new_status) {
-      const allowed = ['trial', 'active', 'expired', 'suspended']
+      const allowed = ['trial', 'active', 'expired', 'suspended', 'deleted']
       if (!allowed.includes(new_status)) {
         return res.status(400).json({ success: false, error: 'Statut invalide.' })
       }
 
+      const isAct = new_status === 'active' || new_status === 'trial'
       await sb.from('companies').update({
         subscription_status: new_status,
+        is_active: isAct,
         updated_at: new Date().toISOString(),
       }).eq('id', company_id)
 
       await logAdminAction(sb, 'MISE_A_JOUR_STATUT', company_id, company.name, 'success', {
-        oldStatus: company.subscription_status, newStatus: new_status
+        oldStatus: company.subscription_status,
+        newStatus: new_status,
+        reason: reason || 'Mise à jour directe du statut',
       }, clientIp)
 
       return res.status(200).json({ success: true, message: 'Statut mis à jour.' })

@@ -59,8 +59,73 @@ export function useAdminCompanies() {
     }
   }, [])
 
+  const blockCompany = useCallback(async (companyId: string, reason: string) => {
+    const res = await adminApiFetch('/api/admin-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'block', company_id: companyId, reason }),
+    })
+    const json = await safeJsonFetch(res)
+    if (!json.success) throw new Error(json.error || 'Échec du blocage de l\'entreprise')
+    await load()
+    return json
+  }, [load])
+
+  const unblockCompany = useCallback(async (companyId: string, reason?: string) => {
+    const res = await adminApiFetch('/api/admin-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'unblock', company_id: companyId, reason }),
+    })
+    const json = await safeJsonFetch(res)
+    if (!json.success) throw new Error(json.error || 'Échec du déblocage de l\'entreprise')
+    await load()
+    return json
+  }, [load])
+
+  const softDeleteCompany = useCallback(async (companyId: string, reason: string) => {
+    const res = await adminApiFetch('/api/admin-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'delete_soft', company_id: companyId, reason }),
+    })
+    const json = await safeJsonFetch(res)
+    if (!json.success) throw new Error(json.error || 'Échec de la suppression logique')
+    await load()
+    return json
+  }, [load])
+
+  const restoreCompany = useCallback(async (companyId: string, reason?: string) => {
+    const res = await adminApiFetch('/api/admin-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'restore', company_id: companyId, reason }),
+    })
+    const json = await safeJsonFetch(res)
+    if (!json.success) throw new Error(json.error || 'Échec de la restauration de l\'entreprise')
+    await load()
+    return json
+  }, [load])
+
+  const hardDeleteCompany = useCallback(async (companyId: string, confirmName: string, reason: string) => {
+    const res = await adminApiFetch('/api/admin-subscription', {
+      method: 'POST',
+      body: JSON.stringify({ action: 'delete_hard', company_id: companyId, confirm_name: confirmName, reason }),
+    })
+    const json = await safeJsonFetch(res)
+    if (!json.success) throw new Error(json.error || 'Échec de la suppression définitive')
+    await load()
+    return json
+  }, [load])
+
   useEffect(() => { load() }, [load])
-  return { companies, loading, error, reload: load }
+  return {
+    companies,
+    loading,
+    error,
+    reload: load,
+    blockCompany,
+    unblockCompany,
+    softDeleteCompany,
+    restoreCompany,
+    hardDeleteCompany
+  }
 }
 
 export function useAdminCompanyDetail(id: string | null) {

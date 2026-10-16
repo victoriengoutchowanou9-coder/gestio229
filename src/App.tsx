@@ -214,13 +214,52 @@ const FullPageLoader = () => (
  * Si pas de session => redirige vers /login.
  */
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const status = useAuthStore((s) => s.status)
+  const { status, company, setCompany } = useAuthStore()
   const location = useLocation()
   const isLoading = status === 'idle' || status === 'loading'
+
+  // Vérification dynamique en arrière-plan du statut de l'entreprise côté serveur
+  useEffect(() => {
+    if (company?.id && status === 'authenticated') {
+      supabase
+        .from('companies')
+        .select('subscription_status, is_active, suspension_reason')
+        .eq('id', company.id)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (data) {
+            if (
+              data.subscription_status !== company.subscription_status ||
+              data.is_active !== company.is_active ||
+              data.suspension_reason !== (company as any).suspension_reason
+            ) {
+              setCompany({
+                ...company,
+                subscription_status: data.subscription_status,
+                is_active: data.is_active,
+                suspension_reason: data.suspension_reason,
+              } as any)
+            }
+          }
+        })
+        .catch(() => {})
+    }
+  }, [location.pathname, company?.id, status])
+
   if (isLoading) {
     return location.pathname.includes('/hub') ? <HubSkeleton /> : <ModuleSkeleton />
   }
   if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
+
+  // Règle de sécurité absolue : si l'entreprise est bloquée, suspendue ou supprimée, interdire l'accès immédiat
+  if (
+    company?.subscription_status === 'suspended' ||
+    company?.subscription_status === 'deleted' ||
+    company?.is_active === false
+  ) {
+    return <Navigate to="/suspended" replace />
+  }
+
   return <>{children}</>
 }
 
@@ -460,32 +499,66 @@ const AppInitializer: React.FC = () => {
 const SuspendedPage = () => {
   const company = useAuthStore((s) => s.company)
   const logout = useAuthStore((s) => s.logout)
-  const subInfo = getCompanySubscriptionInfo(company)
+  const isDeleted = company?.subscription_status === 'deleted'
+  const isSuspended = company?.subscription_status === 'suspended' || company?.is_active === false
+  const reason = (company as any)?.suspension_reason
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 dark:bg-slate-900 p-4">
-      <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-xl border border-slate-200 dark:border-slate-700 p-8 sm:p-10 max-w-md w-full text-center">
-        <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-5 shadow-sm text-3xl">
-          🔒
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 p-4">
+      <div className="bg-slate-800 rounded-3xl shadow-2xl border border-slate-700 p-8 sm:p-10 max-w-md w-full text-center">
+        <div
+          className={`w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-5 shadow-sm text-3xl ${
+            isDeleted
+              ? 'bg-red-950/80 text-red-400 border border-red-700'
+              : 'bg-amber-950/80 text-amber-400 border border-amber-700'
+          }`}
+        >
+          {isDeleted ? '🗑️' : '🔒'}
         </div>
-        <h1 className="text-2xl font-black text-slate-800 dark:text-slate-100 mb-2">
-          {subInfo.isSuspended ? 'Compte Suspendu' : "Période d'Essai de 30 Jours Expirée"}
+        <h1 className="text-2xl font-black text-white mb-2">
+          {isDeleted
+            ? 'Entreprise Désactivée'
+            : isSuspended
+            ? 'Accès à l\'Entreprise Suspendu'
+            : "Période d'Essai de 30 Jours Expirée"}
         </h1>
-        <p className="text-slate-600 dark:text-slate-300 text-sm mb-6 leading-relaxed">
-          {subInfo.isSuspended
-            ? `Le compte ${company?.name || 'de votre entreprise'} est actuellement suspendu. Veuillez régulariser votre abonnement.`
-            : `Votre période d'essai gratuit de 30 jours pour ${company?.name || 'votre entreprise'} est arrivée à échéance. Veuillez activer votre abonnement pour débloquer l'accès à vos sous-logiciels et données.`}
+        <p className="text-slate-300 text-sm mb-4 leading-relaxed">
+          {isDeleted
+            ? `L'accès à l'entreprise « ${company?.name || 'votre entreprise'} » a été désactivé par l'administration de la plateforme GESTIO229. Vos données (ventes, achats, stocks, comptabilité) restent intégralement conservées en toute sécurité.`
+            : isSuspended
+            ? `L'accès à l'espace de travail de « ${company?.name || 'votre entreprise'} » est actuellement suspendu par le Super Administrateur. Toutes vos données sont strictement conservées.`
+            : `Votre période d'essai gratuit de 30 jours pour ${company?.name || 'votre entreprise'} est arrivée à échéance. Veuillez activer votre abonnement pour débloquer l'accès à vos données.`}
         </p>
+
+        {reason && (
+          <div className="bg-slate-900/90 border border-slate-700 rounded-xl p-3 mb-5 text-xs text-left">
+            <span className="text-slate-400 block font-semibold mb-0.5">Motif communiqué :</span>
+            <span className="text-amber-300 font-medium">{reason}</span>
+          </div>
+        )}
+
+        <div className="bg-slate-900/60 border border-slate-700/80 rounded-xl p-3 mb-6 text-xs text-slate-400">
+          Pour toute demande de régularisation ou de rétablissement d'accès, veuillez contacter l'administrateur de la plateforme GESTIO229.
+        </div>
+
         <div className="flex flex-col gap-3">
-          <Link
-            to="/dashboard/abonnement"
-            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition"
+          {!isDeleted && !isSuspended && (
+            <Link
+              to="/dashboard/abonnement"
+              className="w-full inline-flex items-center justify-center gap-2 px-6 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md transition"
+            >
+              Consulter les Formules & Renouveler
+            </Link>
+          )}
+          <a
+            href="mailto:support@gestio229.com"
+            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-semibold text-xs transition"
           >
-            Consulter les Formules & Renouveler
-          </Link>
+            Contacter le Concepteur / Support
+          </a>
           <button
             onClick={logout}
-            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 font-semibold text-sm transition"
+            className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl border border-slate-700 text-slate-400 hover:bg-slate-700 hover:text-white font-semibold text-xs transition"
           >
             Se déconnecter
           </button>

@@ -16,7 +16,7 @@ import {
 // ─── Menu Latéral ─────────────────────────────────────────────────────────
 const NAV_ITEMS = [
   { icon: LayoutDashboard, label: 'Dashboard', href: '/admin/dashboard', key: 'dashboard' },
-  { icon: Building2, label: 'Entreprises', href: '/admin/companies', key: 'companies' },
+  { icon: Building2, label: 'Gestion des entreprises', href: '/admin/companies', key: 'companies' },
   { icon: CreditCard, label: 'Abonnements', href: '/admin/subscriptions', key: 'subscriptions' },
   { icon: DollarSign, label: 'Finances', href: '/admin/finances', key: 'finances' },
   { icon: BarChart3, label: 'Statistiques', href: '/admin/stats', key: 'stats' },
