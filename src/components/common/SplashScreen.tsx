@@ -19,16 +19,16 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
     <div
       role="status"
       aria-live="polite"
-      className="fixed inset-0 z-[999999] flex flex-col items-center justify-center bg-[#0a1931] text-white select-none px-4"
-      style={{ backgroundColor: '#0a1931' }}
+      className="fixed inset-0 z-[999999] flex flex-col items-center justify-center bg-[#064e3b] text-white select-none px-4"
+      style={{ backgroundColor: '#064e3b' }}
     >
       {/* Container Logo centré avec animation pulse */}
       <div className="relative mb-6 flex flex-col items-center">
         {/* Halo lumineux discret */}
-        <div className="absolute -inset-4 bg-emerald-500/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -inset-4 bg-emerald-400/20 rounded-full blur-2xl pointer-events-none" />
 
         {/* Badge Logo avec pulsation fluide */}
-        <div className="relative w-28 h-28 rounded-3xl bg-[#0f244a] border border-emerald-500/30 shadow-2xl shadow-black/60 flex items-center justify-center animate-pulse p-3">
+        <div className="relative w-28 h-28 rounded-3xl bg-gradient-to-br from-emerald-600 via-emerald-700 to-emerald-900 border border-emerald-400/40 shadow-2xl shadow-black/60 flex items-center justify-center animate-pulse p-3">
           <img
             src="/icon-192.png"
             alt="Logo GESTIO 229"

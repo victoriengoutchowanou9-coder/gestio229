@@ -6,31 +6,32 @@ const path = require('path');
 const svg512 = `
 <svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <!-- Background Gradient: Deep Night Blue #0a1931 -->
+    <!-- Background Gradient: Rich Emerald Green (Vert Officiel GESTIO 229) -->
     <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#0f244a"/>
-      <stop offset="50%" stop-color="#0a1931"/>
-      <stop offset="100%" stop-color="#061021"/>
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="45%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#064e3b"/>
     </linearGradient>
 
     <!-- Subtle Glow for central badge -->
-    <radialGradient id="glow" cx="50%" cy="45%" r="50%">
-      <stop offset="0%" stop-color="#10b981" stop-opacity="0.15"/>
-      <stop offset="70%" stop-color="#0a1931" stop-opacity="0"/>
+    <radialGradient id="glow" cx="50%" cy="40%" r="55%">
+      <stop offset="0%" stop-color="#34d399" stop-opacity="0.35"/>
+      <stop offset="60%" stop-color="#059669" stop-opacity="0.10"/>
+      <stop offset="100%" stop-color="#064e3b" stop-opacity="0"/>
     </radialGradient>
 
     <!-- Shadow for logo badge -->
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
-      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000000" flood-opacity="0.55"/>
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#022c22" flood-opacity="0.65"/>
     </filter>
   </defs>
 
-  <!-- Solid Background to full canvas (Maskable Safe) -->
+  <!-- Solid Green Background to full canvas (Maskable Safe) -->
   <rect width="512" height="512" fill="url(#bgGrad)"/>
   <rect width="512" height="512" fill="url(#glow)"/>
 
   <!-- Subtle Dashed Orbit Circle (from original branding) -->
-  <circle cx="256" cy="245" r="160" fill="none" stroke="#10b981" stroke-width="2.5" stroke-dasharray="8 8" stroke-opacity="0.25"/>
+  <circle cx="256" cy="245" r="160" fill="none" stroke="#6ee7b7" stroke-width="2.5" stroke-dasharray="8 8" stroke-opacity="0.35"/>
 
   <!-- Inner Badge Container with Shadow -->
   <g filter="url(#shadow)">
@@ -52,13 +53,13 @@ const svg512 = `
 
     <!-- Subtitle Pill: ERP & CAISSE -->
     <g transform="translate(136, 318)">
-      <rect width="240" height="42" rx="10" fill="#064e3b" fill-opacity="0.4" stroke="#10b981" stroke-width="2"/>
-      <text x="120" y="27" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="800" fill="#34d399" text-anchor="middle" letter-spacing="3.5">ERP &amp; CAISSE</text>
+      <rect width="240" height="42" rx="10" fill="#022c22" fill-opacity="0.55" stroke="#34d399" stroke-width="2"/>
+      <text x="120" y="27" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="800" fill="#a7f3d0" text-anchor="middle" letter-spacing="3.5">ERP &amp; CAISSE</text>
     </g>
 
     <!-- Footer Label: STE GESTIO SARL (Clean, no encoding bug) -->
-    <text x="256" y="415" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="700" fill="#94a3b8" text-anchor="middle" letter-spacing="3">STE GESTIO SARL</text>
-    <text x="256" y="440" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="600" fill="#64748b" text-anchor="middle" letter-spacing="2">RÉPUBLIQUE DU BÉNIN</text>
+    <text x="256" y="415" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="16" font-weight="800" fill="#e2e8f0" text-anchor="middle" letter-spacing="3">STE GESTIO SARL</text>
+    <text x="256" y="440" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="11" font-weight="700" fill="#cbd5e1" text-anchor="middle" letter-spacing="2">RÉPUBLIQUE DU BÉNIN</text>
   </g>
 </svg>
 `;
