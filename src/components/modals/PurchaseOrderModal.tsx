@@ -11,6 +11,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { formatFCFA } from '../../utils/tax'
 import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../../lib/sectorClient'
+import { showModal } from './CustomModalGestio'
 import clsx from 'clsx'
 
 interface PurchaseOrderModalProps {
@@ -181,7 +182,12 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       setNewSupName('')
       setNewSupPhone('')
     } catch (err: any) {
-      alert('Erreur création fournisseur : ' + err.message)
+      showModal({
+        type: 'error',
+        title: 'Erreur création fournisseur',
+        message: err.message || 'Impossible de créer le fournisseur.',
+        domaine: 'www.gestio229.com'
+      })
     }
   }
 
@@ -285,17 +291,32 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     e.preventDefault()
     const trimmedRef = ref.trim()
     if (!trimmedRef) {
-      alert('Veuillez saisir un numéro de Bon de Commande obligatoire.')
+      showModal({
+        type: 'warning',
+        title: 'Champ requis',
+        message: 'Veuillez saisir un numéro de Bon de Commande obligatoire.',
+        domaine: 'www.gestio229.com',
+      })
       return
     }
 
     if (!selectedSupplierId) {
-      alert('Veuillez sélectionner un fournisseur.')
+      showModal({
+        type: 'warning',
+        title: 'Fournisseur manquant',
+        message: 'Veuillez sélectionner un fournisseur.',
+        domaine: 'www.gestio229.com',
+      })
       return
     }
 
     if (activeOrderItems.length === 0) {
-      alert('Veuillez sélectionner au moins un produit avec une quantité supérieure à 0.')
+      showModal({
+        type: 'warning',
+        title: 'Panier vide',
+        message: 'Veuillez sélectionner au moins un produit avec une quantité supérieure à 0.',
+        domaine: 'www.gestio229.com',
+      })
       return
     }
 
@@ -310,7 +331,12 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
           .maybeSingle()
 
         if (existingPo) {
-          alert(`Le N° de Bon de Commande "${trimmedRef}" existe déjà pour votre entreprise. Veuillez en choisir un autre.`)
+          showModal({
+            type: 'error',
+            title: 'Numéro déjà existant',
+            message: `Le N° de Bon de Commande "${trimmedRef}" existe déjà pour votre entreprise. Veuillez en choisir un autre.`,
+            domaine: 'www.gestio229.com',
+          })
           return
         }
       } catch (err) {

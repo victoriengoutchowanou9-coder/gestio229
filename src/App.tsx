@@ -19,6 +19,7 @@ import { preloadCommonModules } from './lib/modulePreloader'
 import HubSkeleton from './components/ui/HubSkeleton'
 import { ModuleSkeleton } from './components/ui/Skeleton'
 import SplashScreen from './components/common/SplashScreen'
+import { CustomModalGestio } from './components/modals/CustomModalGestio'
 
 // ─── GESTIO 229 ADMIN — Back-Office Super Administrateur ──────────────────
 import AdminLoginPage from './pages/admin/AdminLoginPage'
@@ -924,6 +925,7 @@ const App: React.FC = () => {
     <ThemeProvider>
       <BrowserRouter>
         <AppInitializer />
+        <CustomModalGestio />
         <SectorErrorBoundary>
           <Suspense fallback={<FullPageLoader />}>
             <AppRoutes />

@@ -22,6 +22,7 @@ import { checkSectorCaisseStatus } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { imprimerTicketThermique, telechargerTicketPDF, TicketData } from '../../../utils/thermalPrinter'
 import { filterItemsForSector, getActiveSectorSlug } from '../../../lib/sectorClient'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 
 const fmt = (n: number = 0) => formatFCFA(n)
 
@@ -275,9 +276,10 @@ export const SupermarcheCaissePage: React.FC = () => {
     refocaliserScanner()
   }
 
-  const viderTicket = () => {
+  const viderTicket = async () => {
     if (cart.length === 0) return
-    if (window.confirm('Voulez-vous vraiment vider l\'ensemble du ticket en cours ?')) {
+    const ok = await showConfirm('Voulez-vous vraiment vider l\'ensemble du ticket en cours ?', 'Vider le ticket')
+    if (ok) {
       setCart([])
       setClientNom('Client Comptoir')
       setClientTel('')
@@ -308,9 +310,13 @@ export const SupermarcheCaissePage: React.FC = () => {
     refocaliserScanner()
   }
 
-  const reprendreTicket = (ticket: ParkedTicket) => {
+  const reprendreTicket = async (ticket: ParkedTicket) => {
     if (cart.length > 0) {
-      if (!window.confirm('Le panier actuel n\'est pas vide. L\'écraser pour reprendre le ticket en attente ?')) {
+      const ok = await showConfirm(
+        'Le panier actuel n\'est pas vide. L\'écraser pour reprendre le ticket en attente ?',
+        'Reprendre le ticket'
+      )
+      if (!ok) {
         return
       }
     }

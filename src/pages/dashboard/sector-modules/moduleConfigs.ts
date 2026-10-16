@@ -4,6 +4,8 @@
 // Les options des listes correspondent EXACTEMENT aux contraintes CHECK SQL.
 // =============================================================================
 
+import { showModal, showConfirm, showPrompt } from '../../../components/modals/CustomModalGestio'
+
 export type FieldType = 'text' | 'number' | 'date' | 'time' | 'select' | 'textarea' | 'boolean'
 
 export interface FieldDef {
@@ -27,7 +29,7 @@ export interface ActionDef {
   label: string
   show: (row: any) => boolean
   /** Retourne le patch à appliquer, ou null pour annuler */
-  apply: (row: any) => any | null
+  apply: (row: any) => any | Promise<any> | null
   tone?: 'emerald' | 'rose' | 'amber' | 'indigo'
 }
 
@@ -56,8 +58,8 @@ const thisMonth = () => new Date().toISOString().slice(0, 7)
 const isToday = (d: any) => String(d || '').slice(0, 10) === today()
 const isThisMonth = (d: any) => String(d || '').slice(0, 7) === thisMonth()
 const daysUntil = (d: any) => (d ? Math.floor((new Date(d).getTime() - Date.now()) / 86400000) : Infinity)
-const askNumber = (msg: string): number | null => {
-  const v = window.prompt(msg)
+const askNumber = async (msg: string): Promise<number | null> => {
+  const v = await showPrompt(msg, '', 'Saisie numérique')
   if (v === null || v.trim() === '' || isNaN(Number(v))) return null
   return Number(v)
 }
@@ -549,10 +551,10 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
       {
         label: 'Check-in',
         show: (r) => r.statut === 'LIBRE' || r.statut === 'RESERVEE',
-        apply: (r) => {
-          const client = window.prompt(`Nom du client pour la chambre ${r.numero_chambre}`)
+        apply: async (r) => {
+          const client = await showPrompt(`Nom du client pour la chambre ${r.numero_chambre}`, '', 'Check-in Chambre')
           if (!client) return null
-          const nuits = askNumber('Nombre de nuits prévues') ?? 1
+          const nuits = (await askNumber('Nombre de nuits prévues')) ?? 1
           const sortie = new Date(Date.now() + nuits * 86400000).toISOString().slice(0, 10)
           return { statut: 'OCCUPEE', client_actuel: client, date_entree: new Date().toISOString(), date_sortie_prevue: sortie }
         },
@@ -561,10 +563,11 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
       {
         label: 'Check-out',
         show: (r) => r.statut === 'OCCUPEE',
-        apply: (r) => {
+        apply: async (r) => {
           const nuits = Math.max(1, Math.ceil((Date.now() - new Date(r.date_entree || Date.now()).getTime()) / 86400000))
           const total = nuits * n(r.tarif_nuit)
-          if (!window.confirm(`Check-out ${r.client_actuel || ''} — ${nuits} nuit(s) × ${fmtMoney(n(r.tarif_nuit))} = ${fmtMoney(total)}.\nConfirmer ?`)) return null
+          const ok = await showConfirm(`Check-out ${r.client_actuel || ''} — ${nuits} nuit(s) × ${fmtMoney(n(r.tarif_nuit))} = ${fmtMoney(total)}.\nConfirmer ?`, 'Check-out Chambre')
+          if (!ok) return null
           return { statut: 'LIBRE', client_actuel: null, date_entree: null, date_sortie_prevue: null }
         },
         tone: 'rose',
@@ -679,13 +682,16 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
       { label: 'Solde moyen', value: (r) => fmtMoney(r.length ? sum(r, 'solde_epargne') / r.length : 0), tone: 'indigo' },
     ],
     actions: [
-      { label: '+ Dépôt', show: (r) => r.statut === 'ACTIF', apply: (r) => { const m = askNumber(`Dépôt pour ${r.nom_complet}`); return m === null ? null : { solde_epargne: n(r.solde_epargne) + m } }, tone: 'emerald' },
+      { label: '+ Dépôt', show: (r) => r.statut === 'ACTIF', apply: async (r) => { const m = await askNumber(`Dépôt pour ${r.nom_complet}`); return m === null ? null : { solde_epargne: n(r.solde_epargne) + m } }, tone: 'emerald' },
       {
         label: '− Retrait', show: (r) => r.statut === 'ACTIF' && n(r.solde_epargne) > 0,
-        apply: (r) => {
-          const m = askNumber(`Retrait pour ${r.nom_complet} (solde ${fmtMoney(n(r.solde_epargne))})`)
+        apply: async (r) => {
+          const m = await askNumber(`Retrait pour ${r.nom_complet} (solde ${fmtMoney(n(r.solde_epargne))})`)
           if (m === null) return null
-          if (m > n(r.solde_epargne)) { window.alert('Solde insuffisant.'); return null }
+          if (m > n(r.solde_epargne)) {
+            showModal({ type: 'error', title: 'Solde insuffisant', message: 'Le solde disponible est inférieur au montant demandé.' })
+            return null
+          }
           return { solde_epargne: n(r.solde_epargne) - m }
         },
         tone: 'rose',
@@ -726,8 +732,8 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
     actions: [
       {
         label: '+ Remboursement', show: (r) => n(r.solde_restant) > 0 && r.statut !== 'ANNULE',
-        apply: (r) => {
-          const m = askNumber(`Remboursement de ${r.membre_nom} (solde ${fmtMoney(n(r.solde_restant))}, mensualité ${fmtMoney(n(r.montant_total_du) / Math.max(1, n(r.duree_mois)))})`)
+        apply: async (r) => {
+          const m = await askNumber(`Remboursement de ${r.membre_nom} (solde ${fmtMoney(n(r.solde_restant))}, mensualité ${fmtMoney(n(r.montant_total_du) / Math.max(1, n(r.duree_mois)))})`)
           if (m === null) return null
           const remb = n(r.montant_rembourse) + m
           const solde = Math.max(0, n(r.montant_total_du) - remb)
@@ -759,7 +765,7 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
     actions: [
       {
         label: 'Calcul commission', show: () => true,
-        apply: (r) => { const m = askNumber(`Épargne collectée par ${r.nom_complet} sur la période`); if (m !== null) window.alert(`Commission due : ${fmtMoney((m * n(r.commission_taux_pct)) / 100)}`); return null },
+        apply: async (r) => { const m = await askNumber(`Épargne collectée par ${r.nom_complet} sur la période`); if (m !== null) showModal({ type: 'info', title: 'Calcul Commission', message: `Commission due : ${fmtMoney((m * n(r.commission_taux_pct)) / 100)}` }); return null },
       },
     ],
   },
@@ -785,11 +791,12 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
       { label: 'Participants', value: (r) => sum(r, 'nb_participants') },
     ],
     actions: [
-      { label: '+ Cotisations', show: (r) => r.statut === 'ACTIF', apply: (r) => { const p = askNumber(`Nombre de participants ayant cotisé (sur ${r.nb_participants})`); return p === null ? null : { cagnotte_actuelle: n(r.cagnotte_actuelle) + p * n(r.montant_cotisation) } }, tone: 'emerald' },
+      { label: '+ Cotisations', show: (r) => r.statut === 'ACTIF', apply: async (r) => { const p = await askNumber(`Nombre de participants ayant cotisé (sur ${r.nb_participants})`); return p === null ? null : { cagnotte_actuelle: n(r.cagnotte_actuelle) + p * n(r.montant_cotisation) } }, tone: 'emerald' },
       {
         label: 'Verser le tour', show: (r) => r.statut === 'ACTIF' && n(r.cagnotte_actuelle) > 0,
-        apply: (r) => {
-          if (!window.confirm(`Verser ${fmtMoney(n(r.cagnotte_actuelle))} au bénéficiaire du tour ${r.tour_actuel} ?`)) return null
+        apply: async (r) => {
+          const ok = await showConfirm(`Verser ${fmtMoney(n(r.cagnotte_actuelle))} au bénéficiaire du tour ${r.tour_actuel} ?`, 'Versement Cagnotte Tontine')
+          if (!ok) return null
           const next = n(r.tour_actuel) + 1
           return { cagnotte_actuelle: 0, tour_actuel: next, statut: next > n(r.nb_participants) ? 'TERMINE' : 'ACTIF' }
         },
@@ -1224,9 +1231,9 @@ export const MODULE_CONFIGS: Record<string, ModuleConfig> = {
     actions: [
       {
         label: 'Convertir', show: () => true,
-        apply: (r) => {
-          const q = askNumber(`Quantité en « ${r.unite_source} » à convertir en « ${r.unite_cible} »`)
-          if (q !== null) window.alert(`${q} ${r.unite_source} = ${(q * n(r.facteur_conversion)).toLocaleString('fr-FR', { maximumFractionDigits: 4 })} ${r.unite_cible}`)
+        apply: async (r) => {
+          const q = await askNumber(`Quantité en « ${r.unite_source} » à convertir en « ${r.unite_cible} »`)
+          if (q !== null) showModal({ type: 'info', title: 'Conversion d\'unités', message: `${q} ${r.unite_source} = ${(q * n(r.facteur_conversion)).toLocaleString('fr-FR', { maximumFractionDigits: 4 })} ${r.unite_cible}` })
           return null
         },
         tone: 'indigo',

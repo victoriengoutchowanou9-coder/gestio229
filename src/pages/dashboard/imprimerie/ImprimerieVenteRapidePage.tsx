@@ -32,6 +32,7 @@ import {
   CaisseStatusResult
 } from '../../../services/caisseSectorService'
 import { supabase } from '../../../lib/supabase'
+import { showModal } from '../../../components/modals/CustomModalGestio'
 
 import { getSecteurTheme } from '../../../styles/secteursTheme'
 
@@ -145,9 +146,9 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     try {
       if (toast?.[type]) toast[type](msg)
       else if (typeof toast === 'function') toast(msg, type)
-      else window.alert(msg)
+      else showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     } catch {
-      window.alert(msg)
+      showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     }
   }
 

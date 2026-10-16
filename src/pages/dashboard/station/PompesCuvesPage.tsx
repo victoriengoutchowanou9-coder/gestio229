@@ -12,6 +12,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
+import { showModal, showPrompt } from '../../../components/modals/CustomModalGestio'
 
 interface Cuve {
   id: string
@@ -117,7 +118,14 @@ export const PompesCuvesPage: React.FC = () => {
   const notify = useCallback((type: 'success' | 'error', msg: string) => {
     try {
       if (toast?.[type]) toast[type](msg)
-      else if (type === 'error') window.alert(msg)
+      else if (type === 'error') {
+        showModal({
+          type: 'error',
+          title: 'Erreur Station',
+          message: msg,
+          domaine: 'www.gestio229.com'
+        })
+      }
     } catch { /* noop */ }
   }, [toast])
 
@@ -583,7 +591,11 @@ export const PompesCuvesPage: React.FC = () => {
                     <td className="p-3 text-right">
                       <button
                         onClick={async () => {
-                          const nouvelIndex = window.prompt(`Nouvel index pour ${p.numero_pompe} (actuel : ${p.index_actuel}) :`)
+                          const nouvelIndex = await showPrompt(
+                            `Nouvel index pour ${p.numero_pompe} (actuel : ${p.index_actuel}) :`,
+                            String(p.index_actuel || ''),
+                            'Ajustement d\'index pompe'
+                          )
                           if (nouvelIndex && !isNaN(Number(nouvelIndex))) {
                             await supabase
                               .from('station_pompes')

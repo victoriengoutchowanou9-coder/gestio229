@@ -20,6 +20,7 @@ import {
   GarageVehicule,
   GarageMecanicien
 } from '../../../services/garageService'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -209,7 +210,8 @@ export const GarageReparationsPage: React.FC = () => {
 
   // ── Conversion Devis en Ordre de Réparation ──
   const handleConvertDevisToOR = async (dev: GarageDevis) => {
-    if (!window.confirm(`Convertir le devis ${dev.numero_devis} en Ordre de Réparation ?`)) return
+    const ok = await showConfirm(`Convertir le devis ${dev.numero_devis} en Ordre de Réparation ?`, 'Conversion en OR')
+    if (!ok) return
     try {
       const numOr = `OR-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`
       const payload: Partial<GarageOrdreReparation> = {
@@ -272,7 +274,8 @@ export const GarageReparationsPage: React.FC = () => {
       toast.info('Information', 'Les pièces de cet ordre de réparation ont déjà été déstockées.')
       return
     }
-    if (!window.confirm(`Confirmer la sortie de stock pour l'ordre ${ord.numero_or} ?`)) return
+    const ok = await showConfirm(`Confirmer la sortie de stock pour l'ordre ${ord.numero_or} ?`, 'Sortie de stock')
+    if (!ok) return
 
     try {
       await supabaseTenant('garage_ordres_reparation')

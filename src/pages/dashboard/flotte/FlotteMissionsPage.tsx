@@ -19,6 +19,7 @@ import {
   Check,
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
+import { showPrompt } from '../../../components/modals/CustomModalGestio'
 import {
   getMissionsFlotte,
   saveMissionFlotte,
@@ -101,7 +102,11 @@ export const FlotteMissionsPage: React.FC = () => {
   }
 
   const handleFinishMission = async (m: FlotteMission) => {
-    const kmFin = prompt('Entrez le kilométrage au retour (compteur) :', String((m.kilometrage_depart || 0) + 45))
+    const kmFin = await showPrompt(
+      'Entrez le kilométrage au retour (compteur) :',
+      String((m.kilometrage_depart || 0) + 45),
+      'Fin de mission'
+    )
     if (!kmFin) return
     const kmArriveeNum = Number(kmFin)
     const dist = Math.max(0, kmArriveeNum - (m.kilometrage_depart || 0))

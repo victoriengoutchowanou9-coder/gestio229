@@ -20,6 +20,7 @@ import {
   Zap
 } from 'lucide-react'
 import { ModalPortal } from '../modals/ModalPortal'
+import { showConfirm } from '../modals/CustomModalGestio'
 import {
   DestinataireRapport,
   getDestinatairesRapport,
@@ -106,7 +107,8 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
   }
 
   const handleDelete = async (id: string) => {
-    if (confirm('Voulez-vous vraiment retirer cette adresse de la liste des destinataires ?')) {
+    const ok = await showConfirm('Voulez-vous vraiment retirer cette adresse de la liste des destinataires ?', 'Retirer destinataire')
+    if (ok) {
       await supprimerDestinataireRapport(companyId, id)
       await loadData()
     }

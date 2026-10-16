@@ -1,6 +1,7 @@
-﻿import React, { useState } from 'react'
+import React, { useState } from 'react'
 import { ArrowDownRight, Check, X } from 'lucide-react'
 import ModalPortal from './ModalPortal'
+import { showModal } from './CustomModalGestio'
 
 interface TreasuryDisbursementModalProps {
   isOpen: boolean
@@ -14,14 +15,24 @@ export const TreasuryDisbursementModal: React.FC<TreasuryDisbursementModalProps>
   const [beneficiary, setBeneficiary] = useState('')
   const [reason, setReason] = useState('')
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!amount || amount <= 0 || !beneficiary) {
-      alert('Veuillez renseigner le montant et le bénéficiaire.')
+      showModal({
+        type: 'warning',
+        title: 'Champs requis',
+        message: 'Veuillez renseigner le montant et le bénéficiaire.',
+        domaine: 'www.gestio229.com',
+      })
       return
     }
     if (onSuccess) onSuccess({ source, amount, beneficiary, reason })
-    alert(`✅ Décaissement de ${amount} FCFA vers "${beneficiary}" validé !`)
+    await showModal({
+      type: 'success',
+      title: 'Décaissement validé',
+      message: `Décaissement de ${amount.toLocaleString('fr-FR')} FCFA vers "${beneficiary}" validé avec succès !`,
+      domaine: 'www.gestio229.com',
+    })
     onClose()
   }
 

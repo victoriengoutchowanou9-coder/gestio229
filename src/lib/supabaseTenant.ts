@@ -278,13 +278,13 @@ function attachInsertFallback(query: any, physicalTable: string, payload: any, c
 
       // Fallback niveau 1 : retirer la colonne identifiée
       const fb1Payload = buildCleanPayload(payload, colsToRemove)
-      const fb1Res = await supabase.from(physicalTable).insert(fb1Payload, options)
+      const fb1Res = await supabase.from(physicalTable).insert(fb1Payload, options).select()
       if (!fb1Res?.error) return onfulfilled ? onfulfilled(fb1Res) : fb1Res
 
       // Fallback niveau 2 : retirer toutes les colonnes optionnelles connues
       const optionalCols = ['sector_slug', 'notes', 'sector_meta', 'credit_authorized', 'discount_eligible', 'discount_rate', 'title', 'expense_date', 'payment_method', 'customer_name', 'status', 'current_debt']
       const fb2Payload = buildCleanPayload(payload, optionalCols)
-      const fb2Res = await supabase.from(physicalTable).insert(fb2Payload, options)
+      const fb2Res = await supabase.from(physicalTable).insert(fb2Payload, options).select()
       if (!fb2Res?.error) {
         console.warn(`[supabaseTenant] Fallback niv.2 OK pour ${physicalTable}. Appliquer M025_fix_schema_cache_global.sql pour corriger définitivement.`)
         return onfulfilled ? onfulfilled(fb2Res) : fb2Res
@@ -298,7 +298,7 @@ function attachInsertFallback(query: any, physicalTable: string, payload: any, c
         return copy
       }
       const fb3Payload = Array.isArray(payload) ? payload.map(minStrip) : minStrip(payload)
-      const fb3Res = await supabase.from(physicalTable).insert(fb3Payload, options)
+      const fb3Res = await supabase.from(physicalTable).insert(fb3Payload, options).select()
       console.error(`[supabaseTenant] ⚠️ Fallback niv.3 pour ${physicalTable}. URGENT: appliquer M025_fix_schema_cache_global.sql dans Supabase Studio.`)
       return onfulfilled ? onfulfilled(fb3Res) : fb3Res
     }, onrejected)

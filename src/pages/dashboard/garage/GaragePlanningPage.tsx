@@ -12,6 +12,7 @@ import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { formatFCFA } from '../../../utils/tax'
 import { GarageMecanicien, GarageOrdreReparation } from '../../../services/garageService'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -113,7 +114,8 @@ export const GaragePlanningPage: React.FC = () => {
   }
 
   const handleDelete = async (mec: GarageMecanicien) => {
-    if (!window.confirm(`Supprimer le technicien ${mec.nom_complet} ?`)) return
+    const ok = await showConfirm(`Supprimer le technicien ${mec.nom_complet} ?`, 'Suppression technicien')
+    if (!ok) return
     try {
       const { error } = await supabaseTenant('garage_mecaniciens').delete().eq('id', mec.id)
       if (error) throw error

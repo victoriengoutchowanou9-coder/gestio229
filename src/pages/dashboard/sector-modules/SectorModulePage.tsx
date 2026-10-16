@@ -10,6 +10,7 @@ import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { MODULE_CONFIGS, FieldDef, fmtMoney, generateRef } from './moduleConfigs'
 import { TableMissingVerifier } from './TableMissingVerifier'
+import { showModal, showConfirm } from '../../../components/modals/CustomModalGestio'
 
 const TONE_CARD: Record<string, string> = {
   emerald: 'text-emerald-700', rose: 'text-rose-600', amber: 'text-amber-600', indigo: 'text-indigo-700', slate: 'text-slate-900',
@@ -76,7 +77,14 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
     try {
       if (toast?.[type]) toast[type](msg)
       else if (typeof toast === 'function') toast(msg, type)
-      else if (type === 'error') window.alert(msg)
+      else if (type === 'error') {
+        showModal({
+          type: 'error',
+          title: 'Erreur',
+          message: msg,
+          domaine: 'www.gestio229.com'
+        })
+      }
     } catch { /* noop */ }
   }, [toast])
 
@@ -190,7 +198,8 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
   }
 
   const handleDelete = async (row: any) => {
-    if (!window.confirm('Supprimer définitivement cet enregistrement ?')) return
+    const ok = await showConfirm('Supprimer définitivement cet enregistrement ?', 'Suppression')
+    if (!ok) return
     const { error } = await supabase
       .from(config.table)
       .delete()
@@ -203,7 +212,7 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
   }
 
   const runAction = async (row: any, apply: (r: any) => any) => {
-    const patch = apply(row)
+    const patch = await apply(row)
     if (!patch) return
     const { error } = await supabase
       .from(config.table)

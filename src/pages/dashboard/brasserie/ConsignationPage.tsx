@@ -19,6 +19,7 @@ import { useTenant } from '../../../hooks/useTenant'
 import { logAuditEvent } from '../../../services/auditService'
 import { formatFCFA } from '../../../utils/tax'
 import { getSoldeClient, getSoldesClientTous, enregistrerRetourEmballage, isVraiCodeEmballage } from '../../../utils/emballages'
+import { showModal } from '../../../components/modals/CustomModalGestio'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -950,19 +951,34 @@ const BrasserieConsignationPage: React.FC = () => {
     })
 
     if (!companyId) {
-      alert('Erreur: Identifiant entreprise (company_id) manquant')
+      showModal({
+        type: 'error',
+        title: 'Session requise',
+        message: 'Erreur: Identifiant entreprise (company_id) manquant.',
+        domaine: 'www.gestio229.com'
+      })
       toast.error('Erreur', 'Identifiant entreprise manquant')
       return
     }
 
     if (!fRetour.client_id) {
-      alert('Veuillez sélectionner un client')
+      showModal({
+        type: 'warning',
+        title: 'Client requis',
+        message: 'Veuillez sélectionner un client pour ce retour d\'emballages.',
+        domaine: 'www.gestio229.com'
+      })
       toast.error('Client requis', 'Veuillez sélectionner un client')
       return
     }
 
     if (totalRetour <= 0) {
-      alert('Saisissez au moins une quantité à retourner')
+      showModal({
+        type: 'warning',
+        title: 'Quantité requise',
+        message: 'Saisissez au moins une quantité de casiers à retourner.',
+        domaine: 'www.gestio229.com'
+      })
       toast.error('Quantité requise', 'Veuillez renseigner au moins une quantité à retourner')
       return
     }
@@ -1062,7 +1078,12 @@ const BrasserieConsignationPage: React.FC = () => {
     } catch (err: any) {
       console.error('[handleValiderRetour] Erreur retour emballages:', err)
       const msg = err.message || 'Erreur inconnue lors de l\'enregistrement'
-      alert(`Erreur Supabase: ${msg}\n\nOuvrez F12 Console pour inspecter les détails`)
+      showModal({
+        type: 'error',
+        title: 'Erreur Supabase',
+        message: `Erreur lors de l'enregistrement :\n\n${msg}`,
+        domaine: 'www.gestio229.com'
+      })
       toast.error('Erreur enregistrement', msg)
     } finally {
       setIsSubmittingRetour(false)

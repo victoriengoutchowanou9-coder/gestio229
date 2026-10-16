@@ -7,6 +7,7 @@
 import React, { useState, useEffect } from 'react'
 import { PackageCheck, Check, X, AlertTriangle, AlertCircle } from 'lucide-react'
 import ModalPortal from './ModalPortal'
+import { showModal } from './CustomModalGestio'
 
 export interface BlItemReception {
   productId: string
@@ -82,12 +83,22 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
     e.preventDefault()
 
     if (totalReceived <= 0) {
-      alert('Veuillez indiquer au moins une quantité reçue supérieure à 0.')
+      showModal({
+        type: 'warning',
+        title: 'Quantité invalide',
+        message: 'Veuillez indiquer au moins une quantité reçue supérieure à 0.',
+        domaine: 'www.gestio229.com',
+      })
       return
     }
 
     if (!blRef.trim()) {
-      alert('Veuillez saisir le numéro de BL papier du fournisseur.')
+      showModal({
+        type: 'warning',
+        title: 'Numéro BL requis',
+        message: 'Veuillez saisir le numéro de BL papier du fournisseur.',
+        domaine: 'www.gestio229.com',
+      })
       return
     }
 

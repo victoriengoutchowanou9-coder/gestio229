@@ -25,6 +25,7 @@ import {
   checkGrillesOverlap
 } from '../../../services/brasseriePricingService'
 import { filterItemsForSector } from '../../../lib/sectorClient'
+import { showModal, showConfirm } from '../../../components/modals/CustomModalGestio'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -77,7 +78,14 @@ export const BrasserieGrillesPage: React.FC = () => {
     try {
       if (toast?.[type]) toast[type](msg)
       else if (typeof toast === 'function') toast(msg, type)
-      else if (type === 'error') alert(msg)
+      else if (type === 'error') {
+        showModal({
+          type: 'error',
+          title: 'Erreur',
+          message: msg,
+          domaine: 'www.gestio229.com'
+        })
+      }
     } catch { /* noop */ }
   }, [toast])
 
@@ -238,9 +246,12 @@ export const BrasserieGrillesPage: React.FC = () => {
   }
 
   const handleDeleteGrid = async (g: BrasserieGrille) => {
-    if (!window.confirm(`Confirmez-vous la suppression définitive de la grille « ${g.nom} » ?\nTous les prix associés à cette grille seront supprimés.`)) {
-      return
-    }
+    const ok = await showConfirm(
+      `Confirmez-vous la suppression définitive de la grille « ${g.nom} » ?\nTous les prix associés à cette grille seront supprimés.`,
+      'Suppression de grille'
+    )
+    if (!ok) return
+
     try {
       await deleteBrasserieGrille(currentCompanyId, g.id)
       notify('success', `Grille « ${g.nom} » supprimée.`)

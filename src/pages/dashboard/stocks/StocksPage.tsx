@@ -18,6 +18,7 @@ import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
 import { getActiveSectorSlug, filterItemsForSector } from '../../../lib/sectorClient'
 import { NewProductModal, StockSheetModal, ModalPortal } from '../../../components/modals'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import {
@@ -652,9 +653,11 @@ export const StocksPage: React.FC = () => {
   }
 
   const handleDeleteProduct = async (p: ProductStock) => {
-    if (!window.confirm(`Confirmez-vous l'archivage / suppression du produit "${p.name}" (${p.code}) ?`)) {
-      return
-    }
+    const ok = await showConfirm(
+      `Confirmez-vous l'archivage / suppression du produit "${p.name}" (${p.code}) ?`,
+      'Archivage de produit'
+    )
+    if (!ok) return
     try {
       const { error } = await supabase
         .from('products')

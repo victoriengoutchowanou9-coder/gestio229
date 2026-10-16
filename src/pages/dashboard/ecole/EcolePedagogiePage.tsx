@@ -16,6 +16,7 @@ import {
   getClasses, getMatieres, getEnseignants, getSalles,
   getEmploiDuTemps, checkEmploiDuTempsConflit
 } from '../../../services/ecoleService'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 
 const JOURS = ['LUNDI', 'MARDI', 'MERCREDI', 'JEUDI', 'VENDREDI', 'SAMEDI']
 const CRENEAUX = [
@@ -162,7 +163,8 @@ export const EcolePedagogiePage: React.FC = () => {
   }
 
   const handleDeleteSlot = async (id: string) => {
-    if (!window.confirm('Voulez-vous vraiment retirer cette séance de cours ?')) return
+    const ok = await showConfirm('Voulez-vous vraiment retirer cette séance de cours ?', 'Retirer le cours')
+    if (!ok) return
     try {
       await supabase.from('ecole_emplois_du_temps').delete().eq('id', id)
       toast.success('Séance supprimée.')

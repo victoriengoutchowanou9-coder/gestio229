@@ -20,6 +20,7 @@ import {
 import { supabase } from '../../../../lib/supabase'
 import { useTenant } from '../../../../hooks/useTenant'
 import type { BtpChauffeurOperateur, BtpSite, BtpMateriel } from '../../../../services/garageService'
+import { showModal, showConfirm } from '../../../../components/modals/CustomModalGestio'
 
 const CACES_PRESETS = [
   'R482 Catégorie A (Mini-pelle, compacteur)',
@@ -172,14 +173,20 @@ export default function BtpChauffeursPage() {
       setIsModalOpen(false)
       loadData()
     } catch (err: any) {
-      alert(`Erreur d'enregistrement: ${err.message}`)
+      showModal({
+        type: 'error',
+        title: 'Erreur d\'enregistrement',
+        message: err.message || 'Erreur lors de l\'enregistrement du conducteur.',
+        domaine: 'www.gestio229.com'
+      })
     } finally {
       setSaving(false)
     }
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Supprimer ce conducteur / opérateur ?')) return
+    const ok = await showConfirm('Supprimer ce conducteur / opérateur ?', 'Confirmation suppression')
+    if (!ok) return
     try {
       const { error } = await supabase
         .from('btp_chauffeurs_operateurs')
@@ -188,7 +195,12 @@ export default function BtpChauffeursPage() {
       if (error) throw error
       loadData()
     } catch (err: any) {
-      alert(`Erreur: ${err.message}`)
+      showModal({
+        type: 'error',
+        title: 'Erreur',
+        message: err.message || 'Impossible de supprimer ce conducteur.',
+        domaine: 'www.gestio229.com'
+      })
     }
   }
 

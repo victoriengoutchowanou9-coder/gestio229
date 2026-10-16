@@ -3,10 +3,14 @@ import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
 import './App.css'
+import { installGlobalModalInterceptors } from './components/modals/CustomModalGestio'
 
 // =============================================================================
-// GESTIO 229 — Initialisation globale (thème, PWA, version check, chunk guard)
+// GESTIO 229 — Initialisation globale (thème, PWA, version check, chunk guard, modales pro)
 // =============================================================================
+
+// Élimination définitive des popups natives browser (gestio229.vercel.app indique)
+installGlobalModalInterceptors()
 
 declare const __APP_VERSION__: string
 

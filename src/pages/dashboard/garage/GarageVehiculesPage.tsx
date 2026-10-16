@@ -12,6 +12,7 @@ import {
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { GarageVehicule } from '../../../services/garageService'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 import clsx from 'clsx'
 
 export const GarageVehiculesPage: React.FC = () => {
@@ -151,7 +152,8 @@ export const GarageVehiculesPage: React.FC = () => {
   }
 
   const handleDelete = async (v: GarageVehicule) => {
-    if (!window.confirm(`Supprimer définitivement le véhicule ${v.immatriculation} ?`)) return
+    const ok = await showConfirm(`Supprimer définitivement le véhicule ${v.immatriculation} ?`, 'Suppression véhicule')
+    if (!ok) return
     try {
       const { error } = await supabaseTenant('garage_clients_vehicules').delete().eq('id', v.id)
       if (error) throw error

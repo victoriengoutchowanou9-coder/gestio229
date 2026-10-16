@@ -22,6 +22,7 @@ import { formatFCFA } from '../../../utils/tax'
 import { logAuditEvent } from '../../../services/auditService'
 import { enregistrerMouvementCaisse } from '../../../services/caisseSectorService'
 import { comptabiliserEncaissementCreanceAuto } from '../../../services/compta_auto'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 import {
   BrasserieClientPrixPersonnalise,
   fetchClientPrixPersonnalises,
@@ -327,7 +328,11 @@ const ClientsPage: React.FC = () => {
 
   const handleDeleteCustomPrice = async (produitId: string) => {
     if (!customPricesCustomer) return
-    if (!window.confirm('Supprimer ce prix personnalisé ? Ce client basculera sur la grille automatique ou le prix standard pour ce produit.')) return
+    const ok = await showConfirm(
+      'Supprimer ce prix personnalisé ? Ce client basculera sur la grille automatique ou le prix standard pour ce produit.',
+      'Suppression du prix personnalisé'
+    )
+    if (!ok) return
 
     try {
       await deleteClientPrixPersonnalise(currentCompanyId, customPricesCustomer.id, produitId)

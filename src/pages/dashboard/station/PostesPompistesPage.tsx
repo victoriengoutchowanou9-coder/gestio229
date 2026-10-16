@@ -13,6 +13,7 @@ import {
 import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
+import { showModal } from '../../../components/modals/CustomModalGestio'
 
 interface Pompiste {
   id: string
@@ -101,7 +102,14 @@ export const PostesPompistesPage: React.FC = () => {
   const notify = useCallback((type: 'success' | 'error', msg: string) => {
     try {
       if (toast?.[type]) toast[type](msg)
-      else if (type === 'error') window.alert(msg)
+      else if (type === 'error') {
+        showModal({
+          type: 'error',
+          title: 'Erreur Pompiste',
+          message: msg,
+          domaine: 'www.gestio229.com'
+        })
+      }
     } catch { /* noop */ }
   }, [toast])
 

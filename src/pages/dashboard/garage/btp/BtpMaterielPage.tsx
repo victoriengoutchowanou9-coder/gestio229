@@ -13,6 +13,7 @@ import { useTenant } from '../../../../hooks/useTenant'
 import { useUIStore } from '../../../../store/uiStore'
 import { formatFCFA } from '../../../../utils/tax'
 import { BtpMateriel, BtpSite } from '../../../../services/garageService'
+import { showConfirm } from '../../../../components/modals/CustomModalGestio'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -191,7 +192,11 @@ export const BtpMaterielPage: React.FC = () => {
   }
 
   const handleDelete = async (m: BtpMateriel) => {
-    if (!window.confirm(`Supprimer définitivement l'engin ${m.code_materiel} (${m.designation}) ?`)) return
+    const ok = await showConfirm(
+      `Supprimer définitivement l'engin ${m.code_materiel} (${m.designation}) ?`,
+      'Confirmation suppression engin'
+    )
+    if (!ok) return
     try {
       const { error } = await supabaseTenant('btp_materiels').delete().eq('id', m.id)
       if (error) throw error

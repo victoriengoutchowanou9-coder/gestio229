@@ -63,6 +63,8 @@ export default defineConfig({
     // Identifiant unique de chaque build — change à chaque déploiement Vercel
     // Utilisé pour détecter un nouveau déploiement et forcer un rechargement propre
     __APP_VERSION__: JSON.stringify(`${Date.now()}`),
+    // Domaine officiel de la plateforme GESTIO 229
+    __APP_DOMAIN__: JSON.stringify('www.gestio229.com'),
   },
   build: {
     chunkSizeWarningLimit: 1000,

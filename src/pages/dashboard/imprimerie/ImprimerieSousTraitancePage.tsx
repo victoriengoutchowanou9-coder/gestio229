@@ -12,6 +12,7 @@ import { useTenant } from '../../../hooks/useTenant'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { imprimerieService, SousTraitanceOrdre, CommandeImprimerie } from '../../../services/imprimerieService'
+import { showModal } from '../../../components/modals/CustomModalGestio'
 
 export const ImprimerieSousTraitancePage: React.FC = () => {
   const { companyId, sectorSlug } = useTenant()
@@ -52,9 +53,9 @@ export const ImprimerieSousTraitancePage: React.FC = () => {
     try {
       if (toast?.[type]) toast[type](msg)
       else if (typeof toast === 'function') toast(msg, type)
-      else window.alert(msg)
+      else showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     } catch {
-      window.alert(msg)
+      showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     }
   }
 

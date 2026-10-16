@@ -21,6 +21,7 @@ import {
   Save,
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
+import { showConfirm } from '../../../components/modals/CustomModalGestio'
 import {
   getVehiculesFlotte,
   saveVehiculeFlotte,
@@ -106,7 +107,8 @@ export const FlotteVehiculesPage: React.FC = () => {
   }
 
   const handleDelete = async (id: string, immat: string) => {
-    if (!window.confirm(`Confirmez-vous la suppression du véhicule ${immat} de la flotte ?`)) return
+    const ok = await showConfirm(`Confirmez-vous la suppression du véhicule ${immat} de la flotte ?`, 'Suppression de véhicule')
+    if (!ok) return
     await deleteVehiculeFlotte(companyId, id)
     setVehicules((prev) => prev.filter((v) => v.id !== id))
   }

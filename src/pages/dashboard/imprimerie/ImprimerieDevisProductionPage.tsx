@@ -25,6 +25,7 @@ import {
   PrioriteCommande
 } from '../../../services/imprimerieService'
 import { supabase } from '../../../lib/supabase'
+import { showModal, showConfirm } from '../../../components/modals/CustomModalGestio'
 
 export const ImprimerieDevisProductionPage: React.FC = () => {
   const { companyId, sectorSlug } = useTenant()
@@ -105,9 +106,9 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
     try {
       if (toast?.[type]) toast[type](msg)
       else if (typeof toast === 'function') toast(msg, type)
-      else window.alert(msg)
+      else showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     } catch {
-      window.alert(msg)
+      showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     }
   }
 
@@ -237,7 +238,8 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
 
   // ── Transformation Devis ➔ Commande ──
   const handleTransformerDevis = async (devisId: string) => {
-    if (!window.confirm('Voulez-vous transformer ce devis en commande de production ferme ?')) return
+    const ok = await showConfirm('Voulez-vous transformer ce devis en commande de production ferme ?', 'Transformation en commande')
+    if (!ok) return
     try {
       const cmd = await imprimerieService.transformerDevisEnCommande(devisId, user)
       notify('success', `Commande N° ${cmd.numero_commande} créée avec succès et envoyée à l'atelier !`)

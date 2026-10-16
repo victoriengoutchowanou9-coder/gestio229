@@ -23,6 +23,7 @@ import { useTenant } from '../../../hooks/useTenant'
 import { getActiveSectorSlug } from '../../../lib/sectorClient'
 import { logAuditEvent } from '../../../services/auditService'
 import ModalPortal from '../../../components/modals/ModalPortal'
+import { showModal, showConfirm } from '../../../components/modals/CustomModalGestio'
 import {
   JournalCode,
   AccountingEntry,
@@ -312,7 +313,8 @@ export const SyscohadaPage: React.FC = () => {
   }
 
   const handleDeleteBudget = async (bId: string) => {
-    if (!confirm('Archiver ce budget ?')) return
+    const ok = await showConfirm('Archiver ce budget ?', 'Confirmation archivage')
+    if (!ok) return
     try {
       await supabase.from('budgets').update({ is_active: false }).eq('id', bId)
     } catch (_) {}
@@ -384,7 +386,8 @@ export const SyscohadaPage: React.FC = () => {
   }
 
   const handleDeleteBudgetLine = async (lineId: string) => {
-    if (!confirm('Supprimer cette ligne ?')) return
+    const ok = await showConfirm('Supprimer cette ligne ?', 'Confirmation suppression')
+    if (!ok) return
     try {
       await supabase.from('budget_lines').delete().eq('id', lineId)
     } catch (_) {}
@@ -402,7 +405,12 @@ export const SyscohadaPage: React.FC = () => {
 
   const handleRemoveManualLine = (idx: number) => {
     if (manualLines.length <= 2) {
-      alert('Une écriture comptable doit obligatoirement comporter au moins 2 lignes.')
+      showModal({
+        type: 'warning',
+        title: 'Lignes insuffisantes',
+        message: 'Une écriture comptable doit obligatoirement comporter au moins 2 lignes.',
+        domaine: 'www.gestio229.com'
+      })
       return
     }
     setManualLines(manualLines.filter((_, i) => i !== idx))
@@ -427,13 +435,21 @@ export const SyscohadaPage: React.FC = () => {
   const handleSaveManualEntry = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!manualHeader.description.trim()) {
-      alert('Veuillez renseigner le libellé de l\'écriture.')
+      showModal({
+        type: 'warning',
+        title: 'Libellé requis',
+        message: 'Veuillez renseigner le libellé de l\'écriture.',
+        domaine: 'www.gestio229.com'
+      })
       return
     }
     if (!isManualBalanced) {
-      alert(
-        `Écriture déséquilibrée : le total débit (${manualTotalDebit} FCFA) doit être strictement égal au total crédit (${manualTotalCredit} FCFA).`
-      )
+      showModal({
+        type: 'error',
+        title: 'Écriture déséquilibrée',
+        message: `Le total débit (${manualTotalDebit} FCFA) doit être strictement égal au total crédit (${manualTotalCredit} FCFA).`,
+        domaine: 'www.gestio229.com'
+      })
       return
     }
 
@@ -467,7 +483,12 @@ export const SyscohadaPage: React.FC = () => {
       ])
       await loadEntries()
     } else {
-      alert(res.error || 'Erreur lors de l\'enregistrement')
+      showModal({
+        type: 'error',
+        title: 'Enregistrement échoué',
+        message: res.error || 'Erreur lors de l\'enregistrement de l\'écriture.',
+        domaine: 'www.gestio229.com'
+      })
     }
   }
 
@@ -658,7 +679,12 @@ export const SyscohadaPage: React.FC = () => {
 
   const handleApplyLettering = async () => {
     if (selectedLinesToLetter.length < 2) {
-      alert('Sélectionnez au moins 2 écritures (une facture et son règlement) pour effectuer le lettrage.')
+      showModal({
+        type: 'warning',
+        title: 'Sélection insuffisante',
+        message: 'Sélectionnez au moins 2 écritures (une facture et son règlement) pour effectuer le lettrage.',
+        domaine: 'www.gestio229.com'
+      })
       return
     }
     const code = lettreCodeInput.trim().toUpperCase()

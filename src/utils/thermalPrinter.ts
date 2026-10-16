@@ -5,6 +5,7 @@
 
 import jsPDF from 'jspdf'
 import { formatFCFA } from './tax'
+import { showModal } from '../components/modals/CustomModalGestio'
 
 export interface TicketLineItem {
   code?: string
@@ -62,7 +63,12 @@ export function imprimerTicketThermique(
   const is58 = options.width === '58mm'
   const printWindow = window.open('', '_blank', 'width=450,height=650')
   if (!printWindow) {
-    alert("Veuillez autoriser les fenêtres pop-up dans votre navigateur pour l'impression du ticket.")
+    showModal({
+      type: 'warning',
+      title: 'Pop-up bloquée',
+      message: "Veuillez autoriser les fenêtres pop-up dans votre navigateur pour l'impression du ticket.",
+      domaine: 'www.gestio229.com'
+    })
     return
   }
 

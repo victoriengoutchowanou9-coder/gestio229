@@ -16,6 +16,7 @@ import {
   Calendar,
   Filter
 } from 'lucide-react';
+import { showSuccess } from '../../components/modals/CustomModalGestio';
 
 export interface SaaSCompany {
   id: string;
@@ -231,7 +232,7 @@ export const SuperAdminDashboard: React.FC = () => {
     };
     setCompanies([newComp, ...companies]);
     setShowAddCompanyModal(false);
-    alert(`Entreprise "${newCompanyForm.name}" créée avec succès en période d'essai 30 jours !`);
+    showSuccess(`Entreprise "${newCompanyForm.name}" créée avec succès en période d'essai 30 jours !`, 'Entreprise créée');
   };
 
   // Création d'un nouveau secteur dynamique
@@ -250,7 +251,7 @@ export const SuperAdminDashboard: React.FC = () => {
     };
     setSectors([...sectors, newSec]);
     setShowAddSectorModal(false);
-    alert(`Secteur "${newSectorForm.name}" créé et publié immédiatement sur la plateforme !`);
+    showSuccess(`Secteur "${newSectorForm.name}" créé et publié immédiatement sur la plateforme !`, 'Secteur créé');
   };
 
   return (
