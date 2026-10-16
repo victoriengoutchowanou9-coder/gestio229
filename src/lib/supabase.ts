@@ -28,6 +28,11 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
+// Sécurité anti-crash globale : expose supabase sur window
+if (typeof window !== 'undefined') {
+  (window as any).supabase = supabase
+}
+
 // ─── Helpers typés ─────────────────────────────────────────────────────────────
 
 /**

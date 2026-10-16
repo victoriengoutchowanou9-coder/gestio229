@@ -46,7 +46,9 @@ function detectTDZError(err: Error | null): boolean {
   const msg = (err.message || '') + (err.name || '') + (err.stack || '')
   return (
     (msg.includes('Cannot access') && msg.includes('before initialization')) ||
-    (msg.includes('ReferenceError') && msg.includes('initialization'))
+    (msg.includes('ReferenceError') && msg.includes('initialization')) ||
+    msg.includes('is not defined') ||
+    msg.includes('supabase is not defined')
   )
 }
 

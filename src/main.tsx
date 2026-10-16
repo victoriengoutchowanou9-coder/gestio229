@@ -4,6 +4,7 @@ import App from './App'
 import './index.css'
 import './App.css'
 import { installGlobalModalInterceptors } from './components/modals/CustomModalGestio'
+import { supabase } from './lib/supabase'
 
 // =============================================================================
 // GESTIO 229 — Initialisation globale (thème, PWA, version check, chunk guard, modales pro)
@@ -15,6 +16,7 @@ installGlobalModalInterceptors()
 declare const __APP_VERSION__: string
 
 if (typeof window !== 'undefined') {
+  (window as any).supabase = supabase
 
   // ── 1. Thème clair/sombre (sans saut visuel, synchronisé data-theme) ────
   const savedTheme = localStorage.getItem('gestio-theme') || localStorage.getItem('gestio_theme')
