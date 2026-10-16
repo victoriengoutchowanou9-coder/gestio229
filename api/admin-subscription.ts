@@ -90,6 +90,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     comment,
     new_status,
     confirm_name,
+    request_id,
+    approved_sectors,
+    authorized_modules,
+    commercial_terms,
+    sectors_list,
   } = req.body || {}
 
   if (!company_id) {
@@ -432,6 +437,202 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }, clientIp)
 
       return res.status(200).json({ success: true, message: 'Statut mis à jour.' })
+    }
+
+    // ── 7. APPROUVER UNE DEMANDE D'ACCÈS MULTISECTEUR ──────────────────
+    if (action === 'approve_multisector_request') {
+      const sectorsToAuthorize = Array.isArray(approved_sectors) ? approved_sectors : []
+      if (sectorsToAuthorize.length === 0) {
+        return res.status(400).json({ success: false, error: 'Veuillez spécifier au moins un secteur à autoriser.' })
+      }
+
+      // 1. Mettre à jour la demande
+      if (request_id) {
+        await sb.from('sector_access_requests').update({
+          status: 'approved',
+          approved_sectors: sectorsToAuthorize,
+          approved_modules: authorized_modules || [],
+          commercial_terms: commercial_terms || '',
+          admin_response: comment || reason || 'Demande approuvée par le Super Administrateur.',
+          processed_by: 'Super Admin',
+          processed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }).eq('id', request_id)
+      }
+
+      // 2. Fusionner les secteurs autorisés de l'entreprise
+      const { data: currentComp } = await sb.from('companies').select('authorized_sectors, selected_sectors, sectors').eq('id', company_id).single()
+      const existingAuth = Array.isArray(currentComp?.authorized_sectors) ? currentComp.authorized_sectors : []
+      const mergedSectors = Array.from(new Set([...existingAuth, ...sectorsToAuthorize]))
+
+      await sb.from('companies').update({
+        authorized_sectors: mergedSectors,
+        selected_sectors: mergedSectors,
+        sectors: mergedSectors,
+        authorized_modules: authorized_modules || ['dashboard', 'ventes', 'stock', 'caisse', 'clients', 'depenses', 'abonnement', 'configuration', 'utilisateurs', 'audit'],
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      // 3. Insérer les company_sectors correspondants
+      for (const s of sectorsToAuthorize) {
+        const cleanSlug = String(s).replace(/^sec-/, '').toLowerCase().trim()
+        await sb.from('company_sectors').upsert({
+          company_id,
+          sector_slug: cleanSlug,
+          sector_name: cleanSlug.toUpperCase(),
+          is_configured: true,
+          configuration: {
+            approved_by: 'Super Admin',
+            approved_at: new Date().toISOString(),
+          }
+        }, { onConflict: 'company_id,sector_slug' })
+      }
+
+      // 4. Inscription dans l'historique et journal d'audit
+      await sb.from('subscription_history').insert({
+        company_id,
+        company_name: company.name,
+        action: 'approbation_multisecteur',
+        reason: reason || 'Demande multi-secteur approuvée',
+        comment: commercial_terms ? `Conditions : ${commercial_terms}` : '',
+        performed_by: 'Super Admin',
+      })
+
+      await logAdminAction(sb, 'APPROBATION_ACCES_MULTISECTEUR', company_id, company.name, 'success', {
+        approved_sectors: sectorsToAuthorize,
+        commercial_terms,
+        requestId: request_id,
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `Accès accordé pour ${company.name} aux secteurs : ${sectorsToAuthorize.join(', ')}.`
+      })
+    }
+
+    // ── 8. REFUSER UNE DEMANDE D'ACCÈS MULTISECTEUR ──────────────────
+    if (action === 'reject_multisector_request') {
+      const refusalReason = (reason || comment || 'Demande non retenue').trim()
+
+      if (request_id) {
+        await sb.from('sector_access_requests').update({
+          status: 'rejected',
+          admin_response: refusalReason,
+          processed_by: 'Super Admin',
+          processed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }).eq('id', request_id)
+      }
+
+      await logAdminAction(sb, 'REFUS_ACCES_MULTISECTEUR', company_id, company.name, 'success', {
+        reason: refusalReason,
+        requestId: request_id,
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `Demande d'accès multisecteur pour ${company.name} refusée.`
+      })
+    }
+
+    // ── 9. GESTION DIRECTE DES SECTEURS AUTORISÉS ─────────────────────
+    if (action === 'manage_sectors') {
+      const list = Array.isArray(sectors_list) ? sectors_list : []
+      if (list.length === 0) {
+        return res.status(400).json({ success: false, error: 'Au moins 1 secteur requis.' })
+      }
+
+      const cleanList = list.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim())
+      const primary = cleanList[0]
+
+      await sb.from('companies').update({
+        primary_sector: primary,
+        active_sector: primary,
+        authorized_sectors: cleanList,
+        selected_sectors: cleanList,
+        sectors: cleanList,
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      for (const s of cleanList) {
+        await sb.from('company_sectors').upsert({
+          company_id,
+          sector_slug: s,
+          sector_name: s.toUpperCase(),
+          is_configured: true,
+        }, { onConflict: 'company_id,sector_slug' })
+      }
+
+      await logAdminAction(sb, 'GESTION_SECTEURS_AUTORISES', company_id, company.name, 'success', {
+        previous: company.selected_sectors,
+        new_sectors: cleanList,
+        reason: reason || 'Mise à jour par Super Admin',
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `Secteurs autorisés pour ${company.name} mis à jour : ${cleanList.join(', ')}.`
+      })
+    }
+
+    // ── 10. GESTION DES MODULES AUTORISÉS ─────────────────────────────
+    if (action === 'manage_modules') {
+      const modules = Array.isArray(authorized_modules) ? authorized_modules : []
+
+      await sb.from('companies').update({
+        authorized_modules: modules,
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      await logAdminAction(sb, 'GESTION_MODULES_AUTORISES', company_id, company.name, 'success', {
+        authorized_modules: modules,
+        reason: reason || 'Mise à jour modules par Super Admin',
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `Modules autorisés pour ${company.name} mis à jour.`
+      })
+    }
+
+    // ── 11. SIGNALER OU LEVER LE SIGNALEMENT DE COMPTE SUSPECT ────────
+    if (action === 'flag_suspicious') {
+      const suspReason = (reason || comment || 'Signalé suspect pour vérification manuelle').trim()
+
+      await sb.from('companies').update({
+        is_suspicious: true,
+        suspicious_reason: suspReason,
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      await logAdminAction(sb, 'COMPTE_SIGNALE_SUSPECT', company_id, company.name, 'warning', {
+        reason: suspReason,
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `L'entreprise ${company.name} est signalée pour vérification manuelle.`
+      })
+    }
+
+    if (action === 'unflag_suspicious') {
+      await sb.from('companies').update({
+        is_suspicious: false,
+        suspicious_reason: null,
+        suspicious_reviewed_at: new Date().toISOString(),
+        suspicious_reviewed_by: 'Super Admin',
+        updated_at: new Date().toISOString(),
+      }).eq('id', company_id)
+
+      await logAdminAction(sb, 'SIGNALEMENT_SUSPECT_LEVE', company_id, company.name, 'success', {
+        reviewed_by: 'Super Admin',
+        notes: comment || reason || 'Compte vérifié et approuvé manuellement',
+      }, clientIp)
+
+      return res.status(200).json({
+        success: true,
+        message: `Le signalement suspect pour ${company.name} a été levé après vérification manuelle.`
+      })
     }
 
     return res.status(400).json({ success: false, error: 'Action non reconnue.' })

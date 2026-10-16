@@ -25,10 +25,13 @@ import {
   Truck,
   Layers,
   CheckCircle2,
-  ArrowRight
+  ArrowRight,
+  AlertCircle,
+  PhoneCall,
+  X
 } from 'lucide-react'
 
-import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
+import { formatFCFA } from '../../core/subscription/subscriptionEngine'
 
 export interface SectorItem {
   id: string
@@ -217,7 +220,8 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
   submitting = false
 }) => {
   const [searchTerm, setSearchTerm] = useState('')
-  const [planChoice, setPlanChoice] = useState<'starter' | 'entreprise'>('entreprise')
+  const [showMultiSectorModal, setShowMultiSectorModal] = useState(false)
+  const [warningMessage, setWarningMessage] = useState<string | null>(null)
 
   const renderIcon = (iconName: string, isSelected: boolean) => {
     const props = { className: `w-6 h-6 transition-transform ${isSelected ? 'scale-110' : ''}` }
@@ -256,49 +260,86 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
     )
   }, [searchTerm])
 
+  // RÈGLE ABSOLUE CDC SECTION 2 : UN SEUL SECTEUR PRINCIPAL AUTORISÉ EN INSCRIPTION GRATUITE
+  const handleSelectSector = (id: string) => {
+    const isCurrentlySelected = selected.includes(id)
+
+    // Si l'utilisateur clique sur le même secteur déjà sélectionné, il reste sélectionné
+    if (isCurrentlySelected) {
+      return
+    }
+
+    // Si un secteur est déjà choisi et qu'il en choisit un autre, on remplace le secteur principal
+    onToggle(id)
+    setWarningMessage(null)
+  }
+
+  const handleMultiSectorDemand = () => {
+    setShowMultiSectorModal(true)
+  }
+
+  const selectedSectorObj = ALL_SECTORS.find((s) => selected.includes(s.id) || selected.includes(s.slug))
   const count = selected.length
-  const isSolo = count === 1
-  const isMulti = count > 1
 
   return (
     <div className="space-y-6">
-      {/* En-tête de l'étape 2 */}
+      {/* En-tête de l'étape 2 avec règle claire */}
       <div className="text-center sm:text-left">
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700 text-xs font-bold mb-2">
-          <Layers className="w-3.5 h-3.5" /> Étape 2 sur 2 : Activités &amp; Secteurs
+          <Layers className="w-3.5 h-3.5" /> Étape 2 sur 2 : Secteur d'Activité Principal
         </div>
         <h2 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-          Quelles activités exercez-vous ?
+          Quel est votre secteur d'activité principal ?
         </h2>
         <p className="text-sm text-slate-600 mt-1">
-          Sélectionnez un ou plusieurs secteurs d'activité pour configurer vos modules sur mesure (ex : <strong>Quincaillerie + Poissonnerie + Restaurant</strong>).
+          Sélectionnez <strong>un seul secteur principal</strong> pour démarrer votre période d'essai gratuit de 30 jours.
         </p>
       </div>
 
-      {/* Barre de recherche en direct */}
-      <div className="relative">
-        <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
-          <Search className="w-5 h-5" />
+      {/* Message d'avertissement réglementaire si tentative multi-secteurs */}
+      {warningMessage && (
+        <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm font-semibold flex items-center gap-3 animate-fadeIn">
+          <AlertCircle className="w-5 h-5 shrink-0 text-amber-600" />
+          <span>{warningMessage}</span>
         </div>
-        <input
-          type="text"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          placeholder="Rechercher un secteur (ex: quincaillerie, restaurant, poissonnerie, école...)"
-          className="w-full pl-11 pr-4 py-3 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-800 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
-        />
-        {searchTerm && (
-          <button
-            type="button"
-            onClick={() => setSearchTerm('')}
-            className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-xs font-semibold text-slate-400 hover:text-slate-600"
-          >
-            Effacer
-          </button>
-        )}
+      )}
+
+      {/* Barre de recherche + bouton demande multisecteur */}
+      <div className="flex flex-col sm:flex-row gap-3 items-stretch">
+        <div className="relative flex-1">
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
+            <Search className="w-5 h-5" />
+          </div>
+          <input
+            type="text"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Rechercher votre secteur principal (ex: quincaillerie, restaurant, boutique...)"
+            className="w-full pl-11 pr-4 py-3 bg-white border border-slate-300 rounded-xl text-sm font-medium text-slate-800 placeholder-slate-400 shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all"
+          />
+          {searchTerm && (
+            <button
+              type="button"
+              onClick={() => setSearchTerm('')}
+              className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-xs font-semibold text-slate-400 hover:text-slate-600"
+            >
+              Effacer
+            </button>
+          )}
+        </div>
+
+        <button
+          type="button"
+          onClick={handleMultiSectorDemand}
+          className="px-4 py-3 bg-slate-100 hover:bg-slate-200 text-indigo-700 text-xs font-bold rounded-xl border border-indigo-200 flex items-center justify-center gap-2 transition"
+          title="Demander plusieurs secteurs d'activité"
+        >
+          <Layers className="w-4 h-4 text-indigo-600" />
+          <span>Besoin de plusieurs activités ?</span>
+        </button>
       </div>
 
-      {/* Raccourcis fréquents */}
+      {/* Raccourcis fréquents (sélection unique) */}
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <span className="text-slate-500 font-medium">Suggestions :</span>
         {['Quincaillerie', 'Poissonnerie', 'Restaurant', 'Boutique'].map((name) => {
@@ -309,31 +350,31 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
             <button
               key={item.id}
               type="button"
-              onClick={() => onToggle(item.id)}
+              onClick={() => handleSelectSector(item.id)}
               className={`px-2.5 py-1 rounded-lg font-semibold border transition-all ${
                 isSelected
                   ? 'bg-indigo-600 text-white border-indigo-600 shadow-sm'
                   : 'bg-white text-slate-700 border-slate-200 hover:border-indigo-300 hover:bg-slate-50'
               }`}
             >
-              {isSelected ? '✓ ' : '+ '}
+              {isSelected ? '✓ ' : ''}
               {name}
             </button>
           )
         })}
       </div>
 
-      {/* Grille 3 colonnes responsive */}
+      {/* Grille des secteurs (sélection unique radio-style) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5 max-h-[440px] overflow-y-auto p-1 pr-2">
         {filteredSectors.map((sector) => {
           const isChecked = selected.includes(sector.id) || selected.includes(sector.slug)
           return (
             <div
               key={sector.id}
-              onClick={() => onToggle(sector.id)}
+              onClick={() => handleSelectSector(sector.id)}
               className={`relative group rounded-2xl p-4 cursor-pointer border-2 transition-all select-none flex flex-col justify-between ${
                 isChecked
-                  ? 'bg-indigo-50/80 border-indigo-600 shadow-md ring-2 ring-indigo-500/20'
+                  ? 'bg-indigo-50/90 border-indigo-600 shadow-md ring-2 ring-indigo-500/20'
                   : 'bg-white border-slate-200 hover:border-indigo-300 hover:shadow-sm'
               }`}
             >
@@ -349,15 +390,15 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
                     {renderIcon(sector.icon, isChecked)}
                   </div>
 
-                  {/* Checkbox Card indicator */}
+                  {/* Radio Indicator (un seul secteur autorisé) */}
                   <div
-                    className={`w-6 h-6 rounded-lg border-2 flex items-center justify-center transition-all ${
+                    className={`w-6 h-6 rounded-full border-2 flex items-center justify-center transition-all ${
                       isChecked
                         ? 'bg-indigo-600 border-indigo-600 text-white shadow-sm scale-105'
                         : 'border-slate-300 bg-white group-hover:border-indigo-400'
                     }`}
                   >
-                    {isChecked && <Check className="w-3.5 h-3.5 stroke-[3]" />}
+                    {isChecked && <div className="w-2.5 h-2.5 bg-white rounded-full" />}
                   </div>
                 </div>
 
@@ -389,76 +430,34 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
         )}
       </div>
 
-      {/* Encart dynamique du forfait sélectionné & Tarifs (CDC Section 3, 5 & 7) */}
+      {/* Encart récapitulatif & niveau d'accès (CDC Section 3 & 8) */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-700 bg-gradient-to-r from-slate-900 to-indigo-950 p-4 sm:p-5 text-white shadow-xl">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="flex-1">
             <div className="flex flex-wrap items-center gap-2 mb-2">
               <span className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
-                Secteurs sélectionnés :
+                Secteur principal choisi :
               </span>
               <span className="inline-flex items-center justify-center px-2.5 py-0.5 rounded-full text-xs font-extrabold bg-indigo-500 text-white">
-                {count} {count > 1 ? 'secteurs' : 'secteur'}
+                {selectedSectorObj ? selectedSectorObj.name : 'Aucun'}
               </span>
               <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-500 text-slate-900 uppercase tracking-wider">
-                🎁 1er Mois Gratuit
+                🎁 Période d'Essai 30 Jours Gratuite
               </span>
             </div>
 
             {count === 0 ? (
               <p className="text-sm text-amber-300">
-                ⚠️ Veuillez sélectionner au moins <strong>1 secteur</strong> d'activité pour continuer.
+                ⚠️ Veuillez sélectionner <strong>1 secteur d'activité principal</strong> pour continuer.
               </p>
-            ) : count === 1 ? (
-              <div className="space-y-2">
-                <p className="text-xs text-slate-300">Choisissez votre formule pour cette activité :</p>
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition ${
-                    planChoice === 'starter'
-                      ? 'bg-indigo-600/40 border-indigo-400 text-white'
-                      : 'bg-white/10 border-white/20 text-slate-300 hover:bg-white/20'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="planChoice"
-                      checked={planChoice === 'starter'}
-                      onChange={() => setPlanChoice('starter')}
-                      className="accent-emerald-500"
-                    />
-                    <div>
-                      <span className="text-xs font-bold block">Plan Starter</span>
-                      <span className="text-[11px] text-emerald-300 font-black">5 000 FCFA / mois</span>
-                    </div>
-                  </label>
-
-                  <label className={`flex items-center gap-2 p-2.5 rounded-xl border cursor-pointer transition ${
-                    planChoice === 'entreprise'
-                      ? 'bg-emerald-600/40 border-emerald-400 text-white'
-                      : 'bg-white/10 border-white/20 text-slate-300 hover:bg-white/20'
-                  }`}>
-                    <input
-                      type="radio"
-                      name="planChoice"
-                      checked={planChoice === 'entreprise'}
-                      onChange={() => setPlanChoice('entreprise')}
-                      className="accent-emerald-500"
-                    />
-                    <div>
-                      <span className="text-xs font-bold block">Plan Entreprise (Tous modules)</span>
-                      <span className="text-[11px] text-emerald-300 font-black">10 000 FCFA / mois</span>
-                    </div>
-                  </label>
-                </div>
-              </div>
             ) : (
-              <div className="flex flex-wrap items-baseline gap-2">
-                <span className="text-xl font-black text-white">
-                  {formatFCFA(calculateSubscriptionPrice(count).priceMonthly)}
-                </span>
-                <span className="text-xs text-slate-300 font-medium">/ mois</span>
-                <span className="text-xs text-emerald-300 font-bold ml-2">
-                  (0 FCFA le premier mois · Essai gratuit de 30 jours)
-                </span>
+              <div className="space-y-1">
+                <p className="text-xs text-slate-300">
+                  Votre période d'essai gratuit de <strong>30 jours (0 FCFA)</strong> sera configurée pour ce secteur.
+                </p>
+                <p className="text-[11px] text-emerald-300 font-medium">
+                  ✓ Abonnement standard : {formatFCFA(5000)} / mois à l'issue de l'essai.
+                </p>
               </div>
             )}
           </div>
@@ -476,10 +475,7 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
 
             <button
               type="button"
-              onClick={() => {
-                const finalPlanSlug = count === 1 ? planChoice : count === 2 ? 'duo' : count === 3 ? 'trio' : `multi_${count}`
-                onContinue(finalPlanSlug)
-              }}
+              onClick={() => onContinue('starter')}
               disabled={count === 0 || submitting}
               className={`px-6 py-3 text-sm font-extrabold rounded-xl shadow-lg flex items-center justify-center gap-2 transition-all ${
                 count === 0 || submitting
@@ -502,6 +498,59 @@ export const SectorSelector: React.FC<SectorSelectorProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Modal Demande Accès Multisecteur (CDC Section 3 & 8) */}
+      {showMultiSectorModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2.5 text-indigo-700 font-black text-lg">
+                <Layers className="w-5 h-5 text-indigo-600" />
+                <span>Offre Professionnelle Multi-Secteurs</span>
+              </div>
+              <button
+                onClick={() => setShowMultiSectorModal(false)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-4 rounded-2xl bg-indigo-50 border border-indigo-100 text-indigo-900 text-sm leading-relaxed font-medium">
+              « Vous souhaitez utiliser plusieurs secteurs d'activité sur GESTIO229 ? Veuillez contacter notre équipe pour étudier votre besoin et définir une formule adaptée. »
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Pour des raisons de sécurité et d'adaptation personnalisée, l'exploitation simultanée de plusieurs secteurs d'activité est soumise à étude et validation par le Super Administrateur Back-Office.
+            </p>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2 text-xs text-slate-700">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-500">Contact concepteur / Direction :</span>
+                <span className="font-bold text-slate-900">+229 97 00 00 00</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-500">Email commercial :</span>
+                <span className="font-bold text-indigo-600">contact@gestio229.bj</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-slate-500">Procédure :</span>
+                <span className="font-bold text-emerald-700">Étude sous 24h &amp; attribution sur mesure</span>
+              </div>
+            </div>
+
+            <div className="pt-2 flex justify-end gap-2.5">
+              <button
+                type="button"
+                onClick={() => setShowMultiSectorModal(false)}
+                className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition"
+              >
+                J'ai compris, continuer avec 1 secteur principal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

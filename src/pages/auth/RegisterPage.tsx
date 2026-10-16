@@ -58,15 +58,11 @@ export const RegisterPage: React.FC = () => {
   }
 
   const toggleSector = (id: string) => {
-    setForm((prev) => {
-      const exists = prev.selected_sectors.includes(id)
-      return {
-        ...prev,
-        selected_sectors: exists
-          ? prev.selected_sectors.filter((s) => s !== id)
-          : [...prev.selected_sectors, id]
-      }
-    })
+    // RÈGLE ABSOLUE CDC SECTION 2 : Un seul secteur d'activité principal à l'inscription
+    setForm((prev) => ({
+      ...prev,
+      selected_sectors: [id]
+    }))
   }
 
   const handleStep1Submit = (e: React.FormEvent) => {
@@ -96,9 +92,14 @@ export const RegisterPage: React.FC = () => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  const handleFinalSubmit = async (chosenPlanSlug: string = 'entreprise') => {
+  const handleFinalSubmit = async (chosenPlanSlug: string = 'starter') => {
     if (form.selected_sectors.length === 0) {
-      setError('Veuillez sélectionner au moins un secteur d’activité.')
+      setError('Pour créer votre compte GESTIO229, veuillez sélectionner un seul secteur d\'activité principal.')
+      return
+    }
+
+    if (form.selected_sectors.length > 1) {
+      setError("Pour créer votre compte GESTIO229, veuillez sélectionner un seul secteur d'activité principal. Pour accéder à plusieurs secteurs ou bénéficier de fonctionnalités supplémentaires, veuillez contacter le concepteur.")
       return
     }
 
@@ -116,13 +117,37 @@ export const RegisterPage: React.FC = () => {
       const cleanEmail = form.email.trim().toLowerCase()
       const defaultSector = normalizeSectorSlug(form.selected_sectors[0] || 'boutique')
 
-      // Calcul métier du forfait et de l'essai gratuit de 1 mois (30 jours)
-      const planCalc = calculateSubscriptionPrice(
-        form.selected_sectors.length,
-        chosenPlanSlug.includes('starter') ? 'starter' : 'entreprise'
-      )
+      // Calcul métier du forfait et de l'essai gratuit de 1 mois (30 jours) sur 1 secteur principal
+      const planCalc = calculateSubscriptionPrice(1, 'starter')
       const now = new Date()
       const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+
+      // Appel sécurisé au endpoint serveur /api/auth-register
+      try {
+        const regRes = await fetch('/api/auth-register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            company_name: form.company_name.trim(),
+            ifu_number: form.ifu_number.trim(),
+            responsible_name: form.responsible_name.trim(),
+            phone: form.phone.trim(),
+            email: cleanEmail,
+            password: form.password,
+            country: form.country,
+            city: form.city.trim(),
+            selected_sectors: [defaultSector],
+          })
+        })
+        const regJson = await regRes.json()
+        if (!regRes.ok && regJson.error) {
+          throw new Error(regJson.error)
+        }
+      } catch (apiErr: any) {
+        if (apiErr.message && apiErr.message.includes('sélectionner un seul secteur')) {
+          throw apiErr
+        }
+      }
 
       // 1. Création du compte utilisateur Auth Supabase avec email_confirm: true forcé
       const authResult = await createConfirmedUser({
@@ -139,7 +164,8 @@ export const RegisterPage: React.FC = () => {
           ifu_number: form.ifu_number.trim(),
           city: form.city.trim(),
           country: form.country,
-          selected_sectors: form.selected_sectors,
+          selected_sectors: [defaultSector],
+          primary_sector: defaultSector,
         }
       })
 
@@ -153,7 +179,7 @@ export const RegisterPage: React.FC = () => {
         resolvedAuthUserId = sessionData?.session?.user?.id || null
       }
 
-      // 2. Création ou liaison de l'entreprise (Company) avec Essai Gratuit de 1 mois
+      // 2. Création ou liaison de l'entreprise (Company) avec Essai Gratuit de 1 mois sur 1 seul secteur
       let company: any = null
       const { data: existingComp } = await supabase
         .from('companies')
@@ -169,13 +195,16 @@ export const RegisterPage: React.FC = () => {
             name: form.company_name.trim(),
             phone: form.phone.trim(),
             city: form.city.trim(),
+            primary_sector: defaultSector,
             active_sector: defaultSector,
-            selected_sectors: form.selected_sectors,
-            sectors: form.selected_sectors,
+            selected_sectors: [defaultSector],
+            sectors: [defaultSector],
+            authorized_sectors: [defaultSector],
             onboarding_completed: true,
             subscription_status: 'trial',
-            subscription_plan: planCalc.slug,
-            plan: planCalc.slug,
+            trial_ends_at: trialEndsDate.toISOString(),
+            subscription_plan: 'starter',
+            plan: 'starter',
             updated_at: new Date().toISOString()
           })
           .eq('id', existingComp.id)
@@ -189,14 +218,17 @@ export const RegisterPage: React.FC = () => {
             email: cleanEmail,
             country: form.country,
             city: form.city.trim(),
+            primary_sector: defaultSector,
             active_sector: defaultSector,
-            selected_sectors: form.selected_sectors,
-            sectors: form.selected_sectors,
+            selected_sectors: [defaultSector],
+            sectors: [defaultSector],
+            authorized_sectors: [defaultSector],
             subscription_status: 'trial',
+            trial_ends_at: trialEndsDate.toISOString(),
             onboarding_completed: true,
             currency: 'FCFA',
-            subscription_plan: planCalc.slug,
-            plan: planCalc.slug
+            subscription_plan: 'starter',
+            plan: 'starter'
           })
           .select()
           .single()
@@ -209,26 +241,29 @@ export const RegisterPage: React.FC = () => {
       try {
         await supabase.from('subscriptions').insert({
           company_id: company.id,
+          sector_slug: defaultSector,
           status: 'trial',
           started_at: now.toISOString(),
           expires_at: trialEndsDate.toISOString(),
-          notes: `Période d'essai gratuit de 30 jours (0 FCFA) - Formule ${planCalc.name}`
+          fin_essai: trialEndsDate.toISOString(),
+          price_monthly: 5000,
+          notes: `Période d'essai gratuit de 30 jours (0 FCFA) - Secteur principal ${defaultSector.toUpperCase()}`
         })
       } catch (e) {}
 
-      // Initialiser abonnements_global et abonnements_secteurs (Règles 1 & 2 CDC)
+      // Initialiser abonnements_global et abonnements_secteurs
       try {
-        await initialiserAbonnementInscription(company.id, form.selected_sectors, planCalc.slug)
+        await initialiserAbonnementInscription(company.id, [defaultSector], 'starter')
       } catch (e) {
         console.warn('[Register] Notice init abonnements_global_et_secteurs:', e)
       }
 
       setTrialDetails({
-        planName: planCalc.name,
+        planName: `Essai Gratuit (${defaultSector.toUpperCase()})`,
         startDate: now.toLocaleDateString('fr-BJ'),
         endDate: trialEndsDate.toLocaleDateString('fr-BJ'),
-        futurePrice: planCalc.priceMonthly,
-        activityCount: form.selected_sectors.length
+        futurePrice: 5000,
+        activityCount: 1
       })
 
       // 3. Liaison Multi-Secteurs & Abonnements (tolérant aux tables optionnelles)
@@ -381,7 +416,7 @@ export const RegisterPage: React.FC = () => {
           <h2 className="text-2xl font-black text-slate-900">Entreprise enregistrée avec succès !</h2>
           <p className="text-slate-600 text-sm mt-2">
             Bienvenue sur GESTIO 229, <strong>{form.company_name}</strong>.
-            Vos <strong>{form.selected_sectors.length} secteurs d'activités</strong> ont été initialisés.
+            Votre <strong>secteur d'activité principal</strong> a été initialisé avec succès.
           </p>
 
           {/* Bloc Essai Gratuit 1 Mois (CDC Section 7) */}
@@ -505,7 +540,7 @@ export const RegisterPage: React.FC = () => {
               >
                 2
               </div>
-              <span className="text-[11px] font-bold text-slate-700">Choix Multi-Secteurs</span>
+              <span className="text-[11px] font-bold text-slate-700">Secteur Principal</span>
             </div>
           </div>
         </div>

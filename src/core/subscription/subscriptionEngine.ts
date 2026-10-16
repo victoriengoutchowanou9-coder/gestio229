@@ -114,72 +114,21 @@ export function calculateSubscriptionPrice(
     }
   }
 
-  // CAS 2 ACTIVITÉS : 15 000 FCFA
-  if (count === 2) {
-    return {
-      slug: 'duo',
-      name: 'Plan 2 Activités',
-      priceMonthly: 15000,
-      activityCount: 2,
-      description: 'Deux secteurs d’activité avec accès complet et séparation stricte',
-      isStarter: false,
-      isPopular: true,
-      features: [
-        '2 activités au choix (ex: Quincaillerie + Poissonnerie)',
-        'Tous les modules débloqués pour les 2 activités',
-        'Comptabilité SYSCOHADA Révisé',
-        'Trésorerie multi-secteurs',
-        'Reporting consolidé et sectoriel',
-        'Séparation stricte des données',
-        'Accès au HUB central multi-activités'
-      ],
-      accessibleModules: ALL_STANDARD_MODULES,
-      lockedModules: []
-    }
-  }
-
-  // CAS 3 ACTIVITÉS : 25 000 FCFA
-  if (count === 3) {
-    return {
-      slug: 'trio',
-      name: 'Plan 3 Activités',
-      priceMonthly: 25000,
-      activityCount: 3,
-      description: 'Trois secteurs d’activité avec accès illimité à tous les modules',
-      isStarter: false,
-      features: [
-        '3 activités au choix',
-        'Tous les modules débloqués pour les 3 activités',
-        'Comptabilité SYSCOHADA Révisé',
-        'Trésorerie & Caisse par secteur',
-        'Reporting consolidé temps réel',
-        'Gestion multi-activités avancée',
-        'Support prioritaire VIP'
-      ],
-      accessibleModules: ALL_STANDARD_MODULES,
-      lockedModules: []
-    }
-  }
-
-  // CAS > 3 ACTIVITÉS : 25 000 + ((N - 3) * 5 000)
-  const additional = count - 3
-  const calculatedPrice = 25000 + (additional * 5000)
-
+  // NIVEAU 3 : OFFRE PROFESSIONNELLE MULTISECTEUR (> 1 ACTIVITÉ)
+  // « Ne pas afficher de prix multisecteur non défini par le concepteur »
   return {
-    slug: `multi_${count}`,
-    name: `Plan ${count} Activités`,
-    priceMonthly: calculatedPrice,
+    slug: 'multisecteur_pro',
+    name: `Offre Multisecteur (${count} activités)`,
+    priceMonthly: 0, // Défini exclusivement par le concepteur après validation
     activityCount: count,
-    description: `Formule multi-secteurs (${count} activités) au tarif avantageux de +5 000 F/secteur au-delà de 3`,
+    description: "Vous souhaitez utiliser plusieurs secteurs d'activité sur GESTIO229 ? Veuillez contacter notre équipe pour étudier votre besoin et définir une formule adaptée.",
     isStarter: false,
     features: [
-      `${count} activités au choix`,
-      'Tous les modules débloqués pour toutes les activités',
-      'Comptabilité SYSCOHADA Révisé',
-      'Trésorerie & Reporting consolidé',
-      'Inventaires physiques par dépôt',
-      'Multi-tenants & multi-secteurs illimités',
-      'Accompagnement dédié et support 24/7'
+      `${count} activités sur mesure`,
+      'Modules spécifiques et permissions validés par le Super Admin',
+      'Conditions commerciales personnalisées',
+      'Accompagnement dédié et support prioritaire',
+      'Activation après approbation formelle'
     ],
     accessibleModules: ALL_STANDARD_MODULES,
     lockedModules: []
@@ -231,7 +180,7 @@ export function checkModuleAccess(
     return {
       allowed: false,
       reason: 'expired',
-      message: "Votre période d'essai gratuit de 30 jours est arrivée à échéance. Veuillez activer votre abonnement pour continuer à utiliser ce module."
+      message: "Votre période d'essai est arrivée à son terme. Pour continuer à utiliser les fonctionnalités payantes de GESTIO229, veuillez souscrire à un abonnement ou contacter notre équipe."
     }
   }
 
@@ -240,28 +189,39 @@ export function checkModuleAccess(
     return {
       allowed: false,
       reason: 'suspended',
-      message: 'Votre compte est suspendu. Veuillez régulariser votre abonnement pour accéder à ce module.'
+      message: 'Votre compte est actuellement suspendu. Toutes vos données sont strictement conservées. Veuillez contacter l\'administrateur pour régulariser votre compte.'
     }
   }
 
-  // 3. Période d'essai active (<= 30 jours) :
-  // RÈGLE D'OR : Accès 100% débloqué à TOUS les modules de TOUS les secteurs choisis !
+  // 3. Niveau 1 : Période d'essai gratuit (30 jours)
+  // - Accès limité au secteur principal déclaré lors de l'inscription
+  // - Accès aux fonctionnalités expressément autorisées pour l'essai (STARTER_ACCESSIBLE_MODULES)
+  // - Blocage des modules avancés réservés aux formules payantes
   if (status === 'trial') {
+    const normMod = moduleId.toLowerCase().trim()
+    if (ADVANCED_MODULES.includes(normMod)) {
+      return {
+        allowed: false,
+        reason: 'starter_restriction',
+        requiredPlan: 'Abonnement Standard (5 000 FCFA/mois) ou Formule Pro',
+        message: `Le module « ${normMod} » est réservé aux abonnements payants. Souscrivez à l'abonnement standard pour y accéder.`
+      }
+    }
     return { allowed: true }
   }
 
-  // 4. Compte Actif avec Abonnement Payé :
+  // 4. Niveau 2 : Abonnement standard à 5 000 F CFA par mois
   if (status === 'active') {
-    const planSlug = (company.subscription_plan || company.plan || '').toLowerCase()
+    const planSlug = (company.subscription_plan || company.plan || 'starter').toLowerCase()
     const isStarter = planSlug === 'starter' || planSlug === 'solo'
 
-    // Le plan Starter exclut les modules avancés
+    // Le plan Standard 5 000 FCFA exclut les modules financiers / reporting de niveau entreprise
     if (isStarter && ADVANCED_MODULES.includes(moduleId)) {
       return {
         allowed: false,
         reason: 'starter_restriction',
-        requiredPlan: 'Plan Entreprise (10 000 FCFA/mois)',
-        message: 'Ce module est réservé au Plan Entreprise. Mettez à niveau votre abonnement pour y accéder.'
+        requiredPlan: 'Offre Professionnelle Multisecteur',
+        message: 'Ce module requiert une formule avancée validée par le concepteur.'
       }
     }
 

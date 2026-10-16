@@ -656,6 +656,7 @@ const AdminCompanies: React.FC = () => {
     else if (statusFilter === 'suspended') matchStatus = isSuspended && !isDeleted
     else if (statusFilter === 'deleted') matchStatus = isDeleted
     else if (statusFilter === 'expired') matchStatus = (s === 'expired' || isTrialExpired) && !isDeleted
+    else if (statusFilter === 'suspicious') matchStatus = Boolean(c.is_suspicious)
 
     return matchSearch && matchStatus
   })
@@ -801,6 +802,11 @@ const AdminCompanies: React.FC = () => {
               count: companies.filter((c) => (c.subscription_status === 'suspended' || c.is_active === false) && c.subscription_status !== 'deleted').length
             },
             {
+              key: 'suspicious',
+              label: '⚠️ Suspects (vérif. manuelle)',
+              count: companies.filter((c) => c.is_suspicious).length
+            },
+            {
               key: 'deleted',
               label: '🗑️ Supprimés',
               count: companies.filter((c) => c.subscription_status === 'deleted').length
@@ -849,10 +855,10 @@ const AdminCompanies: React.FC = () => {
             <table className="w-full text-left">
               <thead>
                 <tr className="border-b border-slate-800 bg-slate-950/40">
-                  <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Entreprise & ID unique</th>
+                  <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Entreprise &amp; ID unique</th>
                   <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Responsable Principal</th>
-                  <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Secteurs d'activité</th>
-                  <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Date création</th>
+                  <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Secteur Principal Déclaré</th>
+                  <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Création &amp; Fin d'Essai</th>
                   <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap">Statut actuel</th>
                   <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap text-center">Équipe</th>
                   <th className="text-slate-400 text-xs font-semibold px-4 py-3.5 whitespace-nowrap text-right">Actions</th>

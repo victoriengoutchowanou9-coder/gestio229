@@ -92,8 +92,14 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
   const targetCanon = canonicalSectorSlug(sectorSlug)
   const normSlug = String(sectorSlug).replace(/^sec-/, '').toLowerCase().trim()
 
-  // Liste des secteurs souscrits dans company_sectors ou selected_sectors
+  // Liste des secteurs autorisés dans authorized_sectors, primary_sector, company_sectors ou selected_sectors
   const rawList: any[] = []
+  if ((company as any).primary_sector) {
+    rawList.push((company as any).primary_sector)
+  }
+  if (Array.isArray((company as any).authorized_sectors)) {
+    rawList.push(...(company as any).authorized_sectors)
+  }
   if (Array.isArray((company as any).selected_sectors)) {
     rawList.push(...(company as any).selected_sectors)
   }
@@ -112,7 +118,8 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
     }
   }
 
-  if (rawList.length === 0) return true
+  // RÈGLE DE SÉCURITÉ : Si aucun secteur configuré, accès strictement refusé
+  if (rawList.length === 0) return false
 
   for (const s of rawList) {
     let slugStr = ''

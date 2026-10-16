@@ -186,12 +186,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { id } = req.query
       if (!id) return res.status(400).json({ success: false, error: 'id requis' })
 
-      const [compRes, usersRes, subRes, subHistRes, auditRes] = await Promise.all([
+      const [compRes, usersRes, subRes, subHistRes, auditRes, sectorReqRes, secAuditRes] = await Promise.all([
         sb.from('companies').select('*').eq('id', id).maybeSingle(),
         sb.from('user_profiles').select('*').eq('company_id', id),
         sb.from('subscriptions').select('*').eq('company_id', id).order('created_at', { ascending: false }),
         sb.from('subscription_history').select('*').eq('company_id', id).order('created_at', { ascending: false }),
         sb.from('audit_logs').select('*').eq('company_id', id).order('created_at', { ascending: false }).limit(20),
+        sb.from('sector_access_requests').select('*').eq('company_id', id).order('created_at', { ascending: false }),
+        sb.from('security_audit_logs').select('*').eq('company_id', id).order('created_at', { ascending: false }).limit(20),
       ])
 
       return res.status(200).json({
@@ -202,6 +204,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           subscriptions: subRes.data || [],
           subscriptionHistory: subHistRes.data || [],
           auditLogs: auditRes.data || [],
+          sectorRequests: sectorReqRes.data || [],
+          securityLogs: secAuditRes.data || [],
         }
       })
     }
@@ -330,6 +334,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         monthly[key] = (monthly[key] || 0) + 1
       }
       return res.status(200).json({ success: true, data: monthly })
+    }
+
+    // ── DEMANDES D'ACCÈS MULTISECTEUR ─────────────────────────────────────
+    if (action === 'sector_requests') {
+      const { status: filterStatus } = req.query
+      let query = sb.from('sector_access_requests').select('*').order('created_at', { ascending: false })
+      if (filterStatus) query = query.eq('status', filterStatus)
+      const { data, error } = await query
+      if (error) {
+        // Si la table est encore en cours d'initialisation, retourner tableau vide sans planter
+        return res.status(200).json({ success: true, data: [] })
+      }
+      return res.status(200).json({ success: true, data: data || [] })
+    }
+
+    // ── COMPTES SUSPECTS (VÉRIFICATION MANUELLE) ──────────────────────────
+    if (action === 'suspicious_accounts') {
+      const { data, error } = await sb
+        .from('companies')
+        .select('*')
+        .eq('is_suspicious', true)
+        .order('created_at', { ascending: false })
+      if (error) return res.status(200).json({ success: true, data: [] })
+      return res.status(200).json({ success: true, data: data || [] })
+    }
+
+    // ── JOURNAL DE SÉCURITÉ & AUDIT ───────────────────────────────────────
+    if (action === 'security_logs') {
+      const { data, error } = await sb
+        .from('security_audit_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(200)
+      if (error) return res.status(200).json({ success: true, data: [] })
+      return res.status(200).json({ success: true, data: data || [] })
     }
 
     return res.status(400).json({ success: false, error: 'Action non reconnue.' })
