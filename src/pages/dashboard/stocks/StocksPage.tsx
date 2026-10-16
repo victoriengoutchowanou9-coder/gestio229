@@ -169,23 +169,38 @@ export const StocksPage: React.FC = () => {
       const currentActiveSector = sectorSlug || getActiveSectorSlug()
       const isolatedData = filterItemsForSector(data || [], currentActiveSector)
 
-      const mapped: ProductStock[] = isolatedData.map((p: any) => ({
-        id: p.id,
-        code: p.code,
-        name: p.name,
-        unit: p.unit || p.uv || p.sector_meta?.uv || 'Pièce',
-        ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
-        uv: p.uv || p.sector_meta?.uv || p.unit || 'Pièce',
-        coef: Number(p.coef || p.sector_meta?.coef) || 1,
-        cost_price: Number(p.cost_price) || 0,
-        selling_price: Number(p.selling_price) || 0,
-        stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
-        stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0),
-        min_stock_alert: Number(p.min_stock_alert) || 5,
-        category: p.category,
-        batch_pricing: p.batch_pricing || p.sector_meta?.batch_pricing || null,
-        sector_meta: p.sector_meta,
-      }))
+      const mapped: ProductStock[] = isolatedData.map((p: any) => {
+        const meta = p.sector_meta || {}
+        const rawMag = p.stock_magasin !== null && p.stock_magasin !== undefined ? Number(p.stock_magasin) : null
+        const metaMag = Number(meta.stock_magasin) || 0
+        const magVal = (rawMag !== null && rawMag > 0) ? rawMag : (metaMag > 0 ? metaMag : (rawMag ?? 0))
+
+        const rawVente = p.stock_vente !== null && p.stock_vente !== undefined ? Number(p.stock_vente) : null
+        const metaVente = Number(meta.stock_vente) || 0
+        const venteVal = (rawVente !== null && rawVente > 0) ? rawVente : (metaVente > 0 ? metaVente : (rawVente ?? 0))
+
+        const rawCoef = Number(p.coef ?? p.coefficient_conversion) || 0
+        const metaCoef = Number(meta.coef) || 0
+        const coefVal = rawCoef > 1 ? rawCoef : (metaCoef > 1 ? metaCoef : (rawCoef > 0 ? rawCoef : (metaCoef > 0 ? metaCoef : 1)))
+
+        return {
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          unit: p.unit || p.uv || p.unite_vente || meta.uv || 'Pièce',
+          ucd: p.ucd || p.unite_stock || meta.ucd || 'Carton',
+          uv: p.uv || p.unite_vente || meta.uv || p.unit || 'Pièce',
+          coef: coefVal,
+          cost_price: Number(p.cost_price || p.cout_achat || meta.price_achat_ucd_ttc) || 0,
+          selling_price: Number(p.selling_price || p.prix_vente || meta.price_vente_uv_ttc) || 0,
+          stock_magasin: magVal,
+          stock_vente: venteVal,
+          min_stock_alert: Number(p.min_stock_alert) || 5,
+          category: p.category,
+          batch_pricing: p.batch_pricing || meta.batch_pricing || null,
+          sector_meta: p.sector_meta,
+        }
+      })
 
       setProducts(mapped)
     } catch (err: any) {

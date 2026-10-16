@@ -129,26 +129,28 @@ export function normalizeProductStock(p: ProductStockInput): NormalizedProductSt
   const meta = p?.sector_meta || {}
   const batch = p?.batch_pricing || meta.batch_pricing || {}
 
-  // 1. Quantités réelles
-  // Note : si stock_magasin ou stock_vente est 0, on doit respecter 0 et ne pas utiliser de fallback non nul
-  const stockMagasinRaw = p?.stock_magasin ?? meta.stock_magasin ?? p?.warehouse_stock
-  const stockVenteRaw = p?.stock_vente ?? meta.stock_vente ?? p?.current_stock ?? p?.stock
+  // 1. Quantités réelles (priorité à la valeur non nulle si l'une des sources vaut 0 par défaut)
+  const metaMag = safeNumber(meta.stock_magasin, 0)
+  const colMag = p?.stock_magasin !== null && p?.stock_magasin !== undefined ? safeNumber(p.stock_magasin, 0) : null
+  const stockMagasin = (colMag !== null && colMag > 0) ? colMag : (metaMag > 0 ? metaMag : Math.max(0, colMag ?? safeNumber(p?.warehouse_stock, 0)))
 
-  const stockMagasin = Math.max(0, safeNumber(stockMagasinRaw, 0))
-  const stockVente = Math.max(0, safeNumber(stockVenteRaw, 0))
+  const metaVente = safeNumber(meta.stock_vente, 0)
+  const colVente = p?.stock_vente !== null && p?.stock_vente !== undefined ? safeNumber(p.stock_vente, 0) : null
+  const stockVente = (colVente !== null && colVente > 0) ? colVente : (metaVente > 0 ? metaVente : Math.max(0, colVente ?? safeNumber(p?.current_stock ?? p?.stock, 0)))
 
   // 2. Taux de conversion réel UCD -> UV (ex: 1 tonne = 20 sacs, 1 carton = 24 paquets)
-  const rawCoef = p?.coef ?? meta.coef ?? batch.coef
-  const parsedCoef = Number(rawCoef)
+  const metaCoef = safeNumber(meta.coef ?? batch.coef, 0)
+  const colCoef = safeNumber(p?.coef ?? p?.coefficient_conversion, 0)
+  const parsedCoef = colCoef > 1 ? colCoef : (metaCoef > 1 ? metaCoef : (colCoef > 0 ? colCoef : (metaCoef > 0 ? metaCoef : 1)))
   const hasValidConversion = Number.isFinite(parsedCoef) && parsedCoef > 0
   const coef = hasValidConversion ? parsedCoef : 1
 
   // 3. Libellés des unités
-  const ucdUnit = String(p?.ucd || meta.ucd || 'Carton').trim() || 'Carton'
-  const uvUnit = String(p?.uv || meta.uv || p?.unit || 'Pièce').trim() || 'Pièce'
+  const ucdUnit = String(p?.ucd || meta.ucd || p?.unite_stock || 'Carton').trim() || 'Carton'
+  const uvUnit = String(p?.uv || meta.uv || p?.unite_vente || p?.unit || 'Pièce').trim() || 'Pièce'
 
   // 4. Prix d'achat UCD (coût d'achat du carton, de la tonne, du sac de réserve)
-  const prixAchatUcdRaw = meta.price_achat_ucd_ttc ?? p?.cost_price ?? p?.purchase_price ?? meta.price_achat_ht ?? meta.cout_achat
+  const prixAchatUcdRaw = p?.cost_price ?? p?.cout_achat ?? meta.price_achat_ucd_ttc ?? p?.purchase_price ?? meta.price_achat_ht ?? meta.cout_achat
   const prixAchatUcd = Math.max(0, safeNumber(prixAchatUcdRaw, 0))
 
   // 5. Prix d'achat UV (coût d'achat de l'unité de vente au détail)
