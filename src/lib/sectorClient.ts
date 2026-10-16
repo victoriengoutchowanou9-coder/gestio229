@@ -15,36 +15,46 @@ const ACTIVE_ACTIVITY_ID_KEY = 'gestio229_active_activity_id'
 const ACTIVE_ACTIVITY_NAME_KEY = 'gestio229_active_activity_name'
 
 /**
- * Récupère le slug officiel du sous-logiciel actuellement ouvert
+ * Récupère le slug officiel du sous-logiciel actuellement ouvert (toujours normalisé sans préfixe sec-)
  */
 export function getActiveSectorSlug(): string {
-  return localStorage.getItem(ACTIVE_SECTOR_KEY) || 'boutique'
+  const raw = localStorage.getItem(ACTIVE_SECTOR_KEY) || 'boutique'
+  return canonicalSectorSlug(raw) || String(raw).toLowerCase().trim().replace(/^sec-/, '') || 'boutique'
 }
 
 /**
- * Définit le sous-logiciel actif lors de l'accès depuis le HUB
+ * Définit le sous-logiciel actif lors de l'accès depuis le HUB ou la navigation
  */
 export function setActiveSector(sectorSlug: string, activityId?: string, activityName?: string): void {
-  localStorage.setItem(ACTIVE_SECTOR_KEY, sectorSlug)
+  const clean = canonicalSectorSlug(sectorSlug) || String(sectorSlug).toLowerCase().trim().replace(/^sec-/, '')
+  localStorage.setItem(ACTIVE_SECTOR_KEY, clean)
   if (activityId) localStorage.setItem(ACTIVE_ACTIVITY_ID_KEY, activityId)
   if (activityName) localStorage.setItem(ACTIVE_ACTIVITY_NAME_KEY, activityName)
   window.dispatchEvent(new Event('sector_changed'))
 }
 
 /**
- * Récupère les métadonnées officielles du sous-logiciel actif
+ * Récupère les métadonnées officielles du sous-logiciel actif ou spécifié
  */
-export function getActiveSectorMeta() {
-  const slug = getActiveSectorSlug()
-  return ALL_SECTORS_CATALOG.find((s) => s.slug === slug) || {
-    code: slug.toUpperCase(),
-    slug,
-    name: slug.charAt(0).toUpperCase() + slug.slice(1),
+export function getActiveSectorMeta(targetSlug?: string) {
+  const raw = targetSlug || getActiveSectorSlug()
+  const clean = canonicalSectorSlug(raw) || String(raw).toLowerCase().trim().replace(/^sec-/, '')
+  const found = ALL_SECTORS_CATALOG.find((s) => s.slug === clean) ||
+                ALL_SECTORS_CATALOG.find((s) => canonicalSectorSlug(s.slug) === clean) ||
+                ALL_SECTORS_CATALOG.find((s) => s.slug === raw)
+  if (found) return found
+
+  const formattedName = clean.charAt(0).toUpperCase() + clean.slice(1).replace(/-/g, ' ')
+  return {
+    code: clean.toUpperCase().replace(/-/g, '_'),
+    slug: clean,
+    name: formattedName,
+    label: formattedName,
     emoji: '🏢',
     icon: 'Store',
     color: '#059669',
     badge: 'Sous-Logiciel',
-    description: 'Espace métier GESTIO 229',
+    description: `Espace métier GESTIO 229 (${formattedName})`,
     category: 'Général'
   }
 }
@@ -70,6 +80,8 @@ export function canonicalSectorSlug(slug?: string | null): string {
   if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geolocalisation-flotte' || clean === 'geoloc') return 'flotte-geolocalisation'
   return clean
 }
+
+export const normalizeSectorSlug = canonicalSectorSlug
 
 /**
  * Vérifie si l'entreprise a souscrit au secteur demandé
@@ -188,7 +200,7 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   const itemName = String(item.name || item.product_name || item.designation || '').toLowerCase()
 
   // Les boissons brasserie, bières et casiers (Beaufort, Béninoise, Castel, etc.) appartiennent TOUJOURS à Brasserie
-  const isDrinkOrBeer = /beaufort|béninoise|beninoise|castel|guinness|sobebra|youki|casier|casiers|capsule|c12t|c20t|c24t|bière|biere/i.test(itemName)
+  const isDrinkOrBeer = /beaufort|béninoise|beninoise|castel|guinness|sobebra|youki|casier|casiers|capsule|c12t|c20t|c24t|bière|biere|xxl|flag|doppel|chill|panach/i.test(itemName)
   if (isDrinkOrBeer) {
     return activeCanon === 'brasserie'
   }
@@ -200,8 +212,7 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   }
 
   // Les produits frigorifiques / poissons -> Poissonnerie
-  const isFish = !!(item.sector_meta?.coef && Number(item.sector_meta.coef) > 1) ||
-    /tilapia|hake|hm 16|cuisse|poisson|chinchard/i.test(itemName)
+  const isFish = /tilapia|hake|hm 16|cuisse|poisson|chinchard|machoiron|bar |crevette|crabe|capitaine/i.test(itemName)
   if (isFish) {
     return activeCanon === 'poissonnerie'
   }

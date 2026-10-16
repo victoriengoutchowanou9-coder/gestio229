@@ -21,8 +21,9 @@ import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
 import { GROUP_ORDER, GROUP_LABELS } from '../../core/modules/moduleRegistry'
 import SectorLoader from '../../lib/SectorLoader'
-import { getActiveSectorMeta } from '../../lib/sectorClient'
+import { getActiveSectorMeta, getActiveSectorSlug } from '../../lib/sectorClient'
 import { ProfileModal } from '../auth/ProfileModal'
+import { useTenant } from '../../hooks/useTenant'
 import clsx from 'clsx'
 
 // ─── Map icônes ─────────────────────────────────────────────────────────────
@@ -114,8 +115,9 @@ const Sidebar: React.FC = () => {
   const { sidebarCollapsed, sidebarMobileOpen, toggleSidebar } = useUIStore()
   const [profileModalOpen, setProfileModalOpen] = useState(false)
 
-  const currentSectorSlug = params.sectorSlug || localStorage.getItem('gestio229_active_sector') || undefined
-  const sectorMeta = getActiveSectorMeta()
+  const { sectorSlug } = useTenant()
+  const currentSectorSlug = sectorSlug || params.sectorSlug || getActiveSectorSlug()
+  const sectorMeta = getActiveSectorMeta(currentSectorSlug)
 
   // Construire la nav dynamiquement pour le sous-logiciel actif (avec fallback securise)
   let grouped: Record<string, any[]> = {}

@@ -137,7 +137,10 @@ export const StocksPage: React.FC = () => {
     min_stock_alert: number
     stock_magasin: number
     stock_vente: number
-  }>({ name: '', cost_price: 0, selling_price: 0, min_stock_alert: 5, stock_magasin: 0, stock_vente: 0 })
+    ucd: string
+    uv: string
+    coef: number
+  }>({ name: '', cost_price: 0, selling_price: 0, min_stock_alert: 5, stock_magasin: 0, stock_vente: 0, ucd: 'Carton', uv: 'Pièce', coef: 1 })
 
   // Filtres de Date Fiche Journalière de Stock
   const [dateFilterMode, setDateFilterMode] = useState<'today' | 'yesterday' | 'single' | 'period'>('today')
@@ -209,7 +212,7 @@ export const StocksPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [companyId, supabaseTenant, toast])
+  }, [companyId, sectorSlug, supabaseTenant, toast])
 
   useEffect(() => {
     loadData()
@@ -594,7 +597,10 @@ export const StocksPage: React.FC = () => {
       selling_price: p.selling_price,
       min_stock_alert: p.min_stock_alert,
       stock_magasin: p.stock_magasin,
-      stock_vente: p.stock_vente
+      stock_vente: p.stock_vente,
+      ucd: p.ucd || 'Carton',
+      uv: p.uv || p.unit || 'Pièce',
+      coef: p.coef || 1
     })
   }
 
@@ -605,7 +611,10 @@ export const StocksPage: React.FC = () => {
       const updatedMeta = {
         ...currentMeta,
         stock_magasin: Number(editForm.stock_magasin) || 0,
-        stock_vente: Number(editForm.stock_vente) || 0
+        stock_vente: Number(editForm.stock_vente) || 0,
+        ucd: editForm.ucd,
+        uv: editForm.uv,
+        coef: Number(editForm.coef) || 1
       }
 
       let updRes = await supabase
@@ -617,6 +626,7 @@ export const StocksPage: React.FC = () => {
           min_stock_alert: Number(editForm.min_stock_alert) || 5,
           stock_magasin: Number(editForm.stock_magasin) || 0,
           stock_vente: Number(editForm.stock_vente) || 0,
+          unit: editForm.uv,
           sector_meta: updatedMeta
         })
         .eq('id', editingProduct.id)
@@ -629,6 +639,7 @@ export const StocksPage: React.FC = () => {
             cost_price: Number(editForm.cost_price) || 0,
             selling_price: Number(editForm.selling_price) || 0,
             min_stock_alert: Number(editForm.min_stock_alert) || 5,
+            unit: editForm.uv,
             sector_meta: updatedMeta
           })
           .eq('id', editingProduct.id)
@@ -654,6 +665,10 @@ export const StocksPage: React.FC = () => {
                 min_stock_alert: Number(editForm.min_stock_alert) || 5,
                 stock_magasin: Number(editForm.stock_magasin) || 0,
                 stock_vente: Number(editForm.stock_vente) || 0,
+                unit: editForm.uv,
+                uv: editForm.uv,
+                ucd: editForm.ucd,
+                coef: Number(editForm.coef) || 1,
                 sector_meta: updatedMeta
               }
             : p
@@ -1897,7 +1912,7 @@ export const StocksPage: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Stock Magasin ({editingProduct.ucd || 'UCD'})</label>
+                  <label className="font-bold text-slate-700 block mb-1">Stock Magasin ({editForm.ucd || 'UCD'})</label>
                   <input
                     type="number"
                     step="any"
@@ -1908,7 +1923,7 @@ export const StocksPage: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="font-bold text-slate-700 block mb-1">Stock Vente ({editingProduct.uv || editingProduct.unit || 'UV'})</label>
+                  <label className="font-bold text-slate-700 block mb-1">Stock Vente ({editForm.uv || 'UV'})</label>
                   <input
                     type="number"
                     step="any"
@@ -1916,6 +1931,38 @@ export const StocksPage: React.FC = () => {
                     value={editForm.stock_vente}
                     onChange={(e) => setEditForm({ ...editForm, stock_vente: Number(e.target.value) })}
                     className="w-full p-2 border border-slate-200 rounded-xl font-mono text-emerald-700 font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Unité Gros (UCD)</label>
+                  <input
+                    type="text"
+                    value={editForm.ucd}
+                    onChange={(e) => setEditForm({ ...editForm, ucd: e.target.value })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Unité Vente (UV)</label>
+                  <input
+                    type="text"
+                    value={editForm.uv}
+                    onChange={(e) => setEditForm({ ...editForm, uv: e.target.value })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-semibold"
+                  />
+                </div>
+                <div>
+                  <label className="font-bold text-slate-700 block mb-1">Coeff (1 UCD = x UV)</label>
+                  <input
+                    type="number"
+                    min="0.0001"
+                    step="any"
+                    value={editForm.coef}
+                    onChange={(e) => setEditForm({ ...editForm, coef: Number(e.target.value) })}
+                    className="w-full p-2 border border-slate-200 rounded-xl font-mono text-indigo-700 font-bold"
                   />
                 </div>
               </div>

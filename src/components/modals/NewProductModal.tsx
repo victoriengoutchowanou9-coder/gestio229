@@ -21,7 +21,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
 import { useTenant } from '../../hooks/useTenant'
 import { getNextSectorCode } from '../../lib/supabaseTenant'
-import { getActiveSectorSlug } from '../../lib/sectorClient'
+import { getActiveSectorSlug, normalizeSectorSlug } from '../../lib/sectorClient'
 import { showModal, showSuccess, showError } from './CustomModalGestio'
 
 interface NewProductModalProps {
@@ -42,14 +42,103 @@ export const UCD_UNITS = [
 export const UV_UNITS = [
   'Pièce', 'Kg', 'Litre', 'Mètre', 'Centimètre', 'm²',
   'Casier', 'Paquet', 'Palette',
-  'Pelote', 'Douzaine', 'Sachet', 'Gramme', 'Portion'
+  'Pelote', 'Douzaine', 'Sachet', 'Gramme', 'Portion', 'Sac', 'Bouteille', 'Canette', 'Feuille'
 ]
+
+export const SECTOR_DEFAULT_UNITS: Record<string, { ucd: string; uv: string; coef: number; category: string; packaging: string; ucdList: string[]; uvList: string[] }> = {
+  quincaillerie: {
+    ucd: 'Tonne',
+    uv: 'Sac',
+    coef: 20,
+    category: 'Matériaux de Construction',
+    packaging: 'Sac 50kg',
+    ucdList: ['Tonne', 'Sac', 'Barre', 'Paquet', 'Palette', 'Rouleau', 'Boîte', 'Carton', 'Fût', 'Mètre', 'Pièce'],
+    uvList: ['Sac', 'Barre', 'Pièce', 'Kg', 'Mètre', 'Paquet', 'Boîte'],
+  },
+  brasserie: {
+    ucd: 'Casier',
+    uv: 'Bouteille',
+    coef: 24,
+    category: 'Boissons & Rafraîchissements',
+    packaging: 'Casier 24 Bouteilles',
+    ucdList: ['Casier', 'Carton', 'Pack', 'Palette', 'Fût', 'Caisse', 'Pièce'],
+    uvList: ['Bouteille', 'Canette', 'Verre', 'Pièce', 'Casier'],
+  },
+  poissonnerie: {
+    ucd: 'Carton',
+    uv: 'Kg',
+    coef: 20,
+    category: 'Poissons & Surgelés',
+    packaging: 'Carton 20kg',
+    ucdList: ['Carton', 'Caisse', 'Bac', 'Sac', 'Kg', 'Palette', 'Pièce'],
+    uvList: ['Kg', 'Pièce', 'Gramme', 'Sachet', 'Carton'],
+  },
+  pharmacie: {
+    ucd: 'Boîte',
+    uv: 'Plaquette',
+    coef: 10,
+    category: 'Médicaments & Santé',
+    packaging: 'Boîte standard',
+    ucdList: ['Boîte', 'Flacon', 'Carton', 'Paquet', 'Lot', 'Pièce'],
+    uvList: ['Plaquette', 'Gélule', 'Comprimé', 'Flacon', 'Ampoule', 'Pièce'],
+  },
+  imprimerie: {
+    ucd: 'Rame',
+    uv: 'Feuille',
+    coef: 500,
+    category: 'Papeterie & Sérigraphie',
+    packaging: 'Rame 500 feuilles',
+    ucdList: ['Rame', 'Carton', 'Rouleau', 'Paquet', 'Bobine', 'Pièce'],
+    uvList: ['Feuille', 'Pièce', 'Mètre', 'Exemplaire'],
+  },
+  restaurant: {
+    ucd: 'Carton',
+    uv: 'Portion',
+    coef: 1,
+    category: 'Ingrédients & Cuisine',
+    packaging: 'Conditionnement Standard',
+    ucdList: ['Carton', 'Sac', 'Bidon', 'Caisse', 'Paquet', 'Kg', 'Pièce'],
+    uvList: ['Portion', 'Plat', 'Kg', 'Litre', 'Pièce'],
+  },
+  supermarche: {
+    ucd: 'Carton',
+    uv: 'Pièce',
+    coef: 12,
+    category: 'Rayon Alimentaire',
+    packaging: 'Carton 12 pièces',
+    ucdList: ['Carton', 'Pack', 'Caisse', 'Sac', 'Palette', 'Paquet', 'Pièce'],
+    uvList: ['Pièce', 'Bouteille', 'Paquet', 'Sachet', 'Kg', 'Litre'],
+  },
+  boutique: {
+    ucd: 'Carton',
+    uv: 'Pièce',
+    coef: 1,
+    category: 'Articles Divers',
+    packaging: 'Standard',
+    ucdList: ['Carton', 'Paquet', 'Sachet', 'Boîte', 'Lot', 'Pièce'],
+    uvList: ['Pièce', 'Paquet', 'Mètre', 'Gramme'],
+  },
+}
 
 export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess, defaultCircuit }) => {
   const { company, user } = useAuthStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
 
-  const isRestaurant = sectorSlug === 'restaurant' || sectorSlug === 'bar-restaurant-maquis' || sectorSlug === 'bar' || sectorSlug === 'maquis' || sectorSlug === 'fastfood'
+  const activeSectorSlug = normalizeSectorSlug(sectorSlug || getActiveSectorSlug() || 'boutique')
+
+  const availableUcdUnits = useMemo(() => {
+    const secDefaults = SECTOR_DEFAULT_UNITS[activeSectorSlug]?.ucdList || UCD_UNITS
+    const set = new Set([...secDefaults, ...UCD_UNITS])
+    return Array.from(set)
+  }, [activeSectorSlug])
+
+  const availableUvUnits = useMemo(() => {
+    const secDefaults = SECTOR_DEFAULT_UNITS[activeSectorSlug]?.uvList || UV_UNITS
+    const set = new Set([...secDefaults, ...UV_UNITS])
+    return Array.from(set)
+  }, [activeSectorSlug])
+
+  const isRestaurant = activeSectorSlug === 'restaurant' || activeSectorSlug === 'bar-restaurant-maquis' || activeSectorSlug === 'bar' || activeSectorSlug === 'maquis' || activeSectorSlug === 'fastfood'
   const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>(defaultCircuit || 'BAR')
 
   useEffect(() => {
@@ -62,11 +151,11 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
   const [form, setForm] = useState({
     code: '', // Vide au départ, généré automatiquement à l'enregistrement si non saisi
     name: '',
-    category: defaultCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : 'Alimentation & Boissons',
-    ucd: defaultCircuit === 'CUISINE' ? 'Sac' : 'Carton',
-    packaging: 'Standard',
-    uv: defaultCircuit === 'CUISINE' ? 'Kg' : 'Pièce',
-    coef: 1,
+    category: defaultCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : (SECTOR_DEFAULT_UNITS[activeSectorSlug]?.category || 'Alimentation & Boissons'),
+    ucd: defaultCircuit === 'CUISINE' ? 'Sac' : (SECTOR_DEFAULT_UNITS[activeSectorSlug]?.ucd || 'Carton'),
+    packaging: SECTOR_DEFAULT_UNITS[activeSectorSlug]?.packaging || 'Standard',
+    uv: defaultCircuit === 'CUISINE' ? 'Kg' : (SECTOR_DEFAULT_UNITS[activeSectorSlug]?.uv || 'Pièce'),
+    coef: SECTOR_DEFAULT_UNITS[activeSectorSlug]?.coef || 1,
     // Prix saisis DIRECTEMENT en TTC
     priceAchatUcdTtc: 0,
     priceVenteUcdTtc: 0,
@@ -97,6 +186,28 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
     } as BatchPricingConfig,
   })
 
+  // Synchronisation des unités par défaut selon le secteur actif
+  useEffect(() => {
+    if (isOpen) {
+      const defaults = SECTOR_DEFAULT_UNITS[activeSectorSlug] || SECTOR_DEFAULT_UNITS.boutique
+      setForm((prev) => {
+        if (prev.name) return prev // Ne pas écraser la saisie en cours
+        return {
+          ...prev,
+          ucd: defaultCircuit === 'CUISINE' ? 'Sac' : defaults.ucd,
+          uv: defaultCircuit === 'CUISINE' ? 'Kg' : defaults.uv,
+          coef: defaults.coef,
+          category: defaultCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : defaults.category,
+          packaging: defaults.packaging,
+          batchPricing: {
+            ...prev.batchPricing,
+            coef: defaults.coef,
+          }
+        }
+      })
+    }
+  }, [isOpen, activeSectorSlug, defaultCircuit])
+
   // Sous-modale "Paramétrage des tarifs par lot"
   const [showBatchModal, setShowBatchModal] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
@@ -108,7 +219,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
   const [qteEmballageParUnite, setQteEmballageParUnite] = useState<number>(1)
 
   useEffect(() => {
-    if (isOpen && sectorSlug === 'brasserie' && (company?.id || companyId)) {
+    if (isOpen && activeSectorSlug === 'brasserie' && (company?.id || companyId)) {
       const cId = company?.id || companyId || ''
       supabase
         .from('brasserie_emballages')
@@ -282,7 +393,16 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
           }
         : null
 
-      const activeSectorSlug = getActiveSectorSlug()
+      // Contrôle de cohérence stricte des unités
+      if (form.ucd.toLowerCase() === 'tonne' && Number(form.coef) <= 1 && form.uv.toLowerCase() !== 'tonne') {
+        await showError(
+          `Erreur d'unité : Vous avez sélectionné UCD = "${form.ucd}" et UV = "${form.uv}" avec un coefficient de ${form.coef}.\n\n1 Tonne ne peut pas être égale à 1 ${form.uv}. Renseignez le coefficient réel (ex: 20 si 1 Tonne = 20 Sacs de 50kg, ou 1000 si 1 Tonne = 1000 Kg).`,
+          "Incohérence d'Unités"
+        )
+        setIsSaving(false)
+        return
+      }
+
       const isMatierePrem = isRestaurant && restaurantCircuit === 'CUISINE'
       const sectorMeta = {
         sector_slug: activeSectorSlug,
@@ -308,22 +428,19 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         price_vente_ht: taxVenteUv.htPrice,
         margin_ucd_ht: marginUcdHt,
         margin_uv_ht: marginUvHt,
-        emballage_id: sectorSlug === 'brasserie' ? (selectedEmballageId || null) : null,
-        qte_emballage: sectorSlug === 'brasserie' && selectedEmballageId ? (Number(qteEmballageParUnite) || 1) : null,
+        emballage_id: activeSectorSlug === 'brasserie' ? (selectedEmballageId || null) : null,
+        qte_emballage: activeSectorSlug === 'brasserie' && selectedEmballageId ? (Number(qteEmballageParUnite) || 1) : null,
       }
 
       let autoCode = finalCode
       if (!autoCode) {
-        autoCode = await getNextSectorCode('products', 'PROD', companyId || '', sectorSlug)
+        autoCode = await getNextSectorCode('products', 'PROD', companyId || '', activeSectorSlug)
       }
 
       // 3. Préparation du payload optimisé pour Supabase
-      // NOTE ESSENTIELLE : On n'envoie au niveau SQL que les colonnes réelles de 'products'.
-      // Tous les attributs multi-unités et stocks (ucd, uv, coef, stock_magasin, etc.) sont
-      // stockés de façon universelle et pérenne dans la colonne JSONB 'sector_meta' !
-      const coefVal = Math.max(1, Number(form.coef) || 1)
-      const ucdVal = form.ucd || 'Tonne'
-      const uvVal = form.uv || 'Paquet'
+      const coefVal = Math.max(0.0001, Number(form.coef) || 1)
+      const ucdVal = form.ucd || SECTOR_DEFAULT_UNITS[activeSectorSlug]?.ucd || 'Carton'
+      const uvVal = form.uv || SECTOR_DEFAULT_UNITS[activeSectorSlug]?.uv || 'Pièce'
 
       const insertPayload: any = {
         company_id: company?.id || companyId,
@@ -793,7 +910,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                     onChange={(e) => setForm({ ...form, ucd: e.target.value })}
                     className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold text-slate-800 dark:text-slate-100"
                   >
-                    {UCD_UNITS.map((u) => (
+                    {availableUcdUnits.map((u) => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
@@ -815,7 +932,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                     onChange={(e) => setForm({ ...form, uv: e.target.value })}
                     className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold text-slate-800 dark:text-slate-100"
                   >
-                    {UV_UNITS.map((u) => (
+                    {availableUvUnits.map((u) => (
                       <option key={u} value={u}>{u}</option>
                     ))}
                   </select>
@@ -842,9 +959,18 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                     }}
                     className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold font-mono text-indigo-700 dark:text-indigo-400"
                   />
-                  <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
-                    Exemple : 1 Rouleau = 25 Mètres | 1 Carton = 20 Kg | 1 Boîte = 10 Douzaines
-                  </p>
+                  {form.ucd.toLowerCase() === 'tonne' && Number(form.coef) <= 1 && form.uv.toLowerCase() !== 'tonne' ? (
+                    <div className="p-2.5 mt-2 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-700 dark:text-amber-400 text-xs flex items-center space-x-2">
+                      <span>⚠️</span>
+                      <span>
+                        <strong>Attention :</strong> 1 Tonne = 1 {form.uv} avec un coefficient de {form.coef} est généralement une anomalie. Renseignez le coefficient réel (ex: 20 si 1 Tonne = 20 Sacs de 50kg, ou 1000 si 1 Tonne = 1000 Kg).
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1">
+                      Exemple : 1 Casier = 24 Bouteilles | 1 Tonne = 20 Sacs | 1 Carton = 20 Kg | 1 Rame = 500 Feuilles
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

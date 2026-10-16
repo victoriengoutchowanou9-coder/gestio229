@@ -9,7 +9,7 @@ import { useMemo } from 'react'
 import { useParams, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../store/authStore'
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../core/modules/moduleRegistry'
-import { isSectorSubscribed } from '../lib/sectorClient'
+import { isSectorSubscribed, canonicalSectorSlug } from '../lib/sectorClient'
 import { supabaseTenant, TenantQueryClient } from '../lib/supabaseTenant'
 import { normalizeSectorSlug } from '../core/team/sectorRoles'
 
@@ -62,8 +62,15 @@ export function useTenant(): TenantContext {
       return directMatch[1]
     }
 
+    // Fallback pour les pages d'exploitation /dashboard/*
+    if (pathname.startsWith('/dashboard')) {
+      const stored = localStorage.getItem('gestio229_active_sector')
+      if (stored) return stored
+      if (company?.active_sector) return String(company.active_sector).replace(/^sec-/, '')
+    }
+
     return ''
-  }, [isHub, params.sectorSlug, location.pathname])
+  }, [isHub, params.sectorSlug, location.pathname, company?.active_sector])
 
   // Normalisation : toujours en minuscule sans espace et sans préfixe "sec-"
   const sectorSlug = useMemo(() => {
@@ -73,7 +80,10 @@ export function useTenant(): TenantContext {
   // 3. Validation contre les 19 secteurs référentiels
   const sectorMeta = useMemo(() => {
     if (!sectorSlug) return null
-    return ALL_SECTORS_CATALOG.find((s) => s.slug === sectorSlug) || null
+    const canon = canonicalSectorSlug(sectorSlug)
+    return ALL_SECTORS_CATALOG.find((s) => s.slug === sectorSlug) ||
+           ALL_SECTORS_CATALOG.find((s) => canonicalSectorSlug(s.slug) === canon) ||
+           null
   }, [sectorSlug])
 
   const isValidSector = Boolean(sectorMeta)

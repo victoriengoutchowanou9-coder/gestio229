@@ -25,6 +25,7 @@ import SectorSelector, { ALL_SECTORS } from '../../components/auth/SectorSelecto
 import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
 import { rateLimiter } from '../../lib/rateLimiter'
 import { initialiserAbonnementInscription } from '../../services/abonnementService'
+import { normalizeSectorSlug } from '../../lib/sectorClient'
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
@@ -113,7 +114,7 @@ export const RegisterPage: React.FC = () => {
 
     try {
       const cleanEmail = form.email.trim().toLowerCase()
-      const defaultSector = form.selected_sectors[0] || 'boutique'
+      const defaultSector = normalizeSectorSlug(form.selected_sectors[0] || 'boutique')
 
       // Calcul métier du forfait et de l'essai gratuit de 1 mois (30 jours)
       const planCalc = calculateSubscriptionPrice(

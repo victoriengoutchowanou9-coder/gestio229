@@ -13,6 +13,7 @@ import { getActiveSectorMeta } from '../../lib/sectorClient'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
 import { supabase } from '../../lib/supabase'
 import FeedbackButton from '../common/FeedbackButton'
+import { useTenant } from '../../hooks/useTenant'
 
 // Mapping route → titre de page
 const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
@@ -40,7 +41,8 @@ const Header: React.FC = () => {
   const notifications = useUIStore((s) => s.notifications)
   const toggleMobileSidebar = useUIStore((s) => s.toggleMobileSidebar)
   const { toggle, isClair } = useTheme()
-  const sectorMeta = getActiveSectorMeta()
+  const { sectorSlug } = useTenant()
+  const sectorMeta = getActiveSectorMeta(sectorSlug)
 
   // Calcul jours d'essai restants
   const [joursRestants, setJoursRestants] = useState<number | null>(null)
