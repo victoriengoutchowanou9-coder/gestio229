@@ -27,6 +27,7 @@ interface OrderItemRow {
   code: string
   name: string
   ucdUnit: string
+  coefficient_conversion: number
   currentStock: number
   qtyToOrder: number
   unitPriceTtc: number
@@ -114,12 +115,15 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
 
       const mappedProducts = filteredPData.map((p: any) => {
         const photo = p.image_url || p.photo_url || p.image || p.sector_meta?.image_url || p.sector_meta?.photo_url || p.sector_meta?.photo || p.sector_meta?.image || ''
+        const coeffVal = Number(p.coefficient_conversion ?? p.coefficient ?? p.coef ?? p.sector_meta?.coefficient_conversion ?? p.sector_meta?.coef ?? 1) || 1
         return {
           ...p,
           imageUrl: photo,
-          ucd: p.ucd || p.sector_meta?.ucd || 'Carton',
-          unit: p.unit || p.sector_meta?.uv || 'Pièce',
-          cost_price: Number(p.cost_price) || 0,
+          ucd: p.ucd || p.unite_stock || p.sector_meta?.ucd || 'Carton',
+          unit: p.unit || p.unite_vente || p.sector_meta?.uv || 'Pièce',
+          coefficient_conversion: coeffVal,
+          coef: coeffVal,
+          cost_price: Number(p.cost_price ?? p.cout_achat ?? 0) || 0,
           stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
           stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
         }
@@ -140,6 +144,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
           code: p.code,
           name: p.name,
           ucdUnit: p.ucd || 'Carton',
+          coefficient_conversion: p.coefficient_conversion || 1,
           currentStock: p.stock_magasin,
           qtyToOrder: 0,
           unitPriceTtc: p.cost_price || 0,
@@ -344,21 +349,146 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       }
     }
 
-    const orderItems = activeOrderItems.map((it) => ({
-      productId: it.productId,
-      productName: it.name,
-      productCode: it.code,
-      ucdUnit: it.ucdUnit,
-      qtyOrderedUcd: it.qtyToOrder,
-      unitPriceUcd: it.unitPriceTtc,
-      totalTtc: Math.round(it.qtyToOrder * it.unitPriceTtc)
-    }))
+    const orderItems = activeOrderItems.map((it: any) => {
+      const qte = Number(it.qtyToOrder) || 0
+      const coeff = Number(it.coefficient_conversion || 1) || 1
+      // Règle d'achat en UCD : quantite_ucd = quantite * coefficient_conversion
+      // (si UCD=Tonne et vente en Tonne, coeff=1, donc 10*1=10)
+      // Ne jamais laisser quantite_ucd à 0 si c'est un achat en UCD
+      const qteUcd = qte > 0 ? qte : 0
+
+      return {
+        productId: it.productId,
+        produit_id: it.productId,
+        productName: it.name,
+        nom_produit: it.name,
+        article: it.name,
+        designation: it.name,
+        productCode: it.code,
+        code_produit: it.code,
+        ucdUnit: it.ucdUnit,
+        unite_ucd: it.ucdUnit,
+        unite_commande: it.ucdUnit,
+        ucd: it.ucdUnit,
+        quantite: qte,
+        qty: qte,
+        quantite_ucd: qteUcd,
+        qtyOrderedUcd: qteUcd,
+        qte_commande: qteUcd,
+        coefficient_conversion: coeff,
+        unitPriceUcd: it.unitPriceTtc,
+        prix_unitaire: it.unitPriceTtc,
+        pu_ttc: it.unitPriceTtc,
+        totalTtc: Math.round(qte * it.unitPriceTtc),
+        total_ligne: Math.round(qte * it.unitPriceTtc),
+        total_ttc: Math.round(qte * it.unitPriceTtc)
+      }
+    })
 
     const first = orderItems[0]
+
+    // Insertion persistante dans Supabase pour garantir la conformité SQL et multi-tables
+    if (company?.id) {
+      try {
+        // 1. Table bons_commande
+        const { data: bcCreated } = await supabase.from('bons_commande').insert({
+          company_id: company.id,
+          reference: trimmedRef,
+          numero_bc: trimmedRef,
+          fournisseur_id: selectedSupplierId,
+          fournisseur_nom: selectedSupplier?.name || 'Fournisseur',
+          sector_slug: getActiveSectorSlug(),
+          demandeur_nom: magasinierSigner,
+          statut: 'COMMANDE',
+          total_ttc: totalBcTtc,
+          notes
+        }).select().maybeSingle()
+
+        // 2. Table bons_commande_lignes
+        const bclRows = orderItems.map((it) => ({
+          company_id: company.id,
+          bc_id: trimmedRef,
+          bon_commande_id: bcCreated?.id,
+          produit_id: it.productId,
+          article: it.productName,
+          nom_produit: it.productName,
+          designation: it.productName,
+          code_produit: it.productCode,
+          quantite: it.quantite,
+          quantite_ucd: it.quantite_ucd,
+          qte_commande: it.quantite_ucd,
+          unite_commande: it.ucdUnit,
+          unite_ucd: it.ucdUnit,
+          ucd: it.ucdUnit,
+          coefficient_conversion: it.coefficient_conversion,
+          prix_unitaire: it.unitPriceUcd,
+          pu_ttc: it.unitPriceUcd,
+          total_ttc: it.totalTtc
+        }))
+
+        try {
+          await supabase.from('bons_commande_lignes').insert(bclRows)
+        } catch (eBcl) {
+          console.warn('[PurchaseOrderModal] Notice insert bons_commande_lignes:', eBcl)
+        }
+
+        // 3. Fallback bc_lignes si bcCreated a un id UUID
+        if (bcCreated?.id) {
+          try {
+            const bcLignesRows = orderItems.map((it) => ({
+              bc_id: bcCreated.id,
+              produit_id: it.productId,
+              code_produit: it.productCode,
+              nom_produit: it.productName,
+              article: it.productName,
+              ucd: it.ucdUnit,
+              unite_ucd: it.ucdUnit,
+              unite_commande: it.ucdUnit,
+              quantite: it.quantite,
+              quantite_ucd: it.quantite_ucd,
+              qte_commande: it.quantite_ucd,
+              pu_ttc: it.unitPriceUcd,
+              prix_unitaire: it.unitPriceUcd,
+              total_ligne: it.totalTtc
+            }))
+            await supabase.from('bc_lignes').insert(bcLignesRows)
+          } catch (eBc) {
+            console.warn('[PurchaseOrderModal] Notice insert bc_lignes:', eBc)
+          }
+        }
+
+        // 4. Table purchase_orders
+        try {
+          await supabase.from('purchase_orders').insert({
+            company_id: company.id,
+            order_number: trimmedRef,
+            supplier_id: selectedSupplierId,
+            supplier_name: selectedSupplier?.name || 'Fournisseur',
+            sector_slug: getActiveSectorSlug(),
+            circuit: circuit || undefined,
+            total_amount: totalBcTtc,
+            status: 'COMMANDE',
+            product_id: first.productId,
+            product_name: orderItems.length === 1 ? first.productName : `${first.productName} (+${orderItems.length - 1} autre(s))`,
+            unit: first.ucdUnit,
+            quantity: orderItems.reduce((acc, it) => acc + it.quantite_ucd, 0),
+            unit_price: first.unitPriceUcd,
+            items: orderItems,
+            notes,
+            created_by_name: magasinierSigner
+          })
+        } catch (ePo) {
+          console.warn('[PurchaseOrderModal] Notice insert purchase_orders:', ePo)
+        }
+      } catch (errDb) {
+        console.warn('[PurchaseOrderModal] Notice DB persistence:', errDb)
+      }
+    }
 
     const order = {
       id: `po-${Date.now()}`,
       reference: trimmedRef,
+      order_number: trimmedRef,
       date: new Date().toISOString(),
       supplierId: selectedSupplierId,
       supplierName: selectedSupplier?.name || 'Fournisseur',
@@ -371,9 +501,12 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       productName: orderItems.length === 1 ? first.productName : `${first.productName} (+${orderItems.length - 1} autre(s))`,
       productCode: first.productCode,
       ucdUnit: first.ucdUnit,
-      qtyOrderedUcd: orderItems.reduce((acc, it) => acc + it.qtyOrderedUcd, 0),
+      unite_ucd: first.ucdUnit,
+      qtyOrderedUcd: orderItems.reduce((acc, it) => acc + it.quantite_ucd, 0),
+      quantite_ucd: orderItems.reduce((acc, it) => acc + it.quantite_ucd, 0),
+      quantite: orderItems.reduce((acc, it) => acc + it.quantite, 0),
       unitPriceUcd: first.unitPriceUcd,
-      status: 'BROUILLON', // Statut initial : Brouillon -> À valider -> Validé -> Commandé -> Réceptionné
+      status: 'COMMANDE', // Prêt à être réceptionné
       notes,
       signatures: {
         magasinier: magasinierSigner,

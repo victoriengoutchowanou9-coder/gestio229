@@ -8,6 +8,7 @@ import React, { useState, useEffect } from 'react'
 import { PackageCheck, Check, X, AlertTriangle, AlertCircle } from 'lucide-react'
 import ModalPortal from './ModalPortal'
 import { showModal } from './CustomModalGestio'
+import { supabase } from '../../lib/supabase'
 
 export interface BlItemReception {
   productId: string
@@ -30,38 +31,114 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
   const [items, setItems] = useState<BlItemReception[]>([])
   const [conform, setConform] = useState(true)
   const [receptionNotes, setReceptionNotes] = useState('')
+  const [loadingItems, setLoadingItems] = useState(false)
 
   useEffect(() => {
-    if (isOpen && po) {
-      setBlRef('BL-FOURN-' + Math.floor(1000 + Math.random() * 9000))
-      setConform(true)
-      setReceptionNotes('')
+    if (!isOpen || !po) return
 
+    setBlRef('BL-FOURN-' + Math.floor(1000 + Math.random() * 9000))
+    setConform(true)
+    setReceptionNotes('')
+
+    const loadBcItems = async () => {
+      setLoadingItems(true)
+      const bcRef = String(po.reference || po.order_number || po.numero_bc || po.id || '')
+      let dbRows: any[] = []
+
+      // 1. Requête SQL demandée : SELECT article, unite_ucd, quantite_ucd as qte_commandee FROM bons_commande_lignes WHERE bc_id = ...
+      try {
+        const { data: bclData, error: bclErr } = await supabase
+          .from('bons_commande_lignes')
+          .select('id, produit_id, article, nom_produit, designation, unite_ucd, ucd, unite_commande, quantite_ucd, quantite, qte_commande')
+          .or(`bc_id.eq.${po.id},bc_id.eq.${bcRef}`)
+        if (!bclErr && bclData && bclData.length > 0) {
+          dbRows = bclData
+        }
+      } catch (err) {
+        console.warn('[ReceiveBlModal] Notice SELECT bons_commande_lignes:', err)
+      }
+
+      // 2. Fallback sur bc_lignes si bons_commande_lignes n'a pas encore de lignes
+      if (dbRows.length === 0 && po.id) {
+        try {
+          const { data: bcLData2, error: bcLErr2 } = await supabase
+            .from('bc_lignes')
+            .select('id, produit_id, article, nom_produit, ucd, unite_ucd, unite_commande, quantite_ucd, quantite, qte_commande')
+            .or(`bc_id.eq.${po.id},bc_id.eq.${bcRef}`)
+          if (!bcLErr2 && bcLData2 && bcLData2.length > 0) {
+            dbRows = bcLData2
+          }
+        } catch (err) {
+          console.warn('[ReceiveBlModal] Notice SELECT bc_lignes:', err)
+        }
+      }
+
+      // Si lignes trouvées en base de données
+      if (dbRows.length > 0) {
+        setItems(
+          dbRows.map((it: any) => {
+            // Si quantite_ucd IS NULL ou 0, fallback: COALESCE(quantite_ucd, quantite, 0)
+            const rawUcd = Number(it.quantite_ucd) || 0
+            const rawQty = Number(it.quantite ?? it.qte_commande) || 0
+            const qteCommandee = rawUcd > 0 ? rawUcd : (rawQty > 0 ? rawQty : 0)
+            const unit = it.unite_ucd || it.ucd || it.unite_commande || 'UCD'
+            const name = it.article || it.nom_produit || it.designation || 'Article'
+            return {
+              productId: it.produit_id || '',
+              productName: name,
+              ucdUnit: unit,
+              qtyOrdered: qteCommandee,
+              receivedQty: qteCommandee, // Champ Qté Reçue : input par défaut = qte_commandée (10), pas 0
+              ecart: 0
+            }
+          })
+        )
+        setLoadingItems(false)
+        return
+      }
+
+      // 3. Si pas en DB, lire depuis po.items
       if (po.items && Array.isArray(po.items) && po.items.length > 0) {
         setItems(
-          po.items.map((it: any) => ({
-            productId: it.productId,
-            productName: it.productName,
-            ucdUnit: it.ucdUnit || 'UCD',
-            qtyOrdered: Number(it.qty) || 0,
-            receivedQty: Number(it.qty) || 0,
-            ecart: 0
-          }))
+          po.items.map((it: any) => {
+            // Fallback: COALESCE(quantite_ucd, qtyOrderedUcd, quantite, qty, 0)
+            const rawUcd = Number(it.quantite_ucd ?? it.qtyOrderedUcd) || 0
+            const rawQty = Number(it.quantite ?? it.qty ?? it.quantity ?? it.qte_commande) || 0
+            const qteCommandee = rawUcd > 0 ? rawUcd : (rawQty > 0 ? rawQty : 0)
+            const unit = it.unite_ucd || it.ucdUnit || it.ucd || it.unite_commande || it.unit || 'UCD'
+            const name = it.article || it.nom_produit || it.productName || it.name || it.designation || 'Article'
+            return {
+              productId: it.productId || it.produit_id || '',
+              productName: name,
+              ucdUnit: unit,
+              qtyOrdered: qteCommandee,
+              receivedQty: qteCommandee, // Champ Qté Reçue : input par défaut = qte_commandée (10), pas 0
+              ecart: 0
+            }
+          })
         )
-      } else {
-        const qOrdered = Number(po.qtyOrderedUcd) || 1
-        setItems([
-          {
-            productId: po.productId || '',
-            productName: po.productName || 'Article',
-            ucdUnit: po.ucdUnit || 'UCD',
-            qtyOrdered: qOrdered,
-            receivedQty: qOrdered,
-            ecart: 0
-          }
-        ])
+        setLoadingItems(false)
+        return
       }
+
+      // 4. Fallback mono-article objet po
+      const rawUcd = Number(po.quantite_ucd ?? po.qtyOrderedUcd) || 0
+      const rawQty = Number(po.quantite ?? po.quantity ?? po.qty) || 0
+      const qOrdered = rawUcd > 0 ? rawUcd : (rawQty > 0 ? rawQty : 1)
+      setItems([
+        {
+          productId: po.productId || po.produit_id || '',
+          productName: po.productName || po.article || po.nom_produit || 'Article',
+          ucdUnit: po.ucdUnit || po.unite_ucd || po.ucd || po.unit || 'UCD',
+          qtyOrdered: qOrdered,
+          receivedQty: qOrdered, // Champ Qté Reçue : input par défaut = qte_commandée (10), pas 0
+          ecart: 0
+        }
+      ])
+      setLoadingItems(false)
     }
+
+    loadBcItems()
   }, [isOpen, po])
 
   const handleQtyChange = (index: number, val: number) => {
@@ -79,7 +156,7 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
   const totalReceived = items.reduce((sum, it) => sum + it.receivedQty, 0)
   const hasDiscrepancy = items.some((it) => it.ecart !== 0)
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     if (totalReceived <= 0) {
@@ -100,6 +177,75 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
         domaine: 'www.gestio229.com',
       })
       return
+    }
+
+    // Règle B.1: Seule la quantité reçue entre au Stock Magasin (UCD)
+    // -> à la validation, INSERT INTO stocks_magazin (produit, quantite = qte_reçue) et UPDATE bc statut Réceptionné
+    const bcRef = String(po?.reference || po?.order_number || po?.numero_bc || po?.id || 'BC-2026')
+    try {
+      for (const it of items) {
+        if (it.receivedQty > 0) {
+          // INSERT INTO stocks_magazin
+          try {
+            await supabase.from('stocks_magazin').insert({
+              company_id: po?.company_id,
+              produit: it.productName,
+              produit_id: it.productId,
+              quantite: it.receivedQty,
+              stock_ucd: it.receivedQty,
+              unite: it.ucdUnit,
+              ucd: it.ucdUnit,
+              reference_bl: blRef.trim(),
+              notes: receptionNotes
+            })
+          } catch (eSm1) {
+            console.warn('[ReceiveBlModal] stocks_magazin insert notice:', eSm1)
+          }
+
+          // Fallback stock_magasin
+          try {
+            await supabase.from('stock_magasin').upsert({
+              produit_id: it.productId,
+              stock_ucd: it.receivedQty,
+              ucd: it.ucdUnit
+            }, { onConflict: 'produit_id' })
+          } catch (eSm2) {
+            console.warn('[ReceiveBlModal] stock_magasin upsert notice:', eSm2)
+          }
+        }
+      }
+
+      // UPDATE bc statut Réceptionné
+      try {
+        await supabase.from('bons_commande').update({
+          statut: 'Réceptionné',
+          updated_at: new Date().toISOString()
+        }).or(`reference.eq.${bcRef},id.eq.${po?.id}`)
+      } catch (eBc1) {
+        console.warn('[ReceiveBlModal] bons_commande update notice:', eBc1)
+      }
+
+      try {
+        await supabase.from('purchase_orders').update({
+          status: 'RECEPTIONNE'
+        }).or(`order_number.eq.${bcRef},id.eq.${po?.id}`)
+      } catch (eBc2) {
+        console.warn('[ReceiveBlModal] purchase_orders update notice:', eBc2)
+      }
+
+      // UPDATE bons_commande_lignes
+      try {
+        for (const it of items) {
+          await supabase.from('bons_commande_lignes').update({
+            quantite_recue: it.receivedQty,
+            qte_recue: it.receivedQty
+          }).or(`bc_id.eq.${bcRef},bc_id.eq.${po?.id}`)
+        }
+      } catch (eBcl) {
+        console.warn('[ReceiveBlModal] bons_commande_lignes update notice:', eBcl)
+      }
+    } catch (errGlobal) {
+      console.warn('[ReceiveBlModal] Erreur globale persistance réception:', errGlobal)
     }
 
     if (onSuccess) {
@@ -162,7 +308,7 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
               <span className="text-[10px] text-emerald-800 font-bold uppercase tracking-wider">Fournisseur :</span>
               <p className="font-bold text-slate-900">{po?.supplierName || 'Fournisseur'}</p>
               <p className="text-emerald-700 font-mono font-bold text-xs">
-                Total commandé : {totalOrdered} UCD
+                Total commandé : {totalOrdered} {items[0]?.ucdUnit || 'UCD'}
               </p>
             </div>
           </div>
@@ -278,7 +424,7 @@ export const ReceiveBlModal: React.FC<ReceiveBlModalProps> = ({ isOpen, onClose,
 
           <div className="pt-3 flex items-center justify-between border-t border-slate-200">
             <div className="text-xs text-slate-500 font-mono">
-              Total à créditer : <strong className="text-emerald-700">{totalReceived} UCD</strong>
+              Total à créditer : <strong className="text-emerald-700">{totalReceived} {items[0]?.ucdUnit || 'UCD'}</strong>
             </div>
             <div className="flex items-center space-x-2">
               <button

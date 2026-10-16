@@ -161,9 +161,42 @@ export const FournisseursPage: React.FC = () => {
 
       if (sErr) throw sErr
 
+      let allPo = (poData && !poErr) ? [...poData] : []
+
+      // Chargement complémentaire depuis bons_commande si disponible
+      try {
+        const { data: bcList } = await supabaseTenant('bons_commande')
+          .select('*')
+          .order('created_at', { ascending: false })
+        if (bcList && bcList.length > 0) {
+          const existingRefs = new Set(allPo.map((p: any) => p.order_number || p.reference))
+          bcList.forEach((bc: any) => {
+            const ref = bc.reference || bc.numero_bc
+            if (!existingRefs.has(ref)) {
+              allPo.push({
+                id: bc.id,
+                order_number: ref,
+                reference: ref,
+                created_at: bc.created_at || bc.date_commande,
+                supplier_id: bc.fournisseur_id,
+                supplier_name: bc.fournisseur_nom,
+                total_amount: bc.total_ttc,
+                status: bc.statut,
+                notes: bc.notes,
+                sector_slug: bc.sector_slug,
+                circuit: bc.circuit
+              })
+              existingRefs.add(ref)
+            }
+          })
+        }
+      } catch (errBc) {
+        console.warn('[FournisseursPage] Notice fetch bons_commande:', errBc)
+      }
+
       // Isolation stricte par sous-logiciel : filtrer par secteur
       const sectorSuppliers = filterItemsForSector(sData || [], currentSectorSlug)
-      const sectorPo = filterItemsForSector(poData || [], currentSectorSlug)
+      const sectorPo = filterItemsForSector(allPo, currentSectorSlug)
 
       const mappedSuppliers: Supplier[] = sectorSuppliers.map((s: any) => ({
         id: s.id,
@@ -188,7 +221,7 @@ export const FournisseursPage: React.FC = () => {
 
       setSuppliers(mappedSuppliers)
 
-      if (poData && !poErr) {
+      if (sectorPo.length > 0) {
         const mappedPo: PurchaseOrder[] = sectorPo.map((p: any) => {
           let detectedCircuit: 'BAR' | 'CUISINE' | undefined = undefined
           if (p.circuit) detectedCircuit = p.circuit
@@ -198,22 +231,26 @@ export const FournisseursPage: React.FC = () => {
             else if (p.notes.includes('[BAR]') || p.notes.includes('Circuit: BAR')) detectedCircuit = 'BAR'
           }
 
+          const rawQty = Number(p.quantite_ucd ?? p.qtyOrderedUcd ?? p.quantity ?? p.quantite) || 1
+          const rawUnit = p.unit || p.ucd || p.unite_ucd || p.ucdUnit || 'UCD'
+
           return {
             id: p.id,
-            reference: p.order_number || `BC-${p.id.slice(0, 6)}`,
+            reference: p.order_number || p.reference || `BC-${p.id.slice(0, 6)}`,
             date: p.created_at || new Date().toISOString(),
-            supplierId: p.supplier_id,
-            supplierName: p.supplier_name || 'Fournisseur',
+            supplierId: p.supplier_id || p.fournisseur_id,
+            supplierName: p.supplier_name || p.fournisseur_nom || 'Fournisseur',
             productId: p.product_id || '',
-            productName: p.product_name || 'Marchandise',
-            ucdUnit: p.unit || 'UCD',
-            qtyOrderedUcd: Number(p.quantity) || 1,
-            unitPriceUcd: Number(p.unit_price) || 0,
-            totalTtc: Number(p.total_amount) || 0,
-            status: (p.status?.toUpperCase() as any) || 'COMMANDE',
+            productName: p.product_name || p.article || 'Marchandise',
+            ucdUnit: rawUnit,
+            qtyOrderedUcd: rawQty,
+            quantite_ucd: rawQty,
+            unitPriceUcd: Number(p.unit_price || p.prix_unitaire) || 0,
+            totalTtc: Number(p.total_amount || p.total_ttc) || 0,
+            status: (p.status?.toUpperCase() as any) || (p.statut === 'Réceptionné' ? 'RECEPTIONNE' : 'COMMANDE'),
             circuit: detectedCircuit,
             signatures: {
-              magasinier: p.created_by_name || 'Magasinier',
+              magasinier: p.created_by_name || p.demandeur_nom || 'Magasinier',
               gerant: p.validated_by_name || ''
             },
             items: p.items || undefined
@@ -414,13 +451,61 @@ export const FournisseursPage: React.FC = () => {
             }
             totalItemsUpdated++
             totalQtyReceived += itemQty
+
+            // Règle B.1: Seule la quantité reçue entre au Stock Magasin (UCD) -> INSERT INTO stocks_magazin
+            try {
+              await supabase.from('stocks_magazin').insert({
+                company_id: company?.id,
+                produit: item.productName || prodData.name,
+                produit_id: item.productId,
+                quantite: itemQty,
+                stock_ucd: itemQty,
+                unite: item.ucdUnit || prodData.ucd || 'UCD',
+                ucd: item.ucdUnit || prodData.ucd || 'UCD',
+                reference_bl: data.blRef,
+                notes: data.notes
+              })
+            } catch (errSm) {
+              console.warn('[stocks_magazin] insert notice:', errSm)
+            }
+
+            try {
+              await supabase.from('stock_magasin').upsert({
+                produit_id: item.productId,
+                stock_ucd: itemQty,
+                ucd: item.ucdUnit || prodData.ucd || 'UCD'
+              }, { onConflict: 'produit_id' })
+            } catch (errSm2) {
+              console.warn('[stock_magasin] upsert notice:', errSm2)
+            }
           }
         }
       }
 
-      // 2. Mettre à jour le statut du BC -> Réceptionné
+      // 2. Mettre à jour le statut du BC -> Réceptionné (en DB et en state React)
+      const targetBcRef = selectedPoForReceive?.reference || data.poId || 'BC-2026'
+      try {
+        await supabase.from('bons_commande').update({
+          statut: 'Réceptionné',
+          updated_at: new Date().toISOString()
+        }).or(`reference.eq.${targetBcRef},id.eq.${data.poId}`)
+
+        await supabase.from('purchase_orders').update({
+          status: 'RECEPTIONNE'
+        }).or(`order_number.eq.${targetBcRef},id.eq.${data.poId}`)
+
+        for (const item of itemsToReceive) {
+          await supabase.from('bons_commande_lignes').update({
+            quantite_recue: Number(item.receivedQty) || 0,
+            qte_recue: Number(item.receivedQty) || 0
+          }).or(`bc_id.eq.${targetBcRef},bc_id.eq.${data.poId}`)
+        }
+      } catch (errUpdBc) {
+        console.warn('[FournisseursPage] update BC status notice:', errUpdBc)
+      }
+
       setPurchaseOrders((prev) =>
-        prev.map((p) => (p.id === data.poId ? { ...p, status: 'RECEPTIONNE' as const } : p))
+        prev.map((p) => (p.id === data.poId || p.reference === targetBcRef ? { ...p, status: 'RECEPTIONNE' as const } : p))
       )
 
       // 3. Enregistrer l'enregistrement de réception BL
@@ -968,7 +1053,7 @@ export const FournisseursPage: React.FC = () => {
                             <span className="font-semibold text-slate-900">{po.items.length} articles commandés</span>
                             <div className="text-[11px] text-slate-500 font-mono mt-0.5 space-y-0.5 max-h-16 overflow-y-auto">
                               {po.items.map((it, idx) => (
-                                <div key={idx}>• {it.productName} ({it.qty} {it.ucdUnit})</div>
+                                <div key={idx}>• {it.productName || it.nom_produit || it.article} ({it.quantite_ucd ?? it.qtyOrderedUcd ?? it.quantite ?? it.qty} {it.ucdUnit || it.unite_ucd || it.ucd || 'UCD'})</div>
                               ))}
                             </div>
                           </div>
@@ -976,7 +1061,7 @@ export const FournisseursPage: React.FC = () => {
                           <div>
                             <span className="font-semibold text-slate-900">{po.productName}</span>
                             <span className="text-slate-500 font-mono text-[11px] block">
-                              Qté : {po.qtyOrderedUcd} {po.ucdUnit} @ {fmt(po.unitPriceUcd)}
+                              Qté : {po.quantite_ucd ?? po.qtyOrderedUcd ?? po.quantite ?? 1} {po.ucdUnit || po.unite_ucd || po.ucd || 'UCD'} @ {fmt(po.unitPriceUcd)}
                             </span>
                           </div>
                         )}
