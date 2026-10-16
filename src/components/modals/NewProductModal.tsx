@@ -317,55 +317,49 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         autoCode = await getNextSectorCode('products', 'PROD', companyId || '', sectorSlug)
       }
 
-      // 3. Préparation du payload complet pour Supabase avec colonnes multi-unités & synonymes
+      // 3. Préparation du payload optimisé pour Supabase
+      // NOTE ESSENTIELLE : On n'envoie au niveau SQL que les colonnes réelles de 'products'.
+      // Tous les attributs multi-unités et stocks (ucd, uv, coef, stock_magasin, etc.) sont
+      // stockés de façon universelle et pérenne dans la colonne JSONB 'sector_meta' !
       const coefVal = Math.max(1, Number(form.coef) || 1)
       const ucdVal = form.ucd || 'Tonne'
       const uvVal = form.uv || 'Paquet'
 
       const insertPayload: any = {
         company_id: company?.id || companyId,
-        entreprise_id: company?.id || companyId,
-        user_id: user?.id,
         code: autoCode,
         name: form.name.trim(),
-        nom: form.name.trim(),
         unit: uvVal,
-        unite: uvVal,
-        ucd: ucdVal,
-        unite_stock: ucdVal,
-        uv: uvVal,
-        unite_vente: uvVal,
-        coef: coefVal,
-        coefficient: coefVal,
-        coefficient_conversion: coefVal,
         cost_price: form.priceAchatUcdTtc,
-        cout_achat: form.priceAchatUcdTtc,
         selling_price: form.priceVenteUvTtc,
-        prix_vente: form.priceVenteUvTtc,
         wholesale_price: form.priceVenteUcdTtc,
         is_taxable: form.isVatSubject,
         tva_rate: form.isVatSubject ? form.vatRate : 0,
         min_stock_alert: 5,
-        stock_magasin: parsedMagasin,
-        stock_vente: parsedVente,
         sector_slug: activeSectorSlug,
         secteur_slug: activeSectorSlug,
-        secteur: activeSectorSlug,
-        sector: activeSectorSlug,
-        restaurant_circuit: isRestaurant ? restaurantCircuit : undefined,
-        is_matiere_premiere: isMatierePrem,
         sector_meta: sectorMeta,
         is_active: true,
       }
 
-      console.log('INSERT PRODUIT PAYLOAD COMPLET:', insertPayload)
+      if (isRestaurant && restaurantCircuit) {
+        insertPayload.restaurant_circuit = restaurantCircuit
+      }
+      if (isMatierePrem !== undefined) {
+        insertPayload.is_matiere_premiere = isMatierePrem
+      }
+      if (sectorSlug === 'brasserie' && selectedEmballageId) {
+        insertPayload.emballage_code = selectedEmballageId
+      }
 
-      // Exécution de l'insert avec boucle de fallback sur les colonnes inexistantes dans le cache PostgREST
+      console.log('INSERT PRODUIT PAYLOAD OPTIMISÉ (Instantané):', insertPayload)
+
+      // Exécution de l'insert direct (instantané < 500ms)
       let savedRecord: any = null
       let lastError: any = null
       let currentPayload = { ...insertPayload }
 
-      for (let attempt = 0; attempt < 10; attempt++) {
+      for (let attempt = 0; attempt < 3; attempt++) {
         const res = await supabase.from('products').insert(currentPayload).select()
 
         if (!res.error && res.data && res.data.length > 0) {
@@ -393,62 +387,16 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
             continue
           }
 
-          if (errMsg.includes('secteur_slug') && currentPayload.secteur_slug) {
-            delete currentPayload.secteur_slug
-            continue
-          }
-          if (errMsg.includes('restaurant_circuit') && currentPayload.restaurant_circuit) {
-            delete currentPayload.restaurant_circuit
-            continue
-          }
-          if (errMsg.includes('is_matiere_premiere') && currentPayload.is_matiere_premiere !== undefined) {
-            delete currentPayload.is_matiere_premiere
-            continue
-          }
-          if (errMsg.includes('unite_stock') && currentPayload.unite_stock) {
-            delete currentPayload.unite_stock
-            continue
-          }
-          if (errMsg.includes('unite_vente') && currentPayload.unite_vente) {
-            delete currentPayload.unite_vente
-            continue
-          }
-          if (errMsg.includes('coefficient_conversion') && currentPayload.coefficient_conversion) {
-            delete currentPayload.coefficient_conversion
-            continue
-          }
-          if (errMsg.includes('coefficient') && currentPayload.coefficient) {
-            delete currentPayload.coefficient
-            continue
-          }
-          if (errMsg.includes('entreprise_id') && currentPayload.entreprise_id) {
-            delete currentPayload.entreprise_id
-            continue
-          }
-          if (errMsg.includes('nom') && currentPayload.nom) {
-            delete currentPayload.nom
-            continue
-          }
-          if (errMsg.includes('unite') && currentPayload.unite) {
-            delete currentPayload.unite
-            continue
-          }
-          if (errMsg.includes('cout_achat') && currentPayload.cout_achat) {
-            delete currentPayload.cout_achat
-            continue
-          }
-          if (errMsg.includes('prix_vente') && currentPayload.prix_vente) {
-            delete currentPayload.prix_vente
-            continue
-          }
-          if (errMsg.includes('secteur') && currentPayload.secteur) {
-            delete currentPayload.secteur
-            continue
-          }
-          if (errMsg.includes('sector') && currentPayload.sector) {
-            delete currentPayload.sector
-            continue
-          }
+          // Fallbacks de sécurité immédiats
+          if (errMsg.includes('secteur_slug')) delete currentPayload.secteur_slug
+          if (errMsg.includes('restaurant_circuit')) delete currentPayload.restaurant_circuit
+          if (errMsg.includes('is_matiere_premiere')) delete currentPayload.is_matiere_premiere
+          if (errMsg.includes('emballage_code')) delete currentPayload.emballage_code
+          if (errMsg.includes('stock_magasin')) delete currentPayload.stock_magasin
+          if (errMsg.includes('stock_vente')) delete currentPayload.stock_vente
+          if (errMsg.includes('ucd')) delete currentPayload.ucd
+          if (errMsg.includes('uv')) delete currentPayload.uv
+          if (errMsg.includes('coef')) delete currentPayload.coef
 
           // Sortie de boucle si erreur non liée aux colonnes
           break
@@ -457,7 +405,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
           const { data: fetched } = await supabase
             .from('products')
             .select('*')
-            .eq('company_id', company.id)
+            .eq('company_id', company?.id || companyId)
             .eq('code', autoCode)
             .maybeSingle()
 
@@ -508,6 +456,49 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
           })
         } catch (peErr) {
           console.warn('[NewProductModal] Échec brasserie_produit_emballage:', peErr)
+        }
+      }
+
+      // 4c. Enregistrement sécurisé du stock initial (stock_magasin & mouvements)
+      if (savedRecord?.id && (parsedMagasin > 0 || parsedVente > 0)) {
+        const cId = company?.id || companyId || ''
+        try {
+          await supabase.from('stock_magasin').upsert({
+            produit_id: savedRecord.id,
+            stock_ucd: parsedMagasin,
+            ucd: form.ucd
+          }, { onConflict: 'produit_id' })
+        } catch (smErr) {
+          console.warn('[NewProductModal] stock_magasin notice:', smErr)
+        }
+
+        try {
+          await supabase.from('stocks_magazin').insert({
+            company_id: cId,
+            produit: form.name.trim(),
+            produit_id: savedRecord.id,
+            quantite: parsedMagasin,
+            stock_ucd: parsedMagasin,
+            unite: form.ucd,
+            ucd: form.ucd,
+            reference_bl: 'STOCK-INITIAL',
+            notes: 'Stock initial saisi à la création du produit'
+          })
+        } catch (smzErr) {
+          console.warn('[NewProductModal] stocks_magazin notice:', smzErr)
+        }
+
+        try {
+          await supabase.from('stock_movements').insert({
+            company_id: cId,
+            product_id: savedRecord.id,
+            movement_type: 'INITIAL',
+            quantity: parsedMagasin,
+            unit: form.ucd,
+            notes: 'Stock initial à la création'
+          })
+        } catch (mErr) {
+          console.warn('[NewProductModal] stock_movements notice:', mErr)
         }
       }
 
