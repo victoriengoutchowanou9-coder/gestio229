@@ -5,6 +5,7 @@
 import React, { useEffect, Suspense } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useNavigate, Link, useLocation } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
+import { supabase } from './lib/supabase'
 import AppLayout from './components/layout/AppLayout'
 import ModuleGuard from './components/subscription/ModuleGuard'
 import SectorGuard from './components/subscription/SectorGuard'
