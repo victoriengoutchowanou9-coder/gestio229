@@ -15,6 +15,7 @@ export default defineConfig({
         skipWaiting: true,
         clientsClaim: true,
         cleanupOutdatedCaches: true,
+        globIgnores: ['**/middleware-manifest.json'],
       },
       includeAssets: ['icon-*.png', 'icons/*.png'],
       manifest: {
