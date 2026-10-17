@@ -32,33 +32,29 @@ if (typeof window !== 'undefined') {
   }
 
   // ── 2. Version check : détection de nouveau déploiement Vercel ───────────
-  // À chaque déploiement, __APP_VERSION__ est un nouveau timestamp unique.
-  // Si la version stockée ≠ version courante → nouveau build détecté →
-  // on vide les caches, on désenregistre le SW et on reload une seule fois proprement avec délai 3s.
   try {
     const STORED_VERSION_KEY = 'gestio229_app_version'
-    const RELOAD_GUARD_KEY = 'gestio229_chunk_reload_done'
     const storedVersion = localStorage.getItem(STORED_VERSION_KEY)
     const currentVersion = __APP_VERSION__
 
     if (storedVersion && storedVersion !== currentVersion) {
-      const alreadyReloaded = sessionStorage.getItem(RELOAD_GUARD_KEY) === '1'
-      if (!alreadyReloaded) {
-        console.info(`[GESTIO 229] Nouveau déploiement détecté (${storedVersion} → ${currentVersion}) — rechargement dans 3s…`)
-        sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
-        localStorage.setItem(STORED_VERSION_KEY, currentVersion)
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then((regs) => {
-            regs.forEach((r) => r.unregister())
-          }).catch(() => {})
-        }
-        if ('caches' in window) {
-          caches.keys().then((names) => names.forEach((n) => caches.delete(n))).catch(() => {})
-        }
-        setTimeout(() => {
-          window.location.href = window.location.pathname + '?t=' + Date.now()
-        }, 3000)
-      }
+      console.info(`[GESTIO 229] Nouveau déploiement détecté (${storedVersion} → ${currentVersion}) — mise à jour immédiate…`)
+      localStorage.setItem(STORED_VERSION_KEY, currentVersion)
+      sessionStorage.removeItem('gestio229_chunk_reload_done')
+
+      ;(async () => {
+        try {
+          if ('serviceWorker' in navigator) {
+            const regs = await navigator.serviceWorker.getRegistrations()
+            await Promise.all(regs.map((r) => r.unregister()))
+          }
+          if ('caches' in window) {
+            const keys = await window.caches.keys()
+            await Promise.all(keys.map((k) => window.caches.delete(k)))
+          }
+        } catch (_) {}
+        window.location.href = window.location.origin + window.location.pathname + '?v=' + currentVersion
+      })()
     } else {
       localStorage.setItem(STORED_VERSION_KEY, currentVersion)
     }
@@ -75,29 +71,27 @@ if (typeof window !== 'undefined') {
     msg.includes('error loading dynamically imported module') ||
     (msg.includes('Cannot access') && msg.includes('before initialization'))
 
-  const handleSafeAutoReload = (reason: string) => {
+  const handleSafeAutoReload = async (reason: string) => {
     const RELOAD_GUARD_KEY = 'gestio229_chunk_reload_done'
     const alreadyReloaded = sessionStorage.getItem(RELOAD_GUARD_KEY) === '1'
     if (alreadyReloaded) {
       console.warn('[GESTIO 229] Rechargement automatique déjà exécuté une fois. Boucle bloquée :', reason)
       return
     }
-    console.warn('[GESTIO 229] Incident post-déploiement détecté — purge SW & cache, rechargement unique dans 3s…', reason)
+    console.warn('[GESTIO 229] Incident post-déploiement détecté — purge SW & cache, rechargement immédiat :', reason)
     sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
     try {
       localStorage.removeItem('gestio229_app_version')
+      if ('serviceWorker' in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations()
+        await Promise.all(regs.map((r) => r.unregister()))
+      }
+      if ('caches' in window) {
+        const keys = await window.caches.keys()
+        await Promise.all(keys.map((k) => window.caches.delete(k)))
+      }
     } catch (_) {}
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then((regs) => {
-        regs.forEach((r) => r.unregister())
-      }).catch(() => {})
-    }
-    if ('caches' in window) {
-      window.caches.keys().then((names) => names.forEach((n) => window.caches.delete(n))).catch(() => {})
-    }
-    setTimeout(() => {
-      window.location.href = window.location.pathname + '?t=' + Date.now()
-    }, 3000)
+    window.location.href = window.location.origin + window.location.pathname + '?ts=' + Date.now()
   }
 
   window.addEventListener('unhandledrejection', (event) => {
@@ -116,17 +110,15 @@ if (typeof window !== 'undefined') {
     }
   })
 
-  // ── 4. Service Worker PWA ─────────────────────────────────────────────────
+  // ── 4. Service Worker PWA avec vérification active de mise à jour ──────────
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
-          console.log('[GESTIO 229 PWA] Service Worker actif :', reg.scope)
+          reg.update().catch(() => {})
         })
-        .catch((err) => {
-          console.warn('[GESTIO 229 PWA] Échec enregistrement Service Worker :', err)
-        })
+        .catch(() => {})
     })
   }
 }
