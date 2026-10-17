@@ -29,6 +29,7 @@ export const STARTER_ACCESSIBLE_MODULES = [
   'dashboard',   // Tableau de bord
   'ventes',      // Vente & POS
   'stock',       // Stocks & Réserve basique
+  'matieres',    // Matières Premières & Consommables (Imprimerie)
   'caisse',      // Caisse du jour
   'clients',     // Clients & Créances
   'depenses',    // Dépenses courantes

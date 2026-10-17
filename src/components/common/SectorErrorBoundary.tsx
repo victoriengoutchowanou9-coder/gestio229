@@ -162,19 +162,10 @@ export class SectorErrorBoundary extends Component<Props, State> {
   }
 
   public render() {
-    const DISABLE_PWA_UPDATE_BLOCKER = true
-    if (DISABLE_PWA_UPDATE_BLOCKER && this.state.isChunkError) {
-      return null
-    }
-
     if (this.state.hasError) {
       const sectorName = this.props.sectorSlug
         ? this.props.sectorSlug.charAt(0).toUpperCase() + this.props.sectorSlug.slice(1)
         : 'Sous-Logiciel'
-
-      if (this.state.isChunkError) {
-        return null
-      }
 
       return (
         <div className="min-h-[70vh] flex items-center justify-center p-6 bg-slate-50 dark:bg-slate-900">

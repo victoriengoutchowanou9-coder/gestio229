@@ -566,7 +566,6 @@ export const SectorLoader = {
         { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
         // ACTIVITÉS & VENTES
         { id: 'ventes', label: 'Vente & POS', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
-        { id: 'stock', label: 'Matières Premières et Consommables', icon: 'Package', href: `${prefix}/matieres`, group: 'commercial' },
         { id: 'caisse', label: 'Caisse', icon: 'Wallet', href: `${prefix}/caisse`, group: 'commercial' },
         { id: 'devis', label: 'Devis & Production', icon: 'Printer', href: `${prefix}/devis`, group: 'commercial' },
         { id: 'prestations', label: 'Prestations & BOM', icon: 'Layers', href: `${prefix}/prestations`, group: 'commercial' },
@@ -577,7 +576,7 @@ export const SectorLoader = {
         { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
         // APPROVISIONNEMENTS & PRODUCTION
         { id: 'fournisseurs', label: 'Fournisseurs & Achats', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
-        { id: 'matieres', label: 'Matières Premières et Consommables', icon: 'Layers', href: `${prefix}/matieres`, group: 'gestion' },
+        { id: 'matieres', label: 'Matières Premières et Consommables', icon: 'Package', href: `${prefix}/matieres`, group: 'gestion' },
         { id: 'sous_traitance', label: 'Sous-traitance', icon: 'GitFork', href: `${prefix}/sous-traitance`, group: 'gestion' },
         // ADMINISTRATION
         { id: 'rapports', label: 'Rapports & Analyses', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
@@ -879,8 +878,24 @@ export const SectorLoader = {
     if (moduleId === 'ventes' || moduleId === 'caisse' || moduleId === 'consignation') {
       return ['caissier', 'vendeur', 'commercial', 'magasinier', 'gestionnaire', 'gerant', 'pompiste', 'chef_piste', 'receptionniste'].includes(user.role)
     }
-    if (moduleId === 'stock') {
-      return ['magasinier', 'gestionnaire', 'gerant', 'gestionnaire_stock_quincaillerie', 'housekeeping', 'chef_piste'].includes(user.role)
+    if (moduleId === 'stock' || moduleId === 'matieres') {
+      return [
+        'magasinier',
+        'gestionnaire',
+        'gerant',
+        'gestionnaire_stock_quincaillerie',
+        'magasinier_imprimerie',
+        'responsable_imprimerie',
+        'production_imprimerie',
+        'commercial_imprimerie',
+        'graphiste_pao',
+        'caissiere_imprimerie',
+        'comptable_imprimerie',
+        'vendeur',
+        'commercial',
+        'housekeeping',
+        'chef_piste'
+      ].includes(user.role)
     }
     if (moduleId === 'syscohada' || moduleId === 'finances' || moduleId === 'depenses') {
       return ['comptable', 'gestionnaire', 'gerant'].includes(user.role)
@@ -889,11 +904,11 @@ export const SectorLoader = {
       return ['caissier', 'vendeur', 'commercial', 'comptable', 'gerant', 'agent_credit', 'receptionniste'].includes(user.role)
     }
     if (moduleId === 'fournisseurs') {
-      return ['magasinier', 'gestionnaire', 'comptable', 'gerant', 'gestionnaire_stock_quincaillerie'].includes(user.role)
+      return ['magasinier', 'gestionnaire', 'comptable', 'gerant', 'gestionnaire_stock_quincaillerie', 'magasinier_imprimerie', 'responsable_imprimerie'].includes(user.role)
     }
 
-    if (moduleId === 'devis' || moduleId === 'prestations' || moduleId === 'matieres' || moduleId === 'sous_traitance') {
-      return ['commercial_imprimerie', 'graphiste_pao', 'production_imprimerie', 'responsable_imprimerie', 'magasinier_imprimerie', 'caissiere_imprimerie', 'comptable_imprimerie', 'gerant'].includes(user.role)
+    if (moduleId === 'devis' || moduleId === 'prestations' || moduleId === 'sous_traitance') {
+      return ['commercial_imprimerie', 'graphiste_pao', 'production_imprimerie', 'responsable_imprimerie', 'magasinier_imprimerie', 'caissiere_imprimerie', 'comptable_imprimerie', 'gerant', 'magasinier', 'gestionnaire', 'vendeur', 'commercial'].includes(user.role)
     }
 
     return false

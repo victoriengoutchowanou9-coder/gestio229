@@ -667,6 +667,16 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'gestion',
   },
 
+  'matieres': {
+    id: 'matieres',
+    label: 'Matières Premières et Consommables',
+    icon: 'Package',
+    path: 'matieres',
+    isCommon: false,
+    sectorSlugs: ['impression', 'imprimerie'],
+    group: 'gestion',
+  },
+
   // ══════════════════════════════════════════════════════════════════════
   // ══════════════════════════════════════════════════════════════════════
   // MODULES SPÉCIFIQUES — POISSONNERIE & SURGELÉS
