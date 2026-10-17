@@ -44,10 +44,16 @@ export interface MatierePremiere {
   nom: string
   categorie: string
   unite: string
+  unite_vente?: string
+  unite_stock?: string
   stock_actuel: number
+  stock_vente: number
+  stock_magasin: number
   stock_minimum: number
   cout_moyen: number
   dernier_cout_achat: number
+  prix_vente: number // Prix de vente issu de Matières premières (Stock vente)
+  prix_vente_ht?: number
   valeur_stock: number
   fournisseur_prefere?: string
   est_actif: boolean
@@ -58,10 +64,16 @@ export interface PrestationMatiereBOM {
   prestation_id?: string
   matiere_id: string
   matiere_nom?: string
+  matiere_code?: string
   quantite_prevue: number
   unite: string
+  base_calcul?: 'm2' | 'piece' | 'unite' | 'ml' | string
+  taux_gache?: number
+  prix_vente_ref?: number // Prix de vente référence (stock vente)
   cout_unitaire_prevu: number
   cout_total_prevu: number
+  stock_disponible?: number
+  avertissement_prix?: string
 }
 
 export interface PrestationImprimerie {
@@ -321,6 +333,10 @@ export const imprimerieService = {
       const coutUcd = Number(p.cost_price || p.cout_achat || meta.price_achat_ucd_ttc) || 0
       const coutUv = coef > 0 ? Math.round((coutUcd / coef) * 100) / 100 : coutUcd
 
+      // Prix de vente stock vente (module Matières premières)
+      const prixVenteUv = Number(p.selling_price || p.prix_vente || meta.price_vente_uv_ttc || meta.price_vente_ht) || 0
+      const prixVenteHt = Number(meta.price_vente_ht || p.selling_price) || prixVenteUv
+
       return {
         id: p.id,
         company_id: p.company_id,
@@ -329,10 +345,16 @@ export const imprimerieService = {
         nom: p.name,
         categorie: meta.category || p.category_name || (p.category?.name) || 'Matières premières',
         unite: p.uv || p.unit || meta.uv || 'm2',
+        unite_vente: p.uv || meta.uv || 'm2',
+        unite_stock: p.ucd || meta.ucd || 'Rouleau',
         stock_actuel: totalUv,
+        stock_vente: vente,
+        stock_magasin: mag,
         stock_minimum: Number(p.min_stock_alert) || 5,
         cout_moyen: coutUv,
         dernier_cout_achat: coutUv,
+        prix_vente: prixVenteUv,
+        prix_vente_ht: prixVenteHt,
         valeur_stock: Math.round(((mag * coutUcd) + (vente * coutUv)) * 100) / 100,
         fournisseur_prefere: meta.fournisseur_prefere || '',
         est_actif: p.is_active !== false,
@@ -485,33 +507,91 @@ export const imprimerieService = {
       return []
     }
 
+    // Récupérer toutes les matières pour mapper proprement avec les prix stock vente
+    const matieresList = await this.getMatieres(companyId, sectorSlug)
+    const matieresMap = new Map<string, MatierePremiere>()
+    matieresList.forEach((m) => matieresMap.set(m.id, m))
+
     // Récupérer les liaisons BOM matières
     const prestationIds = (prestations || []).map((p) => p.id)
     let bomList: any[] = []
     if (prestationIds.length > 0) {
       const { data: boms } = await supabase
         .from('imprimerie_prestation_matieres')
-        .select('*, matiere:imprimerie_matieres(nom, code, unite, cout_moyen)')
+        .select('*')
         .in('prestation_id', prestationIds)
 
       bomList = boms || []
     }
 
     return (prestations || []).map((p) => {
-      const mats = bomList
-        .filter((b) => b.prestation_id === p.id)
-        .map((b) => ({
-          id: b.id,
-          prestation_id: b.prestation_id,
-          matiere_id: b.matiere_id,
-          matiere_nom: b.matiere?.nom || 'Matière',
-          quantite_prevue: Number(b.quantite_prevue || 0),
-          unite: b.unite || b.matiere?.unite || 'u',
-          cout_unitaire_prevu: Number(b.cout_unitaire_prevu || b.matiere?.cout_moyen || 0),
-          cout_total_prevu: Number(b.cout_total_prevu || 0),
-        }))
+      // Extraction des métadonnées BOM enrichies sauvegardées dans la description
+      let bomExtraMap: Record<string, any> = {}
+      let cleanDesc = p.description || ''
+      if (cleanDesc.includes('<!-- BOM_META:')) {
+        try {
+          const match = cleanDesc.match(/<!-- BOM_META:(.*?) -->/s)
+          if (match && match[1]) {
+            const parsed = JSON.parse(match[1])
+            if (Array.isArray(parsed)) {
+              parsed.forEach((item: any) => {
+                if (item.matiere_id) bomExtraMap[item.matiere_id] = item
+              })
+            }
+          }
+          cleanDesc = cleanDesc.replace(/\s*<!-- BOM_META:.*? -->/gs, '').trim()
+        } catch (e) {
+          console.warn('Erreur parsing BOM_META:', e)
+        }
+      }
 
-      const coutMatieres = mats.reduce((acc, m) => acc + m.cout_total_prevu, 0)
+      const mats: PrestationMatiereBOM[] = bomList
+        .filter((b) => b.prestation_id === p.id)
+        .map((b) => {
+          const mat = matieresMap.get(b.matiere_id)
+          const extra = bomExtraMap[b.matiere_id] || {}
+
+          // Détection base_calcul & gâche depuis unite si encodé
+          let cleanUnite = b.unite || mat?.unite || 'u'
+          let baseCalcul = extra.base_calcul || (p.mode_calcul === 'm2' ? 'm2' : 'piece')
+          let gachePct = extra.taux_gache !== undefined ? Number(extra.taux_gache) : 0
+
+          if (cleanUnite && cleanUnite.includes('|')) {
+            const parts = cleanUnite.split('|')
+            cleanUnite = parts[0]
+            if (parts[1]) baseCalcul = parts[1]
+            if (parts[2]) gachePct = Number(parts[2]) || 0
+          }
+
+          // Priorité : prix de vente du stock vente actuel de Matières Premières
+          const currentPrixVenteStock = mat?.prix_vente ?? 0
+          const prixRef = extra.prix_vente_ref !== undefined && extra.prix_vente_ref > 0 
+            ? Number(extra.prix_vente_ref) 
+            : (currentPrixVenteStock > 0 ? currentPrixVenteStock : Number(b.cout_unitaire_prevu || 0))
+
+          const qty = Number(b.quantite_prevue || 0)
+          const coutUnitaire = prixRef
+          const coutTotal = Number(b.cout_total_prevu || Math.round(qty * coutUnitaire * (1 + gachePct / 100) * 100) / 100)
+
+          return {
+            id: b.id,
+            prestation_id: b.prestation_id,
+            matiere_id: b.matiere_id,
+            matiere_nom: mat?.nom || b.matiere_nom || 'Matière première',
+            matiere_code: mat?.code,
+            quantite_prevue: qty,
+            unite: cleanUnite,
+            base_calcul: baseCalcul,
+            taux_gache: gachePct,
+            prix_vente_ref: prixRef,
+            cout_unitaire_prevu: coutUnitaire,
+            cout_total_prevu: coutTotal,
+            stock_disponible: mat?.stock_vente ?? mat?.stock_actuel ?? 0,
+            avertissement_prix: (!prixRef || prixRef <= 0) ? 'Aucun prix de vente configuré dans le stock vente pour cette matière' : undefined,
+          }
+        })
+
+      const coutMatieres = mats.reduce((acc, m) => acc + (m.cout_total_prevu || 0), 0)
       const coutRevient =
         coutMatieres +
         Number(p.cout_mo_defaut || 0) +
@@ -523,6 +603,7 @@ export const imprimerieService = {
 
       return {
         ...p,
+        description: cleanDesc,
         matieres_bom: mats,
         cout_revient_theorique: coutRevient,
         marge_theorique: marge,
@@ -538,8 +619,22 @@ export const imprimerieService = {
     const sector = prestation.sector_slug || 'imprimerie'
     const code = prestation.code || `PRES-${Date.now().toString().slice(-6)}`
 
+    // Nettoyage description et inclusion métadonnées BOM
+    const cleanDesc = (prestation.description || '').replace(/\s*<!-- BOM_META:.*? -->/gs, '').trim()
+    const bomMetaArray = matieresBom.map((b) => ({
+      matiere_id: b.matiere_id,
+      base_calcul: b.base_calcul || (prestation.mode_calcul === 'm2' ? 'm2' : 'piece'),
+      taux_gache: Number(b.taux_gache || 0),
+      prix_vente_ref: Number(b.prix_vente_ref || b.cout_unitaire_prevu || 0),
+    }))
+
+    const descWithMeta = bomMetaArray.length > 0 
+      ? `${cleanDesc}\n<!-- BOM_META:${JSON.stringify(bomMetaArray)} -->`
+      : cleanDesc
+
     const payload = {
       ...prestation,
+      description: descWithMeta,
       sector_slug: sector,
       code,
       updated_at: new Date().toISOString(),
@@ -563,22 +658,32 @@ export const imprimerieService = {
       await supabase.from('imprimerie_prestation_matieres').delete().eq('prestation_id', presId)
 
       if (matieresBom.length > 0) {
-        const bomPayloads = matieresBom.map((b) => ({
-          company_id: prestation.company_id,
-          sector_slug: sector,
-          prestation_id: presId,
-          matiere_id: b.matiere_id,
-          quantite_prevue: Number(b.quantite_prevue || 1),
-          unite: b.unite,
-          cout_unitaire_prevu: Number(b.cout_unitaire_prevu || 0),
-          cout_total_prevu: Number(b.quantite_prevue || 1) * Number(b.cout_unitaire_prevu || 0),
-        }))
+        const bomPayloads = matieresBom.map((b) => {
+          const qty = Number(b.quantite_prevue || 1)
+          const pu = Number(b.prix_vente_ref || b.cout_unitaire_prevu || 0)
+          const gache = Number(b.taux_gache || 0)
+          const base = b.base_calcul || (prestation.mode_calcul === 'm2' ? 'm2' : 'piece')
+          const coutTotal = Math.round(qty * pu * (1 + gache / 100) * 100) / 100
+          const encodedUnite = `${(b.unite || 'u').split('|')[0]}|${base}|${gache}`
+
+          return {
+            company_id: prestation.company_id,
+            sector_slug: sector,
+            prestation_id: presId,
+            matiere_id: b.matiere_id,
+            quantite_prevue: qty,
+            unite: encodedUnite,
+            cout_unitaire_prevu: pu,
+            cout_total_prevu: coutTotal,
+          }
+        })
         await supabase.from('imprimerie_prestation_matieres').insert(bomPayloads)
       }
     }
 
     return (await this.getPrestations(prestation.company_id, sector)).find((p) => p.id === presId)!
   },
+
 
   // ───────────────────────────────────────────────────────────────────────────
   // 4. DEVIS PROFESSIONNELS & CALCUL SURFACES / DIMENSIONS
