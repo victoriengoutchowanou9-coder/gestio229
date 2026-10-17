@@ -37,6 +37,32 @@ function detectChunkError(err: Error | null): boolean {
   )
 }
 
+/** Purge le Service Worker et tous les caches Workbox/navigateur avant rechargement */
+export async function purgeCacheAndReload(targetUrl?: string): Promise<void> {
+  if (typeof window === 'undefined') return
+  try {
+    sessionStorage.removeItem('gestio229_chunk_reload_done')
+    localStorage.removeItem('gestio229_app_version')
+  } catch (_) {}
+
+  if ('serviceWorker' in navigator) {
+    try {
+      const regs = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(regs.map((r) => r.unregister()))
+    } catch (_) {}
+  }
+
+  if ('caches' in window) {
+    try {
+      const keys = await window.caches.keys()
+      await Promise.all(keys.map((k) => window.caches.delete(k)))
+    } catch (_) {}
+  }
+
+  const dest = targetUrl || (window.location.origin + window.location.pathname + '?ts=' + Date.now())
+  window.location.href = dest
+}
+
 /**
  * Détecte une erreur Temporal Dead Zone (TDZ) ou d'initialisation post-déploiement :
  * "Cannot access 'X' before initialization"
@@ -47,7 +73,6 @@ function detectTDZError(err: Error | null): boolean {
   return (
     (msg.includes('Cannot access') && msg.includes('before initialization')) ||
     (msg.includes('ReferenceError') && msg.includes('initialization')) ||
-    msg.includes('is not defined') ||
     msg.includes('supabase is not defined')
   )
 }
@@ -82,39 +107,21 @@ export class SectorErrorBoundary extends Component<Props, State> {
     // ── Auto-reload si chunk error ou TDZ error (post-déploiement) ──────
     const isAutoRecoverable = detectChunkError(error) || detectTDZError(error)
     if (isAutoRecoverable) {
-      // 1. Désenregistrer le Service Worker & vider le cache au chargement en cas d'erreur
-      if (typeof window !== 'undefined') {
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then((regs) => {
-            regs.forEach((r) => r.unregister())
-          }).catch(() => {})
-        }
-        if ('caches' in window) {
-          window.caches.keys().then((names) => {
-            names.forEach((n) => window.caches.delete(n))
-          }).catch(() => {})
-        }
-        try {
-          localStorage.removeItem('gestio229_app_version')
-        } catch (_) {}
-      }
-
-      // 2. Garde anti-boucle stricte : ne recharger automatiquement QU'UNE SEULE FOIS
+      // 1. Garde anti-boucle stricte : ne recharger automatiquement QU'UNE SEULE FOIS
       const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload_done') === '1'
       if (!alreadyReloaded) {
-        console.warn('[SectorErrorBoundary] Incident post-déploiement détecté — rechargement automatique unique dans 3 secondes…')
+        console.warn('[SectorErrorBoundary] Incident post-déploiement détecté — purge du cache et rechargement dans 3 secondes…')
         sessionStorage.setItem('gestio229_chunk_reload_done', '1')
         this.setState({ isAutoReloading: true, countdown: 3 })
 
-        this.countdownTimer = setInterval(() => {
-          this.setState((prev) => {
-            if (prev.countdown <= 1) {
-              if (this.countdownTimer) clearInterval(this.countdownTimer)
-              window.location.href = window.location.pathname + '?t=' + Date.now()
-              return { countdown: 0, isAutoReloading: false }
-            }
-            return { countdown: prev.countdown - 1 }
-          })
+        this.countdownTimer = setInterval(async () => {
+          if (this.state.countdown <= 1) {
+            if (this.countdownTimer) clearInterval(this.countdownTimer)
+            this.setState({ countdown: 0, isAutoReloading: false })
+            await purgeCacheAndReload()
+            return
+          }
+          this.setState((prev) => ({ countdown: prev.countdown - 1 }))
         }, 1000)
       } else {
         // Déjà rechargé : NE JAMAIS RECHARGER EN BOUCLE
@@ -130,24 +137,10 @@ export class SectorErrorBoundary extends Component<Props, State> {
     }
   }
 
-  /** Hard reload avec cache-bust & purge — bypass navigateur et SW */
-  private handleReload = () => {
+  /** Hard reload asynchrone avec cache-bust & purge — bypass navigateur et SW */
+  private handleReload = async () => {
     if (this.countdownTimer) clearInterval(this.countdownTimer)
-    sessionStorage.removeItem('gestio229_chunk_reload_done')
-    try {
-      localStorage.removeItem('gestio229_app_version')
-    } catch (_) {}
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations().then((regs) => {
-        regs.forEach((r) => r.unregister())
-      }).catch(() => {})
-    }
-    if ('caches' in window) {
-      window.caches.keys().then((names) => {
-        names.forEach((n) => window.caches.delete(n))
-      }).catch(() => {})
-    }
-    window.location.href = window.location.pathname + '?t=' + Date.now()
+    await purgeCacheAndReload()
   }
 
   private handleGoHub = () => {

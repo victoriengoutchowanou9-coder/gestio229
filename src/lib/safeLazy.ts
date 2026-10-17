@@ -48,30 +48,30 @@ export function safeLazy<T extends React.ComponentType<any>>(
   return lazy((): Promise<{ default: T }> => {
     return importFn().catch((err: unknown) => {
       if (isChunkError(err)) {
-        // Nettoyage caches & SW
-        if (typeof window !== 'undefined') {
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.getRegistrations().then((regs) => {
-              regs.forEach((r) => r.unregister())
-            }).catch(() => {})
-          }
-          if ('caches' in window) {
-            window.caches.keys().then((names) => {
-              names.forEach((n) => window.caches.delete(n))
-            }).catch(() => {})
-          }
-          try {
-            localStorage.removeItem('gestio229_app_version')
-          } catch (_) {}
-        }
-
         const alreadyReloaded = sessionStorage.getItem(RELOAD_KEY) === '1'
         if (!alreadyReloaded) {
-          console.warn('[safeLazy] Chunk manquant post-déploiement — rechargement unique programmé dans 3 secondes…', err)
+          console.warn('[safeLazy] Chunk manquant post-déploiement — purge du cache et rechargement dans 2 secondes…', err)
           sessionStorage.setItem(RELOAD_KEY, '1')
-          setTimeout(() => {
-            window.location.href = window.location.pathname + '?t=' + Date.now()
-          }, 3000)
+          setTimeout(async () => {
+            if (typeof window !== 'undefined') {
+              if ('serviceWorker' in navigator) {
+                try {
+                  const regs = await navigator.serviceWorker.getRegistrations()
+                  await Promise.all(regs.map((r) => r.unregister()))
+                } catch (_) {}
+              }
+              if ('caches' in window) {
+                try {
+                  const keys = await window.caches.keys()
+                  await Promise.all(keys.map((k) => window.caches.delete(k)))
+                } catch (_) {}
+              }
+              try {
+                localStorage.removeItem('gestio229_app_version')
+              } catch (_) {}
+              window.location.href = window.location.origin + window.location.pathname + '?ts=' + Date.now()
+            }
+          }, 2000)
           return new Promise(() => {}) as Promise<{ default: T }>
         } else {
           // Déjà rechargé une fois : NE PAS RECHARGER EN BOUCLE, laisser l'ErrorBoundary gérer

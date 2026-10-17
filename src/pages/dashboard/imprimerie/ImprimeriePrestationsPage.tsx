@@ -19,7 +19,7 @@ import {
   PrestationMatiereBOM,
   ModeCalcul
 } from '../../../services/imprimerieService'
-import { showModal } from '../../../components/modals/CustomModalGestio'
+import { showModal as showCustomModal } from '../../../components/modals/CustomModalGestio'
 
 export const ImprimeriePrestationsPage: React.FC = () => {
   const { companyId, sectorSlug } = useTenant()
@@ -79,9 +79,9 @@ export const ImprimeriePrestationsPage: React.FC = () => {
     try {
       if (toast?.[type]) toast[type](msg)
       else if (typeof toast === 'function') toast(msg, type)
-      else showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
+      else showCustomModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     } catch {
-      showModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
+      showCustomModal({ type, message: msg, title: type === 'error' ? 'Erreur' : 'Succès' })
     }
   }
 
