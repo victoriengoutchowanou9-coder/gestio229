@@ -299,18 +299,59 @@ export const imprimerieService = {
   // 2. MATIÈRES PREMIÈRES & STOCKS
   // ───────────────────────────────────────────────────────────────────────────
   async getMatieres(companyId: string, sectorSlug: string = 'imprimerie'): Promise<MatierePremiere[]> {
-    const { data, error } = await supabase
-      .from('imprimerie_matieres')
+    // 1. Lire depuis la table standard 'products' (module stocks / matières premières unifiées)
+    const { data: prods } = await supabase
+      .from('products')
       .select('*')
       .eq('company_id', companyId)
       .eq('sector_slug', sectorSlug)
-      .order('nom', { ascending: true })
+      .neq('is_active', false)
+      .order('name', { ascending: true })
 
-    if (error) {
-      console.warn('Erreur getMatieres:', error)
-      return []
-    }
-    return (data || []) as MatierePremiere[]
+    const mappedProds: MatierePremiere[] = (prods || []).map((p: any) => {
+      const meta = p.sector_meta || {}
+      const coef = Number(p.coef || meta.coef) || 1
+      const mag = Number(p.stock_magasin !== null && p.stock_magasin !== undefined ? p.stock_magasin : meta.stock_magasin) || 0
+      const vente = Number(p.stock_vente !== null && p.stock_vente !== undefined ? p.stock_vente : meta.stock_vente) || 0
+      const totalUv = Math.round(((mag * coef) + vente) * 1000) / 1000
+      const coutUcd = Number(p.cost_price || p.cout_achat || meta.price_achat_ucd_ttc) || 0
+      const coutUv = coef > 0 ? Math.round((coutUcd / coef) * 100) / 100 : coutUcd
+
+      return {
+        id: p.id,
+        company_id: p.company_id,
+        sector_slug: p.sector_slug || sectorSlug,
+        code: p.code,
+        nom: p.name,
+        categorie: meta.category || p.category_name || (p.category?.name) || 'Matières premières',
+        unite: p.uv || p.unit || meta.uv || 'm2',
+        stock_actuel: totalUv,
+        stock_minimum: Number(p.min_stock_alert) || 5,
+        cout_moyen: coutUv,
+        dernier_cout_achat: coutUv,
+        valeur_stock: Math.round(((mag * coutUcd) + (vente * coutUv)) * 100) / 100,
+        fournisseur_prefere: meta.fournisseur_prefere || '',
+        est_actif: p.is_active !== false,
+      }
+    })
+
+    // 2. Récupérer également les éventuelles matières de l'ancienne table legacy imprimerie_matieres
+    let legacyMats: any[] = []
+    try {
+      const { data: legacy } = await supabase
+        .from('imprimerie_matieres')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('sector_slug', sectorSlug)
+      legacyMats = (legacy || []).map((l: any) => ({
+        ...l,
+        est_actif: l.est_actif !== false,
+      }))
+    } catch {}
+
+    const prodIds = new Set(mappedProds.map(m => m.id))
+    const uniqueLegacy = legacyMats.filter((l: any) => !prodIds.has(l.id))
+    return [...mappedProds, ...uniqueLegacy]
   },
 
   async saveMatiere(matiere: Partial<MatierePremiere> & { company_id: string; nom: string }): Promise<MatierePremiere> {
@@ -352,11 +393,63 @@ export const imprimerieService = {
     operation: 'entree' | 'sortie',
     notes?: string
   ): Promise<void> {
+    // 1. Tenter la mise à jour sur products (moteur double stock UCD / UV)
+    const { data: prod } = await supabase
+      .from('products')
+      .select('*')
+      .eq('id', matiereId)
+      .maybeSingle()
+
+    if (prod) {
+      const meta = prod.sector_meta || {}
+      const coef = Number(prod.coef || meta.coef) || 1
+      const currentVente = Number(prod.stock_vente !== null && prod.stock_vente !== undefined ? prod.stock_vente : meta.stock_vente) || 0
+      const currentMag = Number(prod.stock_magasin !== null && prod.stock_magasin !== undefined ? prod.stock_magasin : meta.stock_magasin) || 0
+
+      let newVente = currentVente
+      let newMag = currentMag
+
+      if (operation === 'sortie') {
+        if (currentVente >= deltaStock) {
+          newVente = Math.max(0, Math.round((currentVente - deltaStock) * 1000) / 1000)
+        } else {
+          const deficit = deltaStock - currentVente
+          const boxesNeeded = Math.ceil(deficit / coef)
+          if (currentMag >= boxesNeeded) {
+            newMag = Math.max(0, currentMag - boxesNeeded)
+            newVente = Math.max(0, Math.round((currentVente + (boxesNeeded * coef) - deltaStock) * 1000) / 1000)
+          } else {
+            newVente = Math.max(0, Math.round((currentVente - deltaStock) * 1000) / 1000)
+          }
+        }
+      } else {
+        newVente = Math.round((currentVente + deltaStock) * 1000) / 1000
+      }
+
+      const updatedMeta = {
+        ...meta,
+        stock_vente: newVente,
+        stock_magasin: newMag,
+      }
+
+      await supabase
+        .from('products')
+        .update({
+          stock_vente: newVente,
+          stock_magasin: newMag,
+          sector_meta: updatedMeta,
+        })
+        .eq('id', matiereId)
+
+      return
+    }
+
+    // 2. Fallback sur table legacy imprimerie_matieres
     const { data: current } = await supabase
       .from('imprimerie_matieres')
       .select('stock_actuel, cout_moyen')
       .eq('id', matiereId)
-      .single()
+      .maybeSingle()
 
     if (!current) return
     const newStock = Math.max(0, Number(current.stock_actuel || 0) + (operation === 'entree' ? deltaStock : -deltaStock))

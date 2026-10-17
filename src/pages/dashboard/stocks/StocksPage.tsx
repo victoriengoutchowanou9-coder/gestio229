@@ -85,11 +85,22 @@ interface DailyStockRow {
   valeurVente: number
 }
 
-export const StocksPage: React.FC = () => {
+export interface StocksPageProps {
+  isMatieresModule?: boolean
+  customTitle?: string
+  customSubtitle?: string
+}
+
+export const StocksPage: React.FC<StocksPageProps> = ({
+  isMatieresModule = false,
+  customTitle,
+  customSubtitle,
+}) => {
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
   const currentSectorSlug = sectorSlug
+  const isImprimerie = isMatieresModule || currentSectorSlug === 'imprimerie' || currentSectorSlug === 'impression'
 
   const [activeTab, setActiveTab] = useState<'double_stock' | 'inventaire' | 'fiche_journaliere'>('double_stock')
   const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
@@ -98,6 +109,70 @@ export const StocksPage: React.FC = () => {
   const [products, setProducts] = useState<ProductStock[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [filterCategory, setFilterCategory] = useState<string>('ALL')
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'IN_STOCK' | 'ALERT' | 'OUT_OF_STOCK'>('ALL')
+
+  // Catégories uniques pour les filtres
+  const availableCategories = useMemo(() => {
+    const cats = new Set<string>()
+    products.forEach((p) => {
+      const catName = p.category?.name || p.sector_meta?.category || (p as any).category_name || (typeof (p as any).category === 'string' ? (p as any).category : '')
+      if (catName && typeof catName === 'string') cats.add(catName.trim())
+    })
+    return Array.from(cats).sort()
+  }, [products])
+
+  // Export CSV officiel des stocks
+  const handleExportStockCSV = () => {
+    if (products.length === 0) {
+      toast.error('Aucune donnée', 'Aucun article à exporter.')
+      return
+    }
+    const headers = [
+      'Code',
+      'Désignation',
+      'Catégorie',
+      'UCD (Stockage)',
+      'UV (Consommation/Vente)',
+      'Coef Conversion',
+      'Prix Achat UCD TTC',
+      'Prix Vente UV TTC',
+      'Stock Magasin/Réserve (UCD)',
+      'Stock Vente/Atelier (UV)',
+      'Stock Total Équivalent (UV)',
+      'Valeur Achat Totale (FCFA)',
+      'Valeur Vente Totale (FCFA)',
+    ]
+    const rows = products.map((p) => {
+      const d = getProductValuationDetails(p)
+      const cat = p.category?.name || p.sector_meta?.category || ''
+      return [
+        `"${p.code}"`,
+        `"${p.name.replace(/"/g, '""')}"`,
+        `"${cat.replace(/"/g, '""')}"`,
+        `"${d.ucdUnit}"`,
+        `"${d.uvUnit}"`,
+        d.coef,
+        d.prixAchatUcd,
+        d.prixVenteTtc,
+        d.stockMagasin,
+        d.stockVente,
+        d.stockTotalUv,
+        d.valorisationTotaleAchat,
+        d.valorisationTotaleVente,
+      ].join(';')
+    })
+    const csvContent = '\uFEFF' + [headers.join(';'), ...rows].join('\r\n')
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `stocks_${isImprimerie ? 'matieres_impression' : (currentSectorSlug || 'export')}_${new Date().toISOString().slice(0, 10)}.csv`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    toast.success('Export réussi', 'Le fichier CSV des stocks a été téléchargé avec succès.')
+  }
 
   // Produits filtrés selon le secteur et circuit (BAR vs CUISINE)
   const displayedProducts = useMemo(() => {
@@ -119,13 +194,13 @@ export const StocksPage: React.FC = () => {
   const [transferDirection, setTransferDirection] = useState<'magasin_to_vente' | 'vente_to_magasin'>('magasin_to_vente')
   const [transferProdId, setTransferProdId] = useState('')
   const [transferQty, setTransferQty] = useState<number>(0)
-  const [transferMotif, setTransferMotif] = useState('Réapprovisionnement Rayon Vente POS')
+  const [transferMotif, setTransferMotif] = useState(isImprimerie ? 'Mise à disposition atelier / production' : 'Réapprovisionnement Rayon Vente POS')
 
   // État Transfert en Masse (Plusieurs produits)
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([])
   const [showBulkTransferModal, setShowBulkTransferModal] = useState(false)
   const [bulkTransferQtys, setBulkTransferQtys] = useState<Record<string, number>>({})
-  const [bulkTransferMotif, setBulkTransferMotif] = useState('Réapprovisionnement Rayon Vente POS')
+  const [bulkTransferMotif, setBulkTransferMotif] = useState(isImprimerie ? 'Mise à disposition atelier / production' : 'Réapprovisionnement Rayon Vente POS')
   const [isProcessingBulkTransfer, setIsProcessingBulkTransfer] = useState(false)
 
   // Édition rapide de produit
@@ -199,7 +274,7 @@ export const StocksPage: React.FC = () => {
           stock_magasin: magVal,
           stock_vente: venteVal,
           min_stock_alert: Number(p.min_stock_alert) || 5,
-          category: p.category,
+          category: p.category || (meta.category ? { name: meta.category } : ((p as any).category_name ? { name: (p as any).category_name } : (typeof (p as any).category === 'string' ? { name: (p as any).category } : undefined))),
           batch_pricing: p.batch_pricing || meta.batch_pricing || null,
           sector_meta: p.sector_meta,
         }
@@ -864,12 +939,29 @@ export const StocksPage: React.FC = () => {
     totalStockValVente
   } = stockValuation
 
-  const filteredProducts = displayedProducts.filter(
-    (p) =>
-      !search ||
-      p.name.toLowerCase().includes(search.toLowerCase()) ||
-      p.code.toLowerCase().includes(search.toLowerCase())
-  )
+  const filteredProducts = displayedProducts.filter((p) => {
+    const s = search.toLowerCase().trim()
+    const catName = String(p.category?.name || p.sector_meta?.category || (p as any).category_name || (typeof (p as any).category === 'string' ? (p as any).category : '')).trim()
+    const matchesSearch =
+      !s ||
+      p.name.toLowerCase().includes(s) ||
+      p.code.toLowerCase().includes(s) ||
+      catName.toLowerCase().includes(s)
+
+    const matchesCat = filterCategory === 'ALL' || catName === filterCategory
+
+    const details = getProductValuationDetails(p)
+    let matchesStatus = true
+    if (filterStatus === 'OUT_OF_STOCK') {
+      matchesStatus = details.stockTotalUv <= 0
+    } else if (filterStatus === 'ALERT') {
+      matchesStatus = details.stockTotalUv > 0 && details.stockTotalUv <= (p.min_stock_alert || 5)
+    } else if (filterStatus === 'IN_STOCK') {
+      matchesStatus = details.stockTotalUv > (p.min_stock_alert || 5)
+    }
+
+    return matchesSearch && matchesCat && matchesStatus
+  })
 
   return (
     <div className="space-y-4">
@@ -925,10 +1017,10 @@ export const StocksPage: React.FC = () => {
         <div>
           <h1 className="text-xl font-bold text-slate-900 flex items-center gap-2">
             <Package className="w-5 h-5 text-emerald-600" />
-            Stocks & Inventaire
+            {customTitle || (isImprimerie ? 'Matières Premières & Consommables' : 'Stocks & Inventaire')}
           </h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Double Stock (Magasin UCD & Vente UV), Transferts, Inventaire avec écarts et Valorisation Achat/Vente
+            {customSubtitle || (isImprimerie ? 'Double Stock (Magasin UCD & Consommation Atelier UV), Transferts, Inventaires avec écarts et Valorisation Achat/Vente' : 'Double Stock (Magasin UCD & Vente UV), Transferts, Inventaire avec écarts et Valorisation Achat/Vente')}
           </p>
         </div>
 
@@ -942,7 +1034,7 @@ export const StocksPage: React.FC = () => {
                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
             )}
           >
-            <Layers className="w-4 h-4" /> Double Stock
+            <Layers className="w-4 h-4" /> {isImprimerie ? 'Double Stock (Réserve / Atelier)' : 'Double Stock'}
           </button>
           <button
             onClick={() => setActiveTab('inventaire')}
@@ -968,6 +1060,14 @@ export const StocksPage: React.FC = () => {
           </button>
 
           <button
+            onClick={() => setShowStockSheetModal(true)}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-200 shadow-sm"
+            title="Fiche de Stock et Rapport Valorisé"
+          >
+            <FileText className="w-3.5 h-3.5 text-indigo-600" /> Fiche de Stock
+          </button>
+
+          <button
             onClick={() => setShowValuationModal(true)}
             className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
           >
@@ -982,7 +1082,7 @@ export const StocksPage: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-indigo-700 uppercase tracking-wider block mb-0.5">
-              Stock Magasin (Réserve UCD)
+              {isImprimerie ? 'Stock Réserve (Magasin UCD)' : 'Stock Magasin (Réserve UCD)'}
             </span>
             <p className="text-xl font-black text-slate-900 font-mono">{fmt(totalMagasinValAchat)}</p>
             <span className="text-[10px] text-slate-500 font-medium">
@@ -998,7 +1098,7 @@ export const StocksPage: React.FC = () => {
         <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-emerald-700 uppercase tracking-wider block mb-0.5">
-              Stock Vente (Rayon POS UV)
+              {isImprimerie ? 'Stock Atelier (Consommation UV)' : 'Stock Vente (Rayon POS UV)'}
             </span>
             <p className="text-xl font-black text-emerald-800 font-mono">{fmt(totalVenteValVente)}</p>
             <span className="text-[10px] text-slate-500 font-medium">
@@ -1030,7 +1130,7 @@ export const StocksPage: React.FC = () => {
         <div className="bg-white rounded-2xl border border-emerald-200 bg-gradient-to-br from-white to-emerald-50/30 p-4 shadow-sm flex items-center justify-between">
           <div>
             <span className="text-[11px] font-bold text-emerald-800 uppercase tracking-wider block mb-0.5">
-              VALORISATION TOTALE VENTE
+              {isImprimerie ? 'VALORISATION COMMERCIALE ESTIMÉE' : 'VALORISATION TOTALE VENTE'}
             </span>
             <p className="text-xl font-black text-emerald-900 font-mono">{fmt(totalStockValVente)}</p>
             <span className="text-[10px] text-emerald-700 font-medium">
@@ -1046,31 +1146,87 @@ export const StocksPage: React.FC = () => {
       {activeTab === 'double_stock' && (
         /* ── TAB 1 : DOUBLE STOCK & TRANSFERTS ───────────────────────────────── */
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="relative flex-1 max-w-sm">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
-              <input
-                type="text"
-                placeholder="Rechercher par code ou désignation..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500"
-              />
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2 flex-1">
+              <div className="relative flex-1 min-w-[200px] max-w-xs">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder={isImprimerie ? "Rechercher matière, bâche, vinyle, encre..." : "Rechercher par code ou désignation..."}
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="w-full pl-9 pr-3 py-1.5 border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
+              {availableCategories.length > 0 && (
+                <select
+                  value={filterCategory}
+                  onChange={(e) => setFilterCategory(e.target.value)}
+                  className="px-2.5 py-1.5 border border-slate-200 rounded-xl text-xs bg-white text-slate-700 font-medium focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="ALL">Toutes catégories ({products.length})</option>
+                  {availableCategories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl text-[11px] font-bold text-slate-600">
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('ALL')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', filterStatus === 'ALL' ? 'bg-white text-slate-900 shadow-sm' : 'hover:text-slate-900')}
+                >
+                  Tous
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('IN_STOCK')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', filterStatus === 'IN_STOCK' ? 'bg-white text-emerald-700 shadow-sm' : 'hover:text-emerald-700')}
+                >
+                  En stock
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('ALERT')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', filterStatus === 'ALERT' ? 'bg-white text-amber-700 shadow-sm' : 'hover:text-amber-700')}
+                >
+                  Alertes
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFilterStatus('OUT_OF_STOCK')}
+                  className={clsx('px-2.5 py-1 rounded-lg transition', filterStatus === 'OUT_OF_STOCK' ? 'bg-white text-rose-700 shadow-sm' : 'hover:text-rose-700')}
+                >
+                  Rupture
+                </button>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
+
+            <div className="flex flex-wrap items-center gap-2">
               {selectedProductIds.length > 0 && (
                 <button
                   onClick={handleOpenBulkTransferModal}
                   className="px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm animate-in fade-in"
                 >
-                  <ArrowRightLeft className="w-3.5 h-3.5" /> Transférer la sélection ({selectedProductIds.length})
+                  <ArrowRightLeft className="w-3.5 h-3.5" /> Transférer ({selectedProductIds.length})
                 </button>
               )}
+              <button
+                onClick={handleExportStockCSV}
+                className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-200"
+                title="Exporter l'état des stocks au format CSV"
+              >
+                <Download className="w-3.5 h-3.5" /> Export CSV
+              </button>
               <button
                 onClick={() => setShowNewProductModal(true)}
                 className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
               >
-                <Plus className="w-3.5 h-3.5" /> Nouveau Produit
+                <Plus className="w-3.5 h-3.5" /> {isImprimerie ? 'Nouvelle Matière' : 'Nouveau Produit'}
               </button>
               <button
                 onClick={loadData}
@@ -1100,13 +1256,13 @@ export const StocksPage: React.FC = () => {
                   </th>
                   <th className="p-2.5">Réf</th>
                   <th className="p-2.5">Désignation</th>
-                  <th className="p-2.5">Unité</th>
+                  <th className="p-2.5">{isImprimerie ? 'Unité Consommation' : 'Unité'}</th>
                   <th className="p-2.5 text-right">Prix d'Achat UCD</th>
-                  <th className="p-2.5 text-right">Prix de Vente UV TTC</th>
-                  <th className="p-2.5 text-center bg-indigo-50/70 text-indigo-900">Stock Magasin (UCD)</th>
-                  <th className="p-2.5 text-right bg-indigo-50/40 text-indigo-900">Valeur Magasin (Achat)</th>
-                  <th className="p-2.5 text-center bg-emerald-50/70 text-emerald-900">Stock Vente (UV)</th>
-                  <th className="p-2.5 text-right bg-emerald-50/40 text-emerald-900">Valeur Vente (Commerciale)</th>
+                  <th className="p-2.5 text-right">{isImprimerie ? 'Prix Vente / Val. UV' : 'Prix de Vente UV TTC'}</th>
+                  <th className="p-2.5 text-center bg-indigo-50/70 text-indigo-900">{isImprimerie ? 'Stock Réserve (UCD)' : 'Stock Magasin (UCD)'}</th>
+                  <th className="p-2.5 text-right bg-indigo-50/40 text-indigo-900">{isImprimerie ? 'Valeur Réserve (Achat)' : 'Valeur Magasin (Achat)'}</th>
+                  <th className="p-2.5 text-center bg-emerald-50/70 text-emerald-900">{isImprimerie ? 'Stock Atelier (UV)' : 'Stock Vente (UV)'}</th>
+                  <th className="p-2.5 text-right bg-emerald-50/40 text-emerald-900">{isImprimerie ? 'Valeur Atelier' : 'Valeur Vente (Commerciale)'}</th>
                   <th className="p-2.5 text-center">Actions</th>
                 </tr>
               </thead>
@@ -1114,12 +1270,13 @@ export const StocksPage: React.FC = () => {
                 {filteredProducts.length === 0 ? (
                   <tr>
                     <td colSpan={11} className="p-8 text-center text-slate-400 font-sans">
-                      {loading ? 'Chargement...' : 'Aucun produit trouvé dans cette entreprise.'}
+                      {loading ? 'Chargement...' : 'Aucun produit ou matière trouvé dans cette entreprise.'}
                     </td>
                   </tr>
                 ) : (
                   filteredProducts.map((p) => {
                     const details = getProductValuationDetails(p)
+                    const catName = p.category?.name || p.sector_meta?.category || ''
 
                     return (
                       <tr
@@ -1144,7 +1301,14 @@ export const StocksPage: React.FC = () => {
                           />
                         </td>
                         <td className="p-2.5 font-bold text-slate-900 font-mono">{details.code}</td>
-                        <td className="p-2.5 font-sans font-semibold text-slate-800">{details.name}</td>
+                        <td className="p-2.5 font-sans">
+                          <div className="font-semibold text-slate-800">{details.name}</div>
+                          {catName && (
+                            <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded text-[10px] bg-slate-100 text-slate-600 font-medium">
+                              {catName}
+                            </span>
+                          )}
+                        </td>
                         <td className="p-2.5 font-sans text-slate-500">{details.uvUnit}</td>
                         <td className="p-2.5 text-right font-mono">{fmt(details.prixAchatUcd)}</td>
                         <td className="p-2.5 text-right text-emerald-700 font-bold font-mono">{fmt(details.prixVenteTtc)}</td>
@@ -1527,7 +1691,7 @@ export const StocksPage: React.FC = () => {
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                   )}
                 >
-                  Magasin ➔ Rayon Vente
+                  {isImprimerie ? 'Réserve ➔ Atelier' : 'Magasin ➔ Rayon Vente'}
                 </button>
                 <button
                   type="button"
@@ -1539,7 +1703,7 @@ export const StocksPage: React.FC = () => {
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                   )}
                 >
-                  Rayon Vente ➔ Magasin
+                  {isImprimerie ? 'Atelier ➔ Réserve' : 'Rayon Vente ➔ Magasin'}
                 </button>
               </div>
             </div>
@@ -1742,7 +1906,7 @@ export const StocksPage: React.FC = () => {
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                   )}
                 >
-                  Magasin (UCD) ➔ Rayon Vente (UV)
+                  {isImprimerie ? 'Réserve (UCD) ➔ Atelier (UV)' : 'Magasin (UCD) ➔ Rayon Vente (UV)'}
                 </button>
                 <button
                   type="button"
@@ -1754,7 +1918,7 @@ export const StocksPage: React.FC = () => {
                       : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                   )}
                 >
-                  Rayon Vente (UV) ➔ Magasin (UCD)
+                  {isImprimerie ? 'Atelier (UV) ➔ Réserve (UCD)' : 'Rayon Vente (UV) ➔ Magasin (UCD)'}
                 </button>
               </div>
             </div>

@@ -566,7 +566,7 @@ export const SectorLoader = {
         { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
         // ACTIVITÉS & VENTES
         { id: 'ventes', label: 'Vente & POS', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
-        { id: 'stock', label: 'Stocks', icon: 'Package', href: `${prefix}/stocks`, group: 'commercial' },
+        { id: 'stock', label: 'Matières Premières et Consommables', icon: 'Package', href: `${prefix}/matieres`, group: 'commercial' },
         { id: 'caisse', label: 'Caisse', icon: 'Wallet', href: `${prefix}/caisse`, group: 'commercial' },
         { id: 'devis', label: 'Devis & Production', icon: 'Printer', href: `${prefix}/devis`, group: 'commercial' },
         { id: 'prestations', label: 'Prestations & BOM', icon: 'Layers', href: `${prefix}/prestations`, group: 'commercial' },
@@ -577,7 +577,7 @@ export const SectorLoader = {
         { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
         // APPROVISIONNEMENTS & PRODUCTION
         { id: 'fournisseurs', label: 'Fournisseurs & Achats', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
-        { id: 'matieres', label: 'Matières premières', icon: 'Layers', href: `${prefix}/matieres`, group: 'gestion' },
+        { id: 'matieres', label: 'Matières Premières et Consommables', icon: 'Layers', href: `${prefix}/matieres`, group: 'gestion' },
         { id: 'sous_traitance', label: 'Sous-traitance', icon: 'GitFork', href: `${prefix}/sous-traitance`, group: 'gestion' },
         // ADMINISTRATION
         { id: 'rapports', label: 'Rapports & Analyses', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },

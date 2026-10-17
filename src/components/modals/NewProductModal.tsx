@@ -83,13 +83,19 @@ export const SECTOR_DEFAULT_UNITS: Record<string, { ucd: string; uv: string; coe
     uvList: ['Plaquette', 'Gélule', 'Comprimé', 'Flacon', 'Ampoule', 'Pièce'],
   },
   imprimerie: {
-    ucd: 'Rame',
-    uv: 'Feuille',
-    coef: 500,
-    category: 'Papeterie & Sérigraphie',
-    packaging: 'Rame 500 feuilles',
-    ucdList: ['Rame', 'Carton', 'Rouleau', 'Paquet', 'Bobine', 'Pièce'],
-    uvList: ['Feuille', 'Pièce', 'Mètre', 'Exemplaire'],
+    ucd: 'Rouleau',
+    uv: 'Mètre',
+    coef: 50,
+    category: 'Bâches',
+    packaging: 'Rouleau 50 mètres',
+    ucdList: [
+      'Rouleau', 'Bobine', 'Rame', 'Carton', 'Paquet', 'Bidon',
+      'Boîte', 'Fût', 'Palette', 'Kilogramme', 'Litre', 'Pièce', 'Lot'
+    ],
+    uvList: [
+      'Mètre', 'm²', 'Feuille', 'Pièce', 'Exemplaire', 'Litre',
+      'Millilitre', 'Kilogramme', 'Gramme', 'Rouleau', 'Paquet', 'Unité'
+    ],
   },
   restaurant: {
     ucd: 'Carton',
@@ -120,6 +126,76 @@ export const SECTOR_DEFAULT_UNITS: Record<string, { ucd: string; uv: string; coe
   },
 }
 
+export const SECTOR_CATEGORIES: Record<string, string[]> = {
+  quincaillerie: [
+    'Matériaux de Construction',
+    'Outillage & Quincaillerie',
+    'Plomberie & Sanitaire',
+    'Électricité & Éclairage',
+    'Peinture & Droguerie',
+    'Visserie & Fixation',
+    'Menuiserie & Bois',
+    'Sécurité & Protection',
+    'Divers Matériaux',
+  ],
+  imprimerie: [
+    'Bâches',
+    'Vinyles et films adhésifs',
+    'Papiers et cartons',
+    'Encres',
+    'Solvants',
+    'Émulsions',
+    'Supports textiles',
+    'Films de transfert',
+    'Rubans et adhésifs',
+    'Consommables de finition',
+    'Accessoires consommables',
+    'Autres matières premières',
+  ],
+  brasserie: [
+    'Bières & Boissons Alcoolisées',
+    'Boissons Gazeuses & Sodas',
+    'Jus & Eaux Minérales',
+    'Vins & Spiritueux',
+    'Emballages & Casiers',
+    'Consommables de Service',
+  ],
+  poissonnerie: [
+    'Poissons Frais',
+    'Poissons Congelés / Surgelés',
+    'Crustacés & Fruits de Mer',
+    'Cartons & Conditionnements',
+  ],
+  pharmacie: [
+    'Médicaments essentiels',
+    'Antibiotiques & Antalgiques',
+    'Pansements & Soins',
+    'Vitamines & Compléments',
+    'Hygiène & Parapharmacie',
+  ],
+  restaurant: [
+    'Matières Premières Cuisine',
+    'Viandes & Volailles',
+    'Poissons & Fruits de Mer',
+    'Légumes & Épicerie',
+    'Boissons & Bar',
+    'Emballages & Consommables',
+  ],
+  supermarche: [
+    'Rayon Alimentaire',
+    'Boissons & Liquides',
+    'Hygiène & Beauté',
+    'Entretien Ménager',
+    'Bazar & Fournitures',
+  ],
+  boutique: [
+    'Prêt-à-porter & Mode',
+    'Accessoires & Maroquinerie',
+    'Cosmétiques',
+    'Articles Divers',
+  ],
+}
+
 export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess, defaultCircuit }) => {
   const { company, user } = useAuthStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
@@ -137,6 +213,24 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
     const set = new Set([...secDefaults, ...UV_UNITS])
     return Array.from(set)
   }, [activeSectorSlug])
+
+  const [isCustomCategory, setIsCustomCategory] = useState(false)
+  const [customCategoryText, setCustomCategoryText] = useState('')
+
+  const availableCategories = useMemo(() => {
+    const defaultList = SECTOR_CATEGORIES[activeSectorSlug] || [
+      'Alimentation & Boissons',
+      'Matériaux & BTP',
+      'Textile & Confection',
+      'Électronique & Équipements',
+      'Santé & Cosmétique',
+      'Divers & Prestations',
+    ]
+    if (form.category && !defaultList.includes(form.category) && form.category !== '__custom__') {
+      return [...defaultList, form.category]
+    }
+    return defaultList
+  }, [activeSectorSlug, form.category])
 
   const isRestaurant = activeSectorSlug === 'restaurant' || activeSectorSlug === 'bar-restaurant-maquis' || activeSectorSlug === 'bar' || activeSectorSlug === 'maquis' || activeSectorSlug === 'fastfood'
   const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>(defaultCircuit || 'BAR')
@@ -404,11 +498,13 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
       }
 
       const isMatierePrem = isRestaurant && restaurantCircuit === 'CUISINE'
+      const finalCategory = isCustomCategory && customCategoryText.trim() ? customCategoryText.trim() : (form.category || 'Standard')
       const sectorMeta = {
         sector_slug: activeSectorSlug,
         sector: activeSectorSlug,
         restaurant_circuit: isRestaurant ? restaurantCircuit : undefined,
         is_matiere_premiere: isMatierePrem,
+        category: finalCategory,
         ucd: form.ucd,
         packaging: form.packaging,
         uv: form.uv,
@@ -448,6 +544,8 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
         code: autoCode,
         name: form.name.trim(),
         nom: form.name.trim(),
+        category: finalCategory,
+        category_name: finalCategory,
         unit: uvVal,
         unite: uvVal,
         ucd: ucdVal,
@@ -869,19 +967,68 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
                   />
                 </div>
                 <div className="col-span-6">
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Catégorie *</label>
-                  <select
-                    value={form.category}
-                    onChange={(e) => setForm({ ...form, category: e.target.value })}
-                    className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold text-slate-800 dark:text-slate-100"
-                  >
-                    <option value="Alimentation & Boissons">Alimentation & Boissons</option>
-                    <option value="Matériaux & BTP">Matériaux & BTP</option>
-                    <option value="Textile & Confection">Textile & Confection</option>
-                    <option value="Électronique & Équipements">Électronique & Équipements</option>
-                    <option value="Santé & Cosmétique">Santé & Cosmétique</option>
-                    <option value="Divers & Prestations">Divers & Prestations</option>
-                  </select>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    {activeSectorSlug === 'imprimerie' ? 'Catégorie de Matière / Consommable *' : 'Catégorie *'}
+                  </label>
+                  {!isCustomCategory ? (
+                    <div className="flex gap-1.5">
+                      <select
+                        value={form.category}
+                        onChange={(e) => {
+                          if (e.target.value === '__custom__') {
+                            setIsCustomCategory(true)
+                          } else {
+                            setForm({ ...form, category: e.target.value })
+                          }
+                        }}
+                        className="w-full p-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg font-bold text-slate-800 dark:text-slate-100 text-xs"
+                      >
+                        {availableCategories.map((cat) => (
+                          <option key={cat} value={cat}>
+                            {cat}
+                          </option>
+                        ))}
+                        <option value="__custom__" className="text-emerald-600 font-bold">
+                          + Autre catégorie personnalisée...
+                        </option>
+                      </select>
+                      <button
+                        type="button"
+                        onClick={() => setIsCustomCategory(true)}
+                        className="px-2 py-1 text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg border border-slate-200"
+                        title="Ajouter une nouvelle catégorie libre"
+                      >
+                        +
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        autoFocus
+                        placeholder="Ex: Bâches Microperforées, Adhésifs..."
+                        value={customCategoryText}
+                        onChange={(e) => {
+                          setCustomCategoryText(e.target.value)
+                          setForm({ ...form, category: e.target.value })
+                        }}
+                        className="w-full p-2 bg-white dark:bg-slate-900 border border-emerald-500 rounded-lg font-bold text-slate-800 dark:text-slate-100 text-xs"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsCustomCategory(false)
+                          if (!customCategoryText.trim()) {
+                            setForm({ ...form, category: availableCategories[0] || 'Standard' })
+                          }
+                        }}
+                        className="px-2 py-1 text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg border border-slate-200"
+                        title="Revenir à la liste"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="col-span-6">
                   <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">N° de Lot / Traçabilité</label>
