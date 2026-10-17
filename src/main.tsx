@@ -31,36 +31,44 @@ if (typeof window !== 'undefined') {
     document.documentElement.classList.add('dark')
   }
 
-  // ── 2. Version check : détection de nouveau déploiement Vercel ───────────
+  // ── 2. Gestion de version & mise à jour PWA transparente ─────────────────
   try {
-    const STORED_VERSION_KEY = 'gestio229_app_version'
-    const storedVersion = localStorage.getItem(STORED_VERSION_KEY)
+    const PWA_VERSION_KEY = 'pwa-version'
+    const storedVersion = localStorage.getItem(PWA_VERSION_KEY)
     const currentVersion = __APP_VERSION__
 
     if (storedVersion && storedVersion !== currentVersion) {
-      console.info(`[GESTIO 229] Nouveau déploiement détecté (${storedVersion} → ${currentVersion}) — mise à jour immédiate…`)
-      localStorage.setItem(STORED_VERSION_KEY, currentVersion)
+      localStorage.setItem(PWA_VERSION_KEY, currentVersion)
       sessionStorage.removeItem('gestio229_chunk_reload_done')
 
-      ;(async () => {
-        try {
-          if ('serviceWorker' in navigator) {
-            const regs = await navigator.serviceWorker.getRegistrations()
-            await Promise.all(regs.map((r) => r.unregister()))
-          }
-          if ('caches' in window) {
-            const keys = await window.caches.keys()
-            await Promise.all(keys.map((k) => window.caches.delete(k)))
-          }
-        } catch (_) {}
-        window.location.href = window.location.origin + window.location.pathname + '?v=' + currentVersion
-      })()
+      // Garde anti-boucle : vérifier si rechargé dans les 5 dernières minutes
+      const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
+      const now = Date.now()
+      const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 5 * 60 * 1000)
+
+      if (!alreadyReloadedRecently) {
+        sessionStorage.setItem('pwa-reloaded-at', String(now))
+        // Rechargement UNE SEULE FOIS en purgeant proprement
+        ;(async () => {
+          try {
+            if ('caches' in window) {
+              const keys = await caches.keys()
+              await Promise.all(keys.map((k) => caches.delete(k)))
+            }
+            if ('serviceWorker' in navigator) {
+              const regs = await navigator.serviceWorker.getRegistrations()
+              await Promise.all(regs.map((r) => r.unregister()))
+            }
+          } catch (_) {}
+          window.location.reload()
+        })()
+      }
     } else {
-      localStorage.setItem(STORED_VERSION_KEY, currentVersion)
+      localStorage.setItem(PWA_VERSION_KEY, currentVersion)
     }
   } catch (_) {}
 
-  // ── 3. Filet de sécurité global : chunk error + TDZ error → reload auto unique ──
+  // ── 3. Filet de sécurité global : chunk error + TDZ error ────────────────
   const isAutoReloadableError = (msg: string) =>
     msg.includes('dynamically imported module') ||
     msg.includes('Failed to fetch') ||
@@ -72,26 +80,26 @@ if (typeof window !== 'undefined') {
     (msg.includes('Cannot access') && msg.includes('before initialization'))
 
   const handleSafeAutoReload = async (reason: string) => {
-    const RELOAD_GUARD_KEY = 'gestio229_chunk_reload_done'
-    const alreadyReloaded = sessionStorage.getItem(RELOAD_GUARD_KEY) === '1'
-    if (alreadyReloaded) {
-      console.warn('[GESTIO 229] Rechargement automatique déjà exécuté une fois. Boucle bloquée :', reason)
+    const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
+    const now = Date.now()
+    if (lastReloadStr && (now - parseInt(lastReloadStr, 10) < 5 * 60 * 1000)) {
+      console.warn('[GESTIO 229] Déjà actualisé récemment. Pas de boucle :', reason)
       return
     }
-    console.warn('[GESTIO 229] Incident post-déploiement détecté — purge SW & cache, rechargement immédiat :', reason)
-    sessionStorage.setItem(RELOAD_GUARD_KEY, '1')
+    sessionStorage.setItem('pwa-reloaded-at', String(now))
+    sessionStorage.setItem('gestio229_chunk_reload_done', '1')
+
     try {
-      localStorage.removeItem('gestio229_app_version')
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(keys.map((k) => caches.delete(k)))
+      }
       if ('serviceWorker' in navigator) {
         const regs = await navigator.serviceWorker.getRegistrations()
         await Promise.all(regs.map((r) => r.unregister()))
       }
-      if ('caches' in window) {
-        const keys = await window.caches.keys()
-        await Promise.all(keys.map((k) => window.caches.delete(k)))
-      }
     } catch (_) {}
-    window.location.href = window.location.origin + window.location.pathname + '?ts=' + Date.now()
+    window.location.reload()
   }
 
   window.addEventListener('unhandledrejection', (event) => {
@@ -110,12 +118,28 @@ if (typeof window !== 'undefined') {
     }
   })
 
-  // ── 4. Service Worker PWA avec vérification active de mise à jour ──────────
+  // ── 4. Service Worker PWA avec détection Workbox transparente ────────────
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
+          // Si un nouveau SW attend déjà
+          if (reg.waiting) {
+            window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+          }
+
+          reg.addEventListener('updatefound', () => {
+            const newWorker = reg.installing
+            if (newWorker) {
+              newWorker.addEventListener('statechange', () => {
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+                }
+              })
+            }
+          })
+
           reg.update().catch(() => {})
         })
         .catch(() => {})

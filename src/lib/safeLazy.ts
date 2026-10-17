@@ -48,34 +48,32 @@ export function safeLazy<T extends React.ComponentType<any>>(
   return lazy((): Promise<{ default: T }> => {
     return importFn().catch((err: unknown) => {
       if (isChunkError(err)) {
-        const alreadyReloaded = sessionStorage.getItem(RELOAD_KEY) === '1'
-        if (!alreadyReloaded) {
-          console.warn('[safeLazy] Chunk manquant post-déploiement — purge du cache et rechargement dans 2 secondes…', err)
+        const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
+        const now = Date.now()
+        const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 5 * 60 * 1000)
+
+        if (!alreadyReloadedRecently) {
+          console.warn('[safeLazy] Chunk manquant post-déploiement — purge du cache et rechargement unique…', err)
+          sessionStorage.setItem('pwa-reloaded-at', String(now))
           sessionStorage.setItem(RELOAD_KEY, '1')
           setTimeout(async () => {
             if (typeof window !== 'undefined') {
-              if ('serviceWorker' in navigator) {
-                try {
+              try {
+                if ('caches' in window) {
+                  const keys = await caches.keys()
+                  await Promise.all(keys.map((k) => caches.delete(k)))
+                }
+                if ('serviceWorker' in navigator) {
                   const regs = await navigator.serviceWorker.getRegistrations()
                   await Promise.all(regs.map((r) => r.unregister()))
-                } catch (_) {}
-              }
-              if ('caches' in window) {
-                try {
-                  const keys = await window.caches.keys()
-                  await Promise.all(keys.map((k) => window.caches.delete(k)))
-                } catch (_) {}
-              }
-              try {
-                localStorage.removeItem('gestio229_app_version')
+                }
               } catch (_) {}
-              window.location.href = window.location.origin + window.location.pathname + '?ts=' + Date.now()
+              window.location.reload()
             }
-          }, 2000)
+          }, 1500)
           return new Promise(() => {}) as Promise<{ default: T }>
         } else {
-          // Déjà rechargé une fois : NE PAS RECHARGER EN BOUCLE, laisser l'ErrorBoundary gérer
-          console.error('[safeLazy] Échec persistant après rechargement initial. Pas de boucle :', err)
+          console.warn('[safeLazy] Déjà rechargé dans les 5 dernières minutes. Pas de boucle :', err)
         }
       }
       throw err
