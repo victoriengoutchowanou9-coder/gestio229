@@ -36,12 +36,12 @@ lerna-debug.log*
 *.log
 
 # Vercel deployment folder
+.vercel
 .vercel/
+.vercel_build_output
+output/
 
 # Systèmes d'exploitation
 .DS_Store
 Thumbs.db
 *.pem
-
-.vercel
-.env*
