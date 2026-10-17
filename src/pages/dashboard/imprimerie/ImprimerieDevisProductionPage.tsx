@@ -26,6 +26,8 @@ import {
 } from '../../../services/imprimerieService'
 import { supabase } from '../../../lib/supabase'
 import { showModal, showConfirm } from '../../../components/modals/CustomModalGestio'
+import { NouveauDevisImprimerieModal } from './NouveauDevisImprimerieModal'
+import { generateDevisPdf } from '../../../utils/imprimerieDevisPdf'
 
 export const ImprimerieDevisProductionPage: React.FC = () => {
   const { companyId, sectorSlug } = useTenant()
@@ -55,22 +57,6 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
   const [showDetailCommandeModal, setShowDetailCommandeModal] = useState(false)
   const [selectedCommande, setSelectedCommande] = useState<CommandeImprimerie | null>(null)
 
-  // Formulaire Devis
-  const [devisForm, setDevisForm] = useState<{
-    client_id: string
-    client_nom: string
-    client_tel: string
-    date_validite: string
-    notes: string
-    lignes: DevisLigne[]
-  }>({
-    client_id: '',
-    client_nom: '',
-    client_tel: '',
-    date_validite: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-    notes: '',
-    lignes: [],
-  })
 
   // Formulaire Encaissement
   const [paiementForm, setPaiementForm] = useState<{
@@ -140,101 +126,6 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
     loadAll()
   }, [loadAll])
 
-  // ── Ajout ligne devis ──
-  const handleAddDevisLigne = (prestationId?: string) => {
-    const pres = prestations.find((p) => p.id === prestationId)
-    const newLigne: DevisLigne = {
-      prestation_id: pres?.id,
-      designation: pres ? pres.nom : 'Travail sur mesure',
-      mode_calcul: pres ? pres.mode_calcul : 'm2',
-      largeur: 1,
-      hauteur: 1,
-      surface_m2: 1,
-      quantite: 1,
-      prix_unitaire: pres ? pres.prix_vente : 2000,
-      remise_pct: 0,
-      montant_ht: pres ? pres.prix_vente : 2000,
-      tva_pct: 0,
-      montant_ttc: pres ? pres.prix_vente : 2000,
-    }
-    setDevisForm((prev) => ({
-      ...prev,
-      lignes: [...prev.lignes, newLigne],
-    }))
-  }
-
-  const handleUpdateDevisLigne = (index: number, field: string, val: any) => {
-    setDevisForm((prev) => {
-      const updated = [...prev.lignes]
-      const current = { ...updated[index], [field]: val }
-
-      // Recalcul surface si dimensions changent
-      if (field === 'largeur' || field === 'hauteur') {
-        const l = field === 'largeur' ? Number(val) : Number(current.largeur)
-        const h = field === 'hauteur' ? Number(val) : Number(current.hauteur)
-        current.surface_m2 = Number((l * h).toFixed(3))
-      }
-
-      // Recalcul prix total ligne
-      const surface = Number(current.surface_m2 || 1)
-      const qty = Number(current.quantite || 1)
-      const pu = Number(current.prix_unitaire || 0)
-      const remise = Number(current.remise_pct || 0)
-      const tva = Number(current.tva_pct || 0)
-
-      const base = current.mode_calcul === 'm2' ? surface * qty * pu : qty * pu
-      const ht = base * (1 - remise / 100)
-      const ttc = ht * (1 + tva / 100)
-
-      current.montant_ht = Math.round(ht)
-      current.montant_ttc = Math.round(ttc)
-      updated[index] = current
-
-      return { ...prev, lignes: updated }
-    })
-  }
-
-  const handleRemoveDevisLigne = (index: number) => {
-    setDevisForm((prev) => ({
-      ...prev,
-      lignes: prev.lignes.filter((_, i) => i !== index),
-    }))
-  }
-
-  // ── Sauvegarde Devis ──
-  const handleSaveDevis = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!companyId) return
-    if (!devisForm.client_nom) {
-      notify('error', 'Veuillez saisir le nom du client.')
-      return
-    }
-    if (devisForm.lignes.length === 0) {
-      notify('error', 'Veuillez ajouter au moins une prestation dans le devis.')
-      return
-    }
-
-    try {
-      await imprimerieService.saveDevis(
-        {
-          company_id: companyId,
-          sector_slug: activeSector,
-          client_id: devisForm.client_id || undefined,
-          client_nom: devisForm.client_nom,
-          client_tel: devisForm.client_tel,
-          date_validite: devisForm.date_validite,
-          notes: devisForm.notes,
-          commercial_nom: user?.full_name || 'Commercial',
-        },
-        devisForm.lignes
-      )
-      notify('success', 'Devis enregistré avec succès !')
-      setShowDevisModal(false)
-      loadAll()
-    } catch (err: any) {
-      notify('error', err.message || 'Erreur enregistrement devis.')
-    }
-  }
 
   // ── Transformation Devis ➔ Commande ──
   const handleTransformerDevis = async (devisId: string) => {
@@ -247,6 +138,31 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
       setActiveTab('commandes')
     } catch (err: any) {
       notify('error', err.message || 'Erreur transformation devis.')
+    }
+  }
+
+  // ── Mise à jour statut devis ──
+  const handleChangeDevisStatus = async (devisId: string, newStatut: any) => {
+    try {
+      await imprimerieService.updateDevisStatus(devisId, newStatut, user)
+      notify('success', `Statut du devis actualisé : ${newStatut}`)
+      loadAll()
+    } catch (err: any) {
+      notify('error', err.message || 'Erreur mise à jour statut devis.')
+    }
+  }
+
+  // ── Suppression devis ──
+  const handleDeleteDevis = async (devisId: string) => {
+    const ok = await showConfirm('Êtes-vous sûr de vouloir supprimer définitivement ce devis ?', 'Suppression devis')
+    if (!ok) return
+    try {
+      if (!companyId) return
+      await imprimerieService.deleteDevis(devisId, companyId)
+      notify('success', 'Devis supprimé avec succès.')
+      loadAll()
+    } catch (err: any) {
+      notify('error', err.message || 'Erreur suppression devis.')
     }
   }
 
@@ -370,18 +286,7 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
           </button>
 
           <button
-            onClick={() => {
-              setDevisForm({
-                client_id: '',
-                client_nom: '',
-                client_tel: '',
-                date_validite: new Date(Date.now() + 15 * 86400000).toISOString().split('T')[0],
-                notes: '',
-                lignes: [],
-              })
-              handleAddDevisLigne()
-              setShowDevisModal(true)
-            }}
+            onClick={() => setShowDevisModal(true)}
             className="flex items-center gap-2 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl text-xs shadow-sm transition"
           >
             <Plus className="w-4 h-4" /> Nouveau Devis Imprimerie
@@ -626,27 +531,56 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
                       <td className="px-4 py-3 text-right font-medium text-slate-700">{d.total_ht.toLocaleString('fr-FR')} F</td>
                       <td className="px-4 py-3 text-right font-black text-slate-900">{d.total_ttc.toLocaleString('fr-FR')} F</td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          d.statut === 'transforme'
-                            ? 'bg-emerald-100 text-emerald-800'
-                            : d.statut === 'accepte'
-                            ? 'bg-blue-100 text-blue-800'
-                            : 'bg-amber-100 text-amber-800'
-                        }`}>
-                          {d.statut.replace(/_/g, ' ')}
-                        </span>
+                        <select
+                          value={d.statut}
+                          onChange={(e) => handleChangeDevisStatus(d.id, e.target.value)}
+                          className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-[10px] font-bold focus:outline-none cursor-pointer"
+                        >
+                          <option value="brouillon">Brouillon</option>
+                          <option value="en_attente">En attente</option>
+                          <option value="envoye">Envoyé</option>
+                          <option value="accepte">Accepté</option>
+                          <option value="refuse">Refusé</option>
+                          <option value="expire">Expiré</option>
+                          <option value="transforme">Transformé</option>
+                          <option value="annule">Annulé</option>
+                        </select>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {d.statut !== 'transforme' ? (
+                        <div className="flex items-center justify-center gap-1.5">
                           <button
-                            onClick={() => handleTransformerDevis(d.id)}
-                            className="px-3 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-bold text-[11px] shadow-xs transition"
+                            onClick={() => generateDevisPdf(d, company, { action: 'download' })}
+                            className="p-1.5 bg-slate-100 hover:bg-pink-100 text-slate-700 hover:text-pink-700 rounded-lg transition"
+                            title="Télécharger Devis PDF (A4)"
                           >
-                            Transformer en Commande
+                            <Download className="w-3.5 h-3.5" />
                           </button>
-                        ) : (
-                          <span className="text-emerald-600 font-bold text-[11px]">En Production ✓</span>
-                        )}
+                          <button
+                            onClick={() => generateDevisPdf(d, company, { action: 'print' })}
+                            className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition"
+                            title="Imprimer Devis A4"
+                          >
+                            <Printer className="w-3.5 h-3.5" />
+                          </button>
+                          {d.statut !== 'transforme' ? (
+                            <button
+                              onClick={() => handleTransformerDevis(d.id)}
+                              className="px-2.5 py-1 bg-pink-600 hover:bg-pink-700 text-white rounded-lg font-bold text-[10px] shadow-xs transition"
+                              title="Transformer ce devis en commande atelier"
+                            >
+                              ➔ Atelier
+                            </button>
+                          ) : (
+                            <span className="text-emerald-600 font-bold text-[10px]">En Prod ✓</span>
+                          )}
+                          <button
+                            onClick={() => handleDeleteDevis(d.id)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                            title="Supprimer ce devis"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -709,194 +643,27 @@ export const ImprimerieDevisProductionPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── MODAL CRÉATION DEVIS PRO AU M² ── */}
+      {/* ── MODAL CRÉATION DEVIS MULTI-PRESTATIONS CONFORME CAHIER DES CHARGES ── */}
       {showDevisModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-4xl w-full p-6 space-y-5 my-8 shadow-2xl animate-scaleUp">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <div>
-                <h3 className="text-lg font-black text-slate-900">Nouveau Devis Imprimerie & Sérigraphie</h3>
-                <p className="text-xs text-slate-500">Calculette surfaces m², formats papier, finitions et remises</p>
-              </div>
-              <button onClick={() => setShowDevisModal(false)} className="p-2 hover:bg-slate-100 rounded-xl text-slate-400">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveDevis} className="space-y-4">
-              {/* Infos Client */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1">Client *</label>
-                  <input
-                    type="text"
-                    required
-                    value={devisForm.client_nom}
-                    onChange={(e) => setDevisForm((p) => ({ ...p, client_nom: e.target.value }))}
-                    placeholder="Nom du client / Société"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1">Téléphone</label>
-                  <input
-                    type="text"
-                    value={devisForm.client_tel}
-                    onChange={(e) => setDevisForm((p) => ({ ...p, client_tel: e.target.value }))}
-                    placeholder="Ex: +229 97 00 00 00"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
-                  />
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-bold text-slate-700 uppercase block mb-1">Validité jusqu'au</label>
-                  <input
-                    type="date"
-                    value={devisForm.date_validite}
-                    onChange={(e) => setDevisForm((p) => ({ ...p, date_validite: e.target.value }))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              {/* Lignes du Devis */}
-              <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800 uppercase">Prestations & Travaux</span>
-                  <button
-                    type="button"
-                    onClick={() => handleAddDevisLigne()}
-                    className="text-xs font-bold text-pink-600 hover:text-pink-700 flex items-center gap-1"
-                  >
-                    <Plus className="w-3.5 h-3.5" /> Ajouter une ligne
-                  </button>
-                </div>
-
-                <div className="space-y-2.5 max-h-72 overflow-y-auto">
-                  {devisForm.lignes.map((l, idx) => (
-                    <div key={idx} className="p-3 bg-slate-50 rounded-2xl border border-slate-200 grid grid-cols-1 sm:grid-cols-12 gap-2 items-center text-xs">
-                      <div className="sm:col-span-3">
-                        <input
-                          type="text"
-                          value={l.designation}
-                          onChange={(e) => handleUpdateDevisLigne(idx, 'designation', e.target.value)}
-                          placeholder="Désignation"
-                          className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs"
-                        />
-                      </div>
-
-                      <div className="sm:col-span-2">
-                        <select
-                          value={l.mode_calcul}
-                          onChange={(e) => handleUpdateDevisLigne(idx, 'mode_calcul', e.target.value)}
-                          className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-[11px]"
-                        >
-                          <option value="m2">Au m²</option>
-                          <option value="unite">À l'unité</option>
-                          <option value="page">À la page</option>
-                          <option value="heure">À l'heure</option>
-                          <option value="forfait">Forfait</option>
-                        </select>
-                      </div>
-
-                      {l.mode_calcul === 'm2' ? (
-                        <>
-                          <div className="sm:col-span-1">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={l.largeur}
-                              onChange={(e) => handleUpdateDevisLigne(idx, 'largeur', e.target.value)}
-                              placeholder="Larg(m)"
-                              title="Largeur en mètres"
-                              className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-center"
-                            />
-                          </div>
-                          <div className="sm:col-span-1">
-                            <input
-                              type="number"
-                              step="0.01"
-                              value={l.hauteur}
-                              onChange={(e) => handleUpdateDevisLigne(idx, 'hauteur', e.target.value)}
-                              placeholder="Haut(m)"
-                              title="Hauteur en mètres"
-                              className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-center"
-                            />
-                          </div>
-                          <div className="sm:col-span-1 text-center font-mono font-bold text-slate-700">
-                            {l.surface_m2} m²
-                          </div>
-                        </>
-                      ) : (
-                        <div className="sm:col-span-3 text-slate-400 text-center text-[10px]">Tarif unitaire fixe</div>
-                      )}
-
-                      <div className="sm:col-span-1">
-                        <input
-                          type="number"
-                          value={l.quantite}
-                          onChange={(e) => handleUpdateDevisLigne(idx, 'quantite', e.target.value)}
-                          placeholder="Qté"
-                          title="Quantité"
-                          className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-center font-bold"
-                        />
-                      </div>
-
-                      <div className="sm:col-span-2">
-                        <input
-                          type="number"
-                          value={l.prix_unitaire}
-                          onChange={(e) => handleUpdateDevisLigne(idx, 'prix_unitaire', e.target.value)}
-                          placeholder="P.U."
-                          className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-right font-semibold"
-                        />
-                      </div>
-
-                      <div className="sm:col-span-1 text-right font-black text-slate-900">
-                        {l.montant_ttc?.toLocaleString('fr-FR')} F
-                      </div>
-
-                      <div className="sm:col-span-1 text-center">
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveDevisLigne(idx)}
-                          className="text-slate-400 hover:text-rose-600 p-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Récapitulatif Devis */}
-              <div className="p-4 bg-pink-50/70 rounded-2xl flex items-center justify-between text-xs">
-                <span className="font-bold text-slate-700">Total Devis Estimatif :</span>
-                <span className="text-lg font-black text-pink-700">
-                  {devisForm.lignes.reduce((acc, l) => acc + (l.montant_ttc || 0), 0).toLocaleString('fr-FR')} FCFA
-                </span>
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowDevisModal(false)}
-                  className="px-4 py-2 border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-xl text-xs font-bold shadow-sm transition"
-                >
-                  Enregistrer & Chiffrer le Devis
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <NouveauDevisImprimerieModal
+          isOpen={showDevisModal}
+          onClose={() => setShowDevisModal(false)}
+          onSuccess={(savedDevis, action) => {
+            loadAll()
+            if (action === 'caisse') {
+              setActiveTab('commandes')
+              notify('success', `Devis ${savedDevis.numero_devis} validé et envoyé à l'atelier / caisse !`)
+            } else {
+              notify('success', `Devis ${savedDevis.numero_devis} enregistré (${action === 'brouillon' ? 'Brouillon' : 'En attente'}) !`)
+            }
+          }}
+          companyId={companyId || ''}
+          activeSector={activeSector}
+          user={user}
+          company={company}
+          prestationsCatalog={prestations}
+          onPrestationCreated={loadAll}
+        />
       )}
 
       {/* ── MODAL ENCAISSEMENT CAISSIÈRE (ACOMPTE / SOLDE) ── */}

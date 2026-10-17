@@ -99,6 +99,9 @@ export interface DevisLigne {
   surface_m2: number
   quantite: number
   prix_unitaire: number
+  prix_m2?: number
+  main_doeuvre?: number
+  instructions_graphiste?: string
   remise_pct: number
   montant_ht: number
   tva_pct: number
@@ -123,9 +126,10 @@ export interface DevisImprimerie {
   total_tva: number
   total_aib: number
   total_ttc: number
-  statut: 'brouillon' | 'envoye' | 'accepte' | 'refuse' | 'expire' | 'transforme'
+  statut: 'brouillon' | 'en_attente' | 'envoye' | 'accepte' | 'refuse' | 'expire' | 'transforme' | 'annule'
   commande_id?: string
   notes?: string
+  notes_internes?: string
   lignes?: DevisLigne[]
 }
 
@@ -601,30 +605,49 @@ export const imprimerieService = {
     const sector = devis.sector_slug || 'imprimerie'
     const num = devis.numero_devis || `DEV-${new Date().getFullYear()}-${Date.now().toString().slice(-5)}`
 
-    // Calculs totaux
+    // Calculs rigoureux des totaux
     let totalHt = 0
     let totalTtc = 0
     const computedLignes = lignes.map((l) => {
       let surface = Number(l.surface_m2 || 0)
-      if (l.mode_calcul === 'm2' && l.largeur && l.hauteur) {
-        surface = Number((Number(l.largeur) * Number(l.hauteur)).toFixed(3))
+      if (l.mode_calcul === 'm2') {
+        if (!surface && l.largeur && l.hauteur) {
+          surface = Number((Number(l.largeur) * Number(l.hauteur)).toFixed(3))
+        }
       }
       const qty = Number(l.quantite || 1)
       const pu = Number(l.prix_unitaire || 0)
-      const baseTotal = l.mode_calcul === 'm2' && surface > 0 ? surface * qty * pu : qty * pu
+      const mo = Number(l.main_doeuvre || l.details_json?.main_doeuvre || 0)
+      
+      // Montant de base : (surface * pu * qty) si m², sinon (pu * qty)
+      const baseImpressions = l.mode_calcul === 'm2' && surface > 0 ? surface * pu * qty : pu * qty
+      // Base taxable HT : impressions + main d'œuvre
+      const baseTotal = baseImpressions + mo
+
       const remise = Number(l.remise_pct || 0)
       const ligneHt = baseTotal * (1 - remise / 100)
       const tvaPct = Number(l.tva_pct || 0)
-      const ligneTtc = ligneHt * (1 + tvaPct / 100)
+      const ligneTva = ligneHt * (tvaPct / 100)
+      const ligneTtc = ligneHt + ligneTva
 
       totalHt += ligneHt
       totalTtc += ligneTtc
 
+      const details = {
+        ...(l.details_json || {}),
+        main_doeuvre: mo,
+        instructions_graphiste: l.instructions_graphiste || l.details_json?.instructions_graphiste || '',
+        prix_m2: l.prix_m2 || (l.mode_calcul === 'm2' ? pu : undefined),
+      }
+
       return {
         ...l,
         surface_m2: surface,
-        montant_ht: ligneHt,
-        montant_ttc: ligneTtc,
+        main_doeuvre: mo,
+        instructions_graphiste: details.instructions_graphiste,
+        montant_ht: Math.round(ligneHt),
+        montant_ttc: Math.round(ligneTtc),
+        details_json: details,
       }
     })
 
@@ -632,6 +655,7 @@ export const imprimerieService = {
       ...devis,
       sector_slug: sector,
       numero_devis: num,
+      statut: devis.statut || 'brouillon',
       total_ht: Math.round(totalHt),
       total_tva: Math.round(totalTtc - totalHt),
       total_aib: 0,
@@ -673,6 +697,39 @@ export const imprimerieService = {
     }
 
     return (await this.getDevis(devis.company_id, sector)).find((d) => d.id === devisId)!
+  },
+
+  async updateDevisStatus(
+    devisId: string,
+    statut: 'brouillon' | 'en_attente' | 'envoye' | 'accepte' | 'refuse' | 'expire' | 'transforme' | 'annule',
+    user?: any
+  ): Promise<void> {
+    const { error } = await supabase
+      .from('imprimerie_devis')
+      .update({
+        statut,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', devisId)
+
+    if (error) throw error
+
+    await this.logAudit({
+      company_id: user?.company_id || '',
+      sector_slug: 'imprimerie',
+      action: 'UPDATE_DEVIS_STATUS',
+      entite: 'imprimerie_devis',
+      entite_id: devisId,
+      description: `Statut du devis modifié vers : ${statut}`,
+      utilisateur_id: user?.id,
+      utilisateur_nom: user?.full_name || 'Utilisateur',
+    })
+  },
+
+  async deleteDevis(devisId: string, companyId: string): Promise<void> {
+    await supabase.from('imprimerie_devis_lignes').delete().eq('devis_id', devisId)
+    const { error } = await supabase.from('imprimerie_devis').delete().eq('id', devisId).eq('company_id', companyId)
+    if (error) throw error
   },
 
   // ───────────────────────────────────────────────────────────────────────────
