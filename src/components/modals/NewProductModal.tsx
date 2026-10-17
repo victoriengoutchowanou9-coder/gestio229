@@ -196,50 +196,26 @@ export const SECTOR_CATEGORIES: Record<string, string[]> = {
   ],
 }
 
+SECTOR_DEFAULT_UNITS.impression = SECTOR_DEFAULT_UNITS.imprimerie
+SECTOR_CATEGORIES.impression = SECTOR_CATEGORIES.imprimerie
+
 export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClose, onSuccess, defaultCircuit }) => {
   const { company, user } = useAuthStore()
   const { companyId, sectorSlug, supabaseTenant } = useTenant()
 
   const activeSectorSlug = normalizeSectorSlug(sectorSlug || getActiveSectorSlug() || 'boutique')
+  const isRestaurant = activeSectorSlug === 'restaurant' || activeSectorSlug === 'bar-restaurant-maquis' || activeSectorSlug === 'bar' || activeSectorSlug === 'maquis' || activeSectorSlug === 'fastfood'
 
-  const availableUcdUnits = useMemo(() => {
-    const secDefaults = SECTOR_DEFAULT_UNITS[activeSectorSlug]?.ucdList || UCD_UNITS
-    const set = new Set([...secDefaults, ...UCD_UNITS])
-    return Array.from(set)
-  }, [activeSectorSlug])
-
-  const availableUvUnits = useMemo(() => {
-    const secDefaults = SECTOR_DEFAULT_UNITS[activeSectorSlug]?.uvList || UV_UNITS
-    const set = new Set([...secDefaults, ...UV_UNITS])
-    return Array.from(set)
-  }, [activeSectorSlug])
-
+  // ── 1. TOUS LES ÉTATS (useState) DÉCLARÉS EN PREMIER (ÉLIMINATION TDZ) ──
+  const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>(defaultCircuit || 'BAR')
   const [isCustomCategory, setIsCustomCategory] = useState(false)
   const [customCategoryText, setCustomCategoryText] = useState('')
-
-  const availableCategories = useMemo(() => {
-    const defaultList = SECTOR_CATEGORIES[activeSectorSlug] || [
-      'Alimentation & Boissons',
-      'Matériaux & BTP',
-      'Textile & Confection',
-      'Électronique & Équipements',
-      'Santé & Cosmétique',
-      'Divers & Prestations',
-    ]
-    if (form.category && !defaultList.includes(form.category) && form.category !== '__custom__') {
-      return [...defaultList, form.category]
-    }
-    return defaultList
-  }, [activeSectorSlug, form.category])
-
-  const isRestaurant = activeSectorSlug === 'restaurant' || activeSectorSlug === 'bar-restaurant-maquis' || activeSectorSlug === 'bar' || activeSectorSlug === 'maquis' || activeSectorSlug === 'fastfood'
-  const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>(defaultCircuit || 'BAR')
-
-  useEffect(() => {
-    if (defaultCircuit) {
-      setRestaurantCircuit(defaultCircuit)
-    }
-  }, [defaultCircuit])
+  const [showBatchModal, setShowBatchModal] = useState(false)
+  const [isSaving, setIsSaving] = useState(false)
+  const [lastSavedProduct, setLastSavedProduct] = useState<{ code: string; name: string } | null>(null)
+  const [brasserieEmballages, setBrasserieEmballages] = useState<{ id: string; code: string; designation: string }[]>([])
+  const [selectedEmballageId, setSelectedEmballageId] = useState<string>('')
+  const [qteEmballageParUnite, setQteEmballageParUnite] = useState<number>(1)
 
   // Formulaire Produit sans valeurs fictives (vides ou 0 réels)
   const [form, setForm] = useState({
@@ -280,61 +256,33 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
     } as BatchPricingConfig,
   })
 
-  // Synchronisation des unités par défaut selon le secteur actif
-  useEffect(() => {
-    if (isOpen) {
-      const defaults = SECTOR_DEFAULT_UNITS[activeSectorSlug] || SECTOR_DEFAULT_UNITS.boutique
-      setForm((prev) => {
-        if (prev.name) return prev // Ne pas écraser la saisie en cours
-        return {
-          ...prev,
-          ucd: defaultCircuit === 'CUISINE' ? 'Sac' : defaults.ucd,
-          uv: defaultCircuit === 'CUISINE' ? 'Kg' : defaults.uv,
-          coef: defaults.coef,
-          category: defaultCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : defaults.category,
-          packaging: defaults.packaging,
-          batchPricing: {
-            ...prev.batchPricing,
-            coef: defaults.coef,
-          }
-        }
-      })
+  // ── 2. CALCULS MÉMORISÉS (useMemo) — form est déjà initialisé ──
+  const availableUcdUnits = useMemo(() => {
+    const secDefaults = SECTOR_DEFAULT_UNITS[activeSectorSlug]?.ucdList || UCD_UNITS
+    const set = new Set([...secDefaults, ...UCD_UNITS])
+    return Array.from(set)
+  }, [activeSectorSlug])
+
+  const availableUvUnits = useMemo(() => {
+    const secDefaults = SECTOR_DEFAULT_UNITS[activeSectorSlug]?.uvList || UV_UNITS
+    const set = new Set([...secDefaults, ...UV_UNITS])
+    return Array.from(set)
+  }, [activeSectorSlug])
+
+  const availableCategories = useMemo(() => {
+    const defaultList = SECTOR_CATEGORIES[activeSectorSlug] || [
+      'Alimentation & Boissons',
+      'Matériaux & BTP',
+      'Textile & Confection',
+      'Électronique & Équipements',
+      'Santé & Cosmétique',
+      'Divers & Prestations',
+    ]
+    if (form.category && !defaultList.includes(form.category) && form.category !== '__custom__') {
+      return [...defaultList, form.category]
     }
-  }, [isOpen, activeSectorSlug, defaultCircuit])
-
-  // Sous-modale "Paramétrage des tarifs par lot"
-  const [showBatchModal, setShowBatchModal] = useState(false)
-  const [isSaving, setIsSaving] = useState(false)
-  const [lastSavedProduct, setLastSavedProduct] = useState<{ code: string; name: string } | null>(null)
-
-  // Emballages & Consignations (Brasserie & Dépôt de Boissons uniquement)
-  const [brasserieEmballages, setBrasserieEmballages] = useState<{ id: string; code: string; designation: string }[]>([])
-  const [selectedEmballageId, setSelectedEmballageId] = useState<string>('')
-  const [qteEmballageParUnite, setQteEmballageParUnite] = useState<number>(1)
-
-  useEffect(() => {
-    if (isOpen && activeSectorSlug === 'brasserie' && (company?.id || companyId)) {
-      const cId = company?.id || companyId || ''
-      supabase
-        .from('brasserie_emballages')
-        .select('id, code, designation')
-        .eq('company_id', cId)
-        .eq('sector_slug', 'brasserie')
-        .eq('is_active', true)
-        .order('code')
-        .then(({ data }) => {
-          if (data && data.length > 0) {
-            setBrasserieEmballages(data)
-          } else {
-            setBrasserieEmballages([
-              { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles (12T)' },
-              { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles (20T)' },
-              { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles (24T)' },
-            ])
-          }
-        })
-    }
-  }, [isOpen, sectorSlug, company?.id, companyId])
+    return defaultList
+  }, [activeSectorSlug, form.category])
 
   // Décomposition fiscale automatique
   const taxAchat = useMemo(() => {
@@ -373,10 +321,63 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
   const marginUcdHt = Math.round((taxVenteUcd.htPrice - taxAchat.htPrice) * 100) / 100
   const marginUvHt = Math.round((taxVenteUv.htPrice - costUvHt) * 100) / 100
 
-  // Paliers de lots générés dynamiquement selon le coefficient (le x est remplacé en temps réel)
+  // Paliers de lots générés dynamiquement selon le coefficient
   const batchTiers = useMemo(() => {
     return getBatchTiersList(form.coef, form.batchPricing)
   }, [form.coef, form.batchPricing])
+
+  // ── 3. EFFETS DE SYNCHRONISATION (useEffect) ──
+  useEffect(() => {
+    if (defaultCircuit) {
+      setRestaurantCircuit(defaultCircuit)
+    }
+  }, [defaultCircuit])
+
+  // Synchronisation des unités par défaut selon le secteur actif
+  useEffect(() => {
+    if (isOpen) {
+      const defaults = SECTOR_DEFAULT_UNITS[activeSectorSlug] || SECTOR_DEFAULT_UNITS.boutique
+      setForm((prev) => {
+        if (prev.name) return prev // Ne pas écraser la saisie en cours
+        return {
+          ...prev,
+          ucd: defaultCircuit === 'CUISINE' ? 'Sac' : defaults.ucd,
+          uv: defaultCircuit === 'CUISINE' ? 'Kg' : defaults.uv,
+          coef: defaults.coef,
+          category: defaultCircuit === 'CUISINE' ? 'Matières Premières Cuisine' : defaults.category,
+          packaging: defaults.packaging,
+          batchPricing: {
+            ...prev.batchPricing,
+            coef: defaults.coef,
+          }
+        }
+      })
+    }
+  }, [isOpen, activeSectorSlug, defaultCircuit])
+
+  useEffect(() => {
+    if (isOpen && activeSectorSlug === 'brasserie' && (company?.id || companyId)) {
+      const cId = company?.id || companyId || ''
+      supabase
+        .from('brasserie_emballages')
+        .select('id, code, designation')
+        .eq('company_id', cId)
+        .eq('sector_slug', 'brasserie')
+        .eq('is_active', true)
+        .order('code')
+        .then(({ data }) => {
+          if (data && data.length > 0) {
+            setBrasserieEmballages(data)
+          } else {
+            setBrasserieEmballages([
+              { id: 'c12t', code: 'C12T', designation: 'Casier 12 Bouteilles (12T)' },
+              { id: 'c20t', code: 'C20T', designation: 'Casier 20 Bouteilles (20T)' },
+              { id: 'c24t', code: 'C24T', designation: 'Casier 24 Bouteilles (24T)' },
+            ])
+          }
+        })
+    }
+  }, [isOpen, sectorSlug, company?.id, companyId])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -824,6 +825,8 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
       setIsSaving(false)
     }
   }
+
+  if (!isOpen) return null
 
   return (
     <>
