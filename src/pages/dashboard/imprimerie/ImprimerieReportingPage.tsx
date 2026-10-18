@@ -38,12 +38,13 @@ export const ImprimerieReportingPage: React.FC = () => {
   const [selectedMatiereFilter, setSelectedMatiereFilter] = useState<string>('TOUTES')
   const [selectedCatFilter, setSelectedCatFilter] = useState<string>('TOUTES')
   const [searchMatiere, setSearchMatiere] = useState<string>('')
+  const [prestationsVariables, setPrestationsVariables] = useState<any[]>([])
 
   const loadData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [cmds, pres, mats, cons] = await Promise.all([
+      const [cmds, pres, mats, cons, pVars] = await Promise.all([
         imprimerieService.getCommandes(companyId, activeSector),
         imprimerieService.getPrestations(companyId, activeSector),
         imprimerieService.getMatieres(companyId, activeSector),
@@ -52,11 +53,13 @@ export const ImprimerieReportingPage: React.FC = () => {
           .select('*, matiere:imprimerie_matieres(nom, code, unite, categorie, stock_actuel, stock_minimum, cout_moyen), commande:imprimerie_commandes(numero_commande, client_nom, date_commande)')
           .eq('company_id', companyId)
           .order('created_at', { ascending: false }),
+        imprimerieService.getPrestationsVariables(companyId, activeSector),
       ])
       setCommandes(cmds)
       setPrestations(pres)
       setMatieres(mats)
       setConsommations(cons.data || [])
+      setPrestationsVariables(pVars || [])
     } catch (e) {
       console.error('Erreur chargement reporting imprimerie:', e)
     } finally {
@@ -132,13 +135,38 @@ export const ImprimerieReportingPage: React.FC = () => {
     })
   }, [consommations, isDateInPeriode, selectedMatiereFilter, selectedCatFilter, searchMatiere])
 
-  // ── Totaux globaux financiers ──
-  const caTotal = filteredCommandes.reduce((acc, c) => acc + Number(c.total_ttc || 0), 0)
-  const coutRevientTotal = filteredCommandes.reduce((acc, c) => acc + Number(c.cout_revient_total || 0), 0)
-  const margeBruteTotal = caTotal - coutRevientTotal
+  // ── Filtrer les prestations à coût variable validées dans la période ──
+  // RÈGLE : Seules les prestations validées par le graphiste (et non annulées) s'ajoutent à la marge de la période
+  const filteredPrestationsVariablesValidees = useMemo(() => {
+    return prestationsVariables.filter((pv) => {
+      const isValidee = ['validee_graphiste', 'transmise_caisse', 'partiellement_encaissee', 'encaissee'].includes(pv.statut)
+      if (!isValidee) return false
+      const dateRef = pv.date_validation || pv.created_at
+      return isDateInPeriode(dateRef)
+    })
+  }, [prestationsVariables, isDateInPeriode])
+
+  const margePrestationsVariables = useMemo(() => {
+    return filteredPrestationsVariablesValidees.reduce((acc, pv) => acc + Number(pv.marge_brute || 0), 0)
+  }, [filteredPrestationsVariablesValidees])
+
+  const caPrestationsVariables = useMemo(() => {
+    return filteredPrestationsVariablesValidees.reduce((acc, pv) => acc + Number(pv.prix_vente || 0), 0)
+  }, [filteredPrestationsVariablesValidees])
+
+  const encaissePrestationsVariables = useMemo(() => {
+    return filteredPrestationsVariablesValidees.reduce((acc, pv) => acc + Number(pv.montant_encaisse || 0), 0)
+  }, [filteredPrestationsVariablesValidees])
+
+  // ── Totaux globaux financiers (incluant la marge des prestations à coût variable validées) ──
+  const caTotal = filteredCommandes.reduce((acc, c) => acc + Number(c.total_ttc || 0), 0) + caPrestationsVariables
+  const coutRevientTotal = filteredCommandes.reduce((acc, c) => acc + Number(c.cout_revient_total || 0), 0) +
+    filteredPrestationsVariablesValidees.reduce((acc, pv) => acc + Number(pv.cout_realisation || 0), 0)
+  const margeBruteTotal = (filteredCommandes.reduce((acc, c) => acc + Number(c.total_ttc || 0), 0) - filteredCommandes.reduce((acc, c) => acc + Number(c.cout_revient_total || 0), 0)) + margePrestationsVariables
   const tauxMargeMoyen = caTotal > 0 ? (margeBruteTotal / caTotal) * 100 : 0
-  const totalEncaisse = filteredCommandes.reduce((acc, c) => acc + Number(c.montant_paye || 0), 0)
-  const totalCreances = filteredCommandes.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
+  const totalEncaisse = filteredCommandes.reduce((acc, c) => acc + Number(c.montant_paye || 0), 0) + encaissePrestationsVariables
+  const totalCreances = filteredCommandes.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0) +
+    filteredPrestationsVariablesValidees.reduce((acc, pv) => acc + Number(pv.solde_restant || 0), 0)
 
   // ── ANALYSE DÉTAILLÉE : COÛTS DES MATIÈRES PREMIÈRES (CUMUL & PAR MATIÈRE) ──
   const analyseMatieres = useMemo(() => {
@@ -214,7 +242,7 @@ export const ImprimerieReportingPage: React.FC = () => {
     return ['TOUTES', ...cats]
   }, [matieres])
 
-  // 1. Rentabilité par Prestation
+  // 1. Rentabilité par Prestation (commandes catalogue + prestations à coût variable)
   const rentabiliteParPrestation = useMemo(() => {
     const map: Record<string, { nom: string; nbCommandes: number; ca: number; cout: number; marge: number; taux: number }> = {}
 
@@ -234,13 +262,28 @@ export const ImprimerieReportingPage: React.FC = () => {
       })
     })
 
+    // Ajouter les prestations à coût variable validées
+    filteredPrestationsVariablesValidees.forEach((pv) => {
+      const nom = pv.designation || 'Prestation Graphique'
+      if (!map[nom]) {
+        map[nom] = { nom, nbCommandes: 0, ca: 0, cout: 0, marge: 0, taux: 0 }
+      }
+      const pvCa = Number(pv.prix_vente || 0)
+      const pvCout = Number(pv.cout_realisation || 0)
+      const pvMarge = Number(pv.marge_brute || (pvCa - pvCout))
+      map[nom].nbCommandes += 1
+      map[nom].ca += pvCa
+      map[nom].cout += pvCout
+      map[nom].marge += pvMarge
+    })
+
     return Object.values(map)
       .map((item) => ({
         ...item,
         taux: item.ca > 0 ? (item.marge / item.ca) * 100 : 0,
       }))
       .sort((a, b) => b.marge - a.marge)
-  }, [filteredCommandes])
+  }, [filteredCommandes, filteredPrestationsVariablesValidees])
 
   // 2. Rentabilité par Client
   const rentabiliteParClient = useMemo(() => {

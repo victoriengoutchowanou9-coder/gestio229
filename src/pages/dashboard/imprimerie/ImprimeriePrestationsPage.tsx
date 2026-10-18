@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   Printer, Plus, RefreshCw, Layers, DollarSign, TrendingUp,
   Sliders, Search, Edit3, Trash2, CheckCircle2, AlertTriangle,
-  X, Save, FileText, ChevronRight, Eye
+  X, Save, FileText, ChevronRight, Eye, Palette
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useAuthStore } from '../../../store/authStore'
@@ -21,6 +21,7 @@ import {
 } from '../../../services/imprimerieService'
 import { showModal as showCustomModal } from '../../../components/modals/CustomModalGestio'
 import { ImprimerieBomModal } from './ImprimerieBomModal'
+import { PrestationsVariablesModule } from './PrestationsVariablesModule'
 
 export const ImprimeriePrestationsPage: React.FC = () => {
   const { companyId, sectorSlug } = useTenant()
@@ -34,6 +35,9 @@ export const ImprimeriePrestationsPage: React.FC = () => {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [selectedCategorie, setSelectedCategorie] = useState('TOUTES')
+
+  // Sélecteur d'espace : Catalogue BOM vs Prestations à Coût Variable
+  const [mainModuleTab, setMainModuleTab] = useState<'catalogue_bom' | 'cout_variable'>('cout_variable')
 
   // Modals
   const [showModal, setShowModal] = useState(false)
@@ -219,66 +223,97 @@ export const ImprimeriePrestationsPage: React.FC = () => {
 
   return (
     <div className="space-y-6 pb-16 animate-fadeIn">
-      {/* ── Entête ── */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-5 rounded-3xl border border-slate-200 shadow-xs">
-        <div>
-          <h1 className="text-xl md:text-2xl font-black text-slate-900 flex items-center gap-2">
-            <Printer className="w-6 h-6 text-pink-600" /> Catalogue des Prestations & BOM
-          </h1>
-          <p className="text-xs text-slate-500">
-            Définition des prix au m², à l'unité, recettes de matières et marges prévisionnelles
-          </p>
+      {/* ── Switcher d'Espace Métier : Prestations à Coût Variable vs Catalogue BOM ── */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-3 sm:p-4 rounded-3xl border border-slate-200 shadow-xs">
+        <div className="flex items-center gap-2 p-1 bg-slate-100 rounded-2xl w-full sm:w-auto">
+          <button
+            onClick={() => setMainModuleTab('cout_variable')}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition ${
+              mainModuleTab === 'cout_variable'
+                ? 'bg-pink-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Palette className="w-4 h-4" />
+            <span>Prestations à Coût Variable (PAO / Graphisme)</span>
+          </button>
+
+          <button
+            onClick={() => setMainModuleTab('catalogue_bom')}
+            className={`flex-1 sm:flex-initial flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black transition ${
+              mainModuleTab === 'catalogue_bom'
+                ? 'bg-pink-600 text-white shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            <span>Catalogue Prestations & Nomenclature BOM</span>
+          </button>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button onClick={loadData} className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition">
+        <div className="flex items-center gap-2 self-end sm:self-auto">
+          <button onClick={loadData} className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition" title="Actualiser">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-pink-600' : ''}`} />
           </button>
-          <button
-            onClick={() => handleOpenModal()}
-            className="flex items-center gap-2 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl text-xs shadow-sm transition"
-          >
-            <Plus className="w-4 h-4" /> Nouvelle Prestation
-          </button>
+          {mainModuleTab === 'catalogue_bom' && (
+            <button
+              onClick={() => handleOpenModal()}
+              className="flex items-center gap-2 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl text-xs shadow-sm transition"
+            >
+              <Plus className="w-4 h-4" /> Nouvelle Prestation BOM
+            </button>
+          )}
         </div>
       </div>
 
-      {/* ── Filtres ── */}
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Rechercher par nom de prestation, code..."
-            className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
-          />
-        </div>
+      {/* ── ESPACE 1 : PRESTATIONS À COÛT VARIABLE (Sans Matière Première) ── */}
+      {mainModuleTab === 'cout_variable' && (
+        <PrestationsVariablesModule
+          companyId={companyId || ''}
+          activeSector={activeSector}
+          onRefreshData={loadData}
+        />
+      )}
 
-        <select
-          value={selectedCategorie}
-          onChange={(e) => setSelectedCategorie(e.target.value)}
-          className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-pink-500 focus:outline-none"
-        >
-          <option value="TOUTES">Toutes les catégories</option>
-          <option value="Grand Format">Grand Format (Bâches, Vinyles)</option>
-          <option value="Papeterie">Papeterie (Flyers, Affiches, Cartes)</option>
-          <option value="Textile / Sérigraphie">Textile / Sérigraphie / DTF</option>
-          <option value="Finition">Finition & Façonnage</option>
-          <option value="Graphisme">Graphisme & B.A.T.</option>
-        </select>
-      </div>
+      {/* ── ESPACE 2 : CATALOGUE PRESTATIONS & NOMENCLATURE BOM ── */}
+      {mainModuleTab === 'catalogue_bom' && (
+        <div className="space-y-6">
+          {/* Filtres */}
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Rechercher par nom de prestation, code..."
+                className="w-full pl-9 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-xs focus:ring-2 focus:ring-pink-500 focus:outline-none"
+              />
+            </div>
 
-      {/* ── Liste des Prestations ── */}
-      {filteredPrestations.length === 0 ? (
-        <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 text-slate-400 text-xs">
-          Aucune prestation enregistrée.
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredPrestations.map((p) => {
-            const marge = p.marge_theorique || 0
+            <select
+              value={selectedCategorie}
+              onChange={(e) => setSelectedCategorie(e.target.value)}
+              className="px-3 py-2 bg-white border border-slate-200 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-pink-500 focus:outline-none"
+            >
+              <option value="TOUTES">Toutes les catégories</option>
+              <option value="Grand Format">Grand Format (Bâches, Vinyles)</option>
+              <option value="Papeterie">Papeterie (Flyers, Affiches, Cartes)</option>
+              <option value="Textile / Sérigraphie">Textile / Sérigraphie / DTF</option>
+              <option value="Finition">Finition & Façonnage</option>
+              <option value="Graphisme">Graphisme & B.A.T.</option>
+            </select>
+          </div>
+
+          {/* Liste des Prestations BOM */}
+          {filteredPrestations.length === 0 ? (
+            <div className="text-center py-16 bg-white rounded-3xl border border-slate-200 text-slate-400 text-xs">
+              Aucune prestation enregistrée.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {filteredPrestations.map((p) => {
+                const marge = p.marge_theorique || 0
             const taux = p.taux_marge_theorique || 0
             const coutRevient = p.cout_revient_theorique || 0
             return (
@@ -348,6 +383,8 @@ export const ImprimeriePrestationsPage: React.FC = () => {
               </div>
             )
           })}
+        </div>
+      )}
         </div>
       )}
 

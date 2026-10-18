@@ -233,6 +233,48 @@ export interface PaiementCommande {
   notes?: string
 }
 
+export type StatutPrestationVariable =
+  | 'brouillon'
+  | 'en_attente_validation'
+  | 'validee_graphiste'
+  | 'transmise_caisse'
+  | 'partiellement_encaissee'
+  | 'encaissee'
+  | 'annulee'
+
+export interface PrestationVariable {
+  id: string
+  company_id: string
+  sector_slug: string
+  reference: string
+  designation: string
+  client_id?: string
+  client_nom?: string
+  client_tel?: string
+  mode_realisation: 'interne' | 'externe'
+  prix_vente: number
+  cout_realisation: number | null // null si non renseigné (≠ 0)
+  marge_brute: number // prix_vente - (cout_realisation || 0)
+  note?: string
+  statut: StatutPrestationVariable
+  // Validation Graphiste
+  graphiste_id?: string
+  graphiste_nom?: string
+  date_validation?: string
+  // Encaissement Caisse
+  caisse_id?: string
+  session_caisse_id?: string
+  caissiere_id?: string
+  caissiere_nom?: string
+  date_encaissement?: string
+  montant_encaisse: number
+  solde_restant: number
+  mode_paiement?: 'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'cheque' | 'credit'
+  reference_recu?: string
+  created_at: string
+  updated_at?: string
+}
+
 export interface SousTraitanceOrdre {
   id: string
   company_id: string
@@ -1603,5 +1645,314 @@ export const imprimerieService = {
 
     if (error) return []
     return data || []
+  },
+
+  // ───────────────────────────────────────────────────────────────────────────
+  // 12. PRESTATIONS À COÛT VARIABLE (Sans Matière Première — PAO / Graphisme)
+  // ───────────────────────────────────────────────────────────────────────────
+  getLocalPrestationsVariablesKey(companyId: string): string {
+    return `gestio229_prestations_variables_${companyId}`
+  },
+
+  getLocalPrestationsVariables(companyId: string): PrestationVariable[] {
+    if (typeof window === 'undefined') return []
+    try {
+      const raw = localStorage.getItem(this.getLocalPrestationsVariablesKey(companyId))
+      return raw ? JSON.parse(raw) : []
+    } catch {
+      return []
+    }
+  },
+
+  saveLocalPrestationsVariables(companyId: string, list: PrestationVariable[]): void {
+    if (typeof window === 'undefined') return
+    try {
+      localStorage.setItem(this.getLocalPrestationsVariablesKey(companyId), JSON.stringify(list))
+    } catch (e) {
+      console.warn('Erreur sauvegarde locale prestations variables:', e)
+    }
+  },
+
+  async getPrestationsVariables(companyId: string, sectorSlug: string = 'imprimerie'): Promise<PrestationVariable[]> {
+    const localList = this.getLocalPrestationsVariables(companyId)
+
+    try {
+      const { data, error } = await supabase
+        .from('imprimerie_prestations_variables')
+        .select('*')
+        .eq('company_id', companyId)
+        .eq('sector_slug', sectorSlug)
+        .order('created_at', { ascending: false })
+
+      if (!error && data && data.length > 0) {
+        // Fusion avec local sans doublons
+        const map = new Map<string, PrestationVariable>()
+        localList.forEach((it) => map.set(it.id, it))
+        data.forEach((it: any) => map.set(it.id, it as PrestationVariable))
+        const merged = Array.from(map.values()).sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        this.saveLocalPrestationsVariables(companyId, merged)
+        return merged
+      }
+    } catch (err) {
+      console.warn('Notice lecture distante prestations variables (utilisation stockage local résilient):', err)
+    }
+
+    return localList
+  },
+
+  async savePrestationVariable(
+    item: {
+      id?: string
+      company_id: string
+      sector_slug: string
+      designation: string
+      client_id?: string
+      client_nom?: string
+      client_tel?: string
+      mode_realisation: 'interne' | 'externe'
+      prix_vente: number
+      cout_realisation: number | null
+      note?: string
+    },
+    user?: any
+  ): Promise<PrestationVariable> {
+    const id = item.id || `pv_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    const ref = `VAR-${Date.now().toString().slice(-6)}`
+    const pv = Number(item.prix_vente) || 0
+    const cout = item.cout_realisation !== null && item.cout_realisation !== undefined ? Number(item.cout_realisation) : null
+    const marge = pv - (cout !== null ? cout : 0)
+
+    const record: PrestationVariable = {
+      id,
+      company_id: item.company_id,
+      sector_slug: item.sector_slug || 'imprimerie',
+      reference: ref,
+      designation: item.designation.trim(),
+      client_id: item.client_id,
+      client_nom: item.client_nom?.trim() || 'Client Comptoir',
+      client_tel: item.client_tel?.trim(),
+      mode_realisation: item.mode_realisation || 'interne',
+      prix_vente: pv,
+      cout_realisation: cout,
+      marge_brute: marge,
+      note: item.note?.trim(),
+      statut: 'en_attente_validation',
+      montant_encaisse: 0,
+      solde_restant: pv,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+
+    // 1. Sauvegarde locale immédiate (résilience 100%)
+    const current = this.getLocalPrestationsVariables(item.company_id)
+    const filtered = current.filter((it) => it.id !== id)
+    this.saveLocalPrestationsVariables(item.company_id, [record, ...filtered])
+
+    // 2. Tente la persistance distante Supabase
+    try {
+      await supabase.from('imprimerie_prestations_variables').upsert(record)
+    } catch (e) {
+      console.warn('Notice insertion Supabase prestation variable (conservée localement):', e)
+    }
+
+    // 3. Log d'audit
+    await this.logAudit({
+      company_id: item.company_id,
+      sector_slug: item.sector_slug,
+      user_id: user?.id,
+      user_nom: user?.full_name || 'Graphiste',
+      action: 'CREATION_PRESTATION_VARIABLE',
+      module: 'Prestations à Coût Variable',
+      document_ref: ref,
+      details: { designation: record.designation, prix_vente: pv, cout_realisation: cout, marge_brute: marge },
+    })
+
+    return record
+  },
+
+  async validerPrestationVariableParGraphiste(
+    id: string,
+    companyId: string,
+    graphisteUser?: any
+  ): Promise<PrestationVariable> {
+    const list = this.getLocalPrestationsVariables(companyId)
+    const item = list.find((it) => it.id === id)
+    if (!item) throw new Error('Prestation variable introuvable.')
+
+    // Règle d'idempotence : ne pas valider deux fois
+    if (['validee_graphiste', 'transmise_caisse', 'partiellement_encaissee', 'encaissee'].includes(item.statut)) {
+      return item
+    }
+
+    const updated: PrestationVariable = {
+      ...item,
+      statut: 'transmise_caisse',
+      graphiste_id: graphisteUser?.id,
+      graphiste_nom: graphisteUser?.full_name || graphisteUser?.name || 'Graphiste',
+      date_validation: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }
+
+    // 1. Sauvegarde locale
+    const nextList = list.map((it) => (it.id === id ? updated : it))
+    this.saveLocalPrestationsVariables(companyId, nextList)
+
+    // 2. Sauvegarde Supabase
+    try {
+      await supabase.from('imprimerie_prestations_variables').upsert(updated)
+    } catch (e) {
+      console.warn('Notice mise à jour validation distante (conservée localement):', e)
+    }
+
+    // 3. Journal d'audit
+    await this.logAudit({
+      company_id: companyId,
+      sector_slug: item.sector_slug,
+      user_id: graphisteUser?.id,
+      user_nom: graphisteUser?.full_name || 'Graphiste',
+      action: 'VALIDATION_GRAPHISTE_PRESTATION_VARIABLE',
+      module: 'Prestations à Coût Variable',
+      document_ref: item.reference,
+      details: {
+        reference: item.reference,
+        prix_vente: item.prix_vente,
+        marge_ajoutee: item.marge_brute,
+        transmise_caisse: true,
+      },
+    })
+
+    return updated
+  },
+
+  async encaisserPrestationVariable(
+    id: string,
+    companyId: string,
+    montantVerse: number,
+    modePaiement: 'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'cheque' | 'credit',
+    caissiereUser?: any,
+    notes?: string
+  ): Promise<{ prestation: PrestationVariable; referenceRecu: string }> {
+    const list = this.getLocalPrestationsVariables(companyId)
+    const item = list.find((it) => it.id === id)
+    if (!item) throw new Error('Prestation variable introuvable.')
+
+    if (item.statut === 'encaissee' && item.solde_restant <= 0) {
+      throw new Error('Cette prestation a déjà été intégralement réglée.')
+    }
+
+    const montantRecu = Number(montantVerse) || 0
+    if (montantRecu <= 0) throw new Error('Le montant versé doit être supérieur à zéro.')
+
+    const nouveauTotalPaye = (item.montant_encaisse || 0) + montantRecu
+    const nouveauSolde = Math.max(0, item.prix_vente - nouveauTotalPaye)
+    const isTotal = nouveauSolde === 0
+    const nextStatut: StatutPrestationVariable = isTotal ? 'encaissee' : 'partiellement_encaissee'
+    const refRecu = `REC-VAR-${Date.now().toString().slice(-6)}`
+
+    const updated: PrestationVariable = {
+      ...item,
+      statut: nextStatut,
+      montant_encaisse: nouveauTotalPaye,
+      solde_restant: nouveauSolde,
+      caissiere_id: caissiereUser?.id,
+      caissiere_nom: caissiereUser?.full_name || caissiereUser?.name || 'Caissière',
+      date_encaissement: new Date().toISOString(),
+      mode_paiement: modePaiement,
+      reference_recu: refRecu,
+      note: notes ? `${item.note ? item.note + ' | ' : ''}${notes}` : item.note,
+      updated_at: new Date().toISOString(),
+    }
+
+    // 1. Sauvegarde locale
+    const nextList = list.map((it) => (it.id === id ? updated : it))
+    this.saveLocalPrestationsVariables(companyId, nextList)
+
+    // 2. Sauvegarde Supabase
+    try {
+      await supabase.from('imprimerie_prestations_variables').upsert(updated)
+    } catch (e) {
+      console.warn('Notice mise à jour encaissement distant:', e)
+    }
+
+    // 3. Écriture réelle dans la caisse opérationnelle GESTIO 229
+    try {
+      await enregistrerMouvementCaisse({
+        company_id: companyId,
+        sector_slug: item.sector_slug || 'imprimerie',
+        type: 'encaissement',
+        sens: 'entree',
+        montant_especes: ['especes'].includes(modePaiement) ? montantRecu : 0,
+        montant_momo: ['momo_mtn', 'momo_moov'].includes(modePaiement) ? montantRecu : 0,
+        source_module: 'imprimerie_variable',
+        source_id: item.id,
+        motif: `Encaissement prestation variable ${item.reference} - ${item.designation} (${refRecu})`,
+        user_name: caissiereUser?.full_name || 'Caissière',
+        user_id: caissiereUser?.id,
+      })
+    } catch (caisseErr) {
+      console.warn('Erreur synchronisation caisse prestation variable:', caisseErr)
+    }
+
+    // 4. Log d'audit
+    await this.logAudit({
+      company_id: companyId,
+      sector_slug: item.sector_slug,
+      user_id: caissiereUser?.id,
+      user_nom: caissiereUser?.full_name || 'Caissière',
+      action: 'ENCAISSEMENT_PRESTATION_VARIABLE',
+      module: 'Caisse',
+      document_ref: refRecu,
+      details: {
+        prestation_id: item.id,
+        reference: item.reference,
+        montant_recu: montantRecu,
+        solde_restant: nouveauSolde,
+        mode_paiement: modePaiement,
+      },
+    })
+
+    return { prestation: updated, referenceRecu: refRecu }
+  },
+
+  async annulerPrestationVariable(
+    id: string,
+    companyId: string,
+    user?: any,
+    motif?: string
+  ): Promise<PrestationVariable> {
+    const list = this.getLocalPrestationsVariables(companyId)
+    const item = list.find((it) => it.id === id)
+    if (!item) throw new Error('Prestation variable introuvable.')
+
+    if (item.montant_encaisse > 0) {
+      throw new Error('Impossible d’annuler une prestation ayant déjà fait l’objet d’un encaissement.')
+    }
+
+    const updated: PrestationVariable = {
+      ...item,
+      statut: 'annulee',
+      note: motif ? `${item.note ? item.note + ' | Annulation: ' : 'Annulation: '}${motif}` : item.note,
+      updated_at: new Date().toISOString(),
+    }
+
+    const nextList = list.map((it) => (it.id === id ? updated : it))
+    this.saveLocalPrestationsVariables(companyId, nextList)
+
+    try {
+      await supabase.from('imprimerie_prestations_variables').upsert(updated)
+    } catch (e) {}
+
+    await this.logAudit({
+      company_id: companyId,
+      sector_slug: item.sector_slug,
+      user_id: user?.id,
+      user_nom: user?.full_name || 'Responsable',
+      action: 'ANNULATION_PRESTATION_VARIABLE',
+      module: 'Prestations à Coût Variable',
+      document_ref: item.reference,
+      details: { motif },
+    })
+
+    return updated
   },
 }

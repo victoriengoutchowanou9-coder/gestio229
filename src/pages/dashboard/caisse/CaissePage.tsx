@@ -167,7 +167,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [lastClosure, setLastClosure] = useState<{ fond_reel_especes: number; fond_reel_momo: number }>({ fond_reel_especes: 0, fond_reel_momo: 0 })
   const [allCloturesTotals, setAllCloturesTotals] = useState<{ especes: number; momo: number }>({ especes: 0, momo: 0 })
   const [allDepensesTotals, setAllDepensesTotals] = useState<{ especes: number; momo: number }>({ especes: 0, momo: 0 })
-  const [allRetraitsTotals, setAllRetraitsTotals] = useState<{ especes: number; momo: number }>({ especes: 0, momo: 0 })
+  // Prestations Graphiques transmises par le graphiste prêtes à être encaissées (Module Imprimerie)
+  const [prestationsGraphiquesAEncaisser, setPrestationsGraphiquesAEncaisser] = useState<any[]>([])
+  const [encaissementPrestationModal, setEncaissementPrestationModal] = useState<any | null>(null)
+  const [montantSaisiPrestation, setMontantSaisiPrestation] = useState<number | ''>('')
+  const [modePaiementPrestation, setModePaiementPrestation] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'cheque'>('especes')
+  const [notePrestationCaisse, setNotePrestationCaisse] = useState<string>('')
+  const [isProcessingPrestationCaisse, setIsProcessingPrestationCaisse] = useState<boolean>(false)
 
   // Modals
   const [showOpenModal, setShowOpenModal] = useState(false)
@@ -759,6 +765,21 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               setTotalCreances(cTot)
             }
           } catch (_) {}
+
+          // 7. Si secteur imprimerie : charger les prestations graphiques transmises à la caisse
+          if (currentSectorSlug === 'imprimerie' || currentSectorSlug === 'impression') {
+            try {
+              const { imprimerieService } = await import('../../../services/imprimerieService')
+              const allVars = await imprimerieService.getPrestationsVariables(currentCompanyId, currentSectorSlug)
+              // Filtrer celles transmises à la caisse ou partiellement encaissées avec solde > 0
+              const aEncaisser = allVars.filter((v: any) =>
+                ['transmise_caisse', 'partiellement_encaissee'].includes(v.statut) && Number(v.solde_restant || 0) > 0
+              )
+              setPrestationsGraphiquesAEncaisser(aEncaisser)
+            } catch (errP) {
+              console.warn('Erreur chargement prestations graphiques pour caisse:', errP)
+            }
+          }
         } catch (fErr) {
           console.warn('Erreur chargement fonds_actuels/caisse_jour:', fErr)
         }
@@ -2130,6 +2151,217 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </button>
             </div>
             <ClotureCaisse />
+          </div>
+        </div>
+      )}
+
+      {/* ── Section Prestations Graphiques à encaisser (Imprimerie & Sérigraphie) ── */}
+      {(currentSectorSlug === 'imprimerie' || currentSectorSlug === 'impression') && (
+        <div className="bg-white border border-pink-200 rounded-3xl p-5 shadow-xs space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="p-2 bg-pink-100 text-pink-700 rounded-xl">
+                <Receipt className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Prestations graphiques à encaisser ({prestationsGraphiquesAEncaisser.length})
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  Validées par le graphiste, en attente de règlement au comptoir caisse
+                </p>
+              </div>
+            </div>
+            <span className="text-xs font-bold text-pink-700 bg-pink-50 px-2.5 py-1 rounded-full">
+              Total à percevoir : {fmt(prestationsGraphiquesAEncaisser.reduce((acc, p) => acc + (Number(p.solde_restant || p.prix_vente || 0)), 0))}
+            </span>
+          </div>
+
+          {prestationsGraphiquesAEncaisser.length === 0 ? (
+            <div className="p-6 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+              Aucune prestation graphique en attente d’encaissement.
+            </div>
+          ) : (
+            <div className="overflow-x-auto bg-white rounded-2xl border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3">Réf</th>
+                    <th className="p-3">Désignation</th>
+                    <th className="p-3">Client</th>
+                    <th className="p-3 text-right">Prix de vente</th>
+                    <th className="p-3 text-right font-black text-indigo-700">Reste à payer</th>
+                    <th className="p-3">Graphiste ayant validé</th>
+                    <th className="p-3 text-center">Date validation</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {prestationsGraphiquesAEncaisser.map((pv) => (
+                    <tr key={pv.id} className="hover:bg-pink-50/30 transition">
+                      <td className="p-3 font-bold text-slate-900">{pv.reference}</td>
+                      <td className="p-3 font-sans font-medium text-slate-900">{pv.designation}</td>
+                      <td className="p-3 font-sans text-slate-700">
+                        <span className="font-bold">{pv.client_nom || 'Client Comptoir'}</span>
+                        {pv.client_tel && <span className="block text-[10px] text-slate-400">{pv.client_tel}</span>}
+                      </td>
+                      <td className="p-3 text-right font-bold text-slate-900">{fmt(pv.prix_vente)}</td>
+                      <td className="p-3 text-right font-black text-pink-700">{fmt(pv.solde_restant || pv.prix_vente)}</td>
+                      <td className="p-3 font-sans text-slate-600">
+                        <span className="font-semibold text-slate-800">{pv.graphiste_nom || 'Graphiste'}</span>
+                      </td>
+                      <td className="p-3 text-center font-sans text-slate-500 text-[11px]">
+                        {pv.date_validation ? new Date(pv.date_validation).toLocaleDateString('fr-FR') : '--'}
+                      </td>
+                      <td className="p-3 text-right font-sans">
+                        <button
+                          onClick={() => {
+                            setEncaissementPrestationModal(pv)
+                            setMontantSaisiPrestation(pv.solde_restant || pv.prix_vente)
+                            setModePaiementPrestation('especes')
+                            setNotePrestationCaisse('')
+                          }}
+                          className="px-3 py-1.5 bg-pink-600 hover:bg-pink-700 text-white rounded-xl text-xs font-bold shadow-xs transition inline-flex items-center gap-1"
+                        >
+                          <Receipt className="w-3.5 h-3.5" />
+                          <span>Encaisser</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal d'Encaissement Prestation Graphique par la Caissière */}
+      {encaissementPrestationModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Receipt className="w-5 h-5 text-pink-600" />
+                  Encaissement Prestation Graphique
+                </h3>
+                <p className="text-[11px] text-slate-400">
+                  {encaissementPrestationModal.reference} — {encaissementPrestationModal.designation}
+                </p>
+              </div>
+              <button
+                onClick={() => setEncaissementPrestationModal(null)}
+                className="p-1 rounded-lg hover:bg-slate-100 text-slate-400"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200 space-y-1.5 font-mono">
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-sans">Client :</span>
+                <span className="font-bold text-slate-900 font-sans">{encaissementPrestationModal.client_nom || 'Client Comptoir'}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-500 font-sans">Prix de vente total :</span>
+                <span className="font-bold text-slate-900">{fmt(encaissementPrestationModal.prix_vente)}</span>
+              </div>
+              <div className="flex justify-between text-pink-700 font-black">
+                <span className="font-sans">Reste à payer :</span>
+                <span>{fmt(encaissementPrestationModal.solde_restant || encaissementPrestationModal.prix_vente)}</span>
+              </div>
+            </div>
+
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault()
+                const amt = Number(montantSaisiPrestation) || 0
+                if (amt <= 0) {
+                  toast.error('Montant invalide.')
+                  return
+                }
+                setIsProcessingPrestationCaisse(true)
+                try {
+                  const { imprimerieService } = await import('../../../services/imprimerieService')
+                  const res = await imprimerieService.encaisserPrestationVariable(
+                    encaissementPrestationModal.id,
+                    currentCompanyId,
+                    amt,
+                    modePaiementPrestation,
+                    user,
+                    notePrestationCaisse
+                  )
+                  toast.success(`Encaissement de ${fmt(amt)} validé en Caisse ! Reçu : ${res.referenceRecu}`)
+                  setEncaissementPrestationModal(null)
+                  // Recharger les données de la caisse
+                  loadTransactions()
+                  if (refreshFonds) refreshFonds()
+                } catch (err: any) {
+                  toast.error(err.message || 'Erreur encaissement.')
+                } finally {
+                  setIsProcessingPrestationCaisse(false)
+                }
+              }}
+              className="space-y-3 pt-1"
+            >
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Montant perçu en caisse (FCFA) *</label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  max={encaissementPrestationModal.solde_restant || encaissementPrestationModal.prix_vente}
+                  value={montantSaisiPrestation}
+                  onChange={(e) => setMontantSaisiPrestation(e.target.value === '' ? '' : Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-black text-base text-slate-900 focus:ring-2 focus:ring-pink-500 focus:outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mode de règlement *</label>
+                <select
+                  value={modePaiementPrestation}
+                  onChange={(e) => setModePaiementPrestation(e.target.value as any)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                >
+                  <option value="especes">Espèces (Tiroir Caisse)</option>
+                  <option value="momo_mtn">Mobile Money MTN</option>
+                  <option value="momo_moov">Mobile Money MOOV</option>
+                  <option value="banque">Virement Bancaire</option>
+                  <option value="cheque">Chèque</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Observation / Reçu (facultatif)</label>
+                <input
+                  type="text"
+                  placeholder="Ex : Réglé au comptoir caisse..."
+                  value={notePrestationCaisse}
+                  onChange={(e) => setNotePrestationCaisse(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-200 rounded-xl"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEncaissementPrestationModal(null)}
+                  className="px-4 py-2 rounded-xl text-slate-600 hover:bg-slate-100 font-bold"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={isProcessingPrestationCaisse || Number(montantSaisiPrestation) <= 0}
+                  className="px-5 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>{isProcessingPrestationCaisse ? 'Enregistrement...' : 'Confirmer encaissement'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

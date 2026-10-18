@@ -29,20 +29,24 @@ export const ImprimerieDashboardPage: React.FC = () => {
 
   const activeSector = sectorSlug || 'imprimerie'
 
+  const [prestationsVariables, setPrestationsVariables] = useState<any[]>([])
+
   const loadData = useCallback(async () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [cfg, cmds, devs, mats] = await Promise.all([
+      const [cfg, cmds, devs, mats, pVars] = await Promise.all([
         imprimerieService.getConfig(companyId, activeSector),
         imprimerieService.getCommandes(companyId, activeSector),
         imprimerieService.getDevis(companyId, activeSector),
         imprimerieService.getMatieres(companyId, activeSector),
+        imprimerieService.getPrestationsVariables(companyId, activeSector),
       ])
       setConfig(cfg)
       setCommandes(cmds)
       setDevis(devs)
       setMatieres(mats)
+      setPrestationsVariables(pVars || [])
 
       // Récupérer les dépenses du mois
       const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString()
@@ -91,12 +95,25 @@ export const ImprimerieDashboardPage: React.FC = () => {
     const d = new Date(c.date_commande)
     return d.getMonth() === currentMonth && d.getFullYear() === currentYear
   })
-  const caMois = cmdsMois.reduce((acc, c) => acc + Number(c.total_ttc || 0), 0)
-  const encaissementsMois = cmdsMois.reduce((acc, c) => acc + Number(c.montant_paye || 0), 0)
-  const creancesTotal = commandes.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
+  // Prestations à coût variable validées du mois (RÈGLE D'OR : s'ajoute à la marge de la période)
+  const pVarsValideesMois = prestationsVariables.filter((pv) => {
+    const isValidee = ['validee_graphiste', 'transmise_caisse', 'partiellement_encaissee', 'encaissee'].includes(pv.statut)
+    if (!isValidee) return false
+    const d = new Date(pv.date_validation || pv.created_at)
+    return d.getMonth() === currentMonth && d.getFullYear() === currentYear
+  })
+  const margePVarsMois = pVarsValideesMois.reduce((acc, pv) => acc + Number(pv.marge_brute || 0), 0)
+  const caPVarsMois = pVarsValideesMois.reduce((acc, pv) => acc + Number(pv.prix_vente || 0), 0)
+  const encaissementsPVarsMois = pVarsValideesMois.reduce((acc, pv) => acc + Number(pv.montant_encaisse || 0), 0)
+
+  const caMois = cmdsMois.reduce((acc, c) => acc + Number(c.total_ttc || 0), 0) + caPVarsMois
+  const encaissementsMois = cmdsMois.reduce((acc, c) => acc + Number(c.montant_paye || 0), 0) + encaissementsPVarsMois
+  const creancesTotal = commandes.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0) +
+    pVarsValideesMois.reduce((acc, pv) => acc + Number(pv.solde_restant || 0), 0)
   const coutMatieresMois = cmdsMois.reduce((acc, c) => acc + Number(c.cout_matieres_reel || c.cout_matieres_prevu || 0), 0)
-  const coutRevientMois = cmdsMois.reduce((acc, c) => acc + Number(c.cout_revient_total || 0), 0)
-  const margeBruteMois = caMois - coutRevientMois
+  const coutRevientMois = cmdsMois.reduce((acc, c) => acc + Number(c.cout_revient_total || 0), 0) +
+    pVarsValideesMois.reduce((acc, pv) => acc + Number(pv.cout_realisation || 0), 0)
+  const margeBruteMois = (cmdsMois.reduce((acc, c) => acc + Number(c.total_ttc || 0), 0) - cmdsMois.reduce((acc, c) => acc + Number(c.cout_revient_total || 0), 0)) + margePVarsMois
   const tauxMargeMois = caMois > 0 ? (margeBruteMois / caMois) * 100 : 0
 
   // Statuts Devis & Commandes

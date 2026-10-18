@@ -637,21 +637,36 @@ export async function cloturerSessionCaisse(
  * ET met à jour la session active de la caisse pour le secteur donné
  * RÈGLE D'OR : Aucun mouvement ne touche la caisse d'un autre secteur
  */
-export async function enregistrerMouvementCaisse(params: {
-  company_id: string
-  sector_slug: string
-  caisse_id?: string
-  caisse_session_id?: string | null
-  type: string // 'vente', 'depense', 'reglement_client', 'paiement_fournisseur', 'retrait', 'versement', 'ajustement', 'cloture', 'ouverture'
-  sens?: 'entree' | 'sortie'
-  montant_especes?: number
-  montant_momo?: number
-  source_module: string // 'vente_pos', 'clients_creances', 'depenses', 'fournisseurs_achats', 'tresorerie', 'microfinance', 'station', etc.
-  source_id?: string
-  motif?: string
-  user_name?: string
-  user_id?: string
-}): Promise<void> {
+export async function enregistrerMouvementCaisse(
+  paramsOrCompanyId: {
+    company_id: string
+    sector_slug: string
+    caisse_id?: string
+    caisse_session_id?: string | null
+    type: string
+    sens?: 'entree' | 'sortie'
+    montant_especes?: number
+    montant_momo?: number
+    source_module: string
+    source_id?: string
+    motif?: string
+    user_name?: string
+    user_id?: string
+  } | string,
+  maybeSectorSlug?: string,
+  maybeParams?: any
+): Promise<void> {
+  let params: any
+  if (typeof paramsOrCompanyId === 'string') {
+    params = {
+      ...(maybeParams || {}),
+      company_id: paramsOrCompanyId,
+      sector_slug: maybeSectorSlug || 'boutique',
+    }
+  } else {
+    params = paramsOrCompanyId
+  }
+
   const { company_id, sector_slug } = params
   if (!company_id) return
   const clean = cleanSectorSlug(sector_slug)
