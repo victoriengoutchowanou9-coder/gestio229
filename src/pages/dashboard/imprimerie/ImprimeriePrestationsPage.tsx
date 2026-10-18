@@ -418,9 +418,10 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                   <input
                     type="number"
                     required
-                    value={form.prix_vente}
+                    placeholder="0"
+                    value={form.prix_vente || ''}
                     onChange={(e) => setForm((p) => ({ ...p, prix_vente: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-black text-slate-900"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-black text-slate-900 placeholder:text-slate-300"
                   />
                 </div>
 
@@ -428,9 +429,10 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                   <label className="font-bold text-slate-700 block mb-1">Prix Minimum (FCFA)</label>
                   <input
                     type="number"
-                    value={form.prix_minimum}
+                    placeholder="0"
+                    value={form.prix_minimum || ''}
                     onChange={(e) => setForm((p) => ({ ...p, prix_minimum: Number(e.target.value) }))}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-xl"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-xl font-semibold text-slate-900 placeholder:text-slate-300"
                   />
                 </div>
               </div>
@@ -516,27 +518,30 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                   <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Main-d'œuvre (F)</label>
                   <input
                     type="number"
-                    value={form.cout_mo_defaut}
+                    placeholder="0"
+                    value={form.cout_mo_defaut || ''}
                     onChange={(e) => setForm((p) => ({ ...p, cout_mo_defaut: Number(e.target.value) }))}
-                    className="w-full px-2 py-1 border border-slate-200 rounded-lg"
+                    className="w-full px-2 py-1 border border-slate-200 rounded-lg placeholder:text-slate-300"
                   />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Finition / Façonnage (F)</label>
                   <input
                     type="number"
-                    value={form.cout_finition_defaut}
+                    placeholder="0"
+                    value={form.cout_finition_defaut || ''}
                     onChange={(e) => setForm((p) => ({ ...p, cout_finition_defaut: Number(e.target.value) }))}
-                    className="w-full px-2 py-1 border border-slate-200 rounded-lg"
+                    className="w-full px-2 py-1 border border-slate-200 rounded-lg placeholder:text-slate-300"
                   />
                 </div>
                 <div>
                   <label className="text-[10px] font-bold text-slate-500 block mb-0.5">Autres frais (F)</label>
                   <input
                     type="number"
-                    value={form.cout_autres_defaut}
+                    placeholder="0"
+                    value={form.cout_autres_defaut || ''}
                     onChange={(e) => setForm((p) => ({ ...p, cout_autres_defaut: Number(e.target.value) }))}
-                    className="w-full px-2 py-1 border border-slate-200 rounded-lg"
+                    className="w-full px-2 py-1 border border-slate-200 rounded-lg placeholder:text-slate-300"
                   />
                 </div>
               </div>

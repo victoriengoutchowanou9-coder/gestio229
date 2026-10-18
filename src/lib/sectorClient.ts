@@ -203,19 +203,19 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
     }
   }
 
-  // 3. Cas sémantique d'isolation pour articles historiques orphelins (sans marqueur explicite)
-  const itemName = String(item.name || item.product_name || item.designation || '').toLowerCase()
+  // 3. Cas sémantique d'isolation pour articles et fournisseurs historiques orphelins (sans marqueur explicite)
+  const itemName = String(item.name || item.product_name || item.designation || item.company_name || item.nom || '').toLowerCase()
 
-  // Les boissons brasserie, bières et casiers (Beaufort, Béninoise, Castel, etc.) appartiennent TOUJOURS à Brasserie
+  // Les boissons brasserie, bières et casiers (Beaufort, Béninoise, Castel, Sobebra, etc.) appartiennent TOUJOURS à Brasserie
   const isDrinkOrBeer = /beaufort|béninoise|beninoise|castel|guinness|sobebra|youki|casier|casiers|capsule|c12t|c20t|c24t|bière|biere|xxl|flag|doppel|chill|panach/i.test(itemName)
   if (isDrinkOrBeer) {
     return activeCanon === 'brasserie'
   }
 
-  // Les matériaux BTP (ciment, fer à béton, tôle, pointes) appartiennent TOUJOURS à Quincaillerie
-  const isBTP = /ciment|fer à béton|fer a beton|béton|beton|tôle|tole|quincaillerie|pointes|brouette/i.test(itemName)
+  // Les matériaux et fournisseurs BTP / Ciment (Ciment 50kg, Nocibé, CimBénin, Fer à béton, etc.) appartiennent TOUJOURS à Quincaillerie/BTP
+  const isBTP = /ciment|nocibe|nocibé|cimbenin|cimbénin|fer à béton|fer a beton|béton|beton|tôle|tole|quincaillerie|pointes|brouette|gravier|sable|brique|btp/i.test(itemName)
   if (isBTP) {
-    return activeCanon === 'quincaillerie'
+    return activeCanon === 'quincaillerie' || activeCanon === 'btp'
   }
 
   // Les produits frigorifiques / poissons -> Poissonnerie

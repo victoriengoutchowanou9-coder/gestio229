@@ -257,6 +257,21 @@ export const imprimerieService = {
   // 1. CONFIGURATION
   // ───────────────────────────────────────────────────────────────────────────
   async getConfig(companyId: string, sectorSlug: string = 'imprimerie'): Promise<ImprimerieConfig> {
+    const localKey = `gestio229_imprimerie_mode_${companyId}`
+    const cachedMode = (typeof window !== 'undefined' ? localStorage.getItem(localKey) : null) as ModeGestion | null
+
+    const defaultConfig: ImprimerieConfig = {
+      company_id: companyId,
+      sector_slug: sectorSlug,
+      mode_gestion: cachedMode || 'classique',
+      marge_cible_pct: 40,
+      mention_devis: "Validité de l'offre : 15 jours. Acompte de 50% à la commande, solde à la livraison.",
+      conditions_vente: 'B.A.T. signé obligatoire avant impression finale.',
+      taux_tva_defaut: 18,
+      taux_aib_defaut: 1,
+      devise: 'FCFA',
+    }
+
     try {
       const { data, error } = await supabase
         .from('imprimerie_config')
@@ -269,46 +284,43 @@ export const imprimerieService = {
         console.warn('Erreur getConfig imprimerie:', error)
       }
 
-      if (data) return data as ImprimerieConfig
+      if (data) {
+        const result = data as ImprimerieConfig
+        if (cachedMode && result.mode_gestion !== cachedMode) {
+          result.mode_gestion = cachedMode
+        }
+        return result
+      }
 
-      // Valeurs par défaut si pas encore initialisé en base
-      return {
-        company_id: companyId,
-        sector_slug: sectorSlug,
-        mode_gestion: 'classique',
-        marge_cible_pct: 40,
-        mention_devis: "Validité de l'offre : 15 jours. Acompte de 50% à la commande, solde à la livraison.",
-        conditions_vente: 'B.A.T. signé obligatoire avant impression finale.',
-        taux_tva_defaut: 18,
-        taux_aib_defaut: 1,
-        devise: 'FCFA',
-      }
+      return defaultConfig
     } catch {
-      return {
-        company_id: companyId,
-        sector_slug: sectorSlug,
-        mode_gestion: 'classique',
-        marge_cible_pct: 40,
-        mention_devis: "Validité de l'offre : 15 jours.",
-        conditions_vente: 'B.A.T. signé obligatoire.',
-        taux_tva_defaut: 18,
-        taux_aib_defaut: 1,
-        devise: 'FCFA',
-      }
+      return defaultConfig
     }
   },
 
   async saveConfig(config: Partial<ImprimerieConfig> & { company_id: string; sector_slug?: string }): Promise<void> {
     const sector = config.sector_slug || 'imprimerie'
-    const { error } = await supabase.from('imprimerie_config').upsert(
-      {
-        ...config,
-        sector_slug: sector,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'company_id,sector_slug' }
-    )
-    if (error) throw error
+    const localKey = `gestio229_imprimerie_mode_${config.company_id}`
+
+    if (config.mode_gestion && typeof window !== 'undefined') {
+      localStorage.setItem(localKey, config.mode_gestion)
+    }
+
+    try {
+      const { error } = await supabase.from('imprimerie_config').upsert(
+        {
+          ...config,
+          sector_slug: sector,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'company_id,sector_slug' }
+      )
+      if (error) {
+        console.warn('Notice: Sauvegarde imprimerie_config distante non critique (conservée localement):', error.message || error)
+      }
+    } catch (e) {
+      console.warn('Notice: Sauvegarde config fallback local appliquée:', e)
+    }
   },
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -655,33 +667,41 @@ export const imprimerieService = {
 
     // Mise à jour de la nomenclature BOM
     if (presId) {
-      await supabase.from('imprimerie_prestation_matieres').delete().eq('prestation_id', presId)
+      try {
+        await supabase.from('imprimerie_prestation_matieres').delete().eq('prestation_id', presId)
 
-      if (matieresBom.length > 0) {
-        const bomPayloads = matieresBom.map((b) => {
-          const qty = Number(b.quantite_prevue || 1)
-          const pu = Number(b.prix_vente_ref || b.cout_unitaire_prevu || 0)
-          const gache = Number(b.taux_gache || 0)
-          const base = b.base_calcul || (prestation.mode_calcul === 'm2' ? 'm2' : 'piece')
-          const coutTotal = Math.round(qty * pu * (1 + gache / 100) * 100) / 100
-          const encodedUnite = `${(b.unite || 'u').split('|')[0]}|${base}|${gache}`
+        if (matieresBom.length > 0) {
+          const bomPayloads = matieresBom.map((b) => {
+            const qty = Number(b.quantite_prevue || 1)
+            const pu = Number(b.prix_vente_ref || b.cout_unitaire_prevu || 0)
+            const gache = Number(b.taux_gache || 0)
+            const base = b.base_calcul || (prestation.mode_calcul === 'm2' ? 'm2' : 'piece')
+            const coutTotal = Math.round(qty * pu * (1 + gache / 100) * 100) / 100
+            const encodedUnite = `${(b.unite || 'u').split('|')[0]}|${base}|${gache}`
 
-          return {
-            company_id: prestation.company_id,
-            sector_slug: sector,
-            prestation_id: presId,
-            matiere_id: b.matiere_id,
-            quantite_prevue: qty,
-            unite: encodedUnite,
-            cout_unitaire_prevu: pu,
-            cout_total_prevu: coutTotal,
+            return {
+              company_id: prestation.company_id,
+              sector_slug: sector,
+              prestation_id: presId,
+              matiere_id: b.matiere_id,
+              quantite_prevue: qty,
+              unite: encodedUnite,
+              cout_unitaire_prevu: pu,
+              cout_total_prevu: coutTotal,
+            }
+          })
+          const { error: insErr } = await supabase.from('imprimerie_prestation_matieres').insert(bomPayloads)
+          if (insErr) {
+            console.warn('Notice insertion BOM relationnelle (métadonnées stockées dans prestation):', insErr.message)
           }
-        })
-        await supabase.from('imprimerie_prestation_matieres').insert(bomPayloads)
+        }
+      } catch (bomErr) {
+        console.warn('Notice mise à jour table BOM:', bomErr)
       }
     }
 
-    return (await this.getPrestations(prestation.company_id, sector)).find((p) => p.id === presId)!
+    const allPres = await this.getPrestations(prestation.company_id, sector)
+    return allPres.find((p) => p.id === presId) || (allPres[0] as PrestationImprimerie)
   },
 
 

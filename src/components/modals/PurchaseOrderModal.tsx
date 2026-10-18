@@ -65,7 +65,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       try {
         const { data: sData } = await supabase
           .from('suppliers')
-          .select('id, company_name, phone, city, sector_slug, sector_meta')
+          .select('id, company_name, phone, city, sector_slug, sector_meta, notes')
           .eq('company_id', company.id)
           .order('company_name')
         if (sData) rawSuppliers = sData
@@ -78,6 +78,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
           .from('products')
           .select('*')
           .eq('company_id', company.id)
+          .is('deleted_at', null)
           .neq('is_active', false)
           .order('name')
         if (pData) rawProducts = pData
@@ -85,15 +86,11 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         console.warn('[PurchaseOrderModal] Products fetch warning:', e)
       }
 
+      // ISOLATION STRICTE DU SOUS-LOGICIEL :
+      // Chaque secteur n'affiche QUE ses propres fournisseurs et produits.
+      // Aucun fallback global ne doit faire fuiter les produits/fournisseurs d'autres secteurs (ex: Ciment / NOCIBE BTP en Imprimerie)
       let filteredSData = filterItemsForSector(rawSuppliers, activeSector)
-      if (filteredSData.length === 0 && rawSuppliers.length > 0) {
-        filteredSData = rawSuppliers
-      }
-
       let filteredPData = filterItemsForSector(rawProducts, activeSector)
-      if (filteredPData.length === 0 && rawProducts.length > 0) {
-        filteredPData = rawProducts
-      }
 
       // Si secteur Restaurant, filtrer strictement les produits par circuit (BAR vs CUISINE)
       const isResto = activeSector === 'restaurant' || activeSector === 'bar-restaurant-maquis' || activeSector === 'bar' || activeSector === 'maquis' || activeSector === 'fastfood'
@@ -164,6 +161,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     if (!company?.id || !newSupName.trim()) return
 
     try {
+      const activeSector = sectorSlug || getActiveSectorSlug()
       const autoCode = `FOURN-${String(suppliers.length + 1).padStart(3, '0')}`
       const { data, error } = await supabase.from('suppliers').insert({
         company_id: company.id,
@@ -172,6 +170,9 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         phone: newSupPhone.trim(),
         city: newSupCity.trim(),
         current_payable: 0,
+        sector_slug: activeSector,
+        secteur_slug: activeSector,
+        sector_meta: { sector_slug: activeSector },
         is_active: true
       }).select().single()
 
