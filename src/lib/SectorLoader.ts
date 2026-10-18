@@ -791,6 +791,38 @@ export const SectorLoader = {
       return { grouped, flat: ecoleNav }
     }
 
+    // ── Menu spécifique Flotte & Géolocalisation GPS ──────────────────────────
+    const isFlotte = cleanSlug === 'flotte-geolocalisation' || cleanSlug === 'flotte' || cleanSlug === 'geolocalisation' || cleanSlug === 'gps' || cleanSlug === 'geoloc'
+    if (isFlotte) {
+      const flotteNav: NavItem[] = [
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+        { id: 'flotte_carte', label: 'Carte GPS en Direct', icon: 'Navigation', href: `${prefix}/live-map`, group: 'commercial' },
+        { id: 'flotte_vehicules', label: 'Parc Véhicules', icon: 'Car', href: `${prefix}/vehicules`, group: 'commercial' },
+        { id: 'flotte_conducteurs', label: 'Conducteurs & Chauffeurs', icon: 'Users', href: `${prefix}/conducteurs`, group: 'commercial' },
+        { id: 'flotte_missions', label: 'Missions & Trajets', icon: 'Route', href: `${prefix}/missions`, group: 'commercial' },
+        { id: 'flotte_carburant', label: 'Carburant & Consommation', icon: 'Fuel', href: `${prefix}/carburant`, group: 'gestion' },
+        { id: 'flotte_maintenance', label: 'Entretien & Maintenance', icon: 'Wrench', href: `${prefix}/maintenance`, group: 'gestion' },
+        { id: 'flotte_geofences', label: 'Zones Géographiques (Geofences)', icon: 'Shield', href: `${prefix}/geofences`, group: 'gestion' },
+        { id: 'flotte_alertes', label: 'Alertes & Incidents GPS', icon: 'AlertTriangle', href: `${prefix}/alertes`, group: 'gestion' },
+        { id: 'flotte_capteurs', label: 'Capteurs & Chaîne du Froid', icon: 'Thermometer', href: `${prefix}/capteurs`, group: 'gestion' },
+        { id: 'flotte_documents', label: 'Assurances & Documents', icon: 'FileText', href: `${prefix}/documents`, group: 'gestion' },
+        { id: 'flotte_reservations', label: 'Autopartage & Réservations', icon: 'Calendar', href: `${prefix}/reservations`, group: 'commercial' },
+        { id: 'flotte_inspections', label: 'Inspections & Contrôles', icon: 'ClipboardCheck', href: `${prefix}/inspections`, group: 'commercial' },
+        { id: 'flotte_rapports', label: 'Rapports & Télématique', icon: 'BarChart3', href: `${prefix}/rapports-flotte`, group: 'admin' },
+        { id: 'flotte_integrations', label: 'Traceurs & Ingestion GPS', icon: 'Radio', href: `${prefix}/integrations-gps`, group: 'admin' },
+        { id: 'flotte_parametres', label: 'Paramètres Géolocalisation', icon: 'Settings', href: `${prefix}/parametres-gps`, group: 'admin' },
+        { id: 'caisse', label: 'Caisse Flotte', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Flotte', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+      const grouped = groupNavItems(flotteNav)
+      return { grouped, flat: flotteNav }
+    }
+
     // ── Logique par défaut pour tous les autres secteurs (Strictement Inchangée) ──
     const commonModuleIds = [
       'dashboard', 'ventes', 'stock', 'caisse', 'finances', 'clients',
@@ -828,6 +860,48 @@ export const SectorLoader = {
     return { grouped, flat }
   },
 
+  /**
+   * Retourne dynamiquement la liste exhaustive de TOUS les modules disponibles pour un secteur,
+   * sans aucune limitation arbitraire de nombre.
+   */
+  getAvailableModulesForSector(sectorSlug?: string, company?: Company | null): Array<{
+    id: string
+    label: string
+    category: 'commercial' | 'gestion' | 'finance' | 'admin' | 'apercu'
+    icon?: string
+  }> {
+    try {
+      const cleanSlug = sectorSlug ? normalizeSectorSlug(sectorSlug) : ''
+      const nav = this.getDefaultNav(cleanSlug, company)
+      const list = nav?.flat || []
+
+      const seen = new Set<string>()
+      const result: Array<{
+        id: string
+        label: string
+        category: 'commercial' | 'gestion' | 'finance' | 'admin' | 'apercu'
+        icon?: string
+      }> = []
+
+      list.forEach((item) => {
+        if (!item || !item.id) return
+        if (seen.has(item.id)) return
+        seen.add(item.id)
+        result.push({
+          id: item.id,
+          label: item.label,
+          category: (item.group as any) || 'gestion',
+          icon: item.icon,
+        })
+      })
+
+      return result
+    } catch (e) {
+      console.warn('[SectorLoader] Erreur résolution modules secteur :', e)
+      return []
+    }
+  },
+
   // ─── Vérification d'accès par rôle et permissions ────────────────────────
 
   canAccess(user: UserProfile | null | undefined, moduleId: string, action: string = 'view', company?: Company | null): boolean {
@@ -846,19 +920,73 @@ export const SectorLoader = {
     if (user.role === 'administrateur' || user.role === 'admin' || user.role === 'gerant') return true
     if (moduleId === 'dashboard') return true
 
+    // Dictionnaire d'alias pour compatibilité parfaite
+    const MODULE_ALIASES: Record<string, string[]> = {
+      tables: ['tables_plan'],
+      tables_plan: ['tables'],
+      cuisine: ['cuisine_bar'],
+      cuisine_bar: ['cuisine'],
+      pertes: ['pertes_gaspillage'],
+      pertes_gaspillage: ['pertes'],
+      serveurs: ['serveurs_personnel'],
+      serveurs_personnel: ['serveurs'],
+      devis: ['devis_production'],
+      devis_production: ['devis'],
+      bat: ['bat_approbations'],
+      bat_approbations: ['bat'],
+      sous_traitance: ['soustraitance'],
+      soustraitance: ['sous_traitance'],
+      fiches: ['fiches_techniques'],
+      fiches_techniques: ['fiches'],
+      carburant: ['flotte_carburant'],
+      flotte_carburant: ['carburant'],
+      maintenance: ['flotte_maintenance'],
+      flotte_maintenance: ['maintenance'],
+      carte_gps: ['flotte_carte'],
+      flotte_carte: ['carte_gps'],
+      vehicules: ['flotte_vehicules'],
+      flotte_vehicules: ['vehicules'],
+      conducteurs: ['flotte_conducteurs'],
+      flotte_conducteurs: ['conducteurs'],
+      missions: ['flotte_missions'],
+      flotte_missions: ['missions'],
+      reporting: ['rapports'],
+      rapports: ['reporting'],
+      finances: ['tresorerie'],
+      tresorerie: ['finances'],
+      pompes: ['pompes_cuves'],
+      pompes_cuves: ['pompes'],
+      postes: ['postes_pompiste'],
+      postes_pompiste: ['postes'],
+      flottes: ['flottes_vehicules'],
+      flottes_vehicules: ['flottes'],
+      anomalies: ['anomalies_controles'],
+      anomalies_controles: ['anomalies'],
+      tontine: ['tontines', 'tontine_cycles'],
+      tontines: ['tontine', 'tontine_cycles'],
+      tontine_cycles: ['tontine', 'tontines'],
+      agents: ['agents_collecteurs'],
+      agents_collecteurs: ['agents'],
+      membres: ['membres_epargne'],
+      membres_epargne: ['membres'],
+    }
+
+    const keysToCheck = [moduleId, ...(MODULE_ALIASES[moduleId] || [])]
+
     // Permissions fines
     const perms = (user.permissions as any) || {}
 
-    // Raccourcis booléens globaux
-    if (perms[moduleId] === true) return true
-    if (perms[moduleId] === false) return false
+    // Raccourcis booléens globaux et objets d'action
+    for (const key of keysToCheck) {
+      if (perms[key] === true) return true
+      if (perms[key] === false) return false
 
-    // Raccourcis sous-modules (ex: ventes: { view: true })
-    if (typeof perms[moduleId] === 'object' && perms[moduleId] !== null) {
-      if (perms[moduleId][action] !== undefined) {
-        return !!perms[moduleId][action]
+      if (typeof perms[key] === 'object' && perms[key] !== null) {
+        if (perms[key][action] !== undefined) {
+          return !!perms[key][action]
+        }
+        return !!perms[key].view
       }
-      return !!perms[moduleId].view
     }
 
     // Rôles métiers spécialisés par secteur d'activité
@@ -867,9 +995,11 @@ export const SectorLoader = {
       const sectorRoles = getRolesForSector(userSector)
       const roleDef = sectorRoles.find((r) => r.id === user.role)
       if (roleDef?.defaultPermissions) {
-        const rolePerm = (roleDef.defaultPermissions as any)[moduleId]
-        if (rolePerm !== undefined) {
-          return Boolean(rolePerm)
+        for (const key of keysToCheck) {
+          const rolePerm = (roleDef.defaultPermissions as any)[key]
+          if (rolePerm !== undefined) {
+            return Boolean(rolePerm)
+          }
         }
       }
     }

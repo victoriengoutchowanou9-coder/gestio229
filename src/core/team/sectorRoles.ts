@@ -1322,16 +1322,43 @@ export interface SectorModuleItem {
 export function getSectorAvailableModules(sectorSlug?: string | null): SectorModuleItem[] {
   const norm = normalizeSectorSlug(sectorSlug)
 
-  if (norm === 'flotte-geolocalisation' || norm === 'flotte') {
+  if (norm === 'restaurant' || norm === 'bar-restaurant-maquis' || norm === 'bar' || norm === 'maquis' || norm === 'fastfood') {
     return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'tables_plan', label: 'Service & Tables', category: 'commercial' },
+      { id: 'ventes', label: 'Commandes & POS', category: 'commercial' },
+      { id: 'cuisine_bar', label: 'Cuisine & Bar (KDS)', category: 'commercial' },
+      { id: 'reservations', label: 'Réservations', category: 'commercial' },
+      { id: 'recettes', label: 'Fiches & Recettes', category: 'commercial' },
+      { id: 'evenements', label: 'Événements & Soirées', category: 'commercial' },
+      { id: 'stock', label: 'Stock Boissons & Matières', category: 'gestion' },
+      { id: 'pertes_gaspillage', label: 'Pertes, Casses & Offerts', category: 'gestion' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Achats', category: 'gestion' },
+      { id: 'rapports', label: 'Rapports & Rentabilité', category: 'gestion' },
+      { id: 'caisse', label: 'Caisse & Clôtures Service', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banque', category: 'finance' },
+      { id: 'clients', label: 'Clients & Ardoises', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses Établissement', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'serveurs', label: 'Serveurs & Personnel', category: 'admin' },
+      { id: 'configuration', label: 'Configuration Restaurant', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  if (norm === 'flotte-geolocalisation' || norm === 'flotte' || norm === 'geolocalisation' || norm === 'gps' || norm === 'geoloc') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
       { id: 'flotte_carte', label: 'Carte GPS en Direct', category: 'commercial' },
       { id: 'flotte_vehicules', label: 'Parc Véhicules', category: 'commercial' },
-      { id: 'flotte_conducteurs', label: 'Conducteurs & Permis', category: 'commercial' },
-      { id: 'flotte_missions', label: 'Missions & Itinéraires', category: 'commercial' },
+      { id: 'flotte_conducteurs', label: 'Conducteurs & Chauffeurs', category: 'commercial' },
+      { id: 'flotte_missions', label: 'Missions & Trajets', category: 'commercial' },
       { id: 'flotte_carburant', label: 'Carburant & Consommation', category: 'gestion' },
       { id: 'flotte_maintenance', label: 'Entretien & Maintenance', category: 'gestion' },
       { id: 'flotte_geofences', label: 'Zones Géographiques (Geofences)', category: 'gestion' },
-      { id: 'flotte_alertes', label: 'Alertes & Incidents GPS', category: 'admin' },
+      { id: 'flotte_alertes', label: 'Alertes & Incidents GPS', category: 'gestion' },
       { id: 'flotte_capteurs', label: 'Capteurs & Chaîne du Froid', category: 'gestion' },
       { id: 'flotte_documents', label: 'Assurances & Documents', category: 'gestion' },
       { id: 'flotte_reservations', label: 'Autopartage & Réservations', category: 'commercial' },
@@ -1339,182 +1366,303 @@ export function getSectorAvailableModules(sectorSlug?: string | null): SectorMod
       { id: 'flotte_rapports', label: 'Rapports & Télématique', category: 'admin' },
       { id: 'flotte_integrations', label: 'Traceurs & Ingestion GPS', category: 'admin' },
       { id: 'flotte_parametres', label: 'Paramètres Géolocalisation', category: 'admin' },
+      { id: 'caisse', label: 'Caisse Flotte', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banque', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses Flotte', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
   if (norm === 'hotel') {
     return [
-      { id: 'ventes', label: 'Vente & POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse', category: 'finance' },
-      { id: 'stock', label: 'Stocks', category: 'gestion' },
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
       { id: 'chambres', label: 'Chambres & Réservations', category: 'commercial' },
-      { id: 'housekeeping', label: 'Housekeeping', category: 'gestion' },
-      { id: 'clients', label: 'Clients', category: 'commercial' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
-      { id: 'syscohada', label: 'Comptabilité', category: 'finance' },
-    ]
-  }
-
-  if (norm === 'microfinance') {
-    return [
-      { id: 'membres', label: 'Membres & Épargne', category: 'commercial' },
-      { id: 'credits', label: 'Crédits', category: 'commercial' },
-      { id: 'tontine', label: 'Tontines', category: 'commercial' },
-      { id: 'caisse', label: 'Recettes Administratives / Caisse', category: 'finance' },
-      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
-      { id: 'clients', label: 'Clients & Adhérents', category: 'commercial' },
-      { id: 'reporting', label: 'Reporting & Réglementaire', category: 'gestion' },
-      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
-    ]
-  }
-
-  if (norm === 'imprimerie') {
-    return [
-      { id: 'ventes', label: 'Vente Rapide & Comptoir', category: 'commercial' },
-      { id: 'devis', label: 'Devis & Production Atelier', category: 'commercial' },
-      { id: 'prestations', label: 'Catalogue Prestations & BOM', category: 'commercial' },
-      { id: 'matieres', label: 'Matières Premières & Stocks', category: 'gestion' },
-      { id: 'sous_traitance', label: 'Sous-traitance & Partenaires', category: 'gestion' },
+      { id: 'housekeeping', label: 'Gouvernante & Housekeeping', category: 'gestion' },
+      { id: 'ventes', label: 'Point de Vente Réception', category: 'commercial' },
       { id: 'caisse', label: 'Caisse & Encaissements', category: 'finance' },
-      { id: 'clients', label: 'Clients & Créances', category: 'commercial' },
-      { id: 'fournisseurs', label: 'Fournisseurs & Achats', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses Atelier', category: 'finance' },
+      { id: 'clients', label: 'Fichier Clients & Séjours', category: 'commercial' },
+      { id: 'stock', label: 'Linge & Produits d’Accueil', category: 'gestion' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Blanchisserie', category: 'gestion' },
+      { id: 'depenses', label: 'Dépenses Hôtel', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banque', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Taux d’Occupation & Rapports', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration Hôtel', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  if (norm === 'microfinance' || norm === 'tontine' || norm === 'microfinance-tontine') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord SFD', category: 'apercu' },
+      { id: 'membres', label: 'Membres & Sociétaires', category: 'commercial' },
+      { id: 'credits', label: 'Crédits & Engagements', category: 'commercial' },
+      { id: 'tontine', label: 'Cycles de Tontine', category: 'commercial' },
+      { id: 'agents', label: 'Agents Collecteurs', category: 'commercial' },
+      { id: 'caisse', label: 'Guichet & Caisse', category: 'finance' },
       { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
-      { id: 'reporting', label: 'Rapports & Rentabilité Réelle', category: 'gestion' },
-      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Achats', category: 'gestion' },
+      { id: 'depenses', label: 'Frais de Fonctionnement', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité UEMOA / SYSCOHADA', category: 'finance' },
+      { id: 'conformite', label: 'Risques & Conformité', category: 'gestion' },
+      { id: 'rapports', label: 'Rapports Réglementaires BCEAO', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration IMF', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
-  if (norm === 'station-service') {
+  if (norm === 'imprimerie' || norm === 'impression') {
     return [
-      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'ventes', label: 'Vente & POS', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse', category: 'commercial' },
+      { id: 'devis', label: 'Devis & Production', category: 'commercial' },
+      { id: 'prestations', label: 'Prestations & BOM', category: 'commercial' },
+      { id: 'finances', label: 'Trésorerie', category: 'finance' },
+      { id: 'clients', label: 'Clients & Créances', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Achats', category: 'gestion' },
+      { id: 'matieres', label: 'Matières Premières et Consommables', category: 'gestion' },
+      { id: 'sous_traitance', label: 'Sous-traitance', category: 'gestion' },
+      { id: 'rapports', label: 'Rapports & Analyses', category: 'admin' },
+      { id: 'configuration', label: 'Configuration', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  if (norm === 'station-service' || norm === 'station' || norm === 'hydrocarbures') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'ventes', label: 'Vente & Distribution', category: 'commercial' },
+      { id: 'pompes_cuves', label: 'Pompes & Cuves', category: 'commercial' },
+      { id: 'postes_pompiste', label: 'Postes Pompistes', category: 'commercial' },
+      { id: 'lubrifiants', label: 'Lubrifiants & Produits', category: 'commercial' },
+      { id: 'flottes_vehicules', label: 'Clients & Flottes', category: 'commercial' },
       { id: 'stock', label: 'Stocks Carburants', category: 'gestion' },
-      { id: 'pompes', label: 'Pompes & Cuves', category: 'commercial' },
-      { id: 'postes', label: 'Postes Pompistes', category: 'commercial' },
-      { id: 'clients', label: 'Clients & Flottes', category: 'commercial' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Citernes', category: 'gestion' },
+      { id: 'anomalies_controles', label: 'Anomalies & Pertes', category: 'gestion' },
+      { id: 'rapports', label: 'Rapports de Clôture', category: 'gestion' },
+      { id: 'caisse', label: 'Caisse & Clôtures', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banque', category: 'finance' },
+      { id: 'clients', label: 'Créances Clients', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses Station', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'configuration', label: 'Configuration', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
-  if (norm === 'quincaillerie') {
+  if (norm === 'quincaillerie' || norm === 'btp-materiaux') {
     return [
-      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse', category: 'finance' },
-      { id: 'stock', label: 'Stocks & Inventaires', category: 'gestion' },
-      { id: 'materiaux', label: 'Ciment & Fers', category: 'gestion' },
-      { id: 'chantiers', label: 'Chantiers & Camions', category: 'commercial' },
-      { id: 'clients', label: 'Clients', category: 'commercial' },
-      { id: 'fournisseurs', label: 'Fournisseurs / Achats', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
-      { id: 'reporting', label: 'Reporting & Rapports', category: 'gestion' },
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'ventes', label: 'Vente & Devis Comptoir', category: 'commercial' },
+      { id: 'materiaux', label: 'Ciment, Fers & Matériaux', category: 'gestion' },
+      { id: 'conversions', label: 'Conversions d’Unités (Tonne, Sac, Barre)', category: 'gestion' },
+      { id: 'chantiers', label: 'Chantiers & Bons de Livraison', category: 'commercial' },
+      { id: 'stock', label: 'Stocks & Entrepôt', category: 'gestion' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Usines', category: 'gestion' },
+      { id: 'clients', label: 'Clients & Entreprises BTP', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse & Règlements', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses & Logistique', category: 'finance' },
       { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports de Vente & Marges', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration Quincaillerie', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
   if (norm === 'poissonnerie') {
     return [
-      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse', category: 'finance' },
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'ventes', label: 'Vente & Balance Pesée', category: 'commercial' },
       { id: 'pesee', label: 'Pesée Kg & Cartons', category: 'commercial' },
-      { id: 'chambres_froides', label: 'Chambres Froides & T°', category: 'gestion' },
-      { id: 'stock', label: 'Stocks Frigorifiques', category: 'gestion' },
-      { id: 'avaries', label: 'Avaries & Pertes', category: 'gestion' },
-      { id: 'clients', label: 'Clients', category: 'commercial' },
-      { id: 'fournisseurs', label: 'Fournisseurs Maritimes', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
-    ]
-  }
-
-  if (norm === 'brasserie') {
-    return [
-      { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse', category: 'finance' },
-      { id: 'stock', label: 'Stocks Boissons & Fûts', category: 'gestion' },
-      { id: 'consignation', label: 'Consignations & Casiers', category: 'commercial' },
-      { id: 'grilles', label: 'Grilles Gros & Maquis', category: 'commercial' },
-      { id: 'clients', label: 'Clients & Débits', category: 'commercial' },
-      { id: 'fournisseurs', label: 'Fournisseurs', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
-      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
-    ]
-  }
-
-  if (norm === 'restaurant') {
-    return [
-      { id: 'ventes', label: 'Commandes & POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse & Clôtures', category: 'finance' },
-      { id: 'tables', label: 'Service & Tables', category: 'commercial' },
-      { id: 'cuisine', label: 'Cuisine & Bar (KDS)', category: 'commercial' },
-      { id: 'stock', label: 'Stock Matières & Boissons', category: 'gestion' },
-      { id: 'recettes', label: 'Fiches Recettes', category: 'gestion' },
-      { id: 'pertes', label: 'Pertes & Offerts', category: 'gestion' },
-      { id: 'clients', label: 'Clients & Ardoises', category: 'commercial' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
-      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
-    ]
-  }
-
-  if (norm === 'ecole') {
-    return [
-      { id: 'eleves', label: 'Élèves & Classes', category: 'gestion' },
-      { id: 'frais', label: 'Frais Scolaires', category: 'finance' },
-      { id: 'caisse', label: 'Caisse Scolaire', category: 'finance' },
-      { id: 'notes', label: 'Notes & Résultats', category: 'gestion' },
-      { id: 'absences', label: 'Absences', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses École', category: 'finance' },
-      { id: 'reporting', label: 'Rapports Pédagogiques', category: 'gestion' },
-    ]
-  }
-
-  if (norm === 'immobilier' || norm === 'location') {
-    return [
-      { id: 'biens', label: 'Biens & Logements', category: 'gestion' },
-      { id: 'contrats', label: 'Contrats & Loyers', category: 'commercial' },
-      { id: 'quittances', label: 'Quittances', category: 'finance' },
+      { id: 'chambres_froides', label: 'Chambres Froides & Suivi T°', category: 'gestion' },
+      { id: 'stock', label: 'Stocks Poissons & Produits Congelés', category: 'gestion' },
+      { id: 'avaries', label: 'Avaries, Fonte & Pertes Froid', category: 'gestion' },
+      { id: 'clients', label: 'Clients Grossistes & Particuliers', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Armateurs & Fournisseurs Maritimes', category: 'gestion' },
       { id: 'caisse', label: 'Caisse & Encaissements', category: 'finance' },
-      { id: 'clients', label: 'Locataires & Bailleurs', category: 'commercial' },
-      { id: 'depenses', label: 'Dépenses Travaux', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses Exploitation', category: 'finance' },
       { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports & Rentabilité Poids/Prix', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
-  if (norm === 'garage') {
+  if (norm === 'brasserie' || norm === 'brasserie-depot-boissons' || norm === 'depot-boissons') {
     return [
+      { id: 'dashboard', label: 'Tableau de bord Dépôt', category: 'apercu' },
+      { id: 'ventes', label: 'Vente Gros, Demi-Gros & Détail', category: 'commercial' },
+      { id: 'consignation', label: 'Gestion des Consignations & Casiers', category: 'commercial' },
+      { id: 'grilles', label: 'Grilles Tarifaires Maquis & Revendeurs', category: 'commercial' },
+      { id: 'stock', label: 'Stocks Boissons, Casiers & Bouteilles Pleines/Vides', category: 'gestion' },
+      { id: 'clients', label: 'Clients, Débits de Boissons & Maquis', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Brasseries & Usines Fournisseurs', category: 'gestion' },
+      { id: 'caisse', label: 'Caisse & Encaissements', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses Dépôt', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports Ventes Boissons & Casiers', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration Brasserie', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  if (norm === 'ecole' || norm === 'formation' || norm === 'centre-de-formation' || norm === 'education') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'eleves', label: 'Élèves & Inscriptions', category: 'gestion' },
+      { id: 'pedagogie', label: 'Pédagogie & Classes', category: 'gestion' },
+      { id: 'notes', label: 'Notes & Bulletins', category: 'gestion' },
+      { id: 'absences', label: 'Absences & Retards', category: 'gestion' },
+      { id: 'frais', label: 'Scolarités & Échéanciers', category: 'finance' },
+      { id: 'caisse', label: 'Caisse Scolaire', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses Établissement', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'formations_pro', label: 'Formations Certifiantes', category: 'commercial' },
+      { id: 'bibliotheque', label: 'Bibliothèque & Manuels', category: 'gestion' },
+      { id: 'rapports', label: 'Rapports & Statistiques', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration Année Scolaire', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs & Enseignants', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  if (norm === 'immobilier' || norm === 'location' || norm === 'gestion-locative' || norm === 'gestion_locative') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'alertes_immo', label: 'Alertes & Pilotage', category: 'apercu' },
+      { id: 'biens_locations', label: 'Biens & Logements', category: 'commercial' },
+      { id: 'proprietaires_mandats', label: 'Propriétaires & Mandats', category: 'commercial' },
+      { id: 'contrats_loyers', label: 'Contrats & Loyers', category: 'commercial' },
+      { id: 'etats_lieux', label: 'États des Lieux', category: 'commercial' },
+      { id: 'cautions_depots', label: 'Cautions & Dépôts', category: 'commercial' },
+      { id: 'quittances', label: 'Quittances & Factures', category: 'commercial' },
+      { id: 'maintenances_travaux', label: 'Travaux & Sinistres', category: 'gestion' },
+      { id: 'caisse', label: 'Caisse Agence', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banque', category: 'finance' },
+      { id: 'depenses', label: 'Charges & Dépenses', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports Financiers & Agence', category: 'gestion' },
+      { id: 'clients', label: 'Locataires & Contacts', category: 'commercial' },
+      { id: 'fournisseurs', label: 'Prestataires & Artisans', category: 'gestion' },
+      { id: 'modeles_documents', label: 'Modèles de Documents', category: 'admin' },
+      { id: 'configuration', label: 'Configuration Immobilière', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  if (norm === 'garage' || norm === 'atelier' || norm === 'mecanique') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
       { id: 'vehicules', label: 'Véhicules & Entrées', category: 'gestion' },
-      { id: 'reparations', label: 'Ordres de Réparation', category: 'commercial' },
-      { id: 'ventes', label: 'Vente Pièces / POS', category: 'commercial' },
-      { id: 'caisse', label: 'Caisse Atelier', category: 'finance' },
-      { id: 'stock', label: 'Stocks Pièces', category: 'gestion' },
+      { id: 'reparations', label: 'Ordres de Réparation (OR)', category: 'commercial' },
+      { id: 'reception_diagnostic', label: 'Réception & Diagnostics', category: 'commercial' },
+      { id: 'planning_atelier', label: 'Planning des Ponts & Travaux', category: 'gestion' },
+      { id: 'assurances_sinistres', label: 'Assurances & Expertises', category: 'gestion' },
+      { id: 'ventes', label: 'Vente Pièces & Facturation', category: 'commercial' },
+      { id: 'stock', label: 'Stocks Pièces Détachées', category: 'gestion' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Équipementiers', category: 'gestion' },
       { id: 'clients', label: 'Clients & Propriétaires', category: 'commercial' },
-      { id: 'fournisseurs', label: 'Fournisseurs Pièces', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses Garage', category: 'finance' },
+      { id: 'caisse', label: 'Caisse Atelier', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banque', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses & Achats Urgents', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports & Rentabilité Main d’Œuvre', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration Garage', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
   if (norm === 'pharmacie') {
     return [
-      { id: 'ventes', label: 'Vente & POS', category: 'commercial' },
-      { id: 'ordonnances', label: 'Ordonnances', category: 'commercial' },
+      { id: 'dashboard', label: 'Tableau de bord Officine', category: 'apercu' },
+      { id: 'ventes', label: 'Délivrance & Vente POS', category: 'commercial' },
+      { id: 'ordonnances', label: 'Ordonnances Médicales', category: 'commercial' },
+      { id: 'stock', label: 'Stocks Médicaments & Spécialités', category: 'gestion' },
+      { id: 'lots', label: 'Lots, Séries & Péremptions (DLC)', category: 'gestion' },
+      { id: 'fournisseurs', label: 'Grossistes & Répartiteurs Pharma', category: 'gestion' },
+      { id: 'clients', label: 'Patients & Comptes Clients', category: 'commercial' },
       { id: 'caisse', label: 'Caisse Officine', category: 'finance' },
-      { id: 'stock', label: 'Stocks Médicaments', category: 'gestion' },
-      { id: 'lots', label: 'Lots & Péremptions', category: 'gestion' },
-      { id: 'clients', label: 'Patients & Clients', category: 'commercial' },
-      { id: 'fournisseurs', label: 'Laboratoires & Répartiteurs', category: 'gestion' },
-      { id: 'depenses', label: 'Dépenses', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses & Frais Généraux', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports de Vente & Marges Pharma', category: 'gestion' },
+      { id: 'configuration', label: 'Configuration Pharmacie', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
     ]
   }
 
-  // Par défaut pour les autres commerces (Boutique, Supermarché, Cosmétiques, etc.)
+  if (norm === 'supermarche' || norm === 'superette' || norm === 'supermarche-alimentation') {
+    return [
+      { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
+      { id: 'ventes', label: 'Caisse & POS Scanner', category: 'commercial' },
+      { id: 'rayons', label: 'Rayons & Gondoles', category: 'commercial' },
+      { id: 'promos-dlc', label: 'Promos & DLC Courtes', category: 'commercial' },
+      { id: 'stock', label: 'Stocks & Inventaires Rayons', category: 'gestion' },
+      { id: 'reapprovisionnement', label: 'Réapprovisionnement Intelligent', category: 'gestion' },
+      { id: 'etiquettes', label: 'Étiquettes Prix & Code-barres', category: 'gestion' },
+      { id: 'fournisseurs', label: 'Fournisseurs & Grossistes', category: 'gestion' },
+      { id: 'clients', label: 'Clients & Fidélité', category: 'commercial' },
+      { id: 'fidelite', label: 'Programme Fidélité', category: 'commercial' },
+      { id: 'caisse', label: 'Caisse & Clôtures Session', category: 'finance' },
+      { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+      { id: 'depenses', label: 'Dépenses & Frais Généraux', category: 'finance' },
+      { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+      { id: 'rapports', label: 'Rapports & Ventes par Rayon', category: 'gestion' },
+      { id: 'comparatif-fournisseurs', label: 'Comparatif Fournisseurs', category: 'gestion' },
+      { id: 'performance-caissiers', label: 'Performance Caissiers', category: 'admin' },
+      { id: 'configuration', label: 'Configuration Supermarché', category: 'admin' },
+      { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+      { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+      { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
+    ]
+  }
+
+  // Par défaut pour les autres commerces (Boutique, Cosmétiques, etc.)
   return [
+    { id: 'dashboard', label: 'Tableau de bord', category: 'apercu' },
     { id: 'ventes', label: 'Ventes / POS', category: 'commercial' },
-    { id: 'caisse', label: 'Caisse', category: 'finance' },
+    { id: 'caisse', label: 'Caisse & Encaissements', category: 'finance' },
     { id: 'stock', label: 'Stocks & Inventaires', category: 'gestion' },
     { id: 'clients', label: 'Clients & Créances', category: 'commercial' },
-    { id: 'fournisseurs', label: 'Fournisseurs / Achats', category: 'gestion' },
+    { id: 'fournisseurs', label: 'Fournisseurs & Achats', category: 'gestion' },
     { id: 'depenses', label: 'Dépenses', category: 'finance' },
-    { id: 'reporting', label: 'Reporting & Rapports', category: 'gestion' },
     { id: 'finances', label: 'Trésorerie & Banques', category: 'finance' },
+    { id: 'reporting', label: 'Reporting & Rapports', category: 'gestion' },
     { id: 'syscohada', label: 'Comptabilité SYSCOHADA', category: 'finance' },
+    { id: 'configuration', label: 'Configuration', category: 'admin' },
+    { id: 'utilisateurs', label: 'Gestion Utilisateurs', category: 'admin' },
+    { id: 'audit', label: "Journal d'Audit", category: 'admin' },
+    { id: 'abonnement', label: 'Mon Abonnement', category: 'admin' },
   ]
 }

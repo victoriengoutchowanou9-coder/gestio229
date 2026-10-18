@@ -10,6 +10,7 @@ import { useAuthStore } from '../../../store/authStore'
 import { isSectorSubscribed } from '../../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import { getRolesForSector, normalizeSectorSlug, getSectorAvailableModules } from '../../../core/team/sectorRoles'
+import SectorLoader from '../../../lib/SectorLoader'
 import { comptabiliserSalaireAuto } from '../../../services/compta_auto'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
@@ -212,8 +213,25 @@ const UtilisateursPage: React.FC = () => {
 
   const targetFormSector = form.sector_id || currentSectorSlug
   const availableSectorModules = useMemo(() => {
-    return getSectorAvailableModules(targetFormSector)
-  }, [targetFormSector])
+    const list = SectorLoader.getAvailableModulesForSector(targetFormSector, company)
+    return list.length > 0 ? list : getSectorAvailableModules(targetFormSector)
+  }, [targetFormSector, company])
+
+  const selectAllModules = () => {
+    const newPerms = { ...(form.permissions as any) }
+    availableSectorModules.forEach((m) => {
+      newPerms[m.id] = { view: true, create: true, edit: true, delete: true }
+    })
+    setForm((prev) => ({ ...prev, permissions: newPerms }))
+  }
+
+  const unselectAllModules = () => {
+    const newPerms = { ...(form.permissions as any) }
+    availableSectorModules.forEach((m) => {
+      newPerms[m.id] = false
+    })
+    setForm((prev) => ({ ...prev, permissions: newPerms }))
+  }
 
   const isModuleChecked = (moduleId: string): boolean => {
     const val = (form.permissions as any)?.[moduleId]
@@ -252,6 +270,132 @@ const UtilisateursPage: React.FC = () => {
       role: newRole,
       permissions: updatedPerms,
     }))
+  }
+
+  // ── Modal Modification Permissions Utilisateur Interne Existant ──
+  const [editUser, setEditUser] = useState<InternalUser | null>(null)
+  const [editUserRole, setEditUserRole] = useState<string>('')
+  const [editUserSector, setEditUserSector] = useState<string>('')
+  const [editUserPermissions, setEditUserPermissions] = useState<Record<string, any>>({})
+  const [savingEditUser, setSavingEditUser] = useState(false)
+  const [editUserError, setEditUserError] = useState('')
+
+  const editAvailableModules = useMemo(() => {
+    if (!editUserSector) return []
+    const list = SectorLoader.getAvailableModulesForSector(editUserSector, company)
+    return list.length > 0 ? list : getSectorAvailableModules(editUserSector)
+  }, [editUserSector, company])
+
+  const isEditModuleChecked = (moduleId: string): boolean => {
+    const val = (editUserPermissions as any)?.[moduleId]
+    if (val === true) return true
+    if (val === false) return false
+    if (typeof val === 'object' && val !== null) {
+      return Boolean(val.view || val.create || val.edit || val.admin)
+    }
+    return false
+  }
+
+  const toggleEditModulePermission = (moduleId: string) => {
+    const current = isEditModuleChecked(moduleId)
+    setEditUserPermissions((prev) => ({
+      ...prev,
+      [moduleId]: current ? false : { view: true, create: true, edit: true, delete: true },
+    }))
+  }
+
+  const selectAllEditModules = () => {
+    const newPerms = { ...editUserPermissions }
+    editAvailableModules.forEach((m) => {
+      newPerms[m.id] = { view: true, create: true, edit: true, delete: true }
+    })
+    setEditUserPermissions(newPerms)
+  }
+
+  const unselectAllEditModules = () => {
+    const newPerms = { ...editUserPermissions }
+    editAvailableModules.forEach((m) => {
+      newPerms[m.id] = false
+    })
+    setEditUserPermissions(newPerms)
+  }
+
+  const handleEditRoleChange = (newRole: string) => {
+    const roles = getRolesForSector(editUserSector)
+    const roleObj = roles.find((r) => r.id === newRole)
+    const rolePerms = (roleObj?.defaultPermissions as any) || {}
+
+    const updatedPerms: Record<string, any> = { ...editUserPermissions }
+    editAvailableModules.forEach((m) => {
+      const allowed = Boolean(rolePerms[m.id])
+      updatedPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
+    })
+
+    setEditUserRole(newRole)
+    setEditUserPermissions(updatedPerms)
+  }
+
+  const handleOpenEditUser = (u: InternalUser) => {
+    const perm = (typeof u.permissions === 'object' && u.permissions) ? u.permissions : {}
+    const uSector = (perm.sector_slug || perm.sector || perm.assigned_sector || u.sector_id || currentSectorSlug || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
+    setEditUser(u)
+    setEditUserSector(uSector)
+    setEditUserRole(u.role || 'vendeur')
+    setEditUserPermissions({ ...perm })
+    setEditUserError('')
+  }
+
+  const handleSaveEditUser = async () => {
+    if (!editUser) return
+    setSavingEditUser(true)
+    setEditUserError('')
+    try {
+      const cleanSectorSlug = normalizeSectorSlug(editUserSector)
+      const sectorRolesList = getRolesForSector(cleanSectorSlug)
+      const roleItem = sectorRolesList.find((r) => r.id === editUserRole)
+      const roleLabel = roleItem?.label || editUserRole
+
+      const updatedPermissionsPayload = {
+        ...(editUser.permissions || {}),
+        ...editUserPermissions,
+        sector: cleanSectorSlug,
+        sector_slug: cleanSectorSlug,
+        assigned_sector: cleanSectorSlug,
+        sector_id: cleanSectorSlug,
+        role_label: roleLabel,
+        is_internal_user: true,
+      }
+
+      const { error } = await supabase
+        .from('user_profiles')
+        .update({
+          role: editUserRole,
+          sector_id: cleanSectorSlug,
+          sector_slug: cleanSectorSlug,
+          permissions: updatedPermissionsPayload,
+        })
+        .eq('id', editUser.id)
+
+      if (error) {
+        const { error: fallbackErr } = await supabase
+          .from('user_profiles')
+          .update({
+            role: editUserRole,
+            sector_id: cleanSectorSlug,
+            permissions: updatedPermissionsPayload,
+          })
+          .eq('id', editUser.id)
+        if (fallbackErr) throw fallbackErr
+      }
+
+      setSuccess(`Permissions de "${editUser.full_name}" mises à jour avec succès !`)
+      setEditUser(null)
+      loadUsers()
+    } catch (err: any) {
+      setEditUserError(err.message || 'Erreur lors de la mise à jour des permissions.')
+    } finally {
+      setSavingEditUser(false)
+    }
   }
 
   useEffect(() => {
@@ -1278,9 +1422,10 @@ const UtilisateursPage: React.FC = () => {
                           const roles = getRolesForSector(sec)
                           const defaultRole = roles[0]?.id || 'vendeur'
                           const rolePerms = (roles[0]?.defaultPermissions as any) || {}
-                          const mods = getSectorAvailableModules(sec)
+                          const mods = SectorLoader.getAvailableModulesForSector(sec, company)
+                          const finalMods = mods.length > 0 ? mods : getSectorAvailableModules(sec)
                           const initPerms: Record<string, any> = {}
-                          mods.forEach((m) => {
+                          finalMods.forEach((m) => {
                             const allowed = Boolean(rolePerms[m.id])
                             initPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
                           })
@@ -1302,46 +1447,75 @@ const UtilisateursPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Section PERMISSIONS ET DROITS D'ACCÈS - Grille 3 colonnes sectorielle */}
+                {/* Section PERMISSIONS ET DROITS D'ACCÈS - Grille sectorielle dynamique avec scroll et boutons rapides */}
                 <div className="space-y-3">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 pb-1 border-b border-slate-100">
-                    <h3 className="text-xs font-bold text-slate-800 uppercase flex items-center gap-1.5">
-                      <Shield className="w-4 h-4 text-emerald-600" /> Permissions et Droits d'Accès aux Modules ({availableSectorModules.length})
-                    </h3>
-                    <span className="text-[11px] text-slate-500 italic">
-                      Modules filtrés pour le secteur et pré-cochés selon le rôle choisi
-                    </span>
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                    <div>
+                      <h3 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5">
+                        <Shield className="w-4 h-4 text-emerald-600" />
+                        Permissions et Droits d'Accès aux Modules ({availableSectorModules.length} modules disponibles)
+                      </h3>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        {availableSectorModules.filter((m) => isModuleChecked(m.id)).length} / {availableSectorModules.length} module(s) sélectionné(s)
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={selectAllModules}
+                        className="px-2.5 py-1 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all"
+                      >
+                        Tout cocher
+                      </button>
+                      <button
+                        type="button"
+                        onClick={unselectAllModules}
+                        className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-all"
+                      >
+                        Tout décocher
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
-                    {availableSectorModules.map((mod) => {
-                      const isChecked = isModuleChecked(mod.id)
-                      return (
-                        <label
-                          key={mod.id}
-                          className={`flex items-start gap-2.5 p-3 rounded-xl border transition-all cursor-pointer ${
-                            isChecked
-                              ? 'bg-emerald-50/70 border-emerald-300 text-slate-900 shadow-xs'
-                              : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-slate-50'
-                          }`}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={isChecked}
-                            onChange={() => toggleModulePermission(mod.id)}
-                            className="w-4 h-4 mt-0.5 accent-emerald-600 rounded cursor-pointer shrink-0"
-                          />
-                          <div className="min-w-0 flex-1">
-                            <span className="text-xs font-bold block leading-tight">
-                              {mod.label}
-                            </span>
-                            <span className="text-[10px] text-slate-400 block mt-0.5 font-mono">
-                              {mod.id}
-                            </span>
-                          </div>
-                        </label>
-                      )
-                    })}
+                  <div className="max-h-[380px] overflow-y-auto p-1 pr-2 border border-slate-200 rounded-2xl bg-slate-50/50">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                      {availableSectorModules.map((mod) => {
+                        const isChecked = isModuleChecked(mod.id)
+                        return (
+                          <label
+                            key={mod.id}
+                            className={`flex items-start gap-2.5 p-3 rounded-xl border transition-all cursor-pointer ${
+                              isChecked
+                                ? 'bg-white border-emerald-500 shadow-sm ring-1 ring-emerald-500/20 text-slate-900'
+                                : 'bg-white/80 border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-white'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={() => toggleModulePermission(mod.id)}
+                              className="w-4 h-4 mt-0.5 accent-emerald-600 rounded cursor-pointer shrink-0"
+                            />
+                            <div className="min-w-0 flex-1">
+                              <span className="text-xs font-bold block leading-tight truncate" title={mod.label}>
+                                {mod.label}
+                              </span>
+                              <div className="flex items-center gap-1.5 mt-1">
+                                <span className="text-[10px] text-slate-400 font-mono">
+                                  {mod.id}
+                                </span>
+                                {mod.category && (
+                                  <span className="text-[9px] uppercase px-1.5 py-0.5 rounded font-semibold bg-slate-100 text-slate-500">
+                                    {mod.category}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </label>
+                        )
+                      })}
+                    </div>
                   </div>
                 </div>
 
@@ -1425,6 +1599,15 @@ const UtilisateursPage: React.FC = () => {
                       }`}>
                         {u.is_active ? 'Actif' : 'Inactif'}
                       </span>
+
+                      <button
+                        type="button"
+                        onClick={() => handleOpenEditUser(u)}
+                        className="p-2 text-slate-400 hover:text-emerald-700 rounded-lg hover:bg-emerald-50 transition-all"
+                        title="Modifier les permissions et droits d'accès"
+                      >
+                        <Shield className="w-4 h-4" />
+                      </button>
 
                       <button
                         type="button"
@@ -2205,6 +2388,167 @@ const UtilisateursPage: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL MODIFICATION DES PERMISSIONS D'UN UTILISATEUR EXISTANT */}
+      {editUser && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-2xl w-full p-6 space-y-4 my-8 animate-fadeIn">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold text-sm">
+                  <Shield className="w-5 h-5 text-emerald-600" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">
+                    Permissions & Droits — {editUser.full_name}
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5">
+                    <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded font-bold text-slate-800">
+                      {(editUser as any).username || editUser.login_identifier}
+                    </span>
+                    <span>•</span>
+                    <span className="capitalize font-semibold text-emerald-700">{editUserSector}</span>
+                  </div>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditUser(null)}
+                className="p-2 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {editUserError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+                <span>{editUserError}</span>
+              </div>
+            )}
+
+            {/* Rôle métier spécialisé pour ce secteur */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
+              <label className="text-xs font-bold text-slate-700 block">
+                Rôle Métier Spécialisé ({editUserSector})
+              </label>
+              <select
+                value={editUserRole}
+                onChange={(e) => handleEditRoleChange(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+              >
+                {getRolesForSector(editUserSector).map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label} — {r.description}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-500 italic">
+                Changer le rôle métier pré-coche automatiquement les modules recommandés pour ce poste.
+              </p>
+            </div>
+
+            {/* Liste dynamique des modules pour ce secteur */}
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                <div>
+                  <h4 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5">
+                    <Shield className="w-4 h-4 text-emerald-600" />
+                    Droits d'accès aux modules ({editAvailableModules.length} disponibles)
+                  </h4>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {editAvailableModules.filter((m) => isEditModuleChecked(m.id)).length} / {editAvailableModules.length} module(s) actif(s)
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={selectAllEditModules}
+                    className="px-2.5 py-1 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-all"
+                  >
+                    Tout cocher
+                  </button>
+                  <button
+                    type="button"
+                    onClick={unselectAllEditModules}
+                    className="px-2.5 py-1 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-lg transition-all"
+                  >
+                    Tout décocher
+                  </button>
+                </div>
+              </div>
+
+              <div className="max-h-[360px] overflow-y-auto p-1 pr-2 border border-slate-200 rounded-2xl bg-slate-50/50">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {editAvailableModules.map((mod) => {
+                    const isChecked = isEditModuleChecked(mod.id)
+                    return (
+                      <label
+                        key={mod.id}
+                        className={`flex items-start gap-2.5 p-3 rounded-xl border transition-all cursor-pointer ${
+                          isChecked
+                            ? 'bg-white border-emerald-500 shadow-sm ring-1 ring-emerald-500/20 text-slate-900'
+                            : 'bg-white/80 border-slate-200 text-slate-600 hover:border-slate-300 hover:bg-white'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleEditModulePermission(mod.id)}
+                          className="w-4 h-4 mt-0.5 accent-emerald-600 rounded cursor-pointer shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <span className="text-xs font-bold block leading-tight truncate" title={mod.label}>
+                            {mod.label}
+                          </span>
+                          <div className="flex items-center gap-1.5 mt-1">
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {mod.id}
+                            </span>
+                            {mod.category && (
+                              <span className="text-[9px] uppercase px-1.5 py-0.5 rounded font-semibold bg-slate-100 text-slate-500">
+                                {mod.category}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Actions épinglées en bas */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setEditUser(null)}
+                className="px-4 py-2 border border-slate-300 text-slate-700 font-medium rounded-xl text-xs hover:bg-slate-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={savingEditUser}
+                onClick={handleSaveEditUser}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs transition-all disabled:opacity-60 flex items-center gap-1.5 shadow-sm"
+              >
+                {savingEditUser ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Enregistrement...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-3.5 h-3.5" /> Enregistrer les modifications
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

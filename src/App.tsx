@@ -687,22 +687,22 @@ const AppRoutes: React.FC = () => {
         <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
         <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
         {/* ── Modules Station-Service & Hydrocarbures ── */}
-        <Route path="pompes"      element={<PompesPage />} />
-        <Route path="cuves"       element={<PompesPage />} />
-        <Route path="jaugeages"   element={<PompesPage />} />
-        <Route path="receptions"  element={<PompesPage />} />
-        <Route path="postes"      element={<PostesPage />} />
-        <Route path="flottes"     element={<FlottesPage />} />
-        <Route path="anomalies"   element={<AnomaliesPage />} />
+        <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="cuves"       element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="jaugeages"   element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="receptions"  element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
+        <Route path="flottes"     element={<ModuleGuard moduleId="flottes_vehicules"><FlottesPage /></ModuleGuard>} />
+        <Route path="anomalies"   element={<ModuleGuard moduleId="anomalies_controles"><AnomaliesPage /></ModuleGuard>} />
         <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
         {/* ── Modules Bar, Restaurant, Maquis & Fast-Food ── */}
-        <Route path="tables"       element={<TablesPlanPage />} />
-        <Route path="cuisine-bar"  element={<CuisineBarKDSPage />} />
-        <Route path="recettes"     element={<RecettesFichesPage />} />
-        <Route path="reservations" element={<SectorAwareReservations />} />
-        <Route path="pertes"       element={<PertesGaspillagePage />} />
-        <Route path="serveurs"     element={<ServeursPersonnelPage />} />
-        <Route path="evenements"   element={<EvenementsPage />} />
+        <Route path="tables"       element={<ModuleGuard moduleId="tables_plan"><TablesPlanPage /></ModuleGuard>} />
+        <Route path="cuisine-bar"  element={<ModuleGuard moduleId="cuisine_bar"><CuisineBarKDSPage /></ModuleGuard>} />
+        <Route path="recettes"     element={<ModuleGuard moduleId="recettes"><RecettesFichesPage /></ModuleGuard>} />
+        <Route path="reservations" element={<ModuleGuard moduleId="reservations"><SectorAwareReservations /></ModuleGuard>} />
+        <Route path="pertes"       element={<ModuleGuard moduleId="pertes_gaspillage"><PertesGaspillagePage /></ModuleGuard>} />
+        <Route path="serveurs"     element={<ModuleGuard moduleId="serveurs"><ServeursPersonnelPage /></ModuleGuard>} />
+        <Route path="evenements"   element={<ModuleGuard moduleId="evenements"><EvenementsPage /></ModuleGuard>} />
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
@@ -761,20 +761,21 @@ const AppRoutes: React.FC = () => {
         <Route path="materiel"            element={<ModuleGuard moduleId="location_materiel"><MaterielPage /></ModuleGuard>} />
         <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
         {/* ── Modules Géolocalisation & Flotte (20ᵉ Activité) ── */}
-        <Route path="carte"            element={<FlotteLiveMapPage />} />
-        <Route path="flotte-carte"     element={<FlotteLiveMapPage />} />
-        <Route path="parc-vehicules"   element={<FlotteVehiculesPage />} />
-        <Route path="conducteurs"      element={<FlotteConducteursPage />} />
-        <Route path="missions"         element={<FlotteMissionsPage />} />
-        <Route path="carburant"        element={<FlotteCarburantPage />} />
-        <Route path="maintenance"      element={<FlotteMaintenancePage />} />
-        <Route path="documents"        element={<SectorAwareDocuments />} />
-        <Route path="geofences"        element={<FlotteGeofencesPage />} />
-        <Route path="capteurs"         element={<FlotteCapteursPage />} />
-        <Route path="inspections"      element={<FlotteInspectionsPage />} />
-        <Route path="rapports-flotte"  element={<FlotteRapportsPage />} />
-        <Route path="integrations-gps" element={<FlotteIntegrationsGpsPage />} />
-        <Route path="parametres-gps"   element={<FlotteParametresGpsPage />} />
+        <Route path="live-map"         element={<ModuleGuard moduleId="flotte_carte"><FlotteLiveMapPage /></ModuleGuard>} />
+        <Route path="carte"            element={<ModuleGuard moduleId="flotte_carte"><FlotteLiveMapPage /></ModuleGuard>} />
+        <Route path="flotte-carte"     element={<ModuleGuard moduleId="flotte_carte"><FlotteLiveMapPage /></ModuleGuard>} />
+        <Route path="parc-vehicules"   element={<ModuleGuard moduleId="flotte_vehicules"><FlotteVehiculesPage /></ModuleGuard>} />
+        <Route path="conducteurs"      element={<ModuleGuard moduleId="flotte_conducteurs"><FlotteConducteursPage /></ModuleGuard>} />
+        <Route path="missions"         element={<ModuleGuard moduleId="flotte_missions"><FlotteMissionsPage /></ModuleGuard>} />
+        <Route path="carburant"        element={<ModuleGuard moduleId="flotte_carburant"><FlotteCarburantPage /></ModuleGuard>} />
+        <Route path="maintenance"      element={<ModuleGuard moduleId="flotte_maintenance"><FlotteMaintenancePage /></ModuleGuard>} />
+        <Route path="documents"        element={<ModuleGuard moduleId="flotte_documents"><SectorAwareDocuments /></ModuleGuard>} />
+        <Route path="geofences"        element={<ModuleGuard moduleId="flotte_geofences"><FlotteGeofencesPage /></ModuleGuard>} />
+        <Route path="capteurs"         element={<ModuleGuard moduleId="flotte_capteurs"><FlotteCapteursPage /></ModuleGuard>} />
+        <Route path="inspections"      element={<ModuleGuard moduleId="flotte_inspections"><FlotteInspectionsPage /></ModuleGuard>} />
+        <Route path="rapports-flotte"  element={<ModuleGuard moduleId="flotte_rapports"><FlotteRapportsPage /></ModuleGuard>} />
+        <Route path="integrations-gps" element={<ModuleGuard moduleId="flotte_integrations"><FlotteIntegrationsGpsPage /></ModuleGuard>} />
+        <Route path="parametres-gps"   element={<ModuleGuard moduleId="flotte_parametres"><FlotteParametresGpsPage /></ModuleGuard>} />
       </Route>
 
       {/* Route directe normalisée Caisse Universelle /app/:companyId/secteur/:sectorKey/caisse */}
@@ -848,22 +849,22 @@ const AppRoutes: React.FC = () => {
         <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
         <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
         {/* ── Modules Station-Service & Hydrocarbures ── */}
-        <Route path="pompes"      element={<PompesPage />} />
-        <Route path="cuves"       element={<PompesPage />} />
-        <Route path="jaugeages"   element={<PompesPage />} />
-        <Route path="receptions"  element={<PompesPage />} />
-        <Route path="postes"      element={<PostesPage />} />
-        <Route path="flottes"     element={<FlottesPage />} />
-        <Route path="anomalies"   element={<AnomaliesPage />} />
+        <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="cuves"       element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="jaugeages"   element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="receptions"  element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
+        <Route path="flottes"     element={<ModuleGuard moduleId="flottes_vehicules"><FlottesPage /></ModuleGuard>} />
+        <Route path="anomalies"   element={<ModuleGuard moduleId="anomalies_controles"><AnomaliesPage /></ModuleGuard>} />
         <Route path="lubrifiants" element={<ModuleGuard moduleId="lubrifiants"><LubrifiantsPage /></ModuleGuard>} />
         {/* ── Modules Bar, Restaurant, Maquis & Fast-Food ── */}
-        <Route path="tables"       element={<TablesPlanPage />} />
-        <Route path="cuisine-bar"  element={<CuisineBarKDSPage />} />
-        <Route path="recettes"     element={<RecettesFichesPage />} />
-        <Route path="reservations" element={<SectorAwareReservations />} />
-        <Route path="pertes"       element={<PertesGaspillagePage />} />
-        <Route path="serveurs"     element={<ServeursPersonnelPage />} />
-        <Route path="evenements"   element={<EvenementsPage />} />
+        <Route path="tables"       element={<ModuleGuard moduleId="tables_plan"><TablesPlanPage /></ModuleGuard>} />
+        <Route path="cuisine-bar"  element={<ModuleGuard moduleId="cuisine_bar"><CuisineBarKDSPage /></ModuleGuard>} />
+        <Route path="recettes"     element={<ModuleGuard moduleId="recettes"><RecettesFichesPage /></ModuleGuard>} />
+        <Route path="reservations" element={<ModuleGuard moduleId="reservations"><SectorAwareReservations /></ModuleGuard>} />
+        <Route path="pertes"       element={<ModuleGuard moduleId="pertes_gaspillage"><PertesGaspillagePage /></ModuleGuard>} />
+        <Route path="serveurs"     element={<ModuleGuard moduleId="serveurs"><ServeursPersonnelPage /></ModuleGuard>} />
+        <Route path="evenements"   element={<ModuleGuard moduleId="evenements"><EvenementsPage /></ModuleGuard>} />
         {/* ── Modules Hôtel ── */}
         <Route path="chambres"     element={<ModuleGuard moduleId="chambres_reservations"><ChambresHotelPage /></ModuleGuard>} />
         <Route path="housekeeping" element={<ModuleGuard moduleId="housekeeping"><HousekeepingPage /></ModuleGuard>} />
@@ -922,20 +923,21 @@ const AppRoutes: React.FC = () => {
         <Route path="materiel"            element={<ModuleGuard moduleId="location_materiel"><MaterielPage /></ModuleGuard>} />
         <Route path="traiteur"            element={<ModuleGuard moduleId="traiteur_prestations"><TraiteurPage /></ModuleGuard>} />
         {/* ── Modules Géolocalisation & Flotte (20ᵉ Activité) ── */}
-        <Route path="carte"            element={<FlotteLiveMapPage />} />
-        <Route path="flotte-carte"     element={<FlotteLiveMapPage />} />
-        <Route path="parc-vehicules"   element={<FlotteVehiculesPage />} />
-        <Route path="conducteurs"      element={<FlotteConducteursPage />} />
-        <Route path="missions"         element={<FlotteMissionsPage />} />
-        <Route path="carburant"        element={<FlotteCarburantPage />} />
-        <Route path="maintenance"      element={<FlotteMaintenancePage />} />
-        <Route path="documents"        element={<SectorAwareDocuments />} />
-        <Route path="geofences"        element={<FlotteGeofencesPage />} />
-        <Route path="capteurs"         element={<FlotteCapteursPage />} />
-        <Route path="inspections"      element={<FlotteInspectionsPage />} />
-        <Route path="rapports-flotte"  element={<FlotteRapportsPage />} />
-        <Route path="integrations-gps" element={<FlotteIntegrationsGpsPage />} />
-        <Route path="parametres-gps"   element={<FlotteParametresGpsPage />} />
+        <Route path="live-map"         element={<ModuleGuard moduleId="flotte_carte"><FlotteLiveMapPage /></ModuleGuard>} />
+        <Route path="carte"            element={<ModuleGuard moduleId="flotte_carte"><FlotteLiveMapPage /></ModuleGuard>} />
+        <Route path="flotte-carte"     element={<ModuleGuard moduleId="flotte_carte"><FlotteLiveMapPage /></ModuleGuard>} />
+        <Route path="parc-vehicules"   element={<ModuleGuard moduleId="flotte_vehicules"><FlotteVehiculesPage /></ModuleGuard>} />
+        <Route path="conducteurs"      element={<ModuleGuard moduleId="flotte_conducteurs"><FlotteConducteursPage /></ModuleGuard>} />
+        <Route path="missions"         element={<ModuleGuard moduleId="flotte_missions"><FlotteMissionsPage /></ModuleGuard>} />
+        <Route path="carburant"        element={<ModuleGuard moduleId="flotte_carburant"><FlotteCarburantPage /></ModuleGuard>} />
+        <Route path="maintenance"      element={<ModuleGuard moduleId="flotte_maintenance"><FlotteMaintenancePage /></ModuleGuard>} />
+        <Route path="documents"        element={<ModuleGuard moduleId="flotte_documents"><SectorAwareDocuments /></ModuleGuard>} />
+        <Route path="geofences"        element={<ModuleGuard moduleId="flotte_geofences"><FlotteGeofencesPage /></ModuleGuard>} />
+        <Route path="capteurs"         element={<ModuleGuard moduleId="flotte_capteurs"><FlotteCapteursPage /></ModuleGuard>} />
+        <Route path="inspections"      element={<ModuleGuard moduleId="flotte_inspections"><FlotteInspectionsPage /></ModuleGuard>} />
+        <Route path="rapports-flotte"  element={<ModuleGuard moduleId="flotte_rapports"><FlotteRapportsPage /></ModuleGuard>} />
+        <Route path="integrations-gps" element={<ModuleGuard moduleId="flotte_integrations"><FlotteIntegrationsGpsPage /></ModuleGuard>} />
+        <Route path="parametres-gps"   element={<ModuleGuard moduleId="flotte_parametres"><FlotteParametresGpsPage /></ModuleGuard>} />
       </Route>
 
       {/* Rétrocompatibilité /dashboard */}
