@@ -22,6 +22,7 @@ import { ModuleSkeleton } from './components/ui/Skeleton'
 import SplashScreen from './components/common/SplashScreen'
 import { CustomModalGestio } from './components/modals/CustomModalGestio'
 import PwaUpdateToast from './components/common/PwaUpdateToast'
+import PwaInstallBanner from './components/common/PwaInstallBanner'
 
 // ─── GESTIO 229 ADMIN — Back-Office Super Administrateur ──────────────────
 import AdminLoginPage from './pages/admin/AdminLoginPage'
@@ -1009,6 +1010,7 @@ const App: React.FC = () => {
         <AppInitializer />
         <CustomModalGestio />
         <PwaUpdateToast />
+        <PwaInstallBanner />
         <SectorErrorBoundary>
           <Suspense fallback={<FullPageLoader />}>
             <AppRoutes />

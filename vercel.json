@@ -7,7 +7,7 @@
   ],
   "headers": [
     {
-      "source": "/(index.html|sw.js|registerSW.js|manifest.webmanifest)",
+      "source": "/(index.html|sw.js|registerSW.js|manifest.webmanifest|manifest.json|version.json)",
       "headers": [
         {
           "key": "Cache-Control",

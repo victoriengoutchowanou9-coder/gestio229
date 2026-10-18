@@ -96,14 +96,26 @@ async function generate() {
     .resize(512, 512)
     .png()
     .toFile(path.resolve(iconsDir, 'icon-maskable-512.png'));
+  await sharp(svgBuffer)
+    .resize(512, 512)
+    .png()
+    .toFile(path.resolve(publicDir, 'icon-maskable-512.png'));
   console.log('✅ Mis à jour: public/icons/icon-512.png & icon-maskable-512.png');
 
-  // 4. /public/icons/icon-192.png
+  // 4. /public/icons/icon-192.png & maskable
   await sharp(svgBuffer)
     .resize(192, 192)
     .png()
     .toFile(path.resolve(iconsDir, 'icon-192.png'));
-  console.log('✅ Mis à jour: public/icons/icon-192.png');
+  await sharp(svgBuffer)
+    .resize(192, 192)
+    .png()
+    .toFile(path.resolve(iconsDir, 'icon-maskable-192.png'));
+  await sharp(svgBuffer)
+    .resize(192, 192)
+    .png()
+    .toFile(path.resolve(publicDir, 'icon-maskable-192.png'));
+  console.log('✅ Mis à jour: public/icons/icon-192.png & icon-maskable-192.png');
 
   // 5. Apple Touch Icon (180x180)
   await sharp(svgBuffer)
