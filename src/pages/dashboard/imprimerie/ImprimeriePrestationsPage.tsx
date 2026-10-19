@@ -7,7 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   Printer, Plus, RefreshCw, Layers, DollarSign, TrendingUp,
   Sliders, Search, Edit3, Trash2, CheckCircle2, AlertTriangle,
-  X, Save, FileText, ChevronRight, Eye, Palette
+  X, Save, FileText, ChevronRight, Eye, Palette, Minus, Package
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useAuthStore } from '../../../store/authStore'
@@ -169,20 +169,45 @@ export const ImprimeriePrestationsPage: React.FC = () => {
     }))
   }
 
+  const handleUpdateMatiereQte = (index: number, newQte: number) => {
+    if (newQte < 0) return
+    setForm((p) => {
+      const updated = [...p.matieresBom]
+      const item = { ...updated[index] }
+      item.quantite_prevue = newQte
+      const pu = Number(item.prix_vente_ref || item.cout_unitaire_prevu || 0)
+      const gache = Number(item.taux_gache || 0)
+      item.cout_total_prevu = Math.round(newQte * pu * (1 + gache / 100) * 100) / 100
+      updated[index] = item
+      return { ...p, matieresBom: updated }
+    })
+  }
+
   // Calcul instantané des coûts dans le formulaire
-  const formCoutMatieres = form.matieresBom.reduce((acc, m) => acc + (m.cout_total_prevu || 0), 0)
-  const formCoutRevient = formCoutMatieres + form.cout_mo_defaut + form.cout_finition_defaut + form.cout_autres_defaut
-  const formMargeTheorique = form.prix_vente - formCoutRevient
-  const formTauxMarge = form.prix_vente > 0 ? (formMargeTheorique / form.prix_vente) * 100 : 0
+  const formCoutMatieres = form.matieresBom.reduce((acc, m) => acc + (Number(m.cout_total_prevu) || 0), 0)
+  const formCoutRevient = formCoutMatieres + (Number(form.cout_mo_defaut) || 0) + (Number(form.cout_finition_defaut) || 0) + (Number(form.cout_autres_defaut) || 0)
+  const formMargeTheorique = (Number(form.prix_vente) || 0) - formCoutRevient
+  const formTauxMarge = Number(form.prix_vente) > 0 ? (formMargeTheorique / Number(form.prix_vente)) * 100 : 0
 
   // Sauvegarde
+  const [isSaving, setIsSaving] = useState(false)
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!companyId || !form.nom.trim()) {
+    if (!companyId) {
+      notify('error', 'Session entreprise introuvable.')
+      return
+    }
+    if (!form.nom.trim()) {
       notify('error', 'Veuillez saisir un nom pour la prestation.')
       return
     }
+    if (Number(form.prix_vente) <= 0) {
+      notify('error', 'Veuillez saisir un prix de vente valide supérieur à zéro.')
+      return
+    }
 
+    setIsSaving(true)
     try {
       await imprimerieService.savePrestation(
         {
@@ -190,28 +215,31 @@ export const ImprimeriePrestationsPage: React.FC = () => {
           company_id: companyId,
           sector_slug: activeSector,
           code: form.code,
-          nom: form.nom,
+          nom: form.nom.trim(),
           categorie: form.categorie,
           description: form.description,
           mode_calcul: form.mode_calcul,
           unite_facturation: form.unite_facturation,
-          prix_vente: form.prix_vente,
-          prix_minimum: form.prix_minimum,
-          prix_gros: form.prix_gros,
+          prix_vente: Number(form.prix_vente),
+          prix_minimum: Number(form.prix_minimum) || 0,
+          prix_gros: Number(form.prix_gros) || 0,
           tva_applicable: form.tva_applicable,
           aib_applicable: form.aib_applicable,
-          cout_mo_defaut: form.cout_mo_defaut,
-          cout_finition_defaut: form.cout_finition_defaut,
-          cout_autres_defaut: form.cout_autres_defaut,
+          cout_mo_defaut: Number(form.cout_mo_defaut) || 0,
+          cout_finition_defaut: Number(form.cout_finition_defaut) || 0,
+          cout_autres_defaut: Number(form.cout_autres_defaut) || 0,
           est_actif: true,
         },
         form.matieresBom
       )
-      notify('success', 'Prestation enregistrée avec sa nomenclature BOM !')
+      notify('success', 'Prestation enregistrée avec succès avec sa nomenclature BOM !')
       setShowModal(false)
       loadData()
     } catch (err: any) {
+      console.error('Erreur enregistrement:', err)
       notify('error', err.message || 'Erreur enregistrement.')
+    } finally {
+      setIsSaving(false)
     }
   }
 
@@ -255,14 +283,13 @@ export const ImprimeriePrestationsPage: React.FC = () => {
           <button onClick={loadData} className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition" title="Actualiser">
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-pink-600' : ''}`} />
           </button>
-          {mainModuleTab === 'catalogue_bom' && (
-            <button
-              onClick={() => handleOpenModal()}
-              className="flex items-center gap-2 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl text-xs shadow-sm transition"
-            >
-              <Plus className="w-4 h-4" /> Nouvelle Prestation BOM
-            </button>
-          )}
+          <button
+            onClick={() => handleOpenModal()}
+            className="flex items-center gap-2 px-4 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl text-xs shadow-sm transition"
+            title="Créer une nouvelle prestation avec sa nomenclature BOM"
+          >
+            <Plus className="w-4 h-4" /> Nouvelle prestation
+          </button>
         </div>
       </div>
 
@@ -390,8 +417,18 @@ export const ImprimeriePrestationsPage: React.FC = () => {
 
       {/* ── MODAL NOUVELLE / ÉDITION PRESTATION + BOM ── */}
       {showModal && (
-        <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 space-y-5 my-8 shadow-2xl animate-scaleUp">
+        <div
+          className={`fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-fadeIn ${
+            showBomModal ? 'pointer-events-none select-none' : ''
+          }`}
+          style={{ zIndex: 50 }}
+          aria-hidden={showBomModal}
+        >
+          <div
+            className={`bg-white rounded-3xl max-w-3xl w-full p-5 sm:p-6 space-y-5 my-6 shadow-2xl border border-slate-200 animate-scaleUp transition-opacity duration-200 ${
+              showBomModal ? 'opacity-40' : 'opacity-100'
+            }`}
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-black text-slate-900">
@@ -399,7 +436,11 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                 </h3>
                 <p className="text-xs text-slate-500">Configuration des prix, unités et consommation théorique</p>
               </div>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-600">
+              <button
+                type="button"
+                onClick={() => setShowModal(false)}
+                className="p-1.5 hover:bg-slate-100 rounded-xl text-slate-400 hover:text-slate-600 transition"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -482,7 +523,7 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                       Matières Premières Associées (BOM)
                     </span>
                     <span className="text-[11px] text-slate-400">
-                      Coûts calculés d'après le prix de vente du stock vente
+                      Coûts calculés d'après le prix de vente synchronisé du stock vente
                     </span>
                   </div>
                   <button
@@ -495,56 +536,101 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                 </div>
 
                 {form.matieresBom.length === 0 ? (
-                  <div className="p-3.5 bg-slate-50/80 rounded-2xl border border-dashed border-slate-300 text-slate-400 text-xs text-center flex flex-col sm:flex-row items-center justify-between gap-2">
-                    <span>Aucune matière liée. Le coût matières sera calculé à 0 F.</span>
+                  <div className="p-4 bg-slate-50/80 rounded-2xl border border-dashed border-slate-300 text-slate-500 text-xs text-center flex flex-col sm:flex-row items-center justify-between gap-2">
+                    <div className="text-left">
+                      <span className="font-semibold block text-slate-700">Aucune matière première associée.</span>
+                      <span className="text-[11px] text-slate-400">Le coût matières de cette prestation est calculé à 0 FCFA.</span>
+                    </div>
                     <button
                       type="button"
                       onClick={() => setShowBomModal(true)}
-                      className="text-xs font-bold text-pink-600 hover:underline flex items-center gap-1"
+                      className="px-3 py-1.5 bg-pink-50 hover:bg-pink-100 text-pink-700 rounded-xl font-bold text-xs flex items-center gap-1.5 transition"
                     >
-                      <Plus className="w-3 h-3" /> Ouvrir la nomenclature BOM
+                      <Plus className="w-3.5 h-3.5" /> Ouvrir la nomenclature BOM
                     </button>
                   </div>
                 ) : (
-                  <div className="space-y-1.5 max-h-48 overflow-y-auto">
-                    {form.matieresBom.map((m, idx) => (
-                      <div
-                        key={idx}
-                        className="p-2.5 bg-slate-50 hover:bg-slate-100/70 rounded-xl border border-slate-200 flex items-center justify-between gap-2 text-xs transition"
-                      >
-                        <div className="flex-1 min-w-0">
-                          <span className="font-bold text-slate-800 block truncate">{m.matiere_nom}</span>
-                          <span className="text-[10px] text-slate-500">
-                            {m.quantite_prevue} {m.unite} • {m.base_calcul === 'm2' ? 'par m²' : m.base_calcul === 'piece' ? 'par pièce' : m.base_calcul || 'par unité'}
-                            {m.taux_gache ? ` • Gâche: +${m.taux_gache}%` : ''}
-                            {m.prix_vente_ref ? ` • Prix réf: ${Number(m.prix_vente_ref).toLocaleString('fr-FR')} F` : ''}
-                          </span>
-                        </div>
-                        <div className="text-right shrink-0">
-                          <span className="font-black text-pink-700 block">
-                            {Number(m.cout_total_prevu || 0).toLocaleString('fr-FR')} F
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0 ml-1">
-                          <button
-                            type="button"
-                            onClick={() => setShowBomModal(true)}
-                            className="p-1 text-slate-400 hover:text-pink-600 hover:bg-white rounded-md transition"
-                            title="Modifier dans la fenêtre Nomenclature BOM"
-                          >
-                            <Edit3 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveMatiereBom(idx)}
-                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-white rounded-md transition"
-                            title="Supprimer cette matière"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
+                    <div className="overflow-x-auto max-h-56">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold sticky top-0 z-10">
+                          <tr>
+                            <th className="px-3 py-2">Matière première</th>
+                            <th className="px-3 py-2 text-center">Quantité & Unité</th>
+                            <th className="px-3 py-2 text-right">Prix unitaire réf.</th>
+                            <th className="px-3 py-2 text-right">Coût total</th>
+                            <th className="px-3 py-2 text-center">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {form.matieresBom.map((m, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50 transition">
+                              <td className="px-3 py-2 font-bold text-slate-800">
+                                <div>{m.matiere_nom}</div>
+                                {m.matiere_code && (
+                                  <span className="text-[10px] text-slate-400 font-mono block">{m.matiere_code}</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="inline-flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-lg">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateMatiereQte(idx, Math.max(0.1, Math.round((Number(m.quantite_prevue || 1) - 0.5) * 10) / 10))}
+                                    className="w-4 h-4 flex items-center justify-center text-slate-600 hover:text-pink-600 font-bold"
+                                    title="Diminuer la quantité"
+                                  >
+                                    <Minus className="w-3 h-3" />
+                                  </button>
+                                  <input
+                                    type="number"
+                                    step="0.1"
+                                    min="0.001"
+                                    value={m.quantite_prevue}
+                                    onChange={(e) => handleUpdateMatiereQte(idx, Number(e.target.value))}
+                                    className="w-14 text-center bg-white border border-slate-300 rounded font-bold text-xs py-0.5"
+                                  />
+                                  <span className="text-[11px] font-semibold text-slate-600">{m.unite}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateMatiereQte(idx, Math.round((Number(m.quantite_prevue || 1) + 0.5) * 10) / 10)}
+                                    className="w-4 h-4 flex items-center justify-center text-slate-600 hover:text-pink-600 font-bold"
+                                    title="Augmenter la quantité"
+                                  >
+                                    <Plus className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium text-slate-600">
+                                {Number(m.prix_vente_ref || m.cout_unitaire_prevu || 0).toLocaleString('fr-FR')} F
+                              </td>
+                              <td className="px-3 py-2 text-right font-black text-pink-700">
+                                {Number(m.cout_total_prevu || 0).toLocaleString('fr-FR')} F
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => setShowBomModal(true)}
+                                    className="p-1 text-slate-400 hover:text-pink-600 hover:bg-pink-50 rounded-lg transition"
+                                    title="Modifier dans la modale Nomenclature BOM"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRemoveMatiereBom(idx)}
+                                    className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                                    title="Retirer cette matière"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -584,14 +670,24 @@ export const ImprimeriePrestationsPage: React.FC = () => {
               </div>
 
               {/* Résumé de Calcul Automatique */}
-              <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 flex items-center justify-between font-bold text-xs">
-                <div>
-                  <span className="text-slate-600 block">Coût Revient Estimé : {formCoutRevient.toLocaleString('fr-FR')} F</span>
-                  <span className="text-[10px] text-slate-400">Matières + MO + Finition</span>
+              <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 font-bold text-xs">
+                <div className="space-y-0.5">
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-500 font-semibold">Coût matières :</span>
+                    <span className="font-bold text-pink-700">{formCoutMatieres.toLocaleString('fr-FR')} FCFA</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-slate-700 font-bold">Coût de revient estimé :</span>
+                    <span className="text-rose-600 font-black">{formCoutRevient.toLocaleString('fr-FR')} FCFA</span>
+                  </div>
+                  <span className="text-[10px] text-slate-400 block">Formule : Matières + Main-d'œuvre + Finition + Autres frais</span>
                 </div>
-                <div className="text-right">
-                  <span className="text-emerald-800 text-sm block">Marge : {formMargeTheorique.toLocaleString('fr-FR')} F</span>
-                  <span className="text-emerald-600 text-[10px] font-black">Taux : {formTauxMarge.toFixed(1)}%</span>
+                <div className="text-left sm:text-right border-t sm:border-t-0 border-emerald-200 pt-2 sm:pt-0">
+                  <span className="text-slate-500 text-[11px] block">Marge Brute Estimée</span>
+                  <span className="text-emerald-800 text-base font-black block">
+                    {formMargeTheorique.toLocaleString('fr-FR')} FCFA
+                  </span>
+                  <span className="text-emerald-600 text-[11px] font-black">Taux de marge : {formTauxMarge.toFixed(1)}%</span>
                 </div>
               </div>
 
@@ -599,15 +695,17 @@ export const ImprimeriePrestationsPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => setShowModal(false)}
-                  className="px-3 py-2 border border-slate-300 rounded-xl font-bold text-slate-600"
+                  className="px-3 py-2 border border-slate-300 rounded-xl font-bold text-slate-600 hover:bg-slate-50 transition"
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-pink-600 hover:bg-pink-700 text-white rounded-xl font-black shadow-xs transition"
+                  disabled={isSaving}
+                  className="px-4 py-2 bg-pink-600 hover:bg-pink-700 disabled:opacity-50 text-white rounded-xl font-black shadow-xs transition flex items-center gap-1.5"
                 >
-                  Enregistrer la Prestation
+                  <Save className="w-4 h-4" />
+                  {isSaving ? 'Enregistrement en cours...' : 'Enregistrer la Prestation'}
                 </button>
               </div>
             </form>
@@ -682,7 +780,7 @@ export const ImprimeriePrestationsPage: React.FC = () => {
               matieresBom: updatedBom,
             }))
             setShowBomModal(false)
-            notify('success', 'Nomenclature BOM mise à jour et coûts recalculés !')
+            notify('success', `Nomenclature BOM appliquée : ${updatedBom.length} matière(s) synchronisée(s) et coûts recalculés !`)
           }}
           prestationNom={form.nom}
           modeCalculPrestation={form.mode_calcul}

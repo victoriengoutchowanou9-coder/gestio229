@@ -7,8 +7,7 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import {
   Layers, Plus, Trash2, Edit2, AlertTriangle, CheckCircle2,
-  X, RefreshCw, Info, DollarSign, Scale, ArrowRight, ShieldAlert,
-  Percent, Hash, Package
+  X, RefreshCw, Search, ShieldAlert, Package, Minus
 } from 'lucide-react'
 import {
   PrestationMatiereBOM,
@@ -38,10 +37,24 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
 }) => {
   if (!isOpen) return null
 
-  // Liste locale des matières associées au BOM
+  // Liste locale et temporaire des matières associées au BOM
   const [bomItems, setBomItems] = useState<PrestationMatiereBOM[]>(() => {
     return initialBom.map(item => ({ ...item }))
   })
+
+  // Réinitialisation de l'état temporaire à l'ouverture
+  useEffect(() => {
+    if (isOpen) {
+      setBomItems(initialBom.map(item => ({ ...item })))
+      setEditingIndex(null)
+      setFormError(null)
+      setApplyError(null)
+      setSuccessFeedback(null)
+    }
+  }, [isOpen, initialBom])
+
+  // Recherche dans les matières premières disponibles
+  const [searchMatiere, setSearchMatiere] = useState('')
 
   // Mode édition d'une ligne existante
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
@@ -55,6 +68,19 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
   const [tauxGache, setTauxGache] = useState<number>(5)
   const [prixVenteRef, setPrixVenteRef] = useState<number>(0)
   const [formError, setFormError] = useState<string | null>(null)
+  const [applyError, setApplyError] = useState<string | null>(null)
+  const [successFeedback, setSuccessFeedback] = useState<string | null>(null)
+
+  // Matières disponibles filtrées par recherche
+  const filteredMatieresDisponibles = useMemo(() => {
+    if (!searchMatiere.trim()) return matieresDisponibles
+    const q = searchMatiere.toLowerCase()
+    return matieresDisponibles.filter(m =>
+      m.nom.toLowerCase().includes(q) ||
+      (m.code && m.code.toLowerCase().includes(q)) ||
+      (m.categorie && m.categorie.toLowerCase().includes(q))
+    )
+  }, [matieresDisponibles, searchMatiere])
 
   // Matière sélectionnée dans le catalogue
   const selectedMatiere = useMemo(() => {
@@ -63,19 +89,22 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
 
   // Initialisation à la première matière disponible si formulaire vide
   useEffect(() => {
-    if (!selectedMatiereId && matieresDisponibles.length > 0 && editingIndex === null) {
-      handleSelectMatiere(matieresDisponibles[0].id)
+    if (editingIndex === null) {
+      const targetList = filteredMatieresDisponibles.length > 0 ? filteredMatieresDisponibles : matieresDisponibles
+      if (targetList.length > 0 && (!selectedMatiereId || !targetList.some(m => m.id === selectedMatiereId))) {
+        handleSelectMatiere(targetList[0].id)
+      }
     }
-  }, [matieresDisponibles, selectedMatiereId, editingIndex])
+  }, [filteredMatieresDisponibles, matieresDisponibles, selectedMatiereId, editingIndex])
 
   // Sélection d'une matière et récupération automatique du prix de vente stock vente
   const handleSelectMatiere = (matiereId: string) => {
     setSelectedMatiereId(matiereId)
     setFormError(null)
+    setApplyError(null)
 
     const mat = matieresDisponibles.find(m => m.id === matiereId)
     if (mat) {
-      // Synchronisation avec Matières premières -> Stock vente
       const pv = Number(mat.prix_vente || 0)
       setPrixVenteRef(pv)
     }
@@ -105,18 +134,36 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
     setTauxGache(Number(item.taux_gache || 0))
     setPrixVenteRef(Number(item.prix_vente_ref || item.cout_unitaire_prevu || 0))
     setFormError(null)
+    setApplyError(null)
+    setSuccessFeedback(null)
   }
 
   // Annuler l'édition en cours
   const handleCancelEdit = () => {
     setEditingIndex(null)
     setFormError(null)
+    setApplyError(null)
     if (matieresDisponibles.length > 0) {
       handleSelectMatiere(matieresDisponibles[0].id)
       setQuantite(1)
       setTauxGache(5)
       setBaseCalcul(modeCalculPrestation === 'm2' ? 'm2' : 'piece')
     }
+  }
+
+  // Modification directe de la quantité dans la liste
+  const handleUpdateItemQuantity = (index: number, newQte: number) => {
+    if (newQte <= 0) return
+    setBomItems(prev => {
+      const copy = [...prev]
+      const item = { ...copy[index] }
+      item.quantite_prevue = Number(newQte)
+      const pu = Number(item.prix_vente_ref || item.cout_unitaire_prevu || 0)
+      const gache = Number(item.taux_gache || 0)
+      item.cout_total_prevu = Math.round(newQte * pu * (1 + gache / 100) * 100) / 100
+      copy[index] = item
+      return copy
+    })
   }
 
   // Suppression d'une matière
@@ -127,10 +174,11 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
     }
   }
 
-  // Ajout ou mise à jour de la matière dans la nomenclature
+  // Ajout ou mise à jour de la matière dans la nomenclature locale
   const handleSubmitItem = (e: React.FormEvent) => {
     e.preventDefault()
     setFormError(null)
+    setApplyError(null)
 
     if (!selectedMatiere) {
       setFormError('Veuillez sélectionner une matière première dans la liste.')
@@ -175,33 +223,93 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
         return copy
       })
       handleCancelEdit()
+      setSuccessFeedback('Matière mise à jour dans la nomenclature.')
     } else {
-      // Vérification des doublons
+      // Vérification des doublons : fusion ou ajout
       const existingIdx = bomItems.findIndex(i => i.matiere_id === selectedMatiere.id)
       if (existingIdx >= 0) {
-        // Mise à jour de la ligne existante
         const updated = [...bomItems]
         updated[existingIdx] = newItem
         setBomItems(updated)
+        setSuccessFeedback(`Quantité mise à jour pour ${selectedMatiere.nom}.`)
       } else {
         setBomItems(prev => [...prev, newItem])
+        setSuccessFeedback(`Matière « ${selectedMatiere.nom} » ajoutée ! Vous pouvez en ajouter d'autres.`)
       }
 
-      // Réinitialiser les champs tout en conservant une saisie rapide
+      // Réinitialiser les champs tout en conservant une saisie rapide pour la prochaine matière
       setQuantite(1)
       setTauxGache(5)
     }
+
+    // Effacer le message de succès après 3 secondes
+    setTimeout(() => {
+      setSuccessFeedback(null)
+    }, 3000)
   }
 
-  // Enregistrer et retourner à la fenêtre principale
+  // Validation rigoureuse et application des matières à la prestation
   const handleSaveAndClose = () => {
-    onSave(bomItems)
+    setApplyError(null)
+
+    // Vérifier les quantités
+    for (let i = 0; i < bomItems.length; i++) {
+      const item = bomItems[i]
+      if (!item.quantite_prevue || Number(item.quantite_prevue) <= 0) {
+        setApplyError(`La quantité pour « ${item.matiere_nom} » doit être strictement supérieure à 0.`)
+        return
+      }
+    }
+
+    // Dédoublonnage et consolidation par matière
+    const dedupMap = new Map<string, PrestationMatiereBOM>()
+    for (const item of bomItems) {
+      const key = item.matiere_id
+      const pu = Number(item.prix_vente_ref || item.cout_unitaire_prevu || 0)
+      const gache = Number(item.taux_gache || 0)
+      const qte = Number(item.quantite_prevue || 0)
+
+      if (dedupMap.has(key)) {
+        const existing = dedupMap.get(key)!
+        const combinedQte = Number(existing.quantite_prevue || 0) + qte
+        const combinedCout = Math.round(combinedQte * pu * (1 + gache / 100) * 100) / 100
+        dedupMap.set(key, {
+          ...existing,
+          quantite_prevue: combinedQte,
+          cout_total_prevu: combinedCout,
+        })
+      } else {
+        const coutTotal = Math.round(qte * pu * (1 + gache / 100) * 100) / 100
+        dedupMap.set(key, {
+          ...item,
+          quantite_prevue: qte,
+          cout_unitaire_prevu: pu,
+          prix_vente_ref: pu,
+          cout_total_prevu: coutTotal,
+        })
+      }
+    }
+
+    const validatedBom = Array.from(dedupMap.values())
+    onSave(validatedBom)
     onClose()
   }
 
+  const modalTitle = prestationNom && prestationNom.trim()
+    ? `Nomenclature (BOM) — ${prestationNom.trim()}`
+    : 'Nomenclature (BOM) — Nouvelle Prestation'
+
   return (
-    <div className="fixed inset-0 z-60 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-fadeIn">
-      <div className="bg-white rounded-3xl max-w-4xl w-full p-5 sm:p-6 space-y-5 my-6 shadow-2xl border border-slate-200 animate-scaleUp">
+    <div
+      className="fixed inset-0 z-70 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-3 sm:p-5 overflow-y-auto animate-fadeIn"
+      style={{ zIndex: 70 }}
+      role="dialog"
+      aria-modal="true"
+    >
+      <div
+        className="bg-white rounded-3xl max-w-4xl w-full p-5 sm:p-6 space-y-5 my-6 shadow-2xl border border-slate-200 animate-scaleUp relative"
+        style={{ zIndex: 71 }}
+      >
         
         {/* ── En-tête de la fenêtre BOM ── */}
         <div className="flex items-center justify-between border-b border-slate-100 pb-4">
@@ -211,10 +319,10 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
             </div>
             <div>
               <h3 className="text-base sm:text-lg font-black text-slate-900 leading-tight">
-                Nomenclature (BOM) — {prestationNom.trim() || 'Nouvelle Prestation'}
+                {modalTitle}
               </h3>
               <p className="text-xs text-slate-500">
-                Recette matières, pertes/gâche et synchronisation automatique avec le stock vente
+                Sélection des matières premières, calcul des coûts, gâche et synchronisation automatique avec le stock vente
               </p>
             </div>
           </div>
@@ -231,7 +339,7 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
         {/* ── Indicateur financier synthétique ── */}
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200">
-            <span className="text-[11px] font-bold text-slate-500 uppercase block mb-0.5">Matières associées</span>
+            <span className="text-[11px] font-bold text-slate-500 uppercase block mb-0.5">Matières configurées</span>
             <span className="text-base font-black text-slate-900">{bomItems.length} matériau(x)</span>
           </div>
 
@@ -261,11 +369,27 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
           </div>
         </div>
 
+        {/* Message de succès temporaire */}
+        {successFeedback && (
+          <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center gap-2 animate-fadeIn">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="font-semibold">{successFeedback}</span>
+          </div>
+        )}
+
+        {/* Message d'erreur de validation d'application */}
+        {applyError && (
+          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2 animate-fadeIn">
+            <ShieldAlert className="w-4 h-4 shrink-0" />
+            <span className="font-semibold">{applyError}</span>
+          </div>
+        )}
+
         {/* ── Tableau des matières associées à la prestation ── */}
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h4 className="text-xs font-black text-slate-800 uppercase tracking-wide flex items-center gap-1.5">
-              <Package className="w-3.5 h-3.5 text-pink-600" /> Matières dans la Nomenclature
+              <Package className="w-3.5 h-3.5 text-pink-600" /> Matières dans la Nomenclature BOM
             </h4>
             <span className="text-[11px] font-medium text-slate-400">
               {bomItems.length === 0 ? 'Aucune matière' : `${bomItems.length} entrée(s)`}
@@ -275,9 +399,9 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
           {bomItems.length === 0 ? (
             <div className="text-center py-8 bg-slate-50/60 rounded-2xl border border-dashed border-slate-300 text-slate-400 text-xs">
               <Layers className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-              Aucun matériau associé à cette prestation.
+              Aucun matériau associé pour l'instant.
               <p className="text-[11px] text-slate-400 mt-1">
-                Utilisez le formulaire ci-dessous pour ajouter vos matières premières (bâche, vinyle, encres, etc.).
+                Sélectionnez une matière première ci-dessous (bâche, vinyle, encre...) et cliquez sur « Ajouter ».
               </p>
             </div>
           ) : (
@@ -287,11 +411,11 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
                   <thead className="bg-slate-50 border-b border-slate-200 text-slate-600 font-bold sticky top-0 z-10">
                     <tr>
                       <th className="px-3.5 py-2.5">Matériau / Matière</th>
-                      <th className="px-3 py-2.5 text-center">Qté / Unité</th>
-                      <th className="px-3 py-2.5 text-center">Base de calcul</th>
+                      <th className="px-3 py-2.5 text-center">Quantité & Unité</th>
+                      <th className="px-3 py-2.5 text-center">Base calcul</th>
                       <th className="px-3 py-2.5 text-center">Gâche (%)</th>
-                      <th className="px-3 py-2.5 text-right">Prix Réf. (Vente)</th>
-                      <th className="px-3.5 py-2.5 text-right">Coût Estimé</th>
+                      <th className="px-3 py-2.5 text-right">Prix Unitaire Réf.</th>
+                      <th className="px-3.5 py-2.5 text-right">Coût Total</th>
                       <th className="px-3 py-2.5 text-center">Actions</th>
                     </tr>
                   </thead>
@@ -314,8 +438,34 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
                               <span className="text-[10px] text-slate-400 block font-mono">{item.matiere_code}</span>
                             )}
                           </td>
-                          <td className="px-3 py-2.5 text-center font-bold text-slate-700">
-                            {item.quantite_prevue} {item.unite}
+                          <td className="px-3 py-2.5 text-center">
+                            <div className="inline-flex items-center gap-1 bg-slate-100 px-2 py-1 rounded-lg">
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateItemQuantity(idx, Math.max(0.1, Math.round((Number(item.quantite_prevue || 1) - 0.5) * 10) / 10))}
+                                className="w-4 h-4 flex items-center justify-center text-slate-600 hover:text-pink-600 font-bold"
+                                title="Diminuer"
+                              >
+                                <Minus className="w-3 h-3" />
+                              </button>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0.001"
+                                value={item.quantite_prevue}
+                                onChange={(e) => handleUpdateItemQuantity(idx, Number(e.target.value))}
+                                className="w-14 text-center bg-white border border-slate-300 rounded font-bold text-xs py-0.5"
+                              />
+                              <span className="text-[11px] font-semibold text-slate-600">{item.unite}</span>
+                              <button
+                                type="button"
+                                onClick={() => handleUpdateItemQuantity(idx, Math.round((Number(item.quantite_prevue || 1) + 0.5) * 10) / 10)}
+                                className="w-4 h-4 flex items-center justify-center text-slate-600 hover:text-pink-600 font-bold"
+                                title="Augmenter"
+                              >
+                                <Plus className="w-3 h-3" />
+                              </button>
+                            </div>
                           </td>
                           <td className="px-3 py-2.5 text-center text-slate-600">
                             <span className="px-2 py-0.5 bg-slate-100 rounded-md text-[11px] font-semibold">
@@ -383,6 +533,20 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
             )}
           </div>
 
+          {/* Recherche rapide de matière */}
+          {editingIndex === null && (
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Rechercher une matière dans le catalogue (ex : bâche, encre, vinyle...)"
+                value={searchMatiere}
+                onChange={(e) => setSearchMatiere(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-pink-500"
+              />
+            </div>
+          )}
+
           {/* Message d'erreur éventuel */}
           {formError && (
             <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs flex items-center gap-2">
@@ -404,12 +568,12 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
                 onChange={(e) => handleSelectMatiere(e.target.value)}
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-pink-500 focus:outline-none"
               >
-                {matieresDisponibles.length === 0 ? (
-                  <option value="">Aucune matière en stock</option>
+                {filteredMatieresDisponibles.length === 0 ? (
+                  <option value="">Aucune matière trouvée</option>
                 ) : (
-                  matieresDisponibles.map((m) => (
+                  filteredMatieresDisponibles.map((m) => (
                     <option key={m.id} value={m.id}>
-                      {m.nom} — {m.unite} (Prix vente: {Number(m.prix_vente || 0).toLocaleString('fr-FR')} F)
+                      {m.nom} — {m.unite} (Stock: {m.stock_vente ?? m.stock_actuel ?? 0} | Prix: {Number(m.prix_vente || 0).toLocaleString('fr-FR')} F)
                     </option>
                   ))
                 )}
@@ -479,7 +643,7 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
             </div>
           </div>
 
-          {/* Détails et Avertissement Prix du stock vente */}
+          {/* Détails et Prix du stock vente */}
           {selectedMatiere && (
             <div className="pt-2 border-t border-slate-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
               <div className="flex flex-wrap items-center gap-3 text-slate-600">
@@ -488,17 +652,17 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
                 </span>
                 <span>•</span>
                 <span>
-                  <strong>Stock vente disponible :</strong> {selectedMatiere.stock_vente ?? selectedMatiere.stock_actuel ?? 0} {selectedMatiere.unite}
+                  <strong>Stock disponible :</strong> {selectedMatiere.stock_vente ?? selectedMatiere.stock_actuel ?? 0} {selectedMatiere.unite}
                 </span>
                 <span>•</span>
                 <span className="flex items-center gap-1">
-                  <strong>Prix réf. stock vente :</strong>
+                  <strong>Prix unitaire réf. stock vente :</strong>
                   <input
                     type="number"
                     value={prixVenteRef}
                     onChange={(e) => setPrixVenteRef(Number(e.target.value))}
                     className="w-24 px-1.5 py-0.5 bg-white border border-slate-300 rounded-md font-bold text-slate-900 text-right"
-                    title="Modifiable si besoin pour cette recette"
+                    title="Synchronisé avec le stock vente, modifiable pour cette recette"
                   />
                   <span>F</span>
                 </span>
@@ -510,14 +674,14 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
             </div>
           )}
 
-          {/* Avertissement explicite si pas de prix de vente dans stock vente */}
+          {/* Avertissement si aucun prix */}
           {selectedMatiere && (!prixVenteRef || prixVenteRef <= 0) && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-xs flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
                 <strong>Attention : Aucun prix de vente configuré dans le stock vente pour « {selectedMatiere.nom} » !</strong>
                 <p className="text-[11px] text-amber-700 mt-0.5">
-                  Conformément aux règles de gestion GESTIO 229, le coût matière dans la nomenclature utilise le prix de vente enregistré dans le module Matières Premières (stock vente). Veuillez saisir un prix de référence valide ci-dessus ou actualiser la fiche matière.
+                  Conformément aux règles GESTIO 229, le coût matière dans la nomenclature utilise le prix de vente enregistré dans le module Matières Premières (stock vente). Veuillez saisir un prix de référence valide ci-dessus.
                 </p>
               </div>
             </div>
@@ -540,7 +704,7 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
             className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-sm transition"
           >
             <CheckCircle2 className="w-4 h-4" />
-            Appliquer à la Prestation ({bomItems.length} matière{bomItems.length > 1 ? 's' : ''})
+            Appliquer à la prestation ({bomItems.length} matière{bomItems.length > 1 ? 's' : ''})
           </button>
         </div>
 
@@ -548,3 +712,5 @@ export const ImprimerieBomModal: React.FC<ImprimerieBomModalProps> = ({
     </div>
   )
 }
+
+export default ImprimerieBomModal
