@@ -58,48 +58,85 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     if (!company?.id || !isOpen) return
 
     const fetchResources = async () => {
-      const activeSector = sectorSlug || getActiveSectorSlug()
+      // Résolution canonique robuste du secteur actif (jamais de faux slug générique 'fournisseurs' ou 'achats')
+      const rawSector = sectorSlug || getActiveSectorSlug() || ''
+      const cleanRaw = rawSector.toLowerCase().trim().replace(/^sec-/, '')
+      const activeSector = (cleanRaw === 'fournisseurs' || cleanRaw === 'achats' || !cleanRaw)
+        ? (getActiveSectorSlug() || 'boutique')
+        : rawSector
+
       let rawSuppliers: any[] = []
       let rawProducts: any[] = []
 
       try {
-        const { data: sData } = await supabase
+        const { data: sData, error: sErr } = await supabase
           .from('suppliers')
-          .select('id, company_name, phone, city, sector_slug, sector_meta, notes')
+          .select('id, company_name, name, phone, city, sector_slug, secteur_slug, sector_meta, notes')
           .eq('company_id', company.id)
           .order('company_name')
         if (sData) rawSuppliers = sData
+        if (sErr) console.warn('[PurchaseOrderModal] Suppliers fetch warning:', sErr)
       } catch (e) {
-        console.warn('[PurchaseOrderModal] Suppliers fetch warning:', e)
+        console.warn('[PurchaseOrderModal] Suppliers fetch error:', e)
       }
 
       try {
-        const { data: pData } = await supabase
+        // Requête robuste pour récupérer TOUS les articles du stock sans être éliminés par is_active NULL ou deleted_at
+        const { data: pData, error: pErr } = await supabase
           .from('products')
-          .select('*')
+          .select('*, category:product_categories(id, name)')
           .eq('company_id', company.id)
-          .is('deleted_at', null)
-          .neq('is_active', false)
+          .or('is_active.is.null,is_active.eq.true')
           .order('name')
         if (pData) rawProducts = pData
+        if (pErr) {
+          console.warn('[PurchaseOrderModal] Products fetch warning, attempting fallback select *:', pErr)
+          const { data: pDataFallback } = await supabase
+            .from('products')
+            .select('*')
+            .eq('company_id', company.id)
+            .order('name')
+          if (pDataFallback) rawProducts = pDataFallback
+        }
       } catch (e) {
-        console.warn('[PurchaseOrderModal] Products fetch warning:', e)
+        console.warn('[PurchaseOrderModal] Products fetch error:', e)
       }
 
-      // ISOLATION STRICTE DU SOUS-LOGICIEL :
+      // ISOLATION DU SOUS-LOGICIEL :
       // Chaque secteur n'affiche QUE ses propres fournisseurs et produits.
-      // Aucun fallback global ne doit faire fuiter les produits/fournisseurs d'autres secteurs (ex: Ciment / NOCIBE BTP en Imprimerie)
       let filteredSData = filterItemsForSector(rawSuppliers, activeSector)
-      let filteredPData = filterItemsForSector(rawProducts, activeSector)
+      if (filteredSData.length === 0 && rawSuppliers.length > 0) {
+        // Si aucun fournisseur strictement marqué pour ce secteur, inclure les fournisseurs génériques de l'entreprise
+        filteredSData = rawSuppliers.filter((s: any) => !s.sector_slug || s.sector_slug === activeSector || s.secteur_slug === activeSector)
+        if (filteredSData.length === 0) filteredSData = rawSuppliers
+      }
 
-      // Si secteur Restaurant, filtrer strictement les produits par circuit (BAR vs CUISINE)
+      let filteredPData = filterItemsForSector(rawProducts, activeSector)
+      // Si le filtre sectoriel strict a retourné 0 article alors que l'entreprise a des produits,
+      // vérifier si les produits ont un sector_slug équivalent canoniquement ou sans restriction sectorielle
+      if (filteredPData.length === 0 && rawProducts.length > 0) {
+        filteredPData = rawProducts.filter((p: any) => {
+          const pSec = p.sector_slug || p.secteur_slug || p.sector_meta?.sector_slug || p.sector_meta?.secteur
+          if (!pSec) return true
+          return isItemInSector(p, activeSector)
+        })
+        if (filteredPData.length === 0) {
+          filteredPData = rawProducts
+        }
+      }
+
+      // Si secteur Restaurant / Bar / Maquis, filtrer par circuit si spécifié (BAR vs CUISINE)
       const isResto = activeSector === 'restaurant' || activeSector === 'bar-restaurant-maquis' || activeSector === 'bar' || activeSector === 'maquis' || activeSector === 'fastfood'
       if (isResto && circuit) {
-        filteredPData = filteredPData.filter((p: any) => {
+        const circuitFiltered = filteredPData.filter((p: any) => {
           const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || p.is_matiere_premiere)
           const pCircuit = p.sector_meta?.restaurant_circuit || p.restaurant_circuit || (isMatiere ? 'CUISINE' : 'BAR')
           return circuit === 'CUISINE' ? (pCircuit === 'CUISINE' || isMatiere) : (pCircuit === 'BAR' && !isMatiere)
         })
+        // Si le circuit demandé contient des articles, on applique le filtre de circuit. Sinon on conserve tous les articles du restaurant
+        if (circuitFiltered.length > 0) {
+          filteredPData = circuitFiltered
+        }
       }
 
       const mappedSuppliers = filteredSData.map((s: any) => ({
@@ -111,18 +148,45 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       }))
 
       const mappedProducts = filteredPData.map((p: any) => {
-        const photo = p.image_url || p.photo_url || p.image || p.sector_meta?.image_url || p.sector_meta?.photo_url || p.sector_meta?.photo || p.sector_meta?.image || ''
-        const coeffVal = Number(p.coefficient_conversion ?? p.coefficient ?? p.coef ?? p.sector_meta?.coefficient_conversion ?? p.sector_meta?.coef ?? 1) || 1
+        const meta = p.sector_meta || {}
+        const photo = p.image_url || p.photo_url || p.image || meta.image_url || meta.photo_url || meta.photo || meta.image || ''
+        const rawCoef = Number(p.coefficient_conversion ?? p.coefficient ?? p.coef) || 0
+        const metaCoef = Number(meta.coefficient_conversion ?? meta.coef) || 0
+        const coeffVal = rawCoef > 0 ? rawCoef : (metaCoef > 0 ? metaCoef : 1)
+
+        // Prise en compte de TOUS les stocks configurés dans le secteur (Magasin principal, Réserve, Rayon / Vente)
+        const rawMag = p.stock_magasin !== null && p.stock_magasin !== undefined ? Number(p.stock_magasin) : null
+        const metaMag = Number(meta.stock_magasin) || 0
+        const rawVente = p.stock_vente !== null && p.stock_vente !== undefined ? Number(p.stock_vente) : null
+        const metaVente = Number(meta.stock_vente) || 0
+        const rawActuel = p.stock_actuel !== null && p.stock_actuel !== undefined ? Number(p.stock_actuel) : (p.stock !== null && p.stock !== undefined ? Number(p.stock) : null)
+
+        // Valeur stock magasin : priorité à stock_magasin, sinon stock_actuel, sinon stock_vente
+        let magVal = 0
+        if (rawMag !== null && !isNaN(rawMag)) {
+          magVal = rawMag
+        } else if (metaMag > 0) {
+          magVal = metaMag
+        } else if (rawActuel !== null && !isNaN(rawActuel)) {
+          magVal = rawActuel
+        } else if (rawVente !== null && !isNaN(rawVente)) {
+          magVal = rawVente
+        }
+
+        const venteVal = (rawVente !== null && !isNaN(rawVente)) ? rawVente : (metaVente > 0 ? metaVente : 0)
+
+        const costVal = Number(p.cost_price || p.cout_achat || meta.price_achat_ucd_ttc || meta.cost_price || 0) || 0
+
         return {
           ...p,
           imageUrl: photo,
-          ucd: p.ucd || p.unite_stock || p.sector_meta?.ucd || 'Carton',
-          unit: p.unit || p.unite_vente || p.sector_meta?.uv || 'Pièce',
+          ucd: p.ucd || p.unite_stock || meta.ucd || 'Carton',
+          unit: p.unit || p.uv || p.unite_vente || meta.uv || 'Pièce',
           coefficient_conversion: coeffVal,
           coef: coeffVal,
-          cost_price: Number(p.cost_price ?? p.cout_achat ?? 0) || 0,
-          stock_magasin: Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0),
-          stock_vente: Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
+          cost_price: costVal,
+          stock_magasin: magVal,
+          stock_vente: venteVal
         }
       })
 
@@ -138,8 +202,8 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       mappedProducts.forEach((p: any) => {
         rowsMap[p.id] = {
           productId: p.id,
-          code: p.code,
-          name: p.name,
+          code: p.code || '',
+          name: p.name || '',
           ucdUnit: p.ucd || 'Carton',
           coefficient_conversion: p.coefficient_conversion || 1,
           currentStock: p.stock_magasin,
@@ -391,6 +455,12 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
     // Insertion persistante dans Supabase pour garantir la conformité SQL et multi-tables
     if (company?.id) {
       try {
+        const rawSec = sectorSlug || getActiveSectorSlug() || ''
+        const cleanSec = rawSec.toLowerCase().trim().replace(/^sec-/, '')
+        const effectiveSector = (cleanSec === 'fournisseurs' || cleanSec === 'achats' || !cleanSec)
+          ? (getActiveSectorSlug() || 'boutique')
+          : rawSec
+
         // 1. Table bons_commande
         const { data: bcCreated } = await supabase.from('bons_commande').insert({
           company_id: company.id,
@@ -398,7 +468,8 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
           numero_bc: trimmedRef,
           fournisseur_id: selectedSupplierId,
           fournisseur_nom: selectedSupplier?.name || 'Fournisseur',
-          sector_slug: getActiveSectorSlug(),
+          sector_slug: effectiveSector,
+          secteur_slug: effectiveSector,
           demandeur_nom: magasinierSigner,
           statut: 'COMMANDE',
           total_ttc: totalBcTtc,
@@ -465,7 +536,7 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
             order_number: trimmedRef,
             supplier_id: selectedSupplierId,
             supplier_name: selectedSupplier?.name || 'Fournisseur',
-            sector_slug: getActiveSectorSlug(),
+            sector_slug: effectiveSector,
             circuit: circuit || undefined,
             total_amount: totalBcTtc,
             status: 'COMMANDE',
