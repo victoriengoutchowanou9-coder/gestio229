@@ -676,22 +676,9 @@ export async function ouvrirSessionCaisse(
       console.warn('[CAISSE-SERVICE] Exception mise à jour caisses:', cEx)
     }
 
-    // Enregistrer le mouvement d'ouverture
-    await enregistrerMouvementCaisse({
-      company_id: companyId,
-      sector_slug: clean,
-      caisse_id: caisse.id,
-      caisse_session_id: newSess?.id,
-      type: 'ouverture',
-      sens: 'entree',
-      montant_especes: fondEspeces,
-      montant_momo: fondMomo,
-      source_module: 'caisse',
-      source_id: newSess?.id,
-      motif: `Ouverture de caisse (${caisse.nom}) par ${userName}`,
-      user_name: userName,
-      user_id: userId
-    }).catch(() => {})
+    // RÈGLE MÉTIER OBLIGATOIRE : Aucune entrée de fonds ni mouvement financier fictif lors de l'ouverture.
+    // L'ouverture enregistre uniquement les soldes initiaux et l'identité de la caissière.
+    // Les fonds actuels ne sont jamais augmentés une seconde fois par l'ouverture.
 
     return { success: true, session: newSess }
   } catch (err: any) {
@@ -1005,7 +992,8 @@ export async function cloturerSessionCaisseAutomatique(params: {
   const synthese = await calculerSoldesSessionAutomatique(params)
   const finalSoldeEsp = synthese.soldeTheoriqueEspeces
   const finalSoldeMomo = synthese.soldeTheoriqueMomo
-  const montantConserve = synthese.montantConserve
+  // RÈGLE MÉTIER OBLIGATOIRE : Le solde théorique final devient directement le nouveau fond actuel
+  const montantConserve = finalSoldeEsp
 
   try {
     // 2. Clôturer la session dans caisse_sessions (Tolérance RLS & Double Contrainte)
@@ -1144,23 +1132,8 @@ export async function cloturerSessionCaisseAutomatique(params: {
       console.warn('[CAISSE-SERVICE] Notice caisse_clotures insert auto:', cClotErr)
     }
 
-    // 6. Enregistrer le mouvement de clôture dans caisse_mouvements
-    if (caisseId) {
-      await enregistrerMouvementCaisse({
-        company_id: companyId,
-        sector_slug: clean,
-        caisse_id: caisseId,
-        caisse_session_id: sessionId,
-        type: 'cloture',
-        sens: 'sortie',
-        montant_especes: finalSoldeEsp,
-        montant_momo: finalSoldeMomo,
-        source_module: 'caisse',
-        source_id: sessionId,
-        motif: `Clôture automatique : Espèces ${finalSoldeEsp} FCFA, MoMo ${finalSoldeMomo} FCFA (Écart: 0 FCFA)`,
-        user_name: userName,
-      }).catch(() => {})
-    }
+    // RÈGLE MÉTIER OBLIGATOIRE : La clôture ne doit générer aucune sortie financière fictive.
+    // Les soldes théoriques calculés restent conservés dans la caisse comme nouveaux fonds actuels.
 
     // 7. Mettre à jour fonds_actuels (M048) et réinitialiser caisse_journaliere
     try {
@@ -1491,6 +1464,10 @@ export async function enregistrerMouvementCaisse(
 
     // 5. Mettre à jour les compteurs de la session active
     if (activeSession) {
+      if (['ouverture', 'cloture'].includes(params.type)) {
+        // RÈGLE MÉTIER : L'ouverture ou la clôture ne modifient jamais les encaissements du jour
+        return
+      }
       const curEspDuJour = Number(activeSession.especes_du_jour) || 0
       const curMomoDuJour = Number(activeSession.momo_du_jour) || 0
       const curCaDuJour = Number(activeSession.ca_du_jour) || 0

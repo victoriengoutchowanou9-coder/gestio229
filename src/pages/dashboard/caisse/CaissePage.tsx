@@ -1302,7 +1302,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
       toast.success(
         'Caisse clôturée avec succès !',
-        `Solde reporté pour demain : ${fmt(finalMontantConserve)} (Espèces), MoMo : ${fmt(finalSoldeTheoriqueMomo)}`
+        `Nouveaux fonds actuels : ${fmt(finalSoldeTheoriqueEsp)} (Espèces) | MoMo : ${fmt(finalSoldeTheoriqueMomo)}`
       )
 
       await loadCaisseData()
@@ -3146,32 +3146,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </div>
             </div>
 
-            {/* Gestion automatique du solde laissé et des versements (Règle 5) */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                <label className="text-[11px] font-bold text-slate-700 block mb-1 flex items-center gap-1">
-                  <Lock className="w-3 h-3 text-slate-400" />
-                  Montant conservé pour demain
-                </label>
-                <div className="font-mono text-sm font-black text-emerald-800 bg-white p-2 rounded-lg border border-slate-200 flex justify-between items-center select-none cursor-not-allowed">
-                  <span>{fmt(fondTheoriqueEsp)}</span>
-                  <span className="text-[10px] font-sans font-medium text-slate-400">Automatique</span>
-                </div>
-                <p className="text-[9px] text-slate-400 mt-1">Sera le fond initial de la prochaine session</p>
-              </div>
 
-              <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl">
-                <label className="text-[11px] font-bold text-slate-700 block mb-1 flex items-center gap-1">
-                  <Lock className="w-3 h-3 text-slate-400" />
-                  Montant à reverser trésorerie
-                </label>
-                <div className="font-mono text-sm font-black text-slate-900 bg-white p-2 rounded-lg border border-slate-200 flex justify-between items-center select-none cursor-not-allowed">
-                  <span>{fmt(0)}</span>
-                  <span className="text-[10px] font-sans font-medium text-slate-400">Solde - Conservé</span>
-                </div>
-                <p className="text-[9px] text-slate-400 mt-1">Versements en cours déjà déduits du solde</p>
-              </div>
-            </div>
 
             {/* Récapitulatif activité du jour */}
             <div className="p-3 bg-slate-100/70 rounded-xl text-slate-600 flex justify-between items-center text-xs">

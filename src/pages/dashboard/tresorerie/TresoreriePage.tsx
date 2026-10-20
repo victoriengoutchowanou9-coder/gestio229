@@ -61,6 +61,13 @@ export const TresoreriePage: React.FC = () => {
   // Modals
   const [showAddAccountModal, setShowAddAccountModal] = useState(false)
   const [showDisbursementModal, setShowDisbursementModal] = useState(false)
+  const [showDemandeFondsModal, setShowDemandeFondsModal] = useState(false)
+  const [fondsForm, setFondsForm] = useState({
+    demandeur: '',
+    montant: '' as number | '',
+    canal: 'Espèces' as 'Espèces' | 'MoMo' | 'Virement',
+    motif: '',
+  })
 
   // Formulaire nouveau compte trésorerie
   const [newAccForm, setNewAccForm] = useState({
@@ -771,6 +778,21 @@ export const TresoreriePage: React.FC = () => {
             <span>Ajouter un compte</span>
           </button>
           <button
+            onClick={() => {
+              setFondsForm({
+                demandeur: user?.full_name || 'Gestionnaire',
+                montant: '',
+                canal: 'Espèces',
+                motif: '',
+              })
+              setShowDemandeFondsModal(true)
+            }}
+            className="px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+          >
+            <ArrowUpRight className="w-3.5 h-3.5" />
+            <span>Demande de Fonds</span>
+          </button>
+          <button
             onClick={() => setShowDisbursementModal(true)}
             disabled={accounts.length === 0}
             className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
@@ -1130,7 +1152,7 @@ export const TresoreriePage: React.FC = () => {
         </div>
       </ModalPortal>
 
-      {/* Modal Décaissement */}
+      {/* Modal Décaissement avec traçabilité complète */}
       <TreasuryDisbursementModal
         isOpen={showDisbursementModal}
         onClose={() => setShowDisbursementModal(false)}
@@ -1139,6 +1161,7 @@ export const TresoreriePage: React.FC = () => {
           const isEsp = d.source === 'especes'
           const isMomo = d.source === 'momo'
           const amt = Number(d.amount) || 0
+          const nowIso = d.dateTime ? new Date(d.dateTime).toISOString() : new Date().toISOString()
 
           let targetAcc = accounts.find((a) =>
             isEsp ? a.type === 'vault' : isMomo ? a.type === 'mobile_money' : a.type === 'bank'
@@ -1155,15 +1178,186 @@ export const TresoreriePage: React.FC = () => {
               try {
                 await supabase
                   .from('treasury_accounts')
-                  .update({ balance: newBal, updated_at: new Date().toISOString() })
+                  .update({ balance: newBal, updated_at: nowIso })
                   .eq('id', targetAcc.id)
               } catch (_) {}
+
+              // Enregistrement traçable dans les transferts/décaissements
+              try {
+                await supabase.from('treasury_transfers').insert({
+                  company_id: compId,
+                  sector_slug: currentSectorSlug,
+                  requested_by: user?.full_name || 'Responsable Trésorerie',
+                  type: d.paymentMethod || (isEsp ? 'Espèces' : isMomo ? 'MoMo' : 'Virement'),
+                  amount: amt,
+                  motif: `[DÉCAISSEMENT] ${d.reason} — Bénéficiaire: ${d.beneficiary} — Réf: ${d.reference}${d.approbateur ? ` — Validé par: ${d.approbateur}` : ''}`,
+                  status: 'APPROVED',
+                  approved_by: d.approbateur || user?.full_name || 'Direction',
+                  approved_at: nowIso,
+                  target_account_id: targetAcc.id,
+                  created_at: nowIso,
+                })
+              } catch (_) {}
+
+              // Mouvement audit / traçabilité
+              await logAuditEvent({
+                companyId: compId,
+                userId: user?.id,
+                userName: user?.full_name,
+                userRole: user?.role,
+                action: 'DECAISSEMENT_TRESORERIE',
+                module: 'TRESORERIE',
+                sector: currentSectorSlug.toUpperCase(),
+                description: `Décaissement de ${fmt(amt)} depuis ${targetAcc.name} vers "${d.beneficiary}" (Réf: ${d.reference}). Motif: ${d.reason}`
+              })
             }
           }
           toast.success('Décaissement enregistré avec succès')
           setTimeout(() => loadTreasuryData(), 300)
         }}
       />
+
+      {/* Modal Demande de Fonds / Entrée en Trésorerie (Circuit d'autorisation) */}
+      <ModalPortal isOpen={showDemandeFondsModal} onClose={() => setShowDemandeFondsModal(false)} id="modal-demande-fonds">
+        <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-md w-full border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+          <div className="flex justify-between items-center pb-3 border-b border-slate-100 mb-4">
+            <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+              <ArrowUpRight className="w-5 h-5 text-emerald-600" />
+              Nouvelle Demande de Fonds (Trésorerie)
+            </h3>
+            <button onClick={() => setShowDemandeFondsModal(false)} className="text-slate-400 hover:text-slate-600 p-1">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <form
+            onSubmit={async (e) => {
+              e.preventDefault()
+              const compId = currentCompanyId || company?.id
+              const numAmt = Number(fondsForm.montant) || 0
+              if (!numAmt || numAmt <= 0 || !fondsForm.motif.trim()) {
+                toast.warning('Champs requis', 'Veuillez saisir un montant et un motif valide.')
+                return
+              }
+
+              const newTransferItem: PendingTransfer = {
+                id: `fonds-${Date.now()}`,
+                created_at: new Date().toISOString(),
+                requested_by: fondsForm.demandeur.trim() || user?.full_name || 'Gestionnaire',
+                type: fondsForm.canal,
+                amount: numAmt,
+                motif: fondsForm.motif.trim(),
+                status: 'EN_ATTENTE',
+              }
+
+              if (compId) {
+                try {
+                  await supabase.from('treasury_transfers').insert({
+                    company_id: compId,
+                    sector_slug: currentSectorSlug,
+                    requested_by: newTransferItem.requested_by,
+                    type: fondsForm.canal,
+                    amount: numAmt,
+                    motif: fondsForm.motif.trim(),
+                    status: 'EN_ATTENTE',
+                    created_at: new Date().toISOString(),
+                  })
+                } catch (_) {}
+
+                await logAuditEvent({
+                  companyId: compId,
+                  userId: user?.id,
+                  userName: user?.full_name,
+                  userRole: user?.role,
+                  action: 'DEMANDE_FONDS_TRESORERIE',
+                  module: 'TRESORERIE',
+                  sector: currentSectorSlug.toUpperCase(),
+                  description: `Demande de fonds de ${fmt(numAmt)} (${fondsForm.canal}) soumise par ${newTransferItem.requested_by}. En attente d'autorisation et d'encaissement effectif.`
+                })
+              }
+
+              setPendingTransfers((prev) => [newTransferItem, ...prev])
+              setAllTransfersHistory((prev) => [newTransferItem, ...prev])
+              setShowDemandeFondsModal(false)
+              toast.success('Demande de fonds transmise !', 'La demande est enregistrée et en attente d\'encaissement effectif.')
+            }}
+            className="space-y-4 text-xs"
+          >
+            <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-2xl text-indigo-900">
+              <p className="font-medium text-[11px] leading-relaxed">
+                Une demande de fonds envoyée reste au statut <strong>En attente</strong> et <strong>n'augmente le solde qu'au moment de son encaissement effectif</strong>.
+              </p>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Demandeur / Service *</label>
+              <input
+                type="text"
+                required
+                value={fondsForm.demandeur}
+                onChange={(e) => setFondsForm({ ...fondsForm, demandeur: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Montant Demandé (FCFA) *</label>
+                <input
+                  type="number"
+                  required
+                  min="100"
+                  placeholder="Ex: 100000"
+                  value={fondsForm.montant}
+                  onChange={(e) => setFondsForm({ ...fondsForm, montant: e.target.value === '' ? '' : Number(e.target.value) })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-mono font-bold text-sm"
+                />
+              </div>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Canal de Réception *</label>
+                <select
+                  value={fondsForm.canal}
+                  onChange={(e) => setFondsForm({ ...fondsForm, canal: e.target.value as any })}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl font-bold"
+                >
+                  <option value="Espèces">💵 Espèces (Coffre)</option>
+                  <option value="MoMo">📱 Mobile Money</option>
+                  <option value="Virement">🏦 Virement Bancaire</option>
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block font-bold text-slate-700 mb-1">Motif de la Demande *</label>
+              <textarea
+                required
+                rows={2}
+                placeholder="Ex: Approvisionnement liquidités, apport associé, encaissement client direct..."
+                value={fondsForm.motif}
+                onChange={(e) => setFondsForm({ ...fondsForm, motif: e.target.value })}
+                className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl"
+              />
+            </div>
+
+            <div className="flex gap-2 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setShowDemandeFondsModal(false)}
+                className="flex-1 py-2.5 border border-slate-200 rounded-xl text-xs font-semibold hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md"
+              >
+                <Check className="w-4 h-4" />
+                <span>Soumettre la Demande</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </ModalPortal>
     </div>
   )
 }
