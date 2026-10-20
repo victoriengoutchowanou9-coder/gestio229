@@ -559,6 +559,49 @@ export const SectorLoader = {
       return { grouped, flat: stationNav }
     }
 
+    // ── Menu spécifique Hôtel, Résidence & Auberge ─────────────────────────────
+    const isHotel = cleanSlug === 'hotel' || cleanSlug === 'residence' || cleanSlug === 'auberge' || cleanSlug === 'hotellerie'
+    if (isHotel) {
+      const hotelServicesConfig = (company as any)?.hotel_services_config || {}
+      const hasPos = hotelServicesConfig.has_pos !== false
+
+      const hotelNav: NavItem[] = [
+        // VUE D'ENSEMBLE
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+
+        // ACCUEIL & HÉBERGEMENT
+        { id: 'reception_sejours', label: 'Réception & Séjours', icon: 'ConciergeBell', href: `${prefix}/reception`, group: 'commercial' },
+        { id: 'chambres_reservations', label: 'Chambres & Réservations', icon: 'BedDouble', href: `${prefix}/chambres`, group: 'commercial' },
+        { id: 'clients', label: 'Clients & Créances', icon: 'Users', href: `${prefix}/clients`, group: 'commercial' },
+
+        // SERVICES & EXPLOITATION
+        { id: 'services_consommations', label: 'Services & Consommations', icon: 'Coffee', href: `${prefix}/services-consommations`, group: 'gestion' },
+        { id: 'housekeeping', label: 'Housekeeping & Étages', icon: 'Sparkles', href: `${prefix}/housekeeping`, group: 'gestion' },
+        { id: 'maintenance_hotel', label: 'Maintenance & Équipements', icon: 'Wrench', href: `${prefix}/maintenance`, group: 'gestion' },
+
+        // VENTES & FINANCES
+        ...(hasPos ? [{ id: 'ventes', label: 'Vente & POS (Bar/Resto)', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'finance' } as NavItem] : []),
+        { id: 'caisse', label: 'Caisse & Encaissements', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Hôtelières', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+
+        // APPROVISIONNEMENTS
+        { id: 'fournisseurs', label: 'Fournisseurs & Achats', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'gestion' },
+        { id: 'stock', label: 'Stocks & Lingerie', icon: 'Package', href: `${prefix}/stocks`, group: 'gestion' },
+
+        // GESTION & CONTRÔLE
+        { id: 'rapports', label: 'Rapports & Analyses', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Hôtel', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(hotelNav)
+      return { grouped, flat: hotelNav }
+    }
+
     // ── Menu spécifique Imprimerie & Sérigraphie (Centre d'Impression) ─────────
     const isImprimerie = cleanSlug === 'imprimerie' || cleanSlug === 'impression'
     if (isImprimerie) {

@@ -589,6 +589,16 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
   // MODULES SPÉCIFIQUES — HÔTEL
   // ══════════════════════════════════════════════════════════════════════
 
+  'reception_sejours': {
+    id: 'reception_sejours',
+    label: 'Réception & Séjours',
+    icon: 'ConciergeBell',
+    path: 'reception',
+    isCommon: false,
+    sectorSlugs: ['hotel'],
+    group: 'commercial',
+  },
+
   'chambres_reservations': {
     id: 'chambres_reservations',
     label: 'Chambres & Réservations',
@@ -597,6 +607,26 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     isCommon: false,
     sectorSlugs: ['hotel'],
     group: 'commercial',
+  },
+
+  'services_consommations': {
+    id: 'services_consommations',
+    label: 'Services & Consommations',
+    icon: 'Coffee',
+    path: 'services-consommations',
+    isCommon: false,
+    sectorSlugs: ['hotel'],
+    group: 'gestion',
+  },
+
+  'maintenance_hotel': {
+    id: 'maintenance_hotel',
+    label: 'Maintenance & Équipements',
+    icon: 'Wrench',
+    path: 'maintenance',
+    isCommon: false,
+    sectorSlugs: ['hotel'],
+    group: 'gestion',
   },
 
   'housekeeping': {
