@@ -602,6 +602,47 @@ export const SectorLoader = {
       return { grouped, flat: hotelNav }
     }
 
+    // ── Menu spécifique Transport de Voyageurs & Logistique ────────────────────
+    const isTransport = cleanSlug === 'transport' || cleanSlug === 'transport-logistique' || cleanSlug === 'logistique'
+    if (isTransport) {
+      const transportNav: NavItem[] = [
+        // VUE D'ENSEMBLE
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+
+        // TRANSPORT DE VOYAGEURS
+        { id: 'lignes_arrets', label: 'Lignes & Arrêts', icon: 'Compass', href: `${prefix}/lignes-arrets`, group: 'commercial' },
+        { id: 'departs_rotations', label: 'Horaires & Départs', icon: 'Calendar', href: `${prefix}/departs-rotations`, group: 'commercial' },
+        { id: 'billetterie_bus', label: 'Billetterie Bus (Guichet)', icon: 'Ticket', href: `${prefix}/billetterie-bus`, group: 'commercial' },
+        { id: 'controle_tickets', label: 'Contrôle des Billets', icon: 'ShieldCheck', href: `${prefix}/controle-tickets`, group: 'commercial' },
+        { id: 'flotte_bus', label: 'Parc de Bus & Flotte', icon: 'Bus', href: `${prefix}/flotte-bus`, group: 'commercial' },
+        { id: 'chauffeurs_equipage', label: 'Chauffeurs & Équipages', icon: 'Users', href: `${prefix}/chauffeurs-equipage`, group: 'commercial' },
+
+        // COLIS & LOGISTIQUE
+        { id: 'colis_expeditions', label: 'Colis & Expéditions', icon: 'Package', href: `${prefix}/colis-expeditions`, group: 'gestion' },
+        { id: 'chargement_colis', label: 'Chargement & Remise Colis', icon: 'PackageCheck', href: `${prefix}/chargement-colis`, group: 'gestion' },
+        { id: 'missions_transport', label: 'Missions de Fret', icon: 'Truck', href: `${prefix}/missions-transport`, group: 'gestion' },
+        { id: 'carburant_maintenance', label: 'Carburant & Maintenance', icon: 'Fuel', href: `${prefix}/carburant-maintenance`, group: 'gestion' },
+
+        // COMMERCIAL & FINANCES
+        { id: 'clients', label: 'Clients & Créances', icon: 'Users', href: `${prefix}/clients`, group: 'finance' },
+        { id: 'caisse', label: 'Caisse & Encaissements', icon: 'Wallet', href: `${prefix}/caisse`, group: 'finance' },
+        { id: 'finances', label: 'Trésorerie & Banque', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses Exploitation', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Pièces', icon: 'Truck', href: `${prefix}/fournisseurs`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+
+        // PILOTAGE & ADMINISTRATION
+        { id: 'rapports', label: 'Rapports & Rentabilité', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Transport', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(transportNav)
+      return { grouped, flat: transportNav }
+    }
+
     // ── Menu spécifique Imprimerie & Sérigraphie (Centre d'Impression) ─────────
     const isImprimerie = cleanSlug === 'imprimerie' || cleanSlug === 'impression'
     if (isImprimerie) {

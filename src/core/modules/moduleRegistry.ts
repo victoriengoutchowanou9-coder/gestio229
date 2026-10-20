@@ -640,6 +640,110 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
   },
 
   // ══════════════════════════════════════════════════════════════════════
+  // MODULES SPÉCIFIQUES — TRANSPORT & LOGISTIQUE
+  // ══════════════════════════════════════════════════════════════════════
+
+  'lignes_arrets': {
+    id: 'lignes_arrets',
+    label: 'Lignes & Arrêts',
+    icon: 'Compass',
+    path: 'lignes-arrets',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'commercial',
+  },
+
+  'departs_rotations': {
+    id: 'departs_rotations',
+    label: 'Horaires & Départs',
+    icon: 'Calendar',
+    path: 'departs-rotations',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'commercial',
+  },
+
+  'billetterie_bus': {
+    id: 'billetterie_bus',
+    label: 'Billetterie Bus',
+    icon: 'Ticket',
+    path: 'billetterie-bus',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'commercial',
+  },
+
+  'controle_tickets': {
+    id: 'controle_tickets',
+    label: 'Contrôle des Billets',
+    icon: 'ShieldCheck',
+    path: 'controle-tickets',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'commercial',
+  },
+
+  'flotte_bus': {
+    id: 'flotte_bus',
+    label: 'Parc de Bus',
+    icon: 'Bus',
+    path: 'flotte-bus',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'commercial',
+  },
+
+  'chauffeurs_equipage': {
+    id: 'chauffeurs_equipage',
+    label: 'Chauffeurs & Équipages',
+    icon: 'Users',
+    path: 'chauffeurs-equipage',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'commercial',
+  },
+
+  'colis_expeditions': {
+    id: 'colis_expeditions',
+    label: 'Colis & Expéditions',
+    icon: 'Package',
+    path: 'colis-expeditions',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'gestion',
+  },
+
+  'chargement_colis': {
+    id: 'chargement_colis',
+    label: 'Chargement & Remise Colis',
+    icon: 'PackageCheck',
+    path: 'chargement-colis',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'gestion',
+  },
+
+  'missions_transport': {
+    id: 'missions_transport',
+    label: 'Missions de Fret',
+    icon: 'Truck',
+    path: 'missions-transport',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'gestion',
+  },
+
+  'carburant_maintenance': {
+    id: 'carburant_maintenance',
+    label: 'Carburant & Maintenance',
+    icon: 'Fuel',
+    path: 'carburant-maintenance',
+    isCommon: false,
+    sectorSlugs: ['transport'],
+    group: 'gestion',
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
   // MODULES SPÉCIFIQUES — MICROFINANCE / TONTINE
   // ══════════════════════════════════════════════════════════════════════
 

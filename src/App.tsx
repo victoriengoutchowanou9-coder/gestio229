@@ -117,6 +117,18 @@ const HotelChambresPage      = safeLazy(() => import('./pages/dashboard/hotel/Ho
 const HotelHousekeepingPage  = safeLazy(() => import('./pages/dashboard/hotel/HotelHousekeepingPage'))
 const HotelMaintenancePage   = safeLazy(() => import('./pages/dashboard/hotel/HotelMaintenancePage'))
 const HotelServicesPage      = safeLazy(() => import('./pages/dashboard/hotel/HotelServicesPage'))
+// Transport & Logistique (ERP Dédié Voyageurs & Fret)
+const TransportDashboardPage            = safeLazy(() => import('./pages/dashboard/transport/TransportDashboardPage'))
+const TransportLignesArretsPage         = safeLazy(() => import('./pages/dashboard/transport/TransportLignesArretsPage'))
+const TransportDepartsRotationsPage     = safeLazy(() => import('./pages/dashboard/transport/TransportDepartsRotationsPage'))
+const TransportBilletteriePage          = safeLazy(() => import('./pages/dashboard/transport/TransportBilletteriePage'))
+const TransportControleTicketsPage      = safeLazy(() => import('./pages/dashboard/transport/TransportControleTicketsPage'))
+const TransportParcBusPage              = safeLazy(() => import('./pages/dashboard/transport/TransportParcBusPage'))
+const TransportChauffeursPage           = safeLazy(() => import('./pages/dashboard/transport/TransportChauffeursPage'))
+const TransportColisPage                = safeLazy(() => import('./pages/dashboard/transport/TransportColisPage'))
+const TransportChargementColisPage      = safeLazy(() => import('./pages/dashboard/transport/TransportChargementColisPage'))
+const TransportMissionsFretPage         = safeLazy(() => import('./pages/dashboard/transport/TransportMissionsFretPage'))
+const TransportCarburantMaintenancePage = safeLazy(() => import('./pages/dashboard/transport/TransportCarburantMaintenancePage'))
 // (Hotel Housekeeping replaced by dedicated HotelHousekeepingPage)
 // Garage
 const VehiculesPage          = mod('vehicules_reparations')
@@ -752,6 +764,17 @@ const AppRoutes: React.FC = () => {
         <Route path="housekeeping"           element={<ModuleGuard moduleId="housekeeping"><HotelHousekeepingPage /></ModuleGuard>} />
         <Route path="maintenance-hotel"      element={<ModuleGuard moduleId="maintenance_hotel"><HotelMaintenancePage /></ModuleGuard>} />
         <Route path="services-consommations" element={<ModuleGuard moduleId="services_consommations"><HotelServicesPage /></ModuleGuard>} />
+        {/* ── Modules Transport de Voyageurs & Logistique ── */}
+        <Route path="lignes-arrets"          element={<TransportLignesArretsPage />} />
+        <Route path="departs-rotations"      element={<TransportDepartsRotationsPage />} />
+        <Route path="billetterie-bus"        element={<TransportBilletteriePage />} />
+        <Route path="controle-tickets"       element={<TransportControleTicketsPage />} />
+        <Route path="flotte-bus"             element={<TransportParcBusPage />} />
+        <Route path="chauffeurs-equipage"    element={<TransportChauffeursPage />} />
+        <Route path="colis-expeditions"      element={<TransportColisPage />} />
+        <Route path="chargement-colis"       element={<TransportChargementColisPage />} />
+        <Route path="missions-transport"     element={<TransportMissionsFretPage />} />
+        <Route path="carburant-maintenance"  element={<TransportCarburantMaintenancePage />} />
         {/* ── Modules Garage Classic ── */}
         <Route path="vehicules"              element={<SectorAwareVehicules />} />
         <Route path="reparations"            element={<ModuleGuard moduleId="ordres_reparation"><GarageReparationsPage /></ModuleGuard>} />
@@ -918,6 +941,17 @@ const AppRoutes: React.FC = () => {
         <Route path="housekeeping"           element={<ModuleGuard moduleId="housekeeping"><HotelHousekeepingPage /></ModuleGuard>} />
         <Route path="maintenance-hotel"      element={<ModuleGuard moduleId="maintenance_hotel"><HotelMaintenancePage /></ModuleGuard>} />
         <Route path="services-consommations" element={<ModuleGuard moduleId="services_consommations"><HotelServicesPage /></ModuleGuard>} />
+        {/* ── Modules Transport de Voyageurs & Logistique ── */}
+        <Route path="lignes-arrets"          element={<TransportLignesArretsPage />} />
+        <Route path="departs-rotations"      element={<TransportDepartsRotationsPage />} />
+        <Route path="billetterie-bus"        element={<TransportBilletteriePage />} />
+        <Route path="controle-tickets"       element={<TransportControleTicketsPage />} />
+        <Route path="flotte-bus"             element={<TransportParcBusPage />} />
+        <Route path="chauffeurs-equipage"    element={<TransportChauffeursPage />} />
+        <Route path="colis-expeditions"      element={<TransportColisPage />} />
+        <Route path="chargement-colis"       element={<TransportChargementColisPage />} />
+        <Route path="missions-transport"     element={<TransportMissionsFretPage />} />
+        <Route path="carburant-maintenance"  element={<TransportCarburantMaintenancePage />} />
         {/* ── Modules Garage Classic ── */}
         <Route path="vehicules"              element={<SectorAwareVehicules />} />
         <Route path="reparations"            element={<ModuleGuard moduleId="ordres_reparation"><GarageReparationsPage /></ModuleGuard>} />
