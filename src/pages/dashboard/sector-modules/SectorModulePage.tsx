@@ -11,6 +11,7 @@ import { useUIStore } from '../../../store/uiStore'
 import { MODULE_CONFIGS, FieldDef, fmtMoney, generateRef } from './moduleConfigs'
 import { TableMissingVerifier } from './TableMissingVerifier'
 import { showModal, showConfirm } from '../../../components/modals/CustomModalGestio'
+import { safeStationInsert, safeStationUpdate } from '../../../utils/stationFuelHelper'
 
 const TONE_CARD: Record<string, string> = {
   emerald: 'text-emerald-700', rose: 'text-rose-600', amber: 'text-amber-600', indigo: 'text-indigo-700', slate: 'text-slate-900',
@@ -180,10 +181,21 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
         if (error) throw error
         notify('success', 'Modification enregistrée')
       } else {
-        const { error } = await supabase
-          .from(config.table)
-          .insert({ ...payload, company_id: companyId, tenant_id: companyId, sector_slug: sectorSlug })
-        if (error) throw error
+        const fullPayload = {
+          ...payload,
+          company_id: companyId,
+          tenant_id: companyId,
+          sector_slug: sectorSlug,
+        }
+        let insertErr: any = null
+        if (config.table.startsWith('station_')) {
+          const res = await safeStationInsert(supabase, config.table, fullPayload)
+          insertErr = res.error
+        } else {
+          const res = await supabase.from(config.table).insert(fullPayload)
+          insertErr = res.error
+        }
+        if (insertErr) throw insertErr
         notify('success', 'Enregistrement créé')
       }
       setModalOpen(false)

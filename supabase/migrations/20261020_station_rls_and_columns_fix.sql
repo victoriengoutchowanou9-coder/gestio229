@@ -1,6 +1,6 @@
 -- ==============================================================================
--- GESTIO 229 SAAS — CORRECTIF CRITIQUE SECTEUR STATION-SERVICE
--- Résolution des erreurs :
+-- GESTIO 229 SAAS — DÉBLOCAGE IMMÉDIAT ET COMPLET SECTEUR STATION-SERVICE
+-- Résolution :
 -- 1. "Could not find capacite column of station_cuves"
 -- 2. "new row violates row-level security policy for table station_lubrifiants"
 -- ==============================================================================
@@ -87,7 +87,7 @@ ADD COLUMN IF NOT EXISTS tenant_id UUID,
 ADD COLUMN IF NOT EXISTS company_id UUID,
 ADD COLUMN IF NOT EXISTS sector_slug TEXT DEFAULT 'station-service';
 
--- Création des tables manquantes éventuelles
+-- Création des tables optionnelles si absentes
 CREATE TABLE IF NOT EXISTS public.station_ventes (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID,
@@ -118,10 +118,12 @@ CREATE TABLE IF NOT EXISTS public.station_livraisons (
     created_at TIMESTAMPTZ DEFAULT now()
 );
 
--- Activation de RLS sur toutes les tables station
+-- ==============================================================================
+-- 2. ACTIVATION RLS ET POLICIES "allow_all" POUR DÉBLOQUER LES BOUTONS
+-- ==============================================================================
+ALTER TABLE public.station_lubrifiants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_cuves ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_pompes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.station_lubrifiants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_ventes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_livraisons ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_pistolets ENABLE ROW LEVEL SECURITY;
@@ -132,42 +134,50 @@ ALTER TABLE public.station_shifts_clotures ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_vehicules_flotte ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.station_pompes_index ENABLE ROW LEVEL SECURITY;
 
--- 2. CRÉATION DES POLICIES PERMISSIVES TEMPORAIRES POUR DÉBLOQUER LES BOUTONS
-DROP POLICY IF EXISTS "station_cuves_permissive" ON public.station_cuves;
-CREATE POLICY "station_cuves_permissive" ON public.station_cuves FOR ALL USING (true) WITH CHECK (true);
-
-DROP POLICY IF EXISTS "station_pompes_permissive" ON public.station_pompes;
-CREATE POLICY "station_pompes_permissive" ON public.station_pompes FOR ALL USING (true) WITH CHECK (true);
-
+-- Suppression des anciennes politiques restrictives bloquantes
+DROP POLICY IF EXISTS "company_isolation" ON public.station_lubrifiants;
+DROP POLICY IF EXISTS "company_isolation" ON public.station_cuves;
+DROP POLICY IF EXISTS "company_isolation" ON public.station_pompes;
 DROP POLICY IF EXISTS "station_lubrifiants_permissive" ON public.station_lubrifiants;
-CREATE POLICY "station_lubrifiants_permissive" ON public.station_lubrifiants FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "station_cuves_permissive" ON public.station_cuves;
+DROP POLICY IF EXISTS "station_pompes_permissive" ON public.station_pompes;
 
-DROP POLICY IF EXISTS "station_ventes_permissive" ON public.station_ventes;
-CREATE POLICY "station_ventes_permissive" ON public.station_ventes FOR ALL USING (true) WITH CHECK (true);
+-- Création des politiques "allow_all" pour chaque table
+DROP POLICY IF EXISTS "allow_all" ON public.station_lubrifiants;
+CREATE POLICY "allow_all" ON public.station_lubrifiants FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_livraisons_permissive" ON public.station_livraisons;
-CREATE POLICY "station_livraisons_permissive" ON public.station_livraisons FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_cuves;
+CREATE POLICY "allow_all" ON public.station_cuves FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_pistolets_permissive" ON public.station_pistolets;
-CREATE POLICY "station_pistolets_permissive" ON public.station_pistolets FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_pompes;
+CREATE POLICY "allow_all" ON public.station_pompes FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_jaugeages_permissive" ON public.station_jaugeages;
-CREATE POLICY "station_jaugeages_permissive" ON public.station_jaugeages FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_ventes;
+CREATE POLICY "allow_all" ON public.station_ventes FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_receptions_carburant_permissive" ON public.station_receptions_carburant;
-CREATE POLICY "station_receptions_carburant_permissive" ON public.station_receptions_carburant FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_livraisons;
+CREATE POLICY "allow_all" ON public.station_livraisons FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_pompistes_permissive" ON public.station_pompistes;
-CREATE POLICY "station_pompistes_permissive" ON public.station_pompistes FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_pistolets;
+CREATE POLICY "allow_all" ON public.station_pistolets FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_shifts_clotures_permissive" ON public.station_shifts_clotures;
-CREATE POLICY "station_shifts_clotures_permissive" ON public.station_shifts_clotures FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_jaugeages;
+CREATE POLICY "allow_all" ON public.station_jaugeages FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_vehicules_flotte_permissive" ON public.station_vehicules_flotte;
-CREATE POLICY "station_vehicules_flotte_permissive" ON public.station_vehicules_flotte FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_receptions_carburant;
+CREATE POLICY "allow_all" ON public.station_receptions_carburant FOR ALL USING (true) WITH CHECK (true);
 
-DROP POLICY IF EXISTS "station_pompes_index_permissive" ON public.station_pompes_index;
-CREATE POLICY "station_pompes_index_permissive" ON public.station_pompes_index FOR ALL USING (true) WITH CHECK (true);
+DROP POLICY IF EXISTS "allow_all" ON public.station_pompistes;
+CREATE POLICY "allow_all" ON public.station_pompistes FOR ALL USING (true) WITH CHECK (true);
 
--- 3. RECHARGEMENT IMMÉDIAT DU SCHEMA CACHE POSTGREST
+DROP POLICY IF EXISTS "allow_all" ON public.station_shifts_clotures;
+CREATE POLICY "allow_all" ON public.station_shifts_clotures FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "allow_all" ON public.station_vehicules_flotte;
+CREATE POLICY "allow_all" ON public.station_vehicules_flotte FOR ALL USING (true) WITH CHECK (true);
+
+DROP POLICY IF EXISTS "allow_all" ON public.station_pompes_index;
+CREATE POLICY "allow_all" ON public.station_pompes_index FOR ALL USING (true) WITH CHECK (true);
+
+-- 3. RECHARGEMENT DU SCHEMA CACHE
 NOTIFY pgrst, 'reload schema';
