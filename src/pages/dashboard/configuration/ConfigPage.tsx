@@ -24,6 +24,8 @@ import { imprimerieService, ImprimerieConfig } from '../../../services/imprimeri
 import { useGarageConfig } from '../../../hooks/useGarageConfig'
 import { useEcoleConfig } from '../../../hooks/useEcoleConfig'
 import { EcoleTypeEtablissement } from '../../../services/ecoleService'
+import { useSalesCircuitConfig } from '../../../hooks/useSalesCircuitConfig'
+import { SalesCircuitMode } from '../../../services/salesCircuitService'
 
 // ─── MAPPING DES MODULES & PERMISSIONS DYNAMIQUES PAR SECTEUR ────────────────
 const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> = {
@@ -209,7 +211,44 @@ export const ConfigPage: React.FC = () => {
   const { sectorSlug: currentSectorSlug } = useTenant()
   const { toast } = useUIStore()
 
-  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'imprimerie' | 'garage' | 'ecole'>('etablissement')
+  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'circuit_ventes' | 'imprimerie' | 'garage' | 'ecole'>('etablissement')
+
+  // ─── Configuration Organisation des Ventes & Encaissements ─────────────────
+  const {
+    circuitMode,
+    isIntegrated: isCircuitIntegrated,
+    isSeparated: isCircuitSeparated,
+    pendingCount: circuitPendingCount,
+    selectMode: selectCircuitMode,
+    loading: loadingCircuitMode
+  } = useSalesCircuitConfig()
+
+  const [switchingCircuitModal, setSwitchingCircuitModal] = useState(false)
+  const [targetCircuitMode, setTargetCircuitMode] = useState<SalesCircuitMode | null>(null)
+  const [switchingCircuit, setSwitchingCircuit] = useState(false)
+
+  const handleConfirmSwitchCircuit = async () => {
+    if (!targetCircuitMode) return
+    setSwitchingCircuit(true)
+    try {
+      const res = await selectCircuitMode(targetCircuitMode)
+      if (res.success) {
+        toast.success(
+          'Organisation des ventes mise à jour !',
+          targetCircuitMode === 'INTEGRE'
+            ? 'Mode 1 activé : Vente et encaissement par le même utilisateur.'
+            : 'Mode 2 activé : Séparation entre vendeur et caissière.'
+        )
+        setSwitchingCircuitModal(false)
+      } else {
+        toast.error('Erreur', res.error || 'Impossible de mettre à jour le mode.')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
+    } finally {
+      setSwitchingCircuit(false)
+    }
+  }
 
   // ─── États Établissement ──────────────────────────────────────────────────
   const [saving, setSaving] = useState(false)
@@ -811,6 +850,22 @@ export const ConfigPage: React.FC = () => {
           >
             <Users className="w-4 h-4 text-emerald-600" />
             <span>Équipe & Accès</span>
+          </button>
+          <button
+            onClick={() => setActiveTab('circuit_ventes')}
+            className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+              activeTab === 'circuit_ventes'
+                ? 'bg-white text-slate-900 shadow-sm'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <ArrowRightLeft className="w-4 h-4 text-emerald-600" />
+            <span>Circuit Ventes & Caisses</span>
+            {circuitPendingCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-100 text-amber-700 font-black">
+                {circuitPendingCount}
+              </span>
+            )}
           </button>
           {isImprimerie && (
             <button
@@ -1466,6 +1521,236 @@ export const ConfigPage: React.FC = () => {
                 </div>
               )
             })()}
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET : ORGANISATION DES VENTES ET DES ENCAISSEMENTS                */}
+      {/* =================================================================== */}
+      {activeTab === 'circuit_ventes' && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Bannière de l'organisation active */}
+          <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-2">
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                <ArrowRightLeft className="w-3.5 h-3.5" />
+                <span>Paramètres Métier Entreprise</span>
+              </div>
+              <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
+                <span>Organisation active : </span>
+                <span className={isCircuitSeparated ? 'text-amber-400' : 'text-emerald-400'}>
+                  {isCircuitSeparated
+                    ? 'Mode 2 — Séparation entre Vendeur et Caissière'
+                    : 'Mode 1 — Vente et Encaissement par le même utilisateur'}
+                </span>
+              </h2>
+              <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
+                {isCircuitSeparated
+                  ? "Les vendeurs établissent les bons de commande et les transmettent à la caisse. Les caissières visualisent les bons dans leur vue dédiée et procèdent aux encaissements."
+                  : "L'utilisateur autorisé effectue la vente et encaisse directement le client dans le même circuit, conformément aux permissions accordées. Parcours direct historique conservé."}
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => {
+                setTargetCircuitMode(isCircuitSeparated ? 'INTEGRE' : 'SEPARE_VENDEUR_CAISSIERE')
+                setSwitchingCircuitModal(true)
+              }}
+              className="flex items-center justify-center gap-2 px-5 py-3.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-500/20 transition shrink-0 cursor-pointer"
+            >
+              <ArrowRightLeft className="w-4 h-4" />
+              <span>Changer d'organisation</span>
+            </button>
+          </div>
+
+          {/* Grille des 2 modes configurables */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* MODE 1 */}
+            <div
+              className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                isCircuitIntegrated
+                  ? 'border-emerald-500 bg-white shadow-md ring-2 ring-emerald-500/20'
+                  : 'border-slate-200 bg-slate-50/50 opacity-80'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                    <Store className="w-5 h-5" />
+                  </div>
+                  {isCircuitIntegrated ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800">
+                      <CheckCircle className="w-3.5 h-3.5" /> Actif
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTargetCircuitMode('INTEGRE')
+                        setSwitchingCircuitModal(true)
+                      }}
+                      className="text-xs font-bold text-emerald-600 hover:underline"
+                    >
+                      Activer ce mode
+                    </button>
+                  )}
+                </div>
+                <h3 className="font-bold text-slate-900 text-base mb-1">
+                  MODE 1 — Vente et encaissement par le même utilisateur
+                </h3>
+                <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                  L'utilisateur autorisé peut effectuer la vente et encaisser le client dans le même circuit, conformément aux permissions qui lui sont accordées.
+                </p>
+                <ul className="space-y-2 text-xs text-slate-600 border-t border-slate-100 pt-4">
+                  <li className="flex items-center gap-2">✓ Conserve le fonctionnement actuel et historique de l'entreprise</li>
+                  <li className="flex items-center gap-2">✓ Encaissement direct au point de vente (comptoir unique)</li>
+                  <li className="flex items-center gap-2">✓ Aucun changement inutile dans le parcours des utilisateurs</li>
+                  <li className="flex items-center gap-2">✓ Déstockage et ticket générés en une seule étape</li>
+                </ul>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-[11px] font-medium text-slate-400">Circuit standard direct</span>
+                {isCircuitIntegrated ? (
+                  <span className="text-xs font-bold text-emerald-600">Mode par défaut</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTargetCircuitMode('INTEGRE')
+                      setSwitchingCircuitModal(true)
+                    }}
+                    className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition"
+                  >
+                    Sélectionner
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* MODE 2 */}
+            <div
+              className={`p-6 rounded-3xl border-2 transition flex flex-col justify-between ${
+                isCircuitSeparated
+                  ? 'border-amber-500 bg-white shadow-md ring-2 ring-amber-500/20'
+                  : 'border-slate-200 bg-slate-50/50 opacity-80'
+              }`}
+            >
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-600 flex items-center justify-center">
+                    <ArrowRightLeft className="w-5 h-5" />
+                  </div>
+                  {isCircuitSeparated ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800">
+                      <CheckCircle className="w-3.5 h-3.5" /> Actif
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTargetCircuitMode('SEPARE_VENDEUR_CAISSIERE')
+                        setSwitchingCircuitModal(true)
+                      }}
+                      className="text-xs font-bold text-amber-600 hover:underline"
+                    >
+                      Activer ce mode
+                    </button>
+                  )}
+                </div>
+                <h3 className="font-bold text-slate-900 text-base mb-1">
+                  MODE 2 — Séparation entre vendeur et caissière
+                </h3>
+                <p className="text-xs text-slate-500 mb-4 leading-relaxed">
+                  Les vendeurs établissent les bons de commande et les transmettent à la caisse. Les caissières récupèrent ces bons et procèdent aux encaissements.
+                </p>
+                <ul className="space-y-2 text-xs text-slate-600 border-t border-slate-100 pt-4">
+                  <li className="flex items-center gap-2">✓ Le vendeur prépare et valide le bon de commande sans encaisser</li>
+                  <li className="flex items-center gap-2">✓ Transmission automatique vers « Bons en attente d'encaissement » en Caisse</li>
+                  <li className="flex items-center gap-2">✓ La caissière sélectionne le bon, valide le règlement et délivre le reçu</li>
+                  <li className="flex items-center gap-2">✓ Traçabilité stricte : Vendeur et Caissière distincts sur chaque transaction</li>
+                </ul>
+              </div>
+
+              <div className="mt-6 pt-4 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-[11px] font-medium text-slate-400">Circuit à deux étapes</span>
+                {isCircuitSeparated ? (
+                  <span className="text-xs font-bold text-amber-600">Mode actif</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setTargetCircuitMode('SEPARE_VENDEUR_CAISSIERE')
+                      setSwitchingCircuitModal(true)
+                    }}
+                    className="px-4 py-2 bg-amber-600 text-white rounded-xl text-xs font-bold hover:bg-amber-700 transition"
+                  >
+                    Sélectionner
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Confirmation Changement d'Organisation des Ventes */}
+      {switchingCircuitModal && targetCircuitMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-md w-full shadow-2xl border border-slate-100 p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                <ArrowRightLeft className="w-4 h-4 text-emerald-600" />
+                <span>Confirmer le changement d'organisation</span>
+              </h3>
+              <button
+                onClick={() => setSwitchingCircuitModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Vous êtes sur le point de passer votre établissement en{' '}
+              <strong>
+                {targetCircuitMode === 'INTEGRE'
+                  ? 'Mode 1 (Vente et encaissement intégrés par le même utilisateur)'
+                  : 'Mode 2 (Séparation entre vendeur et caissière)'}
+              </strong>.
+            </p>
+
+            {circuitPendingCount > 0 && targetCircuitMode === 'INTEGRE' && (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-2xl text-xs text-amber-800 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
+                  <span>Opérations en cours ({circuitPendingCount} bons en attente)</span>
+                </p>
+                <p className="text-[11px] text-amber-700">
+                  {circuitPendingCount} bon(s) de commande sont actuellement en attente d'encaissement. Le changement de mode ne supprimera aucun bon ni aucun paiement : ils restent consultables et encaissables dans l'historique de caisse.
+                </p>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setSwitchingCircuitModal(false)}
+                className="px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={switchingCircuit}
+                onClick={handleConfirmSwitchCircuit}
+                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-md transition disabled:opacity-50"
+              >
+                {switchingCircuit ? 'Enregistrement...' : 'Confirmer le changement'}
+              </button>
+            </div>
           </div>
         </div>
       )}

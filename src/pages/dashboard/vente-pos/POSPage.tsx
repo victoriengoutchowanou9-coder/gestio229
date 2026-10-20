@@ -50,6 +50,13 @@ import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService
 import { isVraiCodeEmballage } from '../../../utils/emballages'
 import { getCachedData, setCachedData, invalidateCache } from '../../../utils/cache'
 import { comptabiliserVenteAuto } from '../../../services/compta_auto'
+import { useSalesCircuitConfig } from '../../../hooks/useSalesCircuitConfig'
+import {
+  creerEtTransmettreBon,
+  fetchPendingBons,
+  annulerBonDeCommande,
+  PendingBon
+} from '../../../services/salesCircuitService'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -180,6 +187,26 @@ export const POSPage: React.FC = () => {
   const canTransferStock = Boolean(
     isAdmin || ['admin', 'administrateur', 'gestionnaire', 'gerant', 'super_admin'].includes(userRole)
   )
+
+  // Droits de caisse & mode de circuit
+  const hasCaissePrivilege = Boolean(
+    isAdmin ||
+    ['admin', 'administrateur', 'gestionnaire', 'gerant', 'super_admin', 'caissier', 'caissiere'].includes(userRole) ||
+    (user?.permissions as any)?.caisse === true
+  )
+
+  const {
+    circuitMode,
+    isIntegrated: isCircuitIntegrated,
+    isSeparated: isCircuitSeparated
+  } = useSalesCircuitConfig()
+
+  // État Bon de Commande transmis (Mode Séparé)
+  const [transmittedBonModal, setTransmittedBonModal] = useState<any | null>(null)
+  const [transmittingBon, setTransmittingBon] = useState<boolean>(false)
+  const [mesBonsModal, setMesBonsModal] = useState<boolean>(false)
+  const [mesBonsList, setMesBonsList] = useState<PendingBon[]>([])
+  const [loadingMesBons, setLoadingMesBons] = useState<boolean>(false)
   const { secteurActif, caisseActive } = useAppContext()
   const currentSectorSlug = (sectorSlug || secteurActif?.slug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
@@ -1822,6 +1849,68 @@ export const POSPage: React.FC = () => {
     return { ok: true }
   }
 
+  // ─── Transmission du Bon de Commande à la Caisse (Mode Séparé) ─────────────
+  const handleTransmettreBonCaisse = async () => {
+    if (transmittingBon || cart.length === 0) return
+
+    // Contrôle emballages brasserie si applicable
+    const embCheck = validerConditionsEmballage()
+    if (!embCheck.ok) {
+      toast.error('Validation emballages requise', embCheck.message || '')
+      return
+    }
+
+    setTransmittingBon(true)
+
+    try {
+      const activeCompId = company?.id ?? companyId ?? ''
+      const sellerId = user?.id || ''
+      const sellerName = user?.full_name || 'Vendeur'
+      const clientNom = selectedCustomer ? selectedCustomer.name : 'Client Comptoir'
+
+      const res = await creerEtTransmettreBon({
+        company_id: activeCompId,
+        sector_slug: currentSectorSlug,
+        seller_id: sellerId,
+        seller_name: sellerName,
+        customer_id: selectedCustomer?.id || null,
+        customer_name: clientNom,
+        items: cart,
+        total_ht: cartFiscalSummary.ht,
+        total_tva: cartFiscalSummary.tva,
+        total_aib: cartFiscalSummary.aib,
+        total_ttc: totalNetTTC
+      })
+
+      if (!res.success || !res.orderNumber) {
+        toast.error('Erreur transmission bon', res.error || 'Impossible de transmettre le bon.')
+        return
+      }
+
+      const bonSnapshot = {
+        order_number: res.orderNumber,
+        date: new Date().toISOString(),
+        customer_name: clientNom,
+        seller_name: sellerName,
+        lines: [...cart],
+        total_ht: cartFiscalSummary.ht,
+        total_tva: cartFiscalSummary.tva,
+        total_ttc: totalNetTTC
+      }
+
+      clearCart()
+      setTransmittedBonModal(bonSnapshot)
+      toast.success(
+        'Bon de commande transmis !',
+        `Bon ${res.orderNumber} transmis à la caisse. En attente de règlement.`
+      )
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Erreur lors de la transmission.')
+    } finally {
+      setTransmittingBon(false)
+    }
+  }
+
   // ─── Validation de la Vente ────────────────────────────────────────────────
 
   // ─── Validation de la Vente ────────────────────────────────────────────────
@@ -2727,6 +2816,23 @@ export const POSPage: React.FC = () => {
           >
             <Clock className="w-4 h-4" /> Historique ({salesHistory.length})
           </button>
+          {isCircuitSeparated && (
+            <button
+              onClick={async () => {
+                setMesBonsModal(true)
+                setLoadingMesBons(true)
+                try {
+                  const list = await fetchPendingBons(company?.id ?? companyId ?? '', currentSectorSlug)
+                  setMesBonsList(list)
+                } finally {
+                  setLoadingMesBons(false)
+                }
+              }}
+              className="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200"
+            >
+              <ArrowRightLeft className="w-4 h-4 text-amber-600" /> Bons en attente
+            </button>
+          )}
         </div>
       </div>
 
@@ -3725,31 +3831,100 @@ export const POSPage: React.FC = () => {
                 )
               })()}
 
-              {/* Pied du Panier : Bouton Valider la Vente en 1 clic */}
+              {/* Pied du Panier : Validation Vente Directe ou Transmission Bon de Commande selon le mode d'organisation */}
               <div className="p-3 bg-slate-50 border-t border-slate-200 shrink-0">
-                <button
-                  type="button"
-                  disabled={!canValidateSale || paying}
-                  onClick={handleValidateSale}
-                  className={clsx(
-                    'w-full py-3 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-sm',
-                    (canValidateSale && !paying)
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-600/20'
-                      : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
-                  )}
-                >
-                  {paying ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Validation...</span>
-                    </>
-                  ) : (
-                    <>
-                      <Check className="w-4 h-4" />
-                      <span>{validationButtonText}</span>
-                    </>
-                  )}
-                </button>
+                {isCircuitSeparated && !hasCaissePrivilege ? (
+                  /* MODE 2 : Vendeur exclusif -> Valider et transmettre à la caisse */
+                  <button
+                    type="button"
+                    disabled={cart.length === 0 || transmittingBon}
+                    onClick={handleTransmettreBonCaisse}
+                    className={clsx(
+                      'w-full py-3.5 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-md cursor-pointer',
+                      cart.length > 0 && !transmittingBon
+                        ? 'bg-gradient-to-r from-amber-600 to-amber-700 hover:from-amber-700 hover:to-amber-800 text-white shadow-amber-600/20'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                    )}
+                  >
+                    {transmittingBon ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Transmission à la caisse...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ArrowRightLeft className="w-4 h-4" />
+                        <span>Valider et transmettre à la caisse ({fmt(totalNetTTC)})</span>
+                      </>
+                    )}
+                  </button>
+                ) : isCircuitSeparated && hasCaissePrivilege ? (
+                  /* MODE 2 : Utilisateur polyvalent avec droits de caisse -> Choix transmission ou encaissement direct */
+                  <div className="space-y-2">
+                    <button
+                      type="button"
+                      disabled={cart.length === 0 || transmittingBon}
+                      onClick={handleTransmettreBonCaisse}
+                      className={clsx(
+                        'w-full py-2.5 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-sm',
+                        cart.length > 0 && !transmittingBon
+                          ? 'bg-amber-600 hover:bg-amber-700 text-white cursor-pointer shadow-amber-600/20'
+                          : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                      )}
+                    >
+                      {transmittingBon ? (
+                        <>
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Transmission en cours...</span>
+                        </>
+                      ) : (
+                        <>
+                          <ArrowRightLeft className="w-4 h-4" />
+                          <span>Transmettre à la caisse ({fmt(totalNetTTC)})</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!canValidateSale || paying}
+                      onClick={handleValidateSale}
+                      className={clsx(
+                        'w-full py-2 px-3 rounded-xl text-xs font-bold transition flex items-center justify-center gap-2 border',
+                        canValidateSale && !paying
+                          ? 'bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border-emerald-300 cursor-pointer'
+                          : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                      )}
+                    >
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>Encaisser directement au comptoir</span>
+                    </button>
+                  </div>
+                ) : (
+                  /* MODE 1 : Vente et encaissement par le même utilisateur (Parcours classique direct) */
+                  <button
+                    type="button"
+                    disabled={!canValidateSale || paying}
+                    onClick={handleValidateSale}
+                    className={clsx(
+                      'w-full py-3 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-2 shadow-sm',
+                      (canValidateSale && !paying)
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer shadow-emerald-600/20'
+                        : 'bg-slate-200 text-slate-400 cursor-not-allowed border border-slate-300'
+                    )}
+                  >
+                    {paying ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Validation...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>{validationButtonText}</span>
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -4705,6 +4880,202 @@ export const POSPage: React.FC = () => {
         productsList={products}
         customersList={customers}
       />
+
+      {/* ── MODALE BON DE COMMANDE TRANSMIS À LA CAISSE (MODE SÉPARÉ) ── */}
+      {transmittedBonModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-lg w-full shadow-2xl border border-slate-100 p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Bon de Commande Transmis</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">{transmittedBonModal.order_number}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setTransmittedBonModal(null)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Fiche ticket Bon de Commande imprimable */}
+            <div id="bon-commande-printable" className="p-4 bg-amber-50/40 border border-amber-200 rounded-2xl space-y-3 font-sans text-xs">
+              <div className="text-center space-y-0.5 border-b border-amber-200 pb-2">
+                <p className="font-black text-slate-900 text-sm">{company?.name || 'GESTIO 229'}</p>
+                <p className="text-[11px] text-amber-800 font-bold uppercase tracking-wider">BON DE COMMANDE COMPTOIR</p>
+                <p className="font-mono text-xs font-black text-slate-900">{transmittedBonModal.order_number}</p>
+                <p className="text-[10px] text-slate-500">{new Date(transmittedBonModal.date).toLocaleString('fr-BJ')}</p>
+              </div>
+
+              <div className="flex justify-between text-[11px] text-slate-600">
+                <span>Vendeur : <strong>{transmittedBonModal.seller_name}</strong></span>
+                <span>Client : <strong>{transmittedBonModal.customer_name}</strong></span>
+              </div>
+
+              {/* Lignes d'articles */}
+              <table className="w-full text-[11px] border-t border-dashed border-amber-200 pt-2">
+                <thead>
+                  <tr className="border-b border-amber-200 text-slate-500 font-bold">
+                    <th className="text-left pb-1">Article</th>
+                    <th className="text-center pb-1">Qté</th>
+                    <th className="text-right pb-1">Prix</th>
+                    <th className="text-right pb-1">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-amber-100">
+                  {transmittedBonModal.lines.map((l: any, idx: number) => (
+                    <tr key={idx}>
+                      <td className="py-1 text-slate-900 font-medium">{l.product.name}</td>
+                      <td className="py-1 text-center font-mono font-bold">{l.qty}</td>
+                      <td className="py-1 text-right font-mono">{fmt(l.unitPrice)}</td>
+                      <td className="py-1 text-right font-mono font-black">{fmt(l.qty * l.unitPrice)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+
+              <div className="border-t border-dashed border-amber-300 pt-2 flex justify-between items-center text-sm font-black text-slate-900">
+                <span>TOTAL À ENCAISSER :</span>
+                <span className="text-amber-700 font-mono text-base">{fmt(transmittedBonModal.total_ttc)}</span>
+              </div>
+
+              <div className="p-2.5 bg-amber-100/70 border border-amber-300 rounded-xl text-center text-amber-900 font-bold text-[11px]">
+                👉 Veuillez inviter le client à présenter ce bon au guichet caisse pour le règlement.
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  window.print()
+                }}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimer le Bon</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTransmittedBonModal(null)}
+                className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-md transition"
+              >
+                Nouvelle commande
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODALE SUIVI DES BONS EN ATTENTE POUR LE VENDEUR ── */}
+      {mesBonsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[85vh] shadow-2xl border border-slate-100 p-6 flex flex-col gap-4">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
+                  <ArrowRightLeft className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-sm">Bons de Commande en Attente d'Encaissement</h3>
+                  <p className="text-[11px] text-slate-400">Liste des bons transmis à la caisse pour le secteur</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setMesBonsModal(false)}
+                className="text-slate-400 hover:text-slate-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {loadingMesBons ? (
+                <div className="p-8 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+                  <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
+                  <span>Chargement des bons en cours...</span>
+                </div>
+              ) : mesBonsList.length === 0 ? (
+                <div className="p-8 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+                  Aucun bon en attente d'encaissement pour ce secteur.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-2xl border border-slate-200">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                      <tr>
+                        <th className="p-3">N° Bon</th>
+                        <th className="p-3">Date</th>
+                        <th className="p-3">Client</th>
+                        <th className="p-3 text-right">Montant Total</th>
+                        <th className="p-3 text-right">Reste à payer</th>
+                        <th className="p-3 text-center">Statut</th>
+                        <th className="p-3 text-right">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 font-mono">
+                      {mesBonsList.map((b) => (
+                        <tr key={b.id} className="hover:bg-slate-50/50 transition">
+                          <td className="p-3 font-bold text-slate-900">{b.order_number}</td>
+                          <td className="p-3 font-sans text-slate-500 text-[11px]">
+                            {new Date(b.created_at).toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="p-3 font-sans text-slate-800 font-medium">{b.customer_name}</td>
+                          <td className="p-3 text-right font-bold text-slate-900">{fmt(b.total_amount)}</td>
+                          <td className="p-3 text-right font-black text-amber-700">{fmt(b.remaining_balance)}</td>
+                          <td className="p-3 text-center font-sans">
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                              {b.remaining_balance < b.total_amount ? 'Partiellement payé' : 'En attente de caisse'}
+                            </span>
+                          </td>
+                          <td className="p-3 text-right font-sans">
+                            <button
+                              onClick={() => {
+                                setTransmittedBonModal({
+                                  order_number: b.order_number,
+                                  date: b.created_at,
+                                  customer_name: b.customer_name,
+                                  seller_name: b.seller_name || user?.full_name || 'Vendeur',
+                                  lines: b.items.map(i => ({
+                                    product: { name: i.product_name },
+                                    qty: i.quantity,
+                                    unitPrice: i.unit_price
+                                  })),
+                                  total_ttc: b.total_amount
+                                })
+                              }}
+                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition inline-flex items-center gap-1"
+                              title="Réimprimer le bon pour le client"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              <span>Revoir</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setMesBonsModal(false)}
+                className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

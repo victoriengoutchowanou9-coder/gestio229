@@ -42,6 +42,13 @@ import {
 } from '../../../services/caisseSectorService'
 import ClotureCaisse from './ClotureCaisse'
 import { useAppContext } from '../../../contexts/AppContext'
+import { useSalesCircuitConfig } from '../../../hooks/useSalesCircuitConfig'
+import {
+  fetchPendingBons,
+  encaisserBonDeCommande,
+  annulerBonDeCommande,
+  PendingBon
+} from '../../../services/salesCircuitService'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -176,6 +183,22 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [modePaiementPrestation, setModePaiementPrestation] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'banque' | 'cheque'>('especes')
   const [notePrestationCaisse, setNotePrestationCaisse] = useState<string>('')
   const [isProcessingPrestationCaisse, setIsProcessingPrestationCaisse] = useState<boolean>(false)
+
+  // ── Organisation des Ventes & Bons de Commande en attente d'encaissement ──
+  const {
+    circuitMode,
+    isIntegrated: isCircuitIntegrated,
+    isSeparated: isCircuitSeparated
+  } = useSalesCircuitConfig()
+
+  const [bonsEnAttente, setBonsEnAttente] = useState<PendingBon[]>([])
+  const [loadingBonsEnAttente, setLoadingBonsEnAttente] = useState<boolean>(false)
+  const [bonAEncaisser, setBonAEncaisser] = useState<PendingBon | null>(null)
+  const [montantEncaissementBon, setMontantEncaissementBon] = useState<number>(0)
+  const [modePaiementBon, setModePaiementBon] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'wave' | 'banque' | 'carte'>('especes')
+  const [noteEncaissementBon, setNoteEncaissementBon] = useState<string>('')
+  const [isProcessingEncaissementBon, setIsProcessingEncaissementBon] = useState<boolean>(false)
+  const [receiptSuccessBon, setReceiptSuccessBon] = useState<any | null>(null)
 
   // Modals
   const [showOpenModal, setShowOpenModal] = useState(false)
@@ -373,6 +396,102 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     setOpenedBy(opBy)
     setInitialCash(initC)
     setInitialMomo(initM)
+  }
+
+  // ── Chargement des Bons de Commande en attente d'encaissement (Mode Séparé) ──
+  const loadBonsEnAttente = useCallback(async () => {
+    const compId = currentCompanyId || company?.id
+    if (!compId) return
+    try {
+      setLoadingBonsEnAttente(true)
+      const list = await fetchPendingBons(compId, currentSectorSlug)
+      setBonsEnAttente(list)
+    } catch (err) {
+      console.warn('[CaissePage] Erreur chargement bons en attente:', err)
+    } finally {
+      setLoadingBonsEnAttente(false)
+    }
+  }, [currentCompanyId, company?.id, currentSectorSlug])
+
+  useEffect(() => {
+    loadBonsEnAttente()
+
+    const handleBonEvent = () => {
+      loadBonsEnAttente()
+    }
+
+    window.addEventListener('gestio:bon_transmitted', handleBonEvent)
+    window.addEventListener('gestio:bon_encaisse', handleBonEvent)
+    window.addEventListener('gestio:bon_annule', handleBonEvent)
+    return () => {
+      window.removeEventListener('gestio:bon_transmitted', handleBonEvent)
+      window.removeEventListener('gestio:bon_encaisse', handleBonEvent)
+      window.removeEventListener('gestio:bon_annule', handleBonEvent)
+    }
+  }, [loadBonsEnAttente])
+
+  // ── Validation de l'encaissement d'un Bon par la Caissière ──
+  const handleValiderEncaissementBon = async () => {
+    if (!bonAEncaisser || isProcessingEncaissementBon) return
+    if (montantEncaissementBon <= 0) {
+      toast.error('Montant invalide', 'Le montant à encaisser doit être supérieur à zéro.')
+      return
+    }
+
+    // Contrôle d'état de caisse
+    if (caisseStatus !== 'OUVERTE' && (!sessionDuJour || sessionDuJour.statut === 'fermée')) {
+      toast.error('Caisse fermée', 'Veuillez ouvrir la caisse avant de procéder à l\'encaissement.')
+      return
+    }
+
+    setIsProcessingEncaissementBon(true)
+
+    try {
+      const activeCompId = currentCompanyId || company?.id || ''
+      const res = await encaisserBonDeCommande({
+        orderId: bonAEncaisser.id,
+        companyId: activeCompId,
+        sectorSlug: currentSectorSlug,
+        caisseId: cashRegisterId || caisseActive?.id || null,
+        caisseSessionId: activeSessionId || sessionDuJour?.id || null,
+        cashierId: user?.id || '',
+        cashierName: user?.full_name || 'Caissière',
+        montantEncaisse: montantEncaissementBon,
+        modePaiement: modePaiementBon,
+        notes: noteEncaissementBon
+      })
+
+      if (!res.success) {
+        toast.error('Encaissement impossible', res.error || 'Erreur lors de l\'encaissement.')
+        setIsProcessingEncaissementBon(false)
+        return
+      }
+
+      toast.success(
+        'Encaissement validé avec succès !',
+        `Bon ${bonAEncaisser.order_number} encaissé (${fmt(montantEncaissementBon)}).`
+      )
+
+      setReceiptSuccessBon({
+        transaction_ref: res.transactionRef,
+        order_number: bonAEncaisser.order_number,
+        date: new Date().toISOString(),
+        customer_name: bonAEncaisser.customer_name,
+        seller_name: bonAEncaisser.seller_name,
+        cashier_name: user?.full_name || 'Caissière',
+        amount_paid: montantEncaissementBon,
+        payment_method: modePaiementBon,
+        remaining_balance: Math.max(0, bonAEncaisser.remaining_balance - montantEncaissementBon),
+        items: bonAEncaisser.items
+      })
+
+      setBonAEncaisser(null)
+      await Promise.all([loadBonsEnAttente(), loadCaisseData(), loadSessions()])
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
+    } finally {
+      setIsProcessingEncaissementBon(false)
+    }
   }
 
   // Charger les ventes réelles et remboursements du jour depuis Supabase
@@ -1797,6 +1916,30 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             <span>Ajustement</span>
           </button>
 
+          {/* Bons de commande en attente d'encaissement (Mode Séparé) */}
+          <button
+            onClick={() => {
+              loadBonsEnAttente()
+              const elem = document.getElementById('section-bons-attente-caisse')
+              if (elem) elem.scrollIntoView({ behavior: 'smooth' })
+            }}
+            className={clsx(
+              "px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 border cursor-pointer",
+              bonsEnAttente.length > 0
+                ? "bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300"
+                : "bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200"
+            )}
+            title="Consulter les bons de commande en attente d'encaissement"
+          >
+            <Receipt className="w-3.5 h-3.5 text-amber-600" />
+            <span>Bons en attente</span>
+            {bonsEnAttente.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded-full text-[10px] bg-amber-600 text-white font-black">
+                {bonsEnAttente.length}
+              </span>
+            )}
+          </button>
+
           {/* Envoyer une demande vers Trésorerie */}
           <button
             onClick={() => setShowWithdrawalModal(true)}
@@ -2055,6 +2198,353 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </button>
             </div>
             <ClotureCaisse />
+          </div>
+        </div>
+      )}
+
+      {/* ── SECTION MÉTIER : BONS EN ATTENTE D'ENCAISSEMENT (MODE SÉPARÉ OU BONS EXISTANTS) ── */}
+      {(isCircuitSeparated || bonsEnAttente.length > 0) && (
+        <div id="section-bons-attente-caisse" className="bg-white border-2 border-amber-200/80 rounded-3xl p-5 shadow-xs space-y-3 animate-fadeIn">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2.5 bg-amber-100 text-amber-800 rounded-2xl">
+                <ArrowRightLeft className="w-5 h-5" />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Bons en attente d'encaissement ({bonsEnAttente.length})
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                    Mode Séparé Vendeur &bull; Caissière
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400">
+                  Commandes préparées et transmises par les vendeurs, prêtes pour règlement au comptoir caisse
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-bold text-amber-800 bg-amber-50 px-3 py-1.5 rounded-xl border border-amber-200">
+                Total restant à percevoir : {fmt(bonsEnAttente.reduce((acc, b) => acc + Number(b.remaining_balance || 0), 0))}
+              </span>
+              <button
+                onClick={loadBonsEnAttente}
+                disabled={loadingBonsEnAttente}
+                className="p-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition shadow-xs cursor-pointer"
+                title="Actualiser la liste"
+              >
+                <RefreshCw className={clsx("w-3.5 h-3.5", loadingBonsEnAttente && "animate-spin")} />
+              </button>
+            </div>
+          </div>
+
+          {loadingBonsEnAttente ? (
+            <div className="p-8 text-center text-slate-400 text-xs flex items-center justify-center gap-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-amber-600" />
+              <span>Actualisation des bons en attente...</span>
+            </div>
+          ) : bonsEnAttente.length === 0 ? (
+            <div className="p-6 text-center text-slate-400 text-xs bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+              Aucun bon de commande en attente d'encaissement pour le moment.
+            </div>
+          ) : (
+            <div className="overflow-x-auto bg-white rounded-2xl border border-slate-200">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600 font-bold border-b border-slate-200">
+                  <tr>
+                    <th className="p-3">N° Bon</th>
+                    <th className="p-3">Date & Heure</th>
+                    <th className="p-3">Vendeur</th>
+                    <th className="p-3">Client</th>
+                    <th className="p-3">Détail des articles</th>
+                    <th className="p-3 text-right">Montant Total</th>
+                    <th className="p-3 text-right">Déjà payé</th>
+                    <th className="p-3 text-right font-black text-amber-700">Reste à payer</th>
+                    <th className="p-3 text-center">Statut</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono">
+                  {bonsEnAttente.map((bon) => (
+                    <tr key={bon.id} className="hover:bg-amber-50/20 transition">
+                      <td className="p-3 font-bold text-slate-900">{bon.order_number}</td>
+                      <td className="p-3 font-sans text-slate-500 text-[11px]">
+                        {new Date(bon.created_at).toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
+                        <span className="block text-[10px] text-slate-400">{new Date(bon.created_at).toLocaleDateString('fr-BJ')}</span>
+                      </td>
+                      <td className="p-3 font-sans text-slate-700">
+                        <span className="font-semibold text-slate-900">{bon.seller_name || 'Vendeur'}</span>
+                      </td>
+                      <td className="p-3 font-sans text-slate-800">
+                        <span className="font-bold">{bon.customer_name || 'Client Comptoir'}</span>
+                      </td>
+                      <td className="p-3 font-sans text-slate-600 max-w-xs">
+                        <div className="truncate text-[11px]" title={bon.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ')}>
+                          {bon.items.length > 0
+                            ? bon.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ')
+                            : 'Commande comptoir'}
+                        </div>
+                      </td>
+                      <td className="p-3 text-right font-bold text-slate-900">{fmt(bon.total_amount)}</td>
+                      <td className="p-3 text-right font-medium text-slate-500">{fmt(bon.paid_amount)}</td>
+                      <td className="p-3 text-right font-black text-amber-700">{fmt(bon.remaining_balance)}</td>
+                      <td className="p-3 text-center font-sans">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          bon.paid_amount > 0 ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {bon.paid_amount > 0 ? 'Partiel' : 'En attente'}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right font-sans">
+                        <button
+                          onClick={() => {
+                            setBonAEncaisser(bon)
+                            setMontantEncaissementBon(bon.remaining_balance)
+                            setModePaiementBon('especes')
+                            setNoteEncaissementBon('')
+                          }}
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition inline-flex items-center gap-1 cursor-pointer"
+                        >
+                          <Receipt className="w-3.5 h-3.5" />
+                          <span>Encaisser</span>
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Modal d'Encaissement du Bon de Commande par la Caissière ── */}
+      {bonAEncaisser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Receipt className="w-5 h-5 text-emerald-600" />
+                  <span>Encaissement du Bon de Commande</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 font-mono mt-0.5">
+                  Réf: {bonAEncaisser.order_number} &bull; Vendeur: <strong>{bonAEncaisser.seller_name}</strong>
+                </p>
+              </div>
+              <button
+                onClick={() => setBonAEncaisser(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Récapitulatif pré-rempli non modifiable */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5">
+              <div className="flex justify-between text-slate-600">
+                <span>Client :</span>
+                <span className="font-bold text-slate-900">{bonAEncaisser.customer_name || 'Client Comptoir'}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Montant total de la commande :</span>
+                <span className="font-bold text-slate-900">{fmt(bonAEncaisser.total_amount)}</span>
+              </div>
+              {bonAEncaisser.paid_amount > 0 && (
+                <div className="flex justify-between text-slate-500">
+                  <span>Montant déjà réglé :</span>
+                  <span className="font-medium text-emerald-600">{fmt(bonAEncaisser.paid_amount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between text-amber-800 font-black text-sm border-t border-slate-200 pt-2">
+                <span>Solde restant à percevoir :</span>
+                <span className="font-mono">{fmt(bonAEncaisser.remaining_balance)}</span>
+              </div>
+
+              {/* Lignes d'articles */}
+              {bonAEncaisser.items.length > 0 && (
+                <div className="mt-3 pt-2 border-t border-dashed border-slate-300">
+                  <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">Détail des articles :</p>
+                  <div className="max-h-28 overflow-y-auto space-y-1">
+                    {bonAEncaisser.items.map((item, idx) => (
+                      <div key={idx} className="flex justify-between text-[11px] text-slate-700">
+                        <span>{item.quantity} × {item.product_name}</span>
+                        <span className="font-mono">{fmt(item.total_ttc || item.quantity * item.unit_price)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Formulaire d'encaissement caissière */}
+            <div className="space-y-3 pt-1">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Montant réellement perçu (FCFA) *
+                </label>
+                <input
+                  type="number"
+                  required
+                  min="1"
+                  max={bonAEncaisser.remaining_balance}
+                  value={montantEncaissementBon || ''}
+                  onChange={(e) => setMontantEncaissementBon(Math.max(0, Number(e.target.value) || 0))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-black text-base text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                />
+                {montantEncaissementBon < bonAEncaisser.remaining_balance && montantEncaissementBon > 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    ⚠️ Paiement partiel : il restera un solde dû de {fmt(bonAEncaisser.remaining_balance - montantEncaissementBon)}.
+                  </p>
+                )}
+              </div>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Mode de règlement *</label>
+                <select
+                  value={modePaiementBon}
+                  onChange={(e) => setModePaiementBon(e.target.value as any)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl font-bold"
+                >
+                  <option value="especes">💵 Espèces (Tiroir Caisse)</option>
+                  <option value="momo_mtn">📱 MTN Mobile Money</option>
+                  <option value="momo_moov">📱 Moov Money</option>
+                  <option value="wave">🌊 Wave</option>
+                  <option value="banque">🏦 Banque / Virement</option>
+                  <option value="carte">💳 Carte Bancaire</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-600 mb-1">Note ou observation (facultatif)</label>
+                <input
+                  type="text"
+                  value={noteEncaissementBon}
+                  onChange={(e) => setNoteEncaissementBon(e.target.value)}
+                  placeholder="Ex: Réf reçu, chèque N°..."
+                  className="w-full px-3 py-2 border border-slate-300 rounded-xl text-xs"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  disabled={isProcessingEncaissementBon}
+                  onClick={() => setBonAEncaisser(null)}
+                  className="px-4 py-2 border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl font-bold transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="button"
+                  disabled={isProcessingEncaissementBon || montantEncaissementBon <= 0}
+                  onClick={handleValiderEncaissementBon}
+                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
+                >
+                  {isProcessingEncaissementBon ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Validation en cours...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Valider l'encaissement</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal Reçu d'Encaissement Imprimable ── */}
+      {receiptSuccessBon && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2 text-emerald-600 font-bold">
+                <CheckCircle2 className="w-5 h-5" />
+                <span>Encaissement Réussi</span>
+              </div>
+              <button
+                onClick={() => setReceiptSuccessBon(null)}
+                className="text-slate-400 hover:text-slate-600 p-1"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Ticket de caisse imprimable */}
+            <div id="recu-caisse-printable" className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5 font-sans">
+              <div className="text-center space-y-0.5 border-b border-slate-200 pb-2">
+                <p className="font-black text-slate-900 text-sm">{company?.name || 'GESTIO 229'}</p>
+                <p className="text-[10px] text-slate-500 uppercase tracking-wider font-bold">REÇU DE CAISSE</p>
+                <p className="font-mono text-xs font-bold text-slate-700">Réf: {receiptSuccessBon.transaction_ref}</p>
+                <p className="text-[10px] text-slate-400">{new Date(receiptSuccessBon.date).toLocaleString('fr-BJ')}</p>
+              </div>
+
+              <div className="space-y-1 text-[11px] text-slate-600">
+                <div className="flex justify-between">
+                  <span>Bon de commande :</span>
+                  <span className="font-bold text-slate-900">{receiptSuccessBon.order_number}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Client :</span>
+                  <span className="font-bold text-slate-900">{receiptSuccessBon.customer_name || 'Comptoir'}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Vendeur :</span>
+                  <span>{receiptSuccessBon.seller_name}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Caissière :</span>
+                  <span>{receiptSuccessBon.cashier_name}</span>
+                </div>
+              </div>
+
+              <div className="border-t border-dashed border-slate-300 pt-2 space-y-1">
+                <div className="flex justify-between items-center font-bold">
+                  <span>Mode de paiement :</span>
+                  <span className="uppercase text-slate-900">{receiptSuccessBon.payment_method}</span>
+                </div>
+                <div className="flex justify-between items-center text-sm font-black text-emerald-700">
+                  <span>MONTANT ENCAISSÉ :</span>
+                  <span className="font-mono text-base">{fmt(receiptSuccessBon.amount_paid)}</span>
+                </div>
+                {receiptSuccessBon.remaining_balance > 0 && (
+                  <div className="flex justify-between items-center text-xs text-rose-700 font-bold">
+                    <span>SOLDE RESTANT DÛ :</span>
+                    <span className="font-mono">{fmt(receiptSuccessBon.remaining_balance)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="text-center pt-2 border-t border-slate-200 text-[10px] text-slate-400">
+                Merci de votre confiance !
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimer le reçu</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setReceiptSuccessBon(null)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition"
+              >
+                Fermer
+              </button>
+            </div>
           </div>
         </div>
       )}
