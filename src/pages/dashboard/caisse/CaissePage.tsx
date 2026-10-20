@@ -8,11 +8,14 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import { clsx } from 'clsx'
+import { cn } from '../../../lib/utils'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
-  Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail
+  Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail,
+  Receipt
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
