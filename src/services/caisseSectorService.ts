@@ -287,6 +287,247 @@ export async function checkSectorCaisseStatus(
   return defaultRes
 }
 
+export interface FondInitialResult {
+  fondInitialEspeces: number
+  fondInitialMomo: number
+  sourceEspeces: string
+  sourceMomo: string
+}
+
+/**
+ * Récupère automatiquement les montants initiaux pour l'ouverture de caisse :
+ * A. Fond initial en espèces : solde réel reporté de la dernière clôture validée (ne jamais remettre à 0 si un solde précédent existe)
+ * B. Fond initial Mobile Money : solde du compte marchand Mobile Money concerné
+ */
+export async function getFondInitialOuverture(
+  companyId: string,
+  sectorSlug: string,
+  caisseId?: string | null,
+  secteurId?: string | null
+): Promise<FondInitialResult> {
+  const clean = cleanSectorSlug(sectorSlug)
+  let fondInitialEspeces = 0
+  let fondInitialMomo = 0
+  let sourceEspeces = 'defaut'
+  let sourceMomo = 'defaut'
+
+  if (!companyId) {
+    return { fondInitialEspeces: 0, fondInitialMomo: 0, sourceEspeces, sourceMomo }
+  }
+
+  // 1. Récupérer ou localiser la caisse du secteur
+  let targetCaisseId = caisseId
+  let caisseData: any = null
+  try {
+    if (!targetCaisseId) {
+      const caisse = await getOrCreateSectorCaisse(companyId, clean)
+      targetCaisseId = caisse?.id
+      caisseData = caisse
+    } else {
+      const { data: c } = await supabase.from('caisses').select('*').eq('id', targetCaisseId).maybeSingle()
+      caisseData = c
+    }
+  } catch (_) {}
+
+  // 2. FOND INITIAL ESPÈCES : Solde reporté de la dernière clôture validée
+  // RÈGLE MÉTIER IMPÉRATIVE : Ne JAMAIS remettre à 0 si un solde précédent existe !
+
+  // Priorité A : Solde de clôture reporté dans la table maîtresse caisses (fond_ouverture_especes ou solde_especes_final)
+  if (caisseData) {
+    const valCaisse = Number(caisseData.fond_ouverture_especes ?? caisseData.solde_especes_final ?? caisseData.solde_actuel)
+    if (!isNaN(valCaisse) && valCaisse !== 0) {
+      fondInitialEspeces = valCaisse
+      sourceEspeces = 'caisses_table'
+    }
+    const valMomoCaisse = Number(caisseData.fond_ouverture_momo)
+    if (!isNaN(valMomoCaisse) && valMomoCaisse !== 0) {
+      fondInitialMomo = valMomoCaisse
+      sourceMomo = 'caisses_table'
+    }
+  }
+
+  // Priorité B : Dernière session fermée dans caisse_sessions pour cette caisse
+  if (fondInitialEspeces === 0 && targetCaisseId) {
+    try {
+      const { data: lastSess } = await supabase
+        .from('caisse_sessions')
+        .select('fond_actuel_especes, fond_actuel_momo, especes_comptees, especes_theorique')
+        .eq('company_id', companyId)
+        .eq('caisse_id', targetCaisseId)
+        .in('statut', ['fermee', 'fermée', 'cloturee', 'closed'])
+        .order('date_fermeture', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (lastSess) {
+        const sEsp = Number(lastSess.fond_actuel_especes ?? lastSess.especes_comptees ?? lastSess.especes_theorique)
+        if (!isNaN(sEsp) && sEsp !== 0) {
+          fondInitialEspeces = sEsp
+          sourceEspeces = 'caisse_sessions'
+        }
+        if (fondInitialMomo === 0) {
+          const sMo = Number(lastSess.fond_actuel_momo)
+          if (!isNaN(sMo) && sMo !== 0) {
+            fondInitialMomo = sMo
+            sourceMomo = 'caisse_sessions'
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Priorité C : Dernier enregistrement dans clotures_caisse (secteur ou caisse)
+  if (fondInitialEspeces === 0) {
+    try {
+      let q = supabase
+        .from('clotures_caisse')
+        .select('fond_especes_apres, fond_reel_especes, fond_theorique, especes_cloture, fond_momo_apres, fond_reel_momo, momo_cloture')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+
+      if (targetCaisseId && secteurId) {
+        q = q.or(`caisse_id.eq.${targetCaisseId},secteur_id.eq.${secteurId}`)
+      } else if (targetCaisseId) {
+        q = q.eq('caisse_id', targetCaisseId)
+      } else if (secteurId) {
+        q = q.eq('secteur_id', secteurId)
+      }
+
+      const { data: lastClo } = await q.maybeSingle()
+      if (lastClo) {
+        const cEsp = Number(lastClo.fond_especes_apres ?? lastClo.fond_reel_especes ?? lastClo.fond_theorique ?? lastClo.especes_cloture)
+        if (!isNaN(cEsp) && cEsp !== 0) {
+          fondInitialEspeces = cEsp
+          sourceEspeces = 'clotures_caisse'
+        }
+        if (fondInitialMomo === 0) {
+          const cMo = Number(lastClo.fond_momo_apres ?? lastClo.fond_reel_momo ?? lastClo.momo_cloture)
+          if (!isNaN(cMo) && cMo !== 0) {
+            fondInitialMomo = cMo
+            sourceMomo = 'clotures_caisse'
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Priorité D : caisse_clotures (Historique Z)
+  if (fondInitialEspeces === 0) {
+    try {
+      const { data: lastCC } = await supabase
+        .from('caisse_clotures')
+        .select('fond_actuel_especes_apres, total_especes_jour, fond_actuel_momo_apres, total_momo_jour')
+        .eq('company_id', companyId)
+        .or(`sector_slug.eq.${clean},secteur_slug.eq.${clean}`)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+
+      if (lastCC) {
+        const ccEsp = Number(lastCC.fond_actuel_especes_apres ?? lastCC.total_especes_jour)
+        if (!isNaN(ccEsp) && ccEsp !== 0) {
+          fondInitialEspeces = ccEsp
+          sourceEspeces = 'caisse_clotures'
+        }
+        if (fondInitialMomo === 0) {
+          const ccMo = Number(lastCC.fond_actuel_momo_apres ?? lastCC.total_momo_jour)
+          if (!isNaN(ccMo) && ccMo !== 0) {
+            fondInitialMomo = ccMo
+            sourceMomo = 'caisse_clotures'
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Priorité E : Table fonds_actuels (M048)
+  if (fondInitialEspeces === 0 && (secteurId || targetCaisseId)) {
+    try {
+      let q = supabase
+        .from('fonds_actuels')
+        .select('fond_actuel_especes, fond_initial_especes, fond_actuel_momo')
+        .eq('company_id', companyId)
+
+      if (secteurId) q = q.eq('secteur_id', secteurId)
+      if (targetCaisseId) q = q.or(`caisse_id.eq.${targetCaisseId},caisse_id.is.null`)
+
+      const { data: fa } = await q.limit(1).maybeSingle()
+      if (fa) {
+        const faEsp = Number(fa.fond_actuel_especes ?? fa.fond_initial_especes)
+        if (!isNaN(faEsp) && faEsp !== 0) {
+          fondInitialEspeces = faEsp
+          sourceEspeces = 'fonds_actuels'
+        }
+        if (fondInitialMomo === 0) {
+          const faMo = Number(fa.fond_actuel_momo)
+          if (!isNaN(faMo) && faMo !== 0) {
+            fondInitialMomo = faMo
+            sourceMomo = 'fonds_actuels'
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // Priorité F : Fallback démarrage initial coffre-fort si aucune clôture antérieure n'a jamais eu lieu
+  if (fondInitialEspeces === 0) {
+    try {
+      const { data: vault } = await supabase
+        .from('treasury_accounts')
+        .select('balance')
+        .eq('company_id', companyId)
+        .eq('type', 'vault')
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .maybeSingle()
+
+      if (vault && Number(vault.balance) > 0) {
+        fondInitialEspeces = Number(vault.balance)
+        sourceEspeces = 'treasury_vault'
+      }
+    } catch (_) {}
+  }
+
+  // 3. FOND INITIAL MOBILE MONEY : Récupération automatique du solde marchand
+  // RÈGLE MÉTIER B : Solde du compte marchand Mobile Money concerné
+  try {
+    const { data: momoAcc } = await supabase
+      .from('treasury_accounts')
+      .select('balance')
+      .eq('company_id', companyId)
+      .in('type', ['mobile_money', 'momo', 'marchand', 'momo_mtn', 'momo_moov'])
+      .order('created_at', { ascending: true })
+      .limit(1)
+      .maybeSingle()
+
+    if (momoAcc && Number(momoAcc.balance) !== 0) {
+      fondInitialMomo = Number(momoAcc.balance)
+      sourceMomo = 'treasury_accounts'
+    } else if (fondInitialMomo === 0) {
+      // Recherche alternative par nom
+      const { data: momoNameAcc } = await supabase
+        .from('treasury_accounts')
+        .select('balance')
+        .eq('company_id', companyId)
+        .ilike('name', '%momo%')
+        .limit(1)
+        .maybeSingle()
+      if (momoNameAcc && Number(momoNameAcc.balance) !== 0) {
+        fondInitialMomo = Number(momoNameAcc.balance)
+        sourceMomo = 'treasury_accounts_name'
+      }
+    }
+  } catch (_) {}
+
+  return {
+    fondInitialEspeces,
+    fondInitialMomo,
+    sourceEspeces,
+    sourceMomo
+  }
+}
+
 /**
  * Ouvre une nouvelle session de caisse pour le secteur
  * RÈGLE : Interdire 2 sessions ouvertes simultanément pour la même caisse
@@ -459,6 +700,512 @@ export async function ouvrirSessionCaisse(
   }
 }
 
+export interface SessionCalculatedBalances {
+  fondInitialEspeces: number
+  fondInitialMomo: number
+  entreesEspeces: number
+  entreesMomo: number
+  depensesEspeces: number
+  depensesMomo: number
+  versementsEspeces: number
+  versementsMomo: number
+  soldeTheoriqueEspeces: number
+  soldeTheoriqueMomo: number
+  montantConserve: number
+  montantReverse: number
+  caDuJour: number
+  nbVentes: number
+  autresModes: Array<{ mode: string; montant: number }>
+}
+
+/**
+ * Calcule automatiquement tous les montants et soldes de la session de caisse
+ * à partir des mouvements financiers réellement enregistrés côté serveur :
+ * Solde théorique espèces = Fond initial espèces + Entrées espèces - Dépenses espèces - Versements sortants espèces
+ * Solde théorique MoMo = Fond initial MoMo + Entrées MoMo - Dépenses MoMo - Versements sortants MoMo
+ * Montant à reverser = Solde théorique en espèces - Montant conservé en caisse
+ */
+export async function calculerSoldesSessionAutomatique(params: {
+  companyId: string
+  sectorSlug: string
+  caisseId?: string | null
+  secteurId?: string | null
+  sessionId?: string | null
+  fallbackFondInitialEsp?: number
+  fallbackFondInitialMomo?: number
+  fallbackEspecesJour?: number
+  fallbackMomoJour?: number
+  fallbackDepensesEsp?: number
+  fallbackRetraitsEsp?: number
+  fallbackFondTheoriqueEsp?: number
+  fallbackFondTheoriqueMomo?: number
+}): Promise<SessionCalculatedBalances> {
+  const { companyId, sectorSlug, caisseId, secteurId, sessionId } = params
+  const clean = cleanSectorSlug(sectorSlug)
+
+  let fondInitialEspeces = Number(params.fallbackFondInitialEsp) || 0
+  let fondInitialMomo = Number(params.fallbackFondInitialMomo) || 0
+  let dateOuvertureIso: string | null = null
+
+  // 1. Récupérer la session active pour obtenir le fond d'ouverture exact
+  let activeSession: any = null
+  if (sessionId) {
+    try {
+      const { data: s } = await supabase.from('caisse_sessions').select('*').eq('id', sessionId).maybeSingle()
+      if (s) activeSession = s
+    } catch (_) {}
+  }
+
+  if (!activeSession && caisseId) {
+    try {
+      const { data: list } = await supabase
+        .from('caisse_sessions')
+        .select('*')
+        .eq('caisse_id', caisseId)
+        .in('statut', ['ouverte', 'open'])
+        .is('date_fermeture', null)
+        .order('date_ouverture', { ascending: false })
+        .limit(1)
+      if (list && list.length > 0) activeSession = list[0]
+    } catch (_) {}
+  }
+
+  if (activeSession) {
+    fondInitialEspeces = Number(activeSession.fond_ouverture_especes) || fondInitialEspeces
+    fondInitialMomo = Number(activeSession.fond_actuel_momo ?? activeSession.fond_ouverture_momo) || fondInitialMomo
+    dateOuvertureIso = activeSession.date_ouverture
+  }
+
+  // Si le fond initial n'a pas encore été déterminé, interroger la source de vérité
+  if (fondInitialEspeces === 0) {
+    try {
+      const initB = await getFondInitialOuverture(companyId, clean, caisseId, secteurId)
+      if (initB.fondInitialEspeces !== 0) {
+        fondInitialEspeces = initB.fondInitialEspeces
+      }
+      if (fondInitialMomo === 0 && initB.fondInitialMomo !== 0) {
+        fondInitialMomo = initB.fondInitialMomo
+      }
+    } catch (_) {}
+  }
+
+  // Définir la borne de début de session
+  const now = new Date()
+  const startOfDayIso = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
+  const startIso = dateOuvertureIso || startOfDayIso
+
+  // 2. Calculer les ventes de la session (sales_orders)
+  let sumVentesEspeces = 0
+  let sumVentesMomo = 0
+  let sumAutresModes: Record<string, number> = {}
+  let caDuJour = 0
+  let nbVentes = 0
+
+  try {
+    let salesQuery = supabase
+      .from('sales_orders')
+      .select('id, total_amount, paid_amount, payment_method, payment_status, notes, e_mecef_uid, created_at')
+      .eq('company_id', companyId)
+      .gte('created_at', startIso)
+      .not('payment_status', 'in', '("avoir","ANNULE","annule")')
+
+    const { data: salesList } = await salesQuery
+    if (salesList && salesList.length > 0) {
+      salesList.forEach((s: any) => {
+        const tot = Number(s.total_amount) || 0
+        const paid = Number(s.paid_amount ?? s.total_amount) || 0
+        caDuJour += tot
+        nbVentes += 1
+
+        let pm = (s.payment_method || s.payment_status || '').toLowerCase().trim()
+        if (s.e_mecef_uid && s.e_mecef_uid.startsWith('{')) {
+          try {
+            const meta = JSON.parse(s.e_mecef_uid)
+            if (meta.pm) pm = String(meta.pm).toLowerCase().trim()
+          } catch (_) {}
+        }
+
+        if (['espece', 'especes', 'cash'].includes(pm)) {
+          sumVentesEspeces += paid
+        } else if (pm.includes('momo') || pm.includes('mtn') || pm.includes('moov') || pm.includes('wave') || pm.includes('flooz')) {
+          sumVentesMomo += paid
+        } else if (pm && pm !== 'credit') {
+          sumAutresModes[pm] = (sumAutresModes[pm] || 0) + paid
+        } else {
+          // Par défaut si non spécifié
+          sumVentesEspeces += paid
+        }
+      })
+    }
+  } catch (sErr) {
+    console.warn('[CAISSE-SERVICE] Erreur calcul ventes session:', sErr)
+  }
+
+  // 3. Remboursements créances (debt_payments & customer_repayments)
+  let sumRemboursementsEspeces = 0
+  let sumRemboursementsMomo = 0
+
+  try {
+    const { data: debtPays } = await supabase
+      .from('debt_payments')
+      .select('amount, payment_method')
+      .eq('company_id', companyId)
+      .gte('created_at', startIso)
+
+    if (debtPays && debtPays.length > 0) {
+      debtPays.forEach((dp: any) => {
+        const amt = Number(dp.amount) || 0
+        const m = (dp.payment_method || '').toLowerCase()
+        if (['espece', 'especes', 'cash'].includes(m)) {
+          sumRemboursementsEspeces += amt
+        } else if (m.includes('momo') || m.includes('mtn') || m.includes('moov') || m.includes('wave')) {
+          sumRemboursementsMomo += amt
+        }
+      })
+    }
+  } catch (_) {}
+
+  // 4. Dépenses de la session (depenses & expenses)
+  let sumDepensesEspeces = 0
+  let sumDepensesMomo = 0
+
+  try {
+    const { data: deps } = await supabase
+      .from('depenses')
+      .select('montant, mode_paiement')
+      .eq('company_id', companyId)
+      .gte('created_at', startIso)
+
+    if (deps && deps.length > 0) {
+      deps.forEach((d: any) => {
+        const amt = Number(d.montant) || 0
+        const m = (d.mode_paiement || '').toLowerCase()
+        if (['espece', 'especes', 'cash'].includes(m)) {
+          sumDepensesEspeces += amt
+        } else if (m.includes('momo') || m.includes('mtn') || m.includes('moov')) {
+          sumDepensesMomo += amt
+        }
+      })
+    }
+  } catch (_) {}
+
+  // 5. Versements sortants vers trésorerie (demandes_retrait & treasury_transfers)
+  let sumVersementsEspeces = 0
+  let sumVersementsMomo = 0
+
+  try {
+    const { data: rets } = await supabase
+      .from('demandes_retrait')
+      .select('montant, mode_paiement, statut')
+      .eq('company_id', companyId)
+      .gte('created_at', startIso)
+      .in('statut', ['valide', 'APPROVED', 'APPROUVE', 'VALIDE'])
+
+    if (rets && rets.length > 0) {
+      rets.forEach((r: any) => {
+        const amt = Number(r.montant) || 0
+        const m = (r.mode_paiement || '').toLowerCase()
+        if (['espece', 'especes', 'cash'].includes(m)) {
+          sumVersementsEspeces += amt
+        } else {
+          sumVersementsMomo += amt
+        }
+      })
+    }
+  } catch (_) {}
+
+  try {
+    const { data: trans } = await supabase
+      .from('treasury_transfers')
+      .select('amount, type, status')
+      .eq('company_id', companyId)
+      .gte('created_at', startIso)
+      .in('status', ['APPROVED', 'VALIDE', 'valide'])
+
+    if (trans && trans.length > 0) {
+      trans.forEach((t: any) => {
+        const amt = Number(t.amount) || 0
+        const isCash = t.type === 'Espèces' || t.type === 'especes' || t.type === 'cash'
+        if (isCash) sumVersementsEspeces += amt
+        else sumVersementsMomo += amt
+      })
+    }
+  } catch (_) {}
+
+  // Rapprochement avec les données de secours fournies par le composant (tolérance zéro perte)
+  const entreesEspeces = Math.max(sumVentesEspeces + sumRemboursementsEspeces, Number(params.fallbackEspecesJour) || 0)
+  const entreesMomo = Math.max(sumVentesMomo + sumRemboursementsMomo, Number(params.fallbackMomoJour) || 0)
+  const depensesEspeces = Math.max(sumDepensesEspeces, Number(params.fallbackDepensesEsp) || 0)
+  const versementsEspeces = Math.max(sumVersementsEspeces, Number(params.fallbackRetraitsEsp) || 0)
+
+  // Équation A : Solde théorique de clôture en espèces
+  // Solde théorique = Fond initial + Entrées espèces - Dépenses espèces - Versements sortants espèces
+  const soldeTheoriqueEspeces = fondInitialEspeces + entreesEspeces - depensesEspeces - versementsEspeces
+
+  // Équation B : Solde théorique Mobile Money
+  const soldeTheoriqueMomo = fondInitialMomo + entreesMomo - sumDepensesMomo - sumVersementsMomo
+
+  // Équation 5 : Montant à reverser = Solde théorique en espèces - Montant conservé en caisse
+  // Par défaut dans l'architecture GESTIO 229, le solde théorique calculé reste conservé en caisse pour l'ouverture suivante
+  const montantConserve = soldeTheoriqueEspeces
+  const montantReverse = Math.max(0, soldeTheoriqueEspeces - montantConserve)
+
+  const autresModes = Object.entries(sumAutresModes).map(([mode, montant]) => ({ mode, montant }))
+
+  return {
+    fondInitialEspeces,
+    fondInitialMomo,
+    entreesEspeces,
+    entreesMomo,
+    depensesEspeces,
+    depensesMomo: sumDepensesMomo,
+    versementsEspeces,
+    versementsMomo: sumVersementsMomo,
+    soldeTheoriqueEspeces,
+    soldeTheoriqueMomo,
+    montantConserve,
+    montantReverse,
+    caDuJour: Math.max(caDuJour, entreesEspeces + entreesMomo),
+    nbVentes,
+    autresModes,
+  }
+}
+
+/**
+ * Clôture automatique de la session de caisse :
+ * 1. Recalcule les soldes à partir des mouvements enregistrés (données serveur fiables)
+ * 2. Enregistre la clôture avec les montants calculés automatiquement (sans saisie manuelle)
+ * 3. Enregistre le montant reporté destiné à la prochaine ouverture
+ * 4. Met à jour l'historique et empêche la double validation
+ */
+export async function cloturerSessionCaisseAutomatique(params: {
+  sessionId?: string
+  caisseId?: string
+  companyId: string
+  sectorSlug: string
+  secteurId?: string
+  userId?: string
+  userName: string
+  notes?: string
+  fallbackFondInitialEsp?: number
+  fallbackFondInitialMomo?: number
+  fallbackEspecesJour?: number
+  fallbackMomoJour?: number
+  fallbackDepensesEsp?: number
+  fallbackRetraitsEsp?: number
+  fallbackFondTheoriqueEsp?: number
+  fallbackFondTheoriqueMomo?: number
+}): Promise<{ success: boolean; ecart: number; synthese: SessionCalculatedBalances; error?: string }> {
+  const { companyId, sectorSlug, caisseId, sessionId, userName, notes = '' } = params
+  const clean = cleanSectorSlug(sectorSlug)
+  const nowIso = new Date().toISOString()
+  const dateJour = nowIso.split('T')[0]
+
+  // 1. Recalculer les soldes à partir des mouvements réels
+  const synthese = await calculerSoldesSessionAutomatique(params)
+  const finalSoldeEsp = synthese.soldeTheoriqueEspeces
+  const finalSoldeMomo = synthese.soldeTheoriqueMomo
+  const montantConserve = synthese.montantConserve
+
+  try {
+    // 2. Clôturer la session dans caisse_sessions (Tolérance RLS & Double Contrainte)
+    if (sessionId) {
+      try {
+        const { error: updErr } = await supabase
+          .from('caisse_sessions')
+          .update({
+            statut: 'fermée',
+            date_fermeture: nowIso,
+            fond_actuel_especes: montantConserve,
+            fond_actuel_momo: finalSoldeMomo,
+            especes_du_jour: 0,
+            momo_du_jour: 0,
+            especes_theorique: finalSoldeEsp,
+            especes_comptees: finalSoldeEsp,
+            ecart: 0,
+            cloture_par: userName,
+            notes_fermeture: notes || 'Clôture automatique effectuée sans saisie manuelle',
+            updated_at: nowIso,
+          })
+          .eq('id', sessionId)
+
+        if (updErr) {
+          await supabase
+            .from('caisse_sessions')
+            .update({
+              statut: 'fermee',
+              date_fermeture: nowIso,
+              fond_actuel_especes: montantConserve,
+              fond_actuel_momo: finalSoldeMomo,
+              especes_theorique: finalSoldeEsp,
+              especes_comptees: finalSoldeEsp,
+              ecart: 0,
+              cloture_par: userName,
+              updated_at: nowIso,
+            })
+            .eq('id', sessionId)
+        }
+      } catch (sessUpErr) {
+        console.warn('[CAISSE-SERVICE] Notice mise à jour caisse_sessions clôture auto:', sessUpErr)
+      }
+    }
+
+    // Clôturer également dans sessions_caisse
+    try {
+      if (caisseId) {
+        await supabase
+          .from('sessions_caisse')
+          .update({
+            statut: 'fermée',
+            date_cloture: dateJour,
+            heure_cloture: nowIso,
+            solde_cloture_espece: montantConserve,
+            solde_cloture_momo: finalSoldeMomo,
+            ferme_par_nom: userName,
+            updated_at: nowIso,
+          })
+          .eq('caisse_id', caisseId)
+          .eq('statut', 'ouverte')
+      }
+    } catch (_) {}
+
+    // Nettoyer le cache local
+    try {
+      localStorage.removeItem(`gestio_caisse_active_${clean}_${companyId}`)
+      localStorage.removeItem(`gestio_caisse_active_${clean}`)
+      localStorage.removeItem('active_caisse_session')
+    } catch (_) {}
+
+    // 3. Mettre à jour la table caisses : enregistrement garanti du montant reporté pour la prochaine ouverture
+    if (caisseId) {
+      try {
+        await supabase
+          .from('caisses')
+          .update({
+            statut: 'fermee',
+            date_fermeture: nowIso,
+            fond_ouverture_especes: montantConserve, // Reporté pour la prochaine ouverture
+            solde_especes_final: montantConserve,
+            fond_ouverture_momo: finalSoldeMomo,
+            updated_at: nowIso,
+          })
+          .eq('id', caisseId)
+      } catch (caisseUpErr) {
+        console.warn('[CAISSE-SERVICE] Notice mise à jour caisses clôture auto:', caisseUpErr)
+      }
+    }
+
+    // 4. Enregistrer dans clotures_caisse
+    try {
+      const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+      await supabase.from('clotures_caisse').insert({
+        company_id: companyId,
+        secteur_id: isValidUUID(params.secteurId) ? params.secteurId : null,
+        caisse_id: isValidUUID(caisseId) ? caisseId : null,
+        date_cloture: dateJour,
+        especes_cloture: synthese.entreesEspeces,
+        momo_cloture: synthese.entreesMomo,
+        fond_especes_avant: synthese.fondInitialEspeces,
+        fond_momo_avant: synthese.fondInitialMomo,
+        fond_especes_apres: montantConserve,
+        fond_momo_apres: finalSoldeMomo,
+        fond_initial: synthese.fondInitialEspeces,
+        total_entrees: synthese.entreesEspeces,
+        total_sorties: synthese.depensesEspeces + synthese.versementsEspeces,
+        fond_theorique: finalSoldeEsp,
+        fond_reel: finalSoldeEsp,
+        fond_reel_especes: finalSoldeEsp,
+        fond_reel_momo: finalSoldeMomo,
+        ecart: 0,
+        commentaire: notes || 'Clôture automatique validée',
+        cloture_par: isValidUUID(params.userId) ? params.userId : null,
+        created_by: isValidUUID(params.userId) ? params.userId : null,
+      })
+    } catch (clotErr) {
+      console.warn('[CAISSE-SERVICE] Notice clotures_caisse insert auto:', clotErr)
+    }
+
+    // 5. Enregistrer dans caisse_clotures (Historique Z officiel)
+    try {
+      await supabase.from('caisse_clotures').insert({
+        company_id: companyId,
+        sector_slug: clean,
+        secteur_slug: clean,
+        caisse_id: caisseId || sessionId || null,
+        total_especes_jour: synthese.entreesEspeces,
+        total_momo_jour: synthese.entreesMomo,
+        fond_actuel_especes_apres: montantConserve,
+        fond_actuel_momo_apres: finalSoldeMomo,
+        cloture_par: userName,
+        date_cloture: nowIso,
+        notes: notes || 'Clôture automatique validée',
+      })
+    } catch (cClotErr) {
+      console.warn('[CAISSE-SERVICE] Notice caisse_clotures insert auto:', cClotErr)
+    }
+
+    // 6. Enregistrer le mouvement de clôture dans caisse_mouvements
+    if (caisseId) {
+      await enregistrerMouvementCaisse({
+        company_id: companyId,
+        sector_slug: clean,
+        caisse_id: caisseId,
+        caisse_session_id: sessionId,
+        type: 'cloture',
+        sens: 'sortie',
+        montant_especes: finalSoldeEsp,
+        montant_momo: finalSoldeMomo,
+        source_module: 'caisse',
+        source_id: sessionId,
+        motif: `Clôture automatique : Espèces ${finalSoldeEsp} FCFA, MoMo ${finalSoldeMomo} FCFA (Écart: 0 FCFA)`,
+        user_name: userName,
+      }).catch(() => {})
+    }
+
+    // 7. Mettre à jour fonds_actuels (M048) et réinitialiser caisse_journaliere
+    try {
+      const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+      if (isValidUUID(params.secteurId)) {
+        await supabase
+          .from('fonds_actuels')
+          .upsert({
+            company_id: companyId,
+            secteur_id: params.secteurId,
+            caisse_id: isValidUUID(caisseId) ? caisseId : null,
+            fond_actuel_especes: montantConserve,
+            fond_actuel_momo: finalSoldeMomo,
+            fond_initial_especes: montantConserve,
+            fond_initial_momo: finalSoldeMomo,
+            updated_at: nowIso,
+          })
+          .catch(() => {})
+
+        await supabase
+          .from('caisse_journaliere')
+          .update({
+            especes_du_jour: 0,
+            momo_du_jour: 0,
+            ventes_especes_du_jour: 0,
+            ventes_momo_du_jour: 0,
+            remboursements_especes_du_jour: 0,
+            remboursements_momo_du_jour: 0,
+            nb_ventes: 0,
+            updated_at: nowIso,
+          })
+          .eq('company_id', companyId)
+          .eq('date_jour', dateJour)
+          .eq('secteur_id', params.secteurId)
+          .catch(() => {})
+      }
+    } catch (_) {}
+
+    return { success: true, ecart: 0, synthese }
+  } catch (err: any) {
+    console.error('[CAISSE-SERVICE] Erreur cloturerSessionCaisseAutomatique:', err)
+    return { success: false, ecart: 0, synthese, error: err.message || 'Erreur clôture automatique.' }
+  }
+}
+
 /**
  * Clôture une session de caisse avec transfert obligatoire :
  * - FOND ACTUEL ESPÈCES (nouveau) = FOND ACTUEL ESPÈCES (ancien) + ESPÈCES DU JOUR
@@ -473,14 +1220,23 @@ export async function cloturerSessionCaisse(
   sectorSlug: string,
   userName: string,
   fondTheoriqueEsp: number,
-  especesPhysiquesComptees: number,
-  momoPhysiqueCompte: number,
+  especesPhysiquesComptees?: number,
+  momoPhysiqueCompte?: number,
   notes: string = '',
   rolloverCash?: number
 ): Promise<{ success: boolean; ecart: number; error?: string }> {
   const clean = cleanSectorSlug(sectorSlug)
   const nowIso = new Date().toISOString()
-  const ecart = especesPhysiquesComptees - fondTheoriqueEsp
+  const physicalEsp = especesPhysiquesComptees !== undefined && !isNaN(Number(especesPhysiquesComptees))
+    ? Number(especesPhysiquesComptees)
+    : fondTheoriqueEsp
+  const momoVal = momoPhysiqueCompte !== undefined && !isNaN(Number(momoPhysiqueCompte))
+    ? Number(momoPhysiqueCompte)
+    : 0
+  const rollover = rolloverCash !== undefined && !isNaN(Number(rolloverCash))
+    ? Number(rolloverCash)
+    : physicalEsp
+  const ecart = physicalEsp - fondTheoriqueEsp
 
   try {
     // 1. Récupérer les données de la session courante pour calculer le report
@@ -509,9 +1265,9 @@ export async function cloturerSessionCaisse(
     }
 
     // Le nouveau fond réel laissé en caisse pour le lendemain
-    const nouveauFondEspeces = rolloverCash !== undefined ? rolloverCash : especesPhysiquesComptees
-    const nouveauFondMomo = momoPhysiqueCompte
-    const totalZ = especesPhysiquesComptees + momoPhysiqueCompte
+    const nouveauFondEspeces = rollover
+    const nouveauFondMomo = momoVal
+    const totalZ = physicalEsp + momoVal
 
     // 2. Clôturer la session dans caisse_sessions (tolérance RLS) :
     // Remise à zéro d'especes_du_jour et momo_du_jour après transfert dans fond_actuel
@@ -528,7 +1284,7 @@ export async function cloturerSessionCaisse(
             especes_du_jour: 0,
             momo_du_jour: 0,
             especes_theorique: fondTheoriqueEsp,
-            especes_comptees: especesPhysiquesComptees,
+            especes_comptees: physicalEsp,
             ecart: ecart,
             cloture_par: userName,
             notes_fermeture: notes,
@@ -595,8 +1351,8 @@ export async function cloturerSessionCaisse(
         sector_slug: clean,
         secteur_slug: clean,
         caisse_id: caisseId || sessionId || null,
-        total_especes_jour: espJour || especesPhysiquesComptees,
-        total_momo_jour: momoJour || momoPhysiqueCompte,
+        total_especes_jour: espJour || physicalEsp,
+        total_momo_jour: momoJour || momoVal,
         fond_actuel_especes_apres: nouveauFondEspeces,
         fond_actuel_momo_apres: nouveauFondMomo,
         cloture_par: userName,
@@ -616,11 +1372,11 @@ export async function cloturerSessionCaisse(
         caisse_session_id: sessionId,
         type: 'cloture',
         sens: 'sortie',
-        montant_especes: especesPhysiquesComptees,
-        montant_momo: momoPhysiqueCompte,
+        montant_especes: physicalEsp,
+        montant_momo: momoVal,
         source_module: 'caisse',
         source_id: sessionId,
-        motif: `Clôture Z : Espèces ${especesPhysiquesComptees} FCFA, MoMo ${momoPhysiqueCompte} FCFA (Écart: ${ecart} FCFA)`,
+        motif: `Clôture Z : Espèces ${physicalEsp} FCFA, MoMo ${momoVal} FCFA (Écart: ${ecart} FCFA)`,
         user_name: userName,
       }).catch(() => {})
     }
