@@ -14,6 +14,7 @@ import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
+import { getActiveSectorMeta } from '../../../lib/sectorClient'
 import {
   getRolesForSector,
   normalizeSectorSlug,
@@ -208,8 +209,42 @@ const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> 
 
 export const ConfigPage: React.FC = () => {
   const { company, user, refreshTenantContext } = useAuthStore()
-  const { sectorSlug: currentSectorSlug } = useTenant()
+  const { sectorSlug: currentSectorSlug, sectorMeta: tenantSectorMeta } = useTenant()
   const { toast } = useUIStore()
+
+  // Déclaration robuste et unifiée de sectorMeta pour ConfigPage (évite "sectorMeta is not defined")
+  const sectorMeta = React.useMemo(() => {
+    const meta =
+      tenantSectorMeta ||
+      getActiveSectorMeta() ||
+      ALL_SECTORS_CATALOG.find((s) => s.slug === currentSectorSlug) || {
+        code: (currentSectorSlug || 'BOUTIQUE').toUpperCase(),
+        slug: currentSectorSlug || 'boutique',
+        name: 'Paramètres de Gestion',
+        emoji: '🏢',
+        icon: 'Store',
+        label: 'Paramètres de Gestion',
+        color: '#059669',
+        badge: 'Sous-Logiciel',
+        description: 'Espace configuration GESTIO 229',
+        category: 'Général',
+      }
+
+    return {
+      name: meta?.name || 'Paramètres de Gestion',
+      label: (meta as any)?.label || meta?.name || 'Paramètres de Gestion',
+      icon: (meta as any)?.icon || 'Store',
+      emoji: meta?.emoji || '🏢',
+      slug: meta?.slug || currentSectorSlug || 'boutique',
+      color: (meta as any)?.color || '#059669',
+      badge: (meta as any)?.badge || 'Sous-Logiciel',
+      category: (meta as any)?.category || 'Général',
+      ...meta,
+    }
+  }, [tenantSectorMeta, currentSectorSlug])
+
+  // Sécurisation anti-collision : unifie sectorMeta et secteurMeta
+  const secteurMeta = sectorMeta
 
   const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'circuit_ventes' | 'imprimerie' | 'garage' | 'ecole'>('etablissement')
 
@@ -1447,7 +1482,7 @@ export const ConfigPage: React.FC = () => {
                     const itemSector = normalizeSectorSlug(
                       perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || item.sector_id || ''
                     )
-                    const sectorMeta = ALL_SECTORS_CATALOG.find((s) => s.slug === itemSector)
+                    const itemSectorMeta = ALL_SECTORS_CATALOG.find((s) => s.slug === itemSector) || sectorMeta
                     const sectorRoles = getRolesForSector(itemSector)
                     const roleMeta = sectorRoles.find((r) => r.id === item.role)
                     const roleLabel = perm.role_label || roleMeta?.label || item.role
@@ -1468,10 +1503,10 @@ export const ConfigPage: React.FC = () => {
                                   Administrateur Global
                                 </span>
                               )}
-                              {!isAdmin && sectorMeta && (
+                              {!isAdmin && (itemSectorMeta || sectorMeta) && (
                                 <span className="inline-flex items-center gap-1 text-[10px] font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-full">
-                                  <span>{sectorMeta.emoji}</span>
-                                  <span>{sectorMeta.name}</span>
+                                  <span>{(itemSectorMeta || sectorMeta).emoji}</span>
+                                  <span>{(itemSectorMeta || sectorMeta).name}</span>
                                 </span>
                               )}
                             </div>
@@ -2565,8 +2600,8 @@ export const ConfigPage: React.FC = () => {
               {/* Permissions & Droits d'accès dynamiques par secteur */}
               {(() => {
                 const currentSecSlug = normalizeSectorSlug(newUser.sector)
-                const currentSectorMeta = subscribedSectors.find(s => s.slug === newUser.sector) || ALL_SECTORS_CATALOG.find(s => s.slug === currentSecSlug)
-                const secteurNom = currentSectorMeta?.name || newUser.sector
+                const currentSectorMeta = subscribedSectors.find(s => s.slug === newUser.sector) || ALL_SECTORS_CATALOG.find(s => s.slug === currentSecSlug) || sectorMeta
+                const secteurNom = currentSectorMeta?.name || sectorMeta?.name || newUser.sector
                 const modulesAAfficher = MODULES_PAR_SECTEUR[newUser.sector] || MODULES_PAR_SECTEUR[currentSecSlug] || MODULES_PAR_SECTEUR['default']
 
                 return (
