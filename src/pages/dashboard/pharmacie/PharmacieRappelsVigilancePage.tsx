@@ -26,7 +26,7 @@ import {
 
 export default function PharmacieRappelsVigilancePage() {
   const { currentCompany, currentProfile } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
   const userName = currentProfile?.full_name || 'Pharmacien Titulaire'
 
   const [rappels, setRappels] = useState<PharmacieRappelAlerte[]>([])

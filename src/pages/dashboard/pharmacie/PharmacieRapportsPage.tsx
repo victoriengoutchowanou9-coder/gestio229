@@ -24,7 +24,7 @@ import {
 
 export default function PharmacieRapportsPage() {
   const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
 
   const [produits, setProduits] = useState<PharmacieProduit[]>([])
   const [lots, setLots] = useState<PharmacieLot[]>([])

@@ -27,7 +27,7 @@ import {
 
 export default function PharmacieCatalogueProduitsPage() {
   const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
 
   const [produits, setProduits] = useState<PharmacieProduit[]>([])
   const [loading, setLoading] = useState(true)
@@ -222,10 +222,28 @@ export default function PharmacieCatalogueProduitsPage() {
                     Chargement du catalogue pharmaceutique...
                   </td>
                 </tr>
+              ) : produits.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12 text-center">
+                    <div className="max-w-md mx-auto space-y-2">
+                      <Pill className="w-10 h-10 text-slate-300 mx-auto" />
+                      <div className="font-bold text-slate-800 dark:text-slate-200 text-base">Aucun médicament dans le catalogue</div>
+                      <p className="text-xs text-slate-500">
+                        Votre catalogue officinal est actuellement vide. Ajoutez vos premiers médicaments et dispositifs médicaux pour démarrer la gestion.
+                      </p>
+                      <button
+                        onClick={() => handleOpenModal()}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow mt-2"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Ajouter un Médicament
+                      </button>
+                    </div>
+                  </td>
+                </tr>
               ) : filteredProduits.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                    Aucun médicament ou produit de santé correspondant aux critères.
+                    Aucun médicament ou produit de santé correspondant aux critères de recherche.
                   </td>
                 </tr>
               ) : (

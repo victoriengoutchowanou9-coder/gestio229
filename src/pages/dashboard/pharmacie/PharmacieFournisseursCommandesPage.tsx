@@ -14,133 +14,76 @@ import {
   Package,
   Layers,
   ArrowRight,
+  Inbox,
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import {
   pharmacieService,
   PharmacieProduit,
   PharmacieLot,
+  PharmacieGrossiste,
+  PharmacieCommandeGrossiste,
 } from '../../../services/pharmacieService'
-
-interface GrossisteFournisseur {
-  id: string
-  nom: string
-  code: string
-  contact: string
-  telephone: string
-  email: string
-  adresse: string
-  delai_livraison_moyen: string
-}
-
-interface CommandeGrossiste {
-  id: string
-  reference_commande: string
-  fournisseur_nom: string
-  date_commande: string
-  date_livraison_estimee: string
-  lignes: {
-    produit_nom: string
-    quantite_commandee: number
-    quantite_recue: number
-    prix_achat_prevu: number
-  }[]
-  montant_total_estime: number
-  statut: 'COMMANDEE' | 'LIVREE_PARTIELLE' | 'LIVREE_RECEPTIONNEE' | 'ANNULEE'
-}
 
 export default function PharmacieFournisseursCommandesPage() {
   const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
 
   const [activeTab, setActiveTab] = useState<'COMMANDES' | 'GROSSISTES'>('COMMANDES')
   const [produits, setProduits] = useState<PharmacieProduit[]>([])
+  const [grossistes, setGrossistes] = useState<PharmacieGrossiste[]>([])
+  const [commandes, setCommandes] = useState<PharmacieCommandeGrossiste[]>([])
   const [loading, setLoading] = useState(true)
 
-  // Grossistes locaux Bénin par défaut
-  const [grossistes, setGrossistes] = useState<GrossisteFournisseur[]>([
-    {
-      id: 'g-1',
-      nom: 'UBIPHARM Bénin',
-      code: 'GROSS-UBI',
-      contact: 'Service Répartition Cotonou',
-      telephone: '+229 21 33 00 11',
-      email: 'commandes@ubipharm-benin.com',
-      adresse: 'Zone Industrielle Akpakpa, Cotonou',
-      delai_livraison_moyen: '2 à 4 heures (Urgent)',
-    },
-    {
-      id: 'g-2',
-      nom: 'Centrale d’Achat des Médicaments Essentiels (CAME)',
-      code: 'GROSS-CAME',
-      contact: 'Direction des Approvisionnements',
-      telephone: '+229 21 30 14 55',
-      email: 'ventes@came-benin.bj',
-      adresse: 'Boulevard de la Marina, Cotonou',
-      delai_livraison_moyen: '24 à 48 heures',
-    },
-    {
-      id: 'g-3',
-      nom: 'COPHARBI Bénin (Coopérative Pharmaceutique)',
-      code: 'GROSS-COPH',
-      contact: 'Comptoir de Distribution',
-      telephone: '+229 21 32 45 78',
-      email: 'contact@copharbi.com',
-      adresse: 'Gbégamey, Cotonou',
-      delai_livraison_moyen: 'Même journée',
-    },
-  ])
-
-  // Commandes
-  const [commandes, setCommandes] = useState<CommandeGrossiste[]>([
-    {
-      id: 'cmd-001',
-      reference_commande: 'CMD-PH-2026-081',
-      fournisseur_nom: 'UBIPHARM Bénin',
-      date_commande: '2026-10-18',
-      date_livraison_estimee: '2026-10-19',
-      lignes: [
-        { produit_nom: 'Paracétamol Biogaran 1g', quantite_commandee: 100, quantite_recue: 100, prix_achat_prevu: 850 },
-        { produit_nom: 'Amoxicilline Sandoz 500mg', quantite_commandee: 50, quantite_recue: 50, prix_achat_prevu: 1400 },
-      ],
-      montant_total_estime: 155000,
-      statut: 'LIVREE_RECEPTIONNEE',
-    },
-    {
-      id: 'cmd-002',
-      reference_commande: 'CMD-PH-2026-082',
-      fournisseur_nom: 'CAME Cotonou',
-      date_commande: '2026-10-20',
-      date_livraison_estimee: '2026-10-21',
-      lignes: [
-        { produit_nom: 'Coartem 20/120mg', quantite_commandee: 80, quantite_recue: 0, prix_achat_prevu: 2200 },
-        { produit_nom: 'Lantus SoloStar 100 U/mL', quantite_commandee: 15, quantite_recue: 0, prix_achat_prevu: 28000 },
-      ],
-      montant_total_estime: 596000,
-      statut: 'COMMANDEE',
-    },
-  ])
+  // Modal Nouveau Grossiste
+  const [modalGrossisteOpen, setModalGrossisteOpen] = useState(false)
+  const [nouveauGrossiste, setNouveauGrossiste] = useState<Partial<PharmacieGrossiste>>({
+    nom: '',
+    code: '',
+    contact: '',
+    telephone: '',
+    email: '',
+    adresse: '',
+    delai_livraison_moyen: '',
+  })
 
   // Modal Nouvelle Commande
   const [modalCmdOpen, setModalCmdOpen] = useState(false)
-  const [selectedGrossiste, setSelectedGrossiste] = useState(grossistes[0]?.nom || '')
+  const [selectedGrossiste, setSelectedGrossiste] = useState('')
   const [cmdLignes, setCmdLignes] = useState<{ produitId: string; produitNom: string; qte: number; prixAchat: number }[]>([])
   const [prodSelectId, setProdSelectId] = useState('')
-  const [prodSelectQte, setProdSelectQte] = useState(20)
+  const [prodSelectQte, setProdSelectQte] = useState(10)
 
   // Modal Réception de Commande
   const [receptionModalOpen, setReceptionModalOpen] = useState(false)
-  const [activeCmdToReceive, setActiveCmdToReceive] = useState<CommandeGrossiste | null>(null)
+  const [activeCmdToReceive, setActiveCmdToReceive] = useState<PharmacieCommandeGrossiste | null>(null)
   const [receptionLots, setReceptionLots] = useState<{ [key: string]: { numLot: string; dateExp: string } }>({})
 
   const [messageAction, setMessageAction] = useState('')
 
-  useEffect(() => {
-    pharmacieService.getProduits(companyId).then((p) => {
+  const chargerDonnees = async () => {
+    if (!companyId) return
+    try {
+      setLoading(true)
+      const [p, g, c] = await Promise.all([
+        pharmacieService.getProduits(companyId),
+        pharmacieService.getGrossistes(companyId),
+        pharmacieService.getCommandes(companyId),
+      ])
       setProduits(p)
-      if (p.length > 0) setProdSelectId(p[0].id)
+      setGrossistes(g)
+      setCommandes(c)
+      if (p.length > 0 && !prodSelectId) setProdSelectId(p[0].id)
+      if (g.length > 0 && !selectedGrossiste) setSelectedGrossiste(g[0].nom)
+    } catch (err) {
+      console.error('Erreur chargement données fournisseurs pharmacie:', err)
+    } finally {
       setLoading(false)
-    })
+    }
+  }
+
+  useEffect(() => {
+    chargerDonnees()
   }, [companyId])
 
   const handleAjouterLigneCmd = () => {
@@ -158,44 +101,81 @@ export default function PharmacieFournisseursCommandesPage() {
     ])
   }
 
-  const handleCreerCommande = (e: React.FormEvent) => {
+  const handleCreerCommande = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (!companyId) return
+    if (!selectedGrossiste) {
+      alert('Veuillez sélectionner un grossiste-répartiteur.')
+      return
+    }
     if (cmdLignes.length === 0) {
       alert('Veuillez ajouter au moins un produit à commander.')
       return
     }
 
     const total = cmdLignes.reduce((sum, l) => sum + l.qte * l.prixAchat, 0)
-    const newCmd: CommandeGrossiste = {
-      id: `cmd-${Date.now()}`,
-      reference_commande: `CMD-PH-${Date.now().toString().slice(-6)}`,
-      fournisseur_nom: selectedGrossiste,
-      date_commande: new Date().toISOString().slice(0, 10),
-      date_livraison_estimee: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
-      lignes: cmdLignes.map((l) => ({
-        produit_nom: l.produitNom,
-        quantite_commandee: l.qte,
-        quantite_recue: 0,
-        prix_achat_prevu: l.prixAchat,
-      })),
-      montant_total_estime: total,
-      statut: 'COMMANDEE',
-    }
+    try {
+      const newCmd = await pharmacieService.saveCommande(companyId, {
+        reference_commande: `CMD-PH-${Date.now().toString().slice(-6)}`,
+        fournisseur_nom: selectedGrossiste,
+        date_commande: new Date().toISOString().slice(0, 10),
+        date_livraison_estimee: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+        lignes: cmdLignes.map((l) => ({
+          produit_nom: l.produitNom,
+          quantite_commandee: l.qte,
+          quantite_recue: 0,
+          prix_achat_prevu: l.prixAchat,
+        })),
+        montant_total_estime: total,
+        statut: 'COMMANDEE',
+      })
 
-    setCommandes([newCmd, ...commandes])
-    setModalCmdOpen(false)
-    setCmdLignes([])
-    setMessageAction('Commande fournisseur émise avec succès.')
-    setTimeout(() => setMessageAction(''), 4000)
+      setCommandes([newCmd, ...commandes])
+      setModalCmdOpen(false)
+      setCmdLignes([])
+      setMessageAction('Commande fournisseur émise et enregistrée avec succès.')
+      setTimeout(() => setMessageAction(''), 4000)
+    } catch (err: any) {
+      alert(err.message || 'Erreur lors de la création de la commande')
+    }
   }
 
-  const handleOuvrirReception = (cmd: CommandeGrossiste) => {
+  const handleSaveGrossiste = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!companyId) return
+    if (!nouveauGrossiste.nom?.trim()) {
+      alert('Le nom du grossiste est obligatoire.')
+      return
+    }
+
+    try {
+      const saved = await pharmacieService.saveGrossiste(companyId, nouveauGrossiste)
+      setGrossistes([...grossistes, saved])
+      if (!selectedGrossiste) setSelectedGrossiste(saved.nom)
+      setModalGrossisteOpen(false)
+      setNouveauGrossiste({
+        nom: '',
+        code: '',
+        contact: '',
+        telephone: '',
+        email: '',
+        adresse: '',
+        delai_livraison_moyen: '',
+      })
+      setMessageAction(`Fournisseur ${saved.nom} enregistré avec succès.`)
+      setTimeout(() => setMessageAction(''), 4000)
+    } catch (err: any) {
+      alert(err.message || 'Erreur lors de l’enregistrement du grossiste')
+    }
+  }
+
+  const handleOuvrirReception = (cmd: PharmacieCommandeGrossiste) => {
     setActiveCmdToReceive(cmd)
     const initialLots: { [key: string]: { numLot: string; dateExp: string } } = {}
     cmd.lignes.forEach((l, idx) => {
       initialLots[idx] = {
-        numLot: `LOT-${new Date().getFullYear()}-${Math.floor(Math.random() * 900 + 100)}`,
-        dateExp: '2028-06-30',
+        numLot: '',
+        dateExp: '',
       }
     })
     setReceptionLots(initialLots)
@@ -203,7 +183,15 @@ export default function PharmacieFournisseursCommandesPage() {
   }
 
   const handleValiderReceptionReelle = async () => {
-    if (!activeCmdToReceive) return
+    if (!activeCmdToReceive || !companyId) return
+
+    for (let i = 0; i < activeCmdToReceive.lignes.length; i++) {
+      const lotInfo = receptionLots[i]
+      if (!lotInfo?.numLot?.trim() || !lotInfo?.dateExp?.trim()) {
+        alert('Veuillez renseigner le numéro de lot et la date de péremption pour chaque produit réceptionné.')
+        return
+      }
+    }
 
     try {
       // Pour chaque ligne, créer le lot dans les stocks réels
@@ -215,8 +203,8 @@ export default function PharmacieFournisseursCommandesPage() {
         await pharmacieService.saveLot(companyId, {
           produit_id: prod?.id,
           produit_nom: l.produit_nom,
-          numero_lot: lotInfo?.numLot || `LOT-REC-${Date.now()}`,
-          date_peremption: lotInfo?.dateExp || '2028-01-01',
+          numero_lot: lotInfo.numLot.trim().toUpperCase(),
+          date_peremption: lotInfo.dateExp,
           quantite_initiale: l.quantite_commandee,
           quantite_actuelle: l.quantite_commandee,
           fournisseur_nom: activeCmdToReceive.fournisseur_nom,
@@ -227,21 +215,17 @@ export default function PharmacieFournisseursCommandesPage() {
       }
 
       // Mettre à jour le statut de la commande
-      setCommandes(
-        commandes.map((c) =>
-          c.id === activeCmdToReceive.id
-            ? {
-                ...c,
-                statut: 'LIVREE_RECEPTIONNEE',
-                lignes: c.lignes.map((lg) => ({ ...lg, quantite_recue: lg.quantite_commandee })),
-              }
-            : c
-        )
-      )
+      const updatedCmd: PharmacieCommandeGrossiste = {
+        ...activeCmdToReceive,
+        statut: 'LIVREE_RECEPTIONNEE',
+        lignes: activeCmdToReceive.lignes.map((lg) => ({ ...lg, quantite_recue: lg.quantite_commandee })),
+      }
+      await pharmacieService.saveCommande(companyId, updatedCmd)
 
+      setCommandes(commandes.map((c) => (c.id === updatedCmd.id ? updatedCmd : c)))
       setReceptionModalOpen(false)
       setMessageAction(
-        `Réception validée : les lots et dates de péremption ont été injectés dans les stocks FEFO.`
+        `Réception validée : les lots et dates de péremption réels ont été intégrés aux stocks de l'officine.`
       )
       setTimeout(() => setMessageAction(''), 5000)
     } catch (err: any) {
@@ -250,6 +234,14 @@ export default function PharmacieFournisseursCommandesPage() {
   }
 
   const fmt = (n: number) => (n || 0).toLocaleString('fr-FR')
+
+  if (!companyId) {
+    return (
+      <div className="p-8 text-center text-slate-500">
+        Chargement du contexte officinal...
+      </div>
+    )
+  }
 
   return (
     <div className="p-4 md:p-6 space-y-6 max-w-7xl mx-auto">
@@ -263,16 +255,35 @@ export default function PharmacieFournisseursCommandesPage() {
             Achats, Commandes & Réception de Lots
           </h1>
           <p className="text-sm text-slate-500">
-            Gestion des commandes aux grossistes (UBIPHARM, CAME, COPHARBI) et contrôle strict des lots et DLC à la réception.
+            Gestion des commandes aux grossistes répartiteurs et contrôle strict des lots et DLC à la réception.
           </p>
         </div>
 
-        <button
-          onClick={() => setModalCmdOpen(true)}
-          className="inline-flex items-center gap-2 px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow transition"
-        >
-          <Plus className="w-4 h-4" /> Passer une Commande Grossiste
-        </button>
+        <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            onClick={() => setModalGrossisteOpen(true)}
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700 font-bold rounded-xl border border-slate-300 dark:border-slate-600 transition text-xs"
+          >
+            <Building2 className="w-4 h-4 text-teal-600" /> Nouveau Fournisseur
+          </button>
+          <button
+            onClick={() => {
+              if (grossistes.length === 0) {
+                alert('Veuillez d’abord enregistrer au moins un grossiste-répartiteur.')
+                setModalGrossisteOpen(true)
+                return
+              }
+              if (produits.length === 0) {
+                alert('Veuillez d’abord enregistrer des produits dans votre catalogue pharmaceutique.')
+                return
+              }
+              setModalCmdOpen(true)
+            }}
+            className="inline-flex items-center gap-2 px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl shadow transition text-xs"
+          >
+            <Plus className="w-4 h-4" /> Passer une Commande Grossiste
+          </button>
+        </div>
       </div>
 
       {messageAction && (
@@ -312,106 +323,282 @@ export default function PharmacieFournisseursCommandesPage() {
       {/* Onglet 1 : Commandes & Réceptions */}
       {activeTab === 'COMMANDES' && (
         <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 uppercase text-xs font-semibold border-b border-slate-200 dark:border-slate-700">
-                <tr>
-                  <th className="px-4 py-3">Réf Commande & Date</th>
-                  <th className="px-4 py-3">Fournisseur / Grossiste</th>
-                  <th className="px-4 py-3">Articles Commandés</th>
-                  <th className="px-4 py-3 text-right">Montant Estimé</th>
-                  <th className="px-4 py-3">Statut Réception</th>
-                  <th className="px-4 py-3 text-center">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
-                {commandes.map((cmd) => (
-                  <tr key={cmd.id} className="hover:bg-slate-50 dark:hover:bg-slate-750 transition">
-                    <td className="px-4 py-3">
-                      <div className="font-mono font-bold text-teal-600">{cmd.reference_commande}</div>
-                      <div className="text-xs text-slate-400 mt-0.5">Émise le {cmd.date_commande}</div>
-                    </td>
-
-                    <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">
-                      {cmd.fournisseur_nom}
-                    </td>
-
-                    <td className="px-4 py-3">
-                      <div className="text-xs space-y-0.5">
-                        {cmd.lignes.map((l, i) => (
-                          <div key={i} className="text-slate-700 dark:text-slate-300">
-                            <span className="font-bold">{l.produit_nom}</span> : {l.quantite_commandee} btes
-                            {l.quantite_recue > 0 && (
-                              <span className="text-emerald-600 ml-1 font-semibold">
-                                (Reçu {l.quantite_recue})
-                              </span>
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    </td>
-
-                    <td className="px-4 py-3 text-right font-mono font-bold text-slate-900 dark:text-white">
-                      {fmt(cmd.montant_total_estime)} FCFA
-                    </td>
-
-                    <td className="px-4 py-3">
-                      {cmd.statut === 'LIVREE_RECEPTIONNEE' ? (
-                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
-                          <CheckCircle2 className="w-3.5 h-3.5" /> Réceptionné & Intégré Stock
-                        </span>
-                      ) : (
-                        <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 w-fit">
-                          <Clock className="w-3.5 h-3.5" /> En cours de livraison
-                        </span>
-                      )}
-                    </td>
-
-                    <td className="px-4 py-3 text-center">
-                      {cmd.statut !== 'LIVREE_RECEPTIONNEE' && (
-                        <button
-                          onClick={() => handleOuvrirReception(cmd)}
-                          className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold shadow"
-                        >
-                          Réceptionner Lots
-                        </button>
-                      )}
-                    </td>
+          {commandes.length === 0 ? (
+            <div className="p-12 text-center space-y-3">
+              <div className="w-12 h-12 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                <Inbox className="w-6 h-6" />
+              </div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 text-base">
+                Aucune commande fournisseur enregistrée
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Vous n'avez pas encore passé de commande grossiste. Cliquez ci-dessous pour émettre votre première commande et réceptionner vos lots en stock.
+              </p>
+              <button
+                onClick={() => {
+                  if (grossistes.length === 0) {
+                    alert('Veuillez d’abord enregistrer un grossiste-répartiteur.')
+                    setModalGrossisteOpen(true)
+                    return
+                  }
+                  if (produits.length === 0) {
+                    alert('Veuillez d’abord enregistrer des produits dans votre catalogue pharmaceutique.')
+                    return
+                  }
+                  setModalCmdOpen(true)
+                }}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg text-xs shadow"
+              >
+                <Plus className="w-3.5 h-3.5" /> Passer une Commande
+              </button>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead className="bg-slate-50 dark:bg-slate-900/50 text-slate-500 uppercase text-xs font-semibold border-b border-slate-200 dark:border-slate-700">
+                  <tr>
+                    <th className="px-4 py-3">Réf Commande & Date</th>
+                    <th className="px-4 py-3">Fournisseur / Grossiste</th>
+                    <th className="px-4 py-3">Articles Commandés</th>
+                    <th className="px-4 py-3 text-right">Montant Estimé</th>
+                    <th className="px-4 py-3">Statut Réception</th>
+                    <th className="px-4 py-3 text-center">Action</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                  {commandes.map((cmd) => (
+                    <tr key={cmd.id} className="hover:bg-slate-50 dark:hover:bg-slate-750 transition">
+                      <td className="px-4 py-3">
+                        <div className="font-mono font-bold text-teal-600">{cmd.reference_commande}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">Émise le {cmd.date_commande}</div>
+                      </td>
+
+                      <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">
+                        {cmd.fournisseur_nom}
+                      </td>
+
+                      <td className="px-4 py-3">
+                        <div className="text-xs space-y-0.5">
+                          {cmd.lignes.map((l, i) => (
+                            <div key={i} className="text-slate-700 dark:text-slate-300">
+                              <span className="font-bold">{l.produit_nom}</span> : {l.quantite_commandee} btes
+                              {l.quantite_recue > 0 && (
+                                <span className="text-emerald-600 ml-1 font-semibold">
+                                  (Reçu {l.quantite_recue})
+                                </span>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-3 text-right font-mono font-bold text-slate-900 dark:text-white">
+                        {fmt(cmd.montant_total_estime)} FCFA
+                      </td>
+
+                      <td className="px-4 py-3">
+                        {cmd.statut === 'LIVREE_RECEPTIONNEE' ? (
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 w-fit">
+                            <CheckCircle2 className="w-3.5 h-3.5" /> Réceptionné & Intégré Stock
+                          </span>
+                        ) : (
+                          <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-amber-100 text-amber-800 flex items-center gap-1 w-fit">
+                            <Clock className="w-3.5 h-3.5" /> En attente de livraison
+                          </span>
+                        )}
+                      </td>
+
+                      <td className="px-4 py-3 text-center">
+                        {cmd.statut !== 'LIVREE_RECEPTIONNEE' && (
+                          <button
+                            onClick={() => handleOuvrirReception(cmd)}
+                            className="px-3 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded-lg text-xs font-bold shadow"
+                          >
+                            Réceptionner Lots
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
       {/* Onglet 2 : Fiches Grossistes */}
       {activeTab === 'GROSSISTES' && (
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {grossistes.map((g) => (
-            <div
-              key={g.id}
-              className="bg-white dark:bg-slate-800 rounded-xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3"
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-mono text-xs font-bold text-teal-600 bg-teal-50 px-2 py-0.5 rounded">
-                  {g.code}
-                </span>
-                <span className="text-xs text-slate-500 font-medium">Bénin</span>
+        <div>
+          {grossistes.length === 0 ? (
+            <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-12 text-center space-y-3">
+              <div className="w-12 h-12 bg-slate-100 dark:bg-slate-700 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                <Building2 className="w-6 h-6" />
+              </div>
+              <h3 className="font-bold text-slate-800 dark:text-slate-200 text-base">
+                Aucun grossiste-répartiteur enregistré
+              </h3>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Enregistrez vos fournisseurs pharmaceutiques réels pour émettre des bons de commande et approvisionner votre officine.
+              </p>
+              <button
+                onClick={() => setModalGrossisteOpen(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-lg text-xs shadow"
+              >
+                <Plus className="w-3.5 h-3.5" /> Ajouter un Fournisseur
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {grossistes.map((g) => (
+                <div
+                  key={g.id}
+                  className="bg-white dark:bg-slate-800 rounded-xl p-5 border border-slate-200 dark:border-slate-700 shadow-sm space-y-3"
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-mono text-xs font-bold text-teal-600 bg-teal-50 dark:bg-teal-950/60 px-2 py-0.5 rounded">
+                      {g.code}
+                    </span>
+                    <span className="text-xs text-slate-500 font-medium">Partenaire Officine</span>
+                  </div>
+
+                  <div>
+                    <h3 className="font-bold text-slate-900 dark:text-white text-base">{g.nom}</h3>
+                    {g.adresse && <p className="text-xs text-slate-500 mt-0.5">{g.adresse}</p>}
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 dark:border-slate-700 space-y-1 text-xs text-slate-600 dark:text-slate-400">
+                    {g.telephone && (
+                      <div>
+                        Téléphone : <span className="font-semibold text-slate-900 dark:text-white">{g.telephone}</span>
+                      </div>
+                    )}
+                    {g.email && (
+                      <div>
+                        Email : <span className="font-semibold text-slate-900 dark:text-white">{g.email}</span>
+                      </div>
+                    )}
+                    {g.delai_livraison_moyen && (
+                      <div>
+                        Délai moyen : <span className="font-bold text-teal-600">{g.delai_livraison_moyen}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Modal Nouveau Grossiste */}
+      {modalGrossisteOpen && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-700 space-y-4">
+            <h2 className="text-lg font-bold text-teal-600 flex items-center gap-2">
+              <Building2 className="w-5 h-5" />
+              Nouveau Fournisseur / Grossiste-Répartiteur
+            </h2>
+
+            <form onSubmit={handleSaveGrossiste} className="space-y-3">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Nom du Fournisseur / Grossiste *
+                </label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: UBIPHARM Bénin, CAME, Grossiste Local..."
+                  value={nouveauGrossiste.nom || ''}
+                  onChange={(e) => setNouveauGrossiste({ ...nouveauGrossiste, nom: e.target.value })}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Code / Identifiant
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: GROSS-01"
+                    value={nouveauGrossiste.code || ''}
+                    onChange={(e) => setNouveauGrossiste({ ...nouveauGrossiste, code: e.target.value })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg font-mono uppercase"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Délai Moyen Livraison
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex: 2h à 4h, 24h..."
+                    value={nouveauGrossiste.delai_livraison_moyen || ''}
+                    onChange={(e) => setNouveauGrossiste({ ...nouveauGrossiste, delai_livraison_moyen: e.target.value })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Téléphone
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="+229 ..."
+                    value={nouveauGrossiste.telephone || ''}
+                    onChange={(e) => setNouveauGrossiste({ ...nouveauGrossiste, telephone: e.target.value })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="contact@..."
+                    value={nouveauGrossiste.email || ''}
+                    onChange={(e) => setNouveauGrossiste({ ...nouveauGrossiste, email: e.target.value })}
+                    className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
+                  />
+                </div>
               </div>
 
               <div>
-                <h3 className="font-bold text-slate-900 dark:text-white text-base">{g.nom}</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{g.adresse}</p>
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
+                  Adresse / Localisation
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex: Cotonou, Akpakpa..."
+                  value={nouveauGrossiste.adresse || ''}
+                  onChange={(e) => setNouveauGrossiste({ ...nouveauGrossiste, adresse: e.target.value })}
+                  className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
+                />
               </div>
 
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-700 space-y-1 text-xs text-slate-600 dark:text-slate-400">
-                <div>Téléphone : <span className="font-semibold text-slate-900 dark:text-white">{g.telephone}</span></div>
-                <div>Email : <span className="font-semibold text-slate-900 dark:text-white">{g.email}</span></div>
-                <div>Délai : <span className="font-bold text-teal-600">{g.delai_livraison_moyen}</span></div>
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setModalGrossisteOpen(false)}
+                  className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 text-sm font-bold bg-teal-600 hover:bg-teal-700 text-white rounded-lg shadow"
+                >
+                  Enregistrer
+                </button>
               </div>
-            </div>
-          ))}
+            </form>
+          </div>
         </div>
       )}
 
@@ -436,7 +623,7 @@ export default function PharmacieFournisseursCommandesPage() {
                 >
                   {grossistes.map((g) => (
                     <option key={g.id} value={g.nom}>
-                      {g.nom} ({g.delai_livraison_moyen})
+                      {g.nom} {g.delai_livraison_moyen ? `(${g.delai_livraison_moyen})` : ''}
                     </option>
                   ))}
                 </select>
@@ -520,7 +707,7 @@ export default function PharmacieFournisseursCommandesPage() {
                 Contrôle Réception — {activeCmdToReceive.reference_commande}
               </h2>
               <p className="text-xs text-slate-500">
-                Saisissez les numéros de lots et dates de péremption figurant sur les boîtes livrées par {activeCmdToReceive.fournisseur_nom}.
+                Saisissez les numéros de lots réels et dates de péremption figurant sur les conditionnements livrés par {activeCmdToReceive.fournisseur_nom}.
               </p>
             </div>
 
@@ -534,10 +721,11 @@ export default function PharmacieFournisseursCommandesPage() {
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="block text-[11px] text-slate-500 mb-0.5">N° Lot Fabricant *</label>
+                      <label className="block text-[11px] text-slate-500 mb-0.5">N° Lot Fabricant Réel *</label>
                       <input
                         type="text"
                         required
+                        placeholder="Ex: LOT-2026-X1"
                         value={receptionLots[idx]?.numLot || ''}
                         onChange={(e) =>
                           setReceptionLots({
@@ -549,7 +737,7 @@ export default function PharmacieFournisseursCommandesPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-[11px] text-slate-500 mb-0.5">Date Péremption (DLC) *</label>
+                      <label className="block text-[11px] text-slate-500 mb-0.5">Date Péremption Réelle (DLC) *</label>
                       <input
                         type="date"
                         required

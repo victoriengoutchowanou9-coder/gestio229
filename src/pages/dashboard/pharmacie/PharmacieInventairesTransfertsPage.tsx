@@ -29,7 +29,7 @@ import {
 
 export default function PharmacieInventairesTransfertsPage() {
   const { currentCompany, currentProfile } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
   const userName = currentProfile?.full_name || 'Pharmacien / Gestionnaire'
 
   const [activeTab, setActiveTab] = useState<'TRANSFERTS' | 'INVENTAIRES' | 'DEPOTS'>('TRANSFERTS')

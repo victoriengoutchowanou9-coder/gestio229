@@ -22,8 +22,9 @@ import { pharmacieService } from '../../../services/pharmacieService'
 import { Link } from 'react-router-dom'
 
 export default function PharmacieDashboardPage() {
-  const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const { currentCompany, sectorSlug } = useTenant()
+  const companyId = currentCompany?.id || ''
+  const routePrefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard/pharmacie'
 
   const [metrics, setMetrics] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -67,19 +68,47 @@ export default function PharmacieDashboardPage() {
 
         <div className="flex flex-wrap items-center gap-2.5">
           <Link
-            to="/dashboard/pharmacie/vente-pos"
+            to={`${routePrefix}/vente-pos`}
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 active:scale-95 text-slate-950 font-bold rounded-xl shadow-lg transition"
           >
             <Activity className="w-4 h-4" /> Vente Comptoir (POS)
           </Link>
           <Link
-            to="/dashboard/pharmacie/ordonnances"
+            to={`${routePrefix}/ordonnances`}
             className="inline-flex items-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 text-white font-medium rounded-xl border border-white/20 transition"
           >
             <FileText className="w-4 h-4" /> Ordonnances
           </Link>
         </div>
       </div>
+
+      {/* Bannière Officine Vierge */}
+      {!loading && metrics && metrics.totalReferences === 0 && (
+        <div className="bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-2xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="font-bold text-emerald-900 dark:text-emerald-200 text-sm flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-600" /> Espace Pharmacie & Dépôt Médical Prêt
+            </h3>
+            <p className="text-xs text-emerald-700 dark:text-emerald-300">
+              Votre catalogue officinal est actuellement vierge. Commencez par créer vos fiches médicaments réelles ou passez votre première commande grossiste.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              to={`${routePrefix}/catalogue`}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow"
+            >
+              + Ajouter un Médicament
+            </Link>
+            <Link
+              to={`${routePrefix}/commandes`}
+              className="px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-100 text-slate-800 dark:text-slate-200 border border-slate-300 dark:border-slate-600 rounded-lg text-xs font-bold"
+            >
+              Fournisseurs & Commandes
+            </Link>
+          </div>
+        </div>
+      )}
 
       {/* Cartes KPI Temps Réel */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -164,7 +193,7 @@ export default function PharmacieDashboardPage() {
               Priorité FEFO : Alertes Péremptions Imminentes
             </h2>
             <Link
-              to="/dashboard/pharmacie/lots"
+              to={`${routePrefix}/lots`}
               className="text-xs text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-1"
             >
               Tous les lots <ArrowRight className="w-3.5 h-3.5" />
@@ -211,7 +240,7 @@ export default function PharmacieDashboardPage() {
               Stocks Critiques & Ruptures à Réapprovisionner
             </h2>
             <Link
-              to="/dashboard/pharmacie/commandes"
+              to={`${routePrefix}/commandes`}
               className="text-xs text-emerald-600 hover:text-emerald-700 font-medium flex items-center gap-1"
             >
               Commander grossiste <ArrowRight className="w-3.5 h-3.5" />

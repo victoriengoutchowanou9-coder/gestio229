@@ -28,7 +28,7 @@ import {
 
 export default function PharmacieStocksLotsPage() {
   const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
 
   const [lots, setLots] = useState<PharmacieLot[]>([])
   const [produits, setProduits] = useState<PharmacieProduit[]>([])
@@ -84,10 +84,10 @@ export default function PharmacieStocksLotsPage() {
       depot_id: depots[0]?.id || '',
       depot_nom: depots[0]?.nom || '',
       emplacement_rayon: '',
-      quantite_initiale: 10,
-      quantite_actuelle: 10,
-      fournisseur_nom: 'UBIPHARM Bénin',
-      prix_achat_unitaire: 1000,
+      quantite_initiale: 1,
+      quantite_actuelle: 1,
+      fournisseur_nom: '',
+      prix_achat_unitaire: produits[0]?.prix_achat_ht || 0,
       statut: 'DISPONIBLE',
     })
     setModalOpen(true)
@@ -293,10 +293,28 @@ export default function PharmacieStocksLotsPage() {
                     Chargement des lots pharmaceutiques...
                   </td>
                 </tr>
+              ) : lots.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="px-4 py-12 text-center">
+                    <div className="max-w-md mx-auto space-y-2">
+                      <Layers className="w-10 h-10 text-slate-300 mx-auto" />
+                      <div className="font-bold text-slate-800 dark:text-slate-200 text-base">Aucun lot pharmaceutique en stock</div>
+                      <p className="text-xs text-slate-500">
+                        Votre stock officinal est vierge. Enregistrez vos premiers lots réels pour activer la traçabilité FEFO et le suivi des péremptions.
+                      </p>
+                      <button
+                        onClick={handleOpenNouveauLot}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow mt-2"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Enregistrer un Lot
+                      </button>
+                    </div>
+                  </td>
+                </tr>
               ) : filteredLots.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="px-4 py-8 text-center text-slate-500">
-                    Aucun lot ne correspond aux filtres appliqués.
+                    Aucun lot ne correspond aux critères de recherche.
                   </td>
                 </tr>
               ) : (
@@ -570,7 +588,7 @@ export default function PharmacieStocksLotsPage() {
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: UBIPHARM Bénin, CAME..."
+                    placeholder="Nom du fournisseur ou grossiste-répartiteur"
                     value={editingLot.fournisseur_nom || ''}
                     onChange={(e) => setEditingLot({ ...editingLot, fournisseur_nom: e.target.value })}
                     className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"

@@ -34,7 +34,7 @@ import {
 
 export default function PharmacieVenteComptoirPage() {
   const { currentCompany, currentProfile } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
   const userName = currentProfile?.full_name || 'Pharmacien / Caissier'
 
   const [produits, setProduits] = useState<PharmacieProduit[]>([])
@@ -55,7 +55,7 @@ export default function PharmacieVenteComptoirPage() {
   // Paramètres client & Tiers-Payant
   const [clientNom, setClientNom] = useState('')
   const [estTiersPayant, setEstTiersPayant] = useState(false)
-  const [assureurNom, setAssureurNom] = useState('NSIA Assurances')
+  const [assureurNom, setAssureurNom] = useState('')
   const [tauxPriseEnCharge, setTauxPriseEnCharge] = useState<number>(80) // 80% par défaut
   const [selectedOrdonnanceId, setSelectedOrdonnanceId] = useState<string>('')
 
@@ -515,7 +515,7 @@ export default function PharmacieVenteComptoirPage() {
                     type="text"
                     value={assureurNom}
                     onChange={(e) => setAssureurNom(e.target.value)}
-                    placeholder="Assureur (NSIA, SANLAM...)"
+                    placeholder="Assureur (ex: Mutuelle, NSIA, SANLAM...)"
                     className="px-2.5 py-1 text-xs bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
                   />
                   <select

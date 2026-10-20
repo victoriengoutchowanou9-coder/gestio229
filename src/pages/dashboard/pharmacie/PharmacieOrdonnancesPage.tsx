@@ -28,7 +28,7 @@ import { Link } from 'react-router-dom'
 
 export default function PharmacieOrdonnancesPage() {
   const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || 'demo-company-pharma'
+  const companyId = currentCompany?.id || ''
 
   const [ordonnances, setOrdonnances] = useState<PharmacieOrdonnance[]>([])
   const [loading, setLoading] = useState(true)
@@ -260,10 +260,28 @@ export default function PharmacieOrdonnancesPage() {
                     Chargement des ordonnances...
                   </td>
                 </tr>
+              ) : ordonnances.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-12 text-center">
+                    <div className="max-w-md mx-auto space-y-2">
+                      <FileText className="w-10 h-10 text-slate-300 mx-auto" />
+                      <div className="font-bold text-slate-800 dark:text-slate-200 text-base">Aucune ordonnance médicale enregistrée</div>
+                      <p className="text-xs text-slate-500">
+                        Votre registre d'ordonnances est vierge. Enregistrez les prescriptions de vos patients pour assurer le suivi des délivrances et du tiers-payant.
+                      </p>
+                      <button
+                        onClick={() => setModalOpen(true)}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow mt-2"
+                      >
+                        <Plus className="w-3.5 h-3.5" /> Nouvelle Ordonnance
+                      </button>
+                    </div>
+                  </td>
+                </tr>
               ) : filteredOrds.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-8 text-center text-slate-500">
-                    Aucune ordonnance trouvée.
+                    Aucune ordonnance correspondant aux critères de recherche.
                   </td>
                 </tr>
               ) : (
@@ -429,7 +447,7 @@ export default function PharmacieOrdonnancesPage() {
                   <input
                     type="text"
                     required
-                    placeholder="Ex: Dr. Mensah KOFFI"
+                    placeholder="Nom et titre du médecin prescripteur"
                     value={nouvelleOrd.prescripteur_nom || ''}
                     onChange={(e) => setNouvelleOrd({ ...nouvelleOrd, prescripteur_nom: e.target.value })}
                     className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"
@@ -442,7 +460,7 @@ export default function PharmacieOrdonnancesPage() {
                   </label>
                   <input
                     type="text"
-                    placeholder="Ex: CNHU-HKM, Clinique Mahouna..."
+                    placeholder="Centre hospitalier, cabinet ou clinique"
                     value={nouvelleOrd.etablissement_soins || ''}
                     onChange={(e) => setNouvelleOrd({ ...nouvelleOrd, etablissement_soins: e.target.value })}
                     className="w-full px-3 py-2 text-sm bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg"

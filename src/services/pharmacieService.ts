@@ -248,6 +248,40 @@ export interface LigneInventairePhysique {
   valeur_ecart: number
 }
 
+export interface PharmacieGrossiste {
+  id: string
+  company_id: string
+  nom: string
+  code: string
+  contact?: string
+  telephone?: string
+  email?: string
+  adresse?: string
+  delai_livraison_moyen?: string
+  est_actif?: boolean
+}
+
+export interface PharmacieLigneCommande {
+  produit_nom: string
+  quantite_commandee: number
+  quantite_recue: number
+  prix_achat_prevu: number
+}
+
+export interface PharmacieCommandeGrossiste {
+  id: string
+  company_id: string
+  reference_commande: string
+  fournisseur_nom: string
+  fournisseur_id?: string
+  date_commande: string
+  date_livraison_estimee?: string
+  lignes: PharmacieLigneCommande[]
+  montant_total_estime: number
+  statut: 'COMMANDEE' | 'LIVREE_RECEPTIONNEE' | 'ANNULEE'
+  notes?: string
+}
+
 export interface PharmacieInventairePhysique {
   id: string
   company_id: string
@@ -267,8 +301,129 @@ export interface PharmacieInventairePhysique {
 // ─── HELPER STOCKAGE LOCAL TENANT-SCOPED (FALLBACK SUPABASE) ──────────────────
 
 const STORAGE_KEY_PREFIX = 'gestio229_pharmacie_'
+const SANITIZED_COMPANIES = new Set<string>()
+
+export function sanitizeCompanyStorage(companyId: string): void {
+  if (typeof window === 'undefined' || !window.localStorage) return
+  if (!companyId) return
+
+  // Nettoyage immédiat de tout résidu de démo globale
+  try {
+    const keysToRemove: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k && k.includes('demo-company-pharma')) {
+        keysToRemove.push(k)
+      }
+    }
+    keysToRemove.forEach((k) => localStorage.removeItem(k))
+  } catch (_) {}
+
+  if (companyId === 'demo-company-pharma') return
+  if (SANITIZED_COMPANIES.has(companyId)) return
+  SANITIZED_COMPANIES.add(companyId)
+
+  try {
+    // 1. Purge des produits fictifs
+    const prodsKey = `${STORAGE_KEY_PREFIX}${companyId}_produits`
+    const rawProds = localStorage.getItem(prodsKey)
+    if (rawProds) {
+      const prods: PharmacieProduit[] = JSON.parse(rawProds)
+      const cleanProds = prods.filter((p) => {
+        const isMockId =
+          p.id.startsWith('prod-para-1000-') ||
+          p.id.startsWith('prod-amox-500-') ||
+          p.id.startsWith('prod-artem-80-') ||
+          p.id.startsWith('prod-insu-lant-')
+        const isMockCip = ['3400936081234', '3400936195678', '3400937482910', '3400935891452'].includes(
+          p.code_cip_acl
+        )
+        return !isMockId && !isMockCip
+      })
+      if (cleanProds.length !== prods.length) {
+        localStorage.setItem(prodsKey, JSON.stringify(cleanProds))
+      }
+    }
+
+    // 2. Purge des lots fictifs
+    const lotsKey = `${STORAGE_KEY_PREFIX}${companyId}_lots`
+    const rawLots = localStorage.getItem(lotsKey)
+    if (rawLots) {
+      const lots: PharmacieLot[] = JSON.parse(rawLots)
+      const mockLotNumbers = ['BG-2024-901', 'BG-2024-988', 'SDZ-AMX-441', 'SNF-LANT-8820', 'NVR-CRT-OLD']
+      const cleanLots = lots.filter((l) => {
+        const isMockId =
+          l.id.startsWith('lot-para-') ||
+          l.id.startsWith('lot-amox-') ||
+          l.id.startsWith('lot-insu-') ||
+          l.id.startsWith('lot-artem-')
+        const isMockNum = mockLotNumbers.includes(l.numero_lot)
+        return !isMockId && !isMockNum
+      })
+      if (cleanLots.length !== lots.length) {
+        localStorage.setItem(lotsKey, JSON.stringify(cleanLots))
+      }
+    }
+
+    // 3. Purge des ordonnances fictives
+    const ordKey = `${STORAGE_KEY_PREFIX}${companyId}_ordonnances`
+    const rawOrds = localStorage.getItem(ordKey)
+    if (rawOrds) {
+      const ords: PharmacieOrdonnance[] = JSON.parse(rawOrds)
+      const cleanOrds = ords.filter(
+        (o) => !o.id.startsWith('ord-demo-') && o.numero_ordonnance !== 'ORD-2026-0891'
+      )
+      if (cleanOrds.length !== ords.length) {
+        localStorage.setItem(ordKey, JSON.stringify(cleanOrds))
+      }
+    }
+
+    // 4. Purge des commandes et grossistes fictifs
+    const cmdKey = `${STORAGE_KEY_PREFIX}${companyId}_commandes_grossistes`
+    const rawCmds = localStorage.getItem(cmdKey)
+    if (rawCmds) {
+      const cmds: PharmacieCommandeGrossiste[] = JSON.parse(rawCmds)
+      const mockCmdRefs = ['CMD-PH-2026-081', 'CMD-PH-2026-082']
+      const cleanCmds = cmds.filter(
+        (c) => !mockCmdRefs.includes(c.reference_commande) && !['cmd-001', 'cmd-002'].includes(c.id)
+      )
+      if (cleanCmds.length !== cmds.length) {
+        localStorage.setItem(cmdKey, JSON.stringify(cleanCmds))
+      }
+    }
+
+    const grossKey = `${STORAGE_KEY_PREFIX}${companyId}_grossistes`
+    const rawGross = localStorage.getItem(grossKey)
+    if (rawGross) {
+      const gross: PharmacieGrossiste[] = JSON.parse(rawGross)
+      const mockCodes = ['GROSS-UBI', 'GROSS-CAME', 'GROSS-COPH']
+      const cleanGross = gross.filter(
+        (g) => !mockCodes.includes(g.code) && !['g-1', 'g-2', 'g-3'].includes(g.id)
+      )
+      if (cleanGross.length !== gross.length) {
+        localStorage.setItem(grossKey, JSON.stringify(cleanGross))
+      }
+    }
+
+    // 5. Purge des dépôts fictifs de démonstration
+    const depotsKey = `${STORAGE_KEY_PREFIX}${companyId}_depots`
+    const rawDepots = localStorage.getItem(depotsKey)
+    if (rawDepots) {
+      const depots: PharmacieDepot[] = JSON.parse(rawDepots)
+      const cleanDepots = depots.filter(
+        (d) => !d.id.startsWith('dep-comptoir-') && !d.id.startsWith('dep-reserve-') && !d.id.startsWith('dep-frigo-')
+      )
+      if (cleanDepots.length !== depots.length) {
+        localStorage.setItem(depotsKey, JSON.stringify(cleanDepots))
+      }
+    }
+  } catch (err) {
+    console.warn('[PHARMACIE-SERVICE] Erreur assainissement stockage:', err)
+  }
+}
 
 function getLocalData<T>(companyId: string, collection: string, defaultValue: T): T {
+  if (!companyId || companyId === 'demo-company-pharma') return defaultValue
   try {
     const raw = localStorage.getItem(`${STORAGE_KEY_PREFIX}${companyId}_${collection}`)
     return raw ? JSON.parse(raw) : defaultValue
@@ -279,6 +434,7 @@ function getLocalData<T>(companyId: string, collection: string, defaultValue: T)
 }
 
 function setLocalData<T>(companyId: string, collection: string, data: T): void {
+  if (!companyId || companyId === 'demo-company-pharma') return
   try {
     localStorage.setItem(`${STORAGE_KEY_PREFIX}${companyId}_${collection}`, JSON.stringify(data))
   } catch (err) {
@@ -286,265 +442,15 @@ function setLocalData<T>(companyId: string, collection: string, data: T): void {
   }
 }
 
-// ─── INITIALISATION DONNÉES PAR DÉFAUT SI NOUVEAU TENANT ──────────────────────
-
-function getInitialDepots(companyId: string): PharmacieDepot[] {
-  return [
-    {
-      id: `dep-comptoir-${companyId}`,
-      company_id: companyId,
-      code: 'DEP-COMPTOIR',
-      nom: 'Comptoir Principal (Délivrance)',
-      type_depot: 'COMPTOIR',
-      responsable_nom: 'Pharmacien de Garde',
-      est_actif: true,
-    },
-    {
-      id: `dep-reserve-${companyId}`,
-      company_id: companyId,
-      code: 'DEP-RESERVE',
-      nom: 'Magasin Central / Réserve',
-      type_depot: 'CENTRAL',
-      responsable_nom: 'Magasinier Officine',
-      est_actif: true,
-    },
-    {
-      id: `dep-frigo-${companyId}`,
-      company_id: companyId,
-      code: 'DEP-FRIGO',
-      nom: 'Armoire Frigorifique (2°C - 8°C)',
-      type_depot: 'FRIGO',
-      responsable_nom: 'Pharmacien Qualité',
-      est_actif: true,
-    },
-  ]
-}
-
-function getInitialProduits(companyId: string): PharmacieProduit[] {
-  return [
-    {
-      id: `prod-para-1000-${companyId}`,
-      company_id: companyId,
-      sector_slug: 'pharmacie',
-      code_cip_acl: '3400936081234',
-      nom_commercial: 'Paracétamol Biogaran 1g',
-      dci: 'Paracétamol',
-      forme_galenique: 'Comprimé effervescent',
-      dosage: '1000 mg',
-      conditionnement: 'Boîte de 8 comprimés',
-      unite_vente: 'Boîte',
-      laboratoire_fabricant: 'Biogaran',
-      famille_therapeutique: 'Antalgique / Antipyrétique',
-      classe_tableau: 'OTC',
-      necessite_ordonnance: false,
-      conditions_conservation: 'AMBIANTE',
-      prix_achat_ht: 850,
-      prix_vente_ttc: 1200,
-      stock_minimum_alerte: 20,
-      stock_securite: 10,
-      est_generique: true,
-      est_actif: true,
-    },
-    {
-      id: `prod-amox-500-${companyId}`,
-      company_id: companyId,
-      sector_slug: 'pharmacie',
-      code_cip_acl: '3400936195678',
-      nom_commercial: 'Amoxicilline Sandoz 500mg',
-      dci: 'Amoxicilline',
-      forme_galenique: 'Gélule',
-      dosage: '500 mg',
-      conditionnement: 'Boîte de 12 gélules',
-      unite_vente: 'Boîte',
-      laboratoire_fabricant: 'Sandoz',
-      famille_therapeutique: 'Antibiotique (Bêta-lactamines)',
-      classe_tableau: 'LISTE_I',
-      necessite_ordonnance: true,
-      conditions_conservation: 'AMBIANTE',
-      prix_achat_ht: 1400,
-      prix_vente_ttc: 2100,
-      taux_remboursement_ss: 80,
-      stock_minimum_alerte: 15,
-      stock_securite: 8,
-      est_generique: true,
-      est_actif: true,
-    },
-    {
-      id: `prod-artem-80-${companyId}`,
-      company_id: companyId,
-      sector_slug: 'pharmacie',
-      code_cip_acl: '3400937482910',
-      nom_commercial: 'Coartem 20/120mg',
-      dci: 'Artéméther + Luméfantrine',
-      forme_galenique: 'Comprimé',
-      dosage: '20 mg / 120 mg',
-      conditionnement: 'Boîte de 24 comprimés',
-      unite_vente: 'Boîte',
-      laboratoire_fabricant: 'Novartis',
-      famille_therapeutique: 'Antipaludique (CTA)',
-      classe_tableau: 'LISTE_II',
-      necessite_ordonnance: true,
-      conditions_conservation: 'AMBIANTE',
-      prix_achat_ht: 2200,
-      prix_vente_ttc: 3200,
-      taux_remboursement_ss: 80,
-      stock_minimum_alerte: 30,
-      stock_securite: 15,
-      est_generique: false,
-      est_actif: true,
-    },
-    {
-      id: `prod-insu-lant-${companyId}`,
-      company_id: companyId,
-      sector_slug: 'pharmacie',
-      code_cip_acl: '3400935891452',
-      nom_commercial: 'Lantus SoloStar 100 U/mL',
-      dci: 'Insuline glargine',
-      forme_galenique: 'Solution injectable en stylo prérempli',
-      dosage: '100 U/mL',
-      conditionnement: 'Boîte de 5 stylos de 3 mL',
-      unite_vente: 'Boîte',
-      laboratoire_fabricant: 'Sanofi-Aventis',
-      famille_therapeutique: 'Antidiabétique (Insuline lente)',
-      classe_tableau: 'LISTE_I',
-      necessite_ordonnance: true,
-      conditions_conservation: 'FROID_2_8',
-      temperature_max: 8,
-      prix_achat_ht: 28000,
-      prix_vente_ttc: 35000,
-      taux_remboursement_ss: 80,
-      stock_minimum_alerte: 5,
-      stock_securite: 2,
-      est_generique: false,
-      est_actif: true,
-    },
-  ]
-}
-
-function getInitialLots(companyId: string, produits: PharmacieProduit[]): PharmacieLot[] {
-  const today = new Date()
-  
-  // Expirations variables pour tester les alertes et le principe FEFO
-  const d30 = new Date(today)
-  d30.setDate(d30.getDate() + 25) // expire dans 25 jours (Alerte rouge / urgente)
-  
-  const d90 = new Date(today)
-  d90.setDate(d90.getDate() + 75) // expire dans 75 jours (Alerte jaune)
-  
-  const d360 = new Date(today)
-  d360.setDate(d360.getDate() + 380) // expire dans plus d'un an (Sain)
-
-  const dExpired = new Date(today)
-  dExpired.setDate(dExpired.getDate() - 10) // lot périmé depuis 10 jours (Bloqué)
-
-  return [
-    {
-      id: `lot-para-1-${companyId}`,
-      company_id: companyId,
-      produit_id: produits[0]?.id || `prod-para-1000-${companyId}`,
-      produit_nom: 'Paracétamol Biogaran 1g',
-      numero_lot: 'BG-2024-901',
-      date_fabrication: '2024-01-10',
-      date_peremption: d90.toISOString().slice(0, 10),
-      depot_id: `dep-comptoir-${companyId}`,
-      depot_nom: 'Comptoir Principal (Délivrance)',
-      emplacement_rayon: 'Rayon Douleurs - Tiroir A1',
-      quantite_initiale: 100,
-      quantite_actuelle: 45,
-      fournisseur_nom: 'UBIPHARM Bénin',
-      prix_achat_unitaire: 850,
-      statut: 'DISPONIBLE',
-      date_reception: '2024-02-01',
-    },
-    {
-      id: `lot-para-2-${companyId}`,
-      company_id: companyId,
-      produit_id: produits[0]?.id || `prod-para-1000-${companyId}`,
-      produit_nom: 'Paracétamol Biogaran 1g',
-      numero_lot: 'BG-2024-988',
-      date_fabrication: '2024-06-15',
-      date_peremption: d360.toISOString().slice(0, 10),
-      depot_id: `dep-reserve-${companyId}`,
-      depot_nom: 'Magasin Central / Réserve',
-      emplacement_rayon: 'Palette B - Étagère 4',
-      quantite_initiale: 200,
-      quantite_actuelle: 180,
-      fournisseur_nom: 'UBIPHARM Bénin',
-      prix_achat_unitaire: 850,
-      statut: 'DISPONIBLE',
-      date_reception: '2024-07-02',
-    },
-    {
-      id: `lot-amox-urgent-${companyId}`,
-      company_id: companyId,
-      produit_id: produits[1]?.id || `prod-amox-500-${companyId}`,
-      produit_nom: 'Amoxicilline Sandoz 500mg',
-      numero_lot: 'SDZ-AMX-441',
-      date_fabrication: '2023-11-01',
-      date_peremption: d30.toISOString().slice(0, 10),
-      depot_id: `dep-comptoir-${companyId}`,
-      depot_nom: 'Comptoir Principal (Délivrance)',
-      emplacement_rayon: 'Rayon Antibiotiques - Étagère 1',
-      quantite_initiale: 40,
-      quantite_actuelle: 14,
-      fournisseur_nom: 'CAME Cotonou',
-      prix_achat_unitaire: 1400,
-      statut: 'DISPONIBLE',
-      date_reception: '2023-12-05',
-    },
-    {
-      id: `lot-insu-frigo-${companyId}`,
-      company_id: companyId,
-      produit_id: produits[3]?.id || `prod-insu-lant-${companyId}`,
-      produit_nom: 'Lantus SoloStar 100 U/mL',
-      numero_lot: 'SNF-LANT-8820',
-      date_fabrication: '2024-04-01',
-      date_peremption: d360.toISOString().slice(0, 10),
-      depot_id: `dep-frigo-${companyId}`,
-      depot_nom: 'Armoire Frigorifique (2°C - 8°C)',
-      emplacement_rayon: 'Bac Insuline - Étage Médian',
-      quantite_initiale: 20,
-      quantite_actuelle: 12,
-      fournisseur_nom: 'COPHARBI Bénin',
-      prix_achat_unitaire: 28000,
-      statut: 'DISPONIBLE',
-      date_reception: '2024-04-20',
-    },
-    {
-      id: `lot-artem-expire-${companyId}`,
-      company_id: companyId,
-      produit_id: produits[2]?.id || `prod-artem-80-${companyId}`,
-      produit_nom: 'Coartem 20/120mg',
-      numero_lot: 'NVR-CRT-OLD',
-      date_fabrication: '2022-09-01',
-      date_peremption: dExpired.toISOString().slice(0, 10),
-      depot_id: `dep-reserve-${companyId}`,
-      depot_nom: 'Magasin Central / Réserve',
-      emplacement_rayon: 'Zone Isolement Périmés',
-      quantite_initiale: 50,
-      quantite_actuelle: 6,
-      fournisseur_nom: 'CAME Cotonou',
-      prix_achat_unitaire: 2200,
-      statut: 'BLOQUE',
-      motif_blocage: 'Date de péremption dépassée - En attente de PV de destruction',
-      date_reception: '2022-10-10',
-    },
-  ]
-}
-
-// ─── SERVICE PHARMACIE CENTRAL ────────────────────────────────────────────────
+// ─── SERVICE PHARMACIE CENTRAL (DONNÉES 100% RÉELLES & ÉTANCHES) ──────────────
 
 export const pharmacieService = {
 
   // 1. DÉPÔTS PHARMACEUTIQUES
   async getDepots(companyId: string): Promise<PharmacieDepot[]> {
-    const defaultDepots = getInitialDepots(companyId)
-    const stored = getLocalData<PharmacieDepot[]>(companyId, 'depots', defaultDepots)
-    if (!stored || stored.length === 0) {
-      setLocalData(companyId, 'depots', defaultDepots)
-      return defaultDepots
-    }
-    return stored
+    if (!companyId || companyId === 'demo-company-pharma') return []
+    sanitizeCompanyStorage(companyId)
+    return getLocalData<PharmacieDepot[]>(companyId, 'depots', [])
   },
 
   async saveDepot(companyId: string, depot: Partial<PharmacieDepot>): Promise<PharmacieDepot> {
@@ -572,13 +478,9 @@ export const pharmacieService = {
 
   // 2. PRODUITS DU CATALOGUE PHARMACEUTIQUE
   async getProduits(companyId: string): Promise<PharmacieProduit[]> {
-    const defaultProds = getInitialProduits(companyId)
-    const stored = getLocalData<PharmacieProduit[]>(companyId, 'produits', defaultProds)
-    if (!stored || stored.length === 0) {
-      setLocalData(companyId, 'produits', defaultProds)
-      return defaultProds
-    }
-    return stored
+    if (!companyId || companyId === 'demo-company-pharma') return []
+    sanitizeCompanyStorage(companyId)
+    return getLocalData<PharmacieProduit[]>(companyId, 'produits', [])
   },
 
   async saveProduit(companyId: string, produit: Partial<PharmacieProduit>): Promise<PharmacieProduit> {
@@ -628,13 +530,9 @@ export const pharmacieService = {
 
   // 3. GESTION DES LOTS ET TRAÇABILITÉ FEFO
   async getLots(companyId: string, options?: { produitId?: string; statut?: StatutLot }): Promise<PharmacieLot[]> {
-    const prods = await this.getProduits(companyId)
-    const defaultLots = getInitialLots(companyId, prods)
-    let lots = getLocalData<PharmacieLot[]>(companyId, 'lots', defaultLots)
-    if (!lots || lots.length === 0) {
-      setLocalData(companyId, 'lots', defaultLots)
-      lots = defaultLots
-    }
+    if (!companyId || companyId === 'demo-company-pharma') return []
+    sanitizeCompanyStorage(companyId)
+    let lots = getLocalData<PharmacieLot[]>(companyId, 'lots', [])
 
     // Mise à jour automatique des statuts périmés
     const todayStr = new Date().toISOString().slice(0, 10)
@@ -809,15 +707,18 @@ export const pharmacieService = {
     // Intégration financière dans la Caisse GESTIO229 (secteur 'pharmacie')
     if (nouvelleVente.part_patient > 0) {
       try {
+        const estMomo = nouvelleVente.mode_reglement === 'MOMO'
         await enregistrerMouvementCaisse({
           company_id: companyId,
           sector_slug: 'pharmacie',
-          type_mouvement: 'VENTE',
-          montant: nouvelleVente.part_patient,
-          mode_paiement: nouvelleVente.mode_reglement === 'MOMO' ? 'MOMO' : 'ESPECES',
-          libelle: `Vente Pharmacie ${refTicket} - ${venteData.client_nom || 'Client Comptoir'}`,
-          reference_externe: nouvelleVente.id,
-          date_mouvement: new Date().toISOString(),
+          type: 'vente',
+          sens: 'entree',
+          montant_especes: estMomo ? 0 : nouvelleVente.part_patient,
+          montant_momo: estMomo ? nouvelleVente.part_patient : 0,
+          source_module: 'pharmacie',
+          source_id: nouvelleVente.id,
+          motif: `Vente Pharmacie ${refTicket} - ${venteData.client_nom || 'Client Comptoir'}`,
+          user_name: 'Comptoir Pharmacie',
         })
       } catch (errCaisse) {
         console.warn('[PHARMACIE-SERVICE] Liaison caisse enregistrée localement:', errCaisse)
@@ -833,49 +734,9 @@ export const pharmacieService = {
 
   // 6. GESTION DES ORDONNANCES
   async getOrdonnances(companyId: string): Promise<PharmacieOrdonnance[]> {
-    const list = getLocalData<PharmacieOrdonnance[]>(companyId, 'ordonnances', [])
-    if (list.length === 0) {
-      const demoOrds: PharmacieOrdonnance[] = [
-        {
-          id: `ord-demo-1-${companyId}`,
-          company_id: companyId,
-          numero_ordonnance: 'ORD-2026-0891',
-          date_prescription: new Date().toISOString().slice(0, 10),
-          prescripteur_nom: 'Dr. Mensah KOFFI',
-          prescripteur_specialite: 'Médecine Générale',
-          etablissement_soins: 'Clinique de la Paix Cotonou',
-          patient_nom: 'Mme AÏVOHO Sidoine',
-          patient_age: 34,
-          patient_telephone: '+229 97 00 11 22',
-          lignes: [
-            {
-              id: 'l-ord-1',
-              medicament_ou_dci: 'Amoxicilline Sandoz 500mg',
-              dosage: '500 mg',
-              forme: 'Gélule',
-              posologie: '1 gélule 3 fois par jour pendant 7 jours',
-              quantite_prescrite: 2,
-              quantite_delivree: 0,
-              solde_a_servir: 2,
-            },
-            {
-              id: 'l-ord-2',
-              medicament_ou_dci: 'Paracétamol Biogaran 1g',
-              dosage: '1000 mg',
-              forme: 'Comprimé',
-              posologie: '1 comprimé en cas de fièvre, max 3 par jour',
-              quantite_prescrite: 1,
-              quantite_delivree: 0,
-              solde_a_servir: 1,
-            },
-          ],
-          statut: 'EN_ATTENTE',
-        },
-      ]
-      setLocalData(companyId, 'ordonnances', demoOrds)
-      return demoOrds
-    }
-    return list
+    if (!companyId || companyId === 'demo-company-pharma') return []
+    sanitizeCompanyStorage(companyId)
+    return getLocalData<PharmacieOrdonnance[]>(companyId, 'ordonnances', [])
   },
 
   async saveOrdonnance(companyId: string, ordonnance: Partial<PharmacieOrdonnance>): Promise<PharmacieOrdonnance> {
@@ -1297,5 +1158,77 @@ export const pharmacieService = {
       lotsExpire30j,
       lotsExpires,
     }
+  },
+  // 12. FOURNISSEURS GROSSISTES & COMMANDES
+  async getGrossistes(companyId: string): Promise<PharmacieGrossiste[]> {
+    if (!companyId || companyId === 'demo-company-pharma') return []
+    sanitizeCompanyStorage(companyId)
+    return getLocalData<PharmacieGrossiste[]>(companyId, 'grossistes', [])
+  },
+
+  async saveGrossiste(companyId: string, grossiste: Partial<PharmacieGrossiste>): Promise<PharmacieGrossiste> {
+    if (!companyId || companyId === 'demo-company-pharma') throw new Error('Identifiant d\'entreprise requis')
+    const list = await this.getGrossistes(companyId)
+    const nowId = grossiste.id || `gross-${Date.now()}`
+    const existingIdx = list.findIndex((g) => g.id === nowId)
+    const entity: PharmacieGrossiste = {
+      id: nowId,
+      company_id: companyId,
+      nom: (grossiste.nom || '').trim(),
+      code: (grossiste.code || `GROSS-${Date.now().toString().slice(-4)}`).trim(),
+      contact: grossiste.contact || '',
+      telephone: grossiste.telephone || '',
+      email: grossiste.email || '',
+      adresse: grossiste.adresse || '',
+      delai_livraison_moyen: grossiste.delai_livraison_moyen || '',
+      est_actif: grossiste.est_actif !== false,
+    }
+    if (existingIdx >= 0) {
+      list[existingIdx] = entity
+    } else {
+      list.push(entity)
+    }
+    setLocalData(companyId, 'grossistes', list)
+    return entity
+  },
+
+  async deleteGrossiste(companyId: string, grossisteId: string): Promise<void> {
+    if (!companyId || companyId === 'demo-company-pharma') return
+    const list = await this.getGrossistes(companyId)
+    const filtered = list.filter((g) => g.id !== grossisteId)
+    setLocalData(companyId, 'grossistes', filtered)
+  },
+
+  async getCommandes(companyId: string): Promise<PharmacieCommandeGrossiste[]> {
+    if (!companyId || companyId === 'demo-company-pharma') return []
+    sanitizeCompanyStorage(companyId)
+    return getLocalData<PharmacieCommandeGrossiste[]>(companyId, 'commandes_grossistes', [])
+  },
+
+  async saveCommande(companyId: string, cmd: Partial<PharmacieCommandeGrossiste>): Promise<PharmacieCommandeGrossiste> {
+    if (!companyId || companyId === 'demo-company-pharma') throw new Error('Identifiant d\'entreprise requis')
+    const list = await this.getCommandes(companyId)
+    const nowId = cmd.id || `cmd-${Date.now()}`
+    const existingIdx = list.findIndex((c) => c.id === nowId)
+    const entity: PharmacieCommandeGrossiste = {
+      id: nowId,
+      company_id: companyId,
+      reference_commande: cmd.reference_commande || `CMD-PH-${Date.now().toString().slice(-6)}`,
+      fournisseur_nom: cmd.fournisseur_nom || '',
+      fournisseur_id: cmd.fournisseur_id,
+      date_commande: cmd.date_commande || new Date().toISOString().slice(0, 10),
+      date_livraison_estimee: cmd.date_livraison_estimee || '',
+      lignes: cmd.lignes || [],
+      montant_total_estime: Number(cmd.montant_total_estime) || 0,
+      statut: cmd.statut || 'COMMANDEE',
+      notes: cmd.notes || '',
+    }
+    if (existingIdx >= 0) {
+      list[existingIdx] = entity
+    } else {
+      list.unshift(entity)
+    }
+    setLocalData(companyId, 'commandes_grossistes', list)
+    return entity
   },
 }
