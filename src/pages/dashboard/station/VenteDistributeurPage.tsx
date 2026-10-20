@@ -48,10 +48,10 @@ export const VenteDistributeurPage: React.FC = () => {
   const [selectedVehiculeId, setSelectedVehiculeId] = useState<string>('')
   const [paymentMethod, setPaymentMethod] = useState<'CASH' | 'MOMO' | 'CARD' | 'TRANSFER' | 'CREDIT'>('CASH')
 
-  // Calculateur Montant / Volume
+  // Calculateur Montant / Volume (Valeur initiale strictement à 0)
   const [calcMode, setCalcMode] = useState<'montant' | 'volume'>('montant')
-  const [inputMontant, setInputMontant] = useState<string>('5000')
-  const [inputVolume, setInputVolume] = useState<string>('')
+  const [inputMontant, setInputMontant] = useState<string>('0')
+  const [inputVolume, setInputVolume] = useState<string>('0.00')
 
   // Reçu / Ticket après validation
   const [lastTicket, setLastTicket] = useState<any>(null)
@@ -66,66 +66,93 @@ export const VenteDistributeurPage: React.FC = () => {
       const caisseStatus = await checkSectorCaisseStatus(companyId, cleanSectorSlug)
       setActiveCaisse(caisseStatus?.session || null)
 
-      // 2. Cuves
+      // 2. Cuves réelles (seules sources valides de stock de carburant)
       const { data: cuveData } = await supabaseTenant('station_cuves')
         .select('*')
-        .eq('statut', 'ACTIF')
-      setCuves(cuveData || [])
+        .order('nom')
+      
+      const activeCuves = (cuveData || []).filter((c: any) => !c.statut || c.statut === 'ACTIF')
+      setCuves(activeCuves)
 
       // 3. Pompes / Pistolets
       const { data: pistData } = await supabaseTenant('station_pistolets')
         .select('*')
-        .eq('statut', 'ACTIF')
         .order('numero_pompe')
 
       let effectivePistolets: FuelPumpItem[] = []
 
       if (pistData && pistData.length > 0) {
-        effectivePistolets = pistData.map((p: any) => {
-          const linkedCuve = (cuveData || []).find((c: any) => c.id === p.cuve_id || c.nom === p.cuve_nom)
-          return {
-            id: p.id,
-            code_pistolet: p.code_pistolet || 'P01',
-            numero_pompe: p.numero_pompe || 'Pompe 01',
-            produit: p.produit || 'Essence Super',
-            prix_actuel: Number(p.prix_actuel) || 680,
-            cuve_id: p.cuve_id,
-            cuve_nom: linkedCuve?.nom || p.cuve_nom,
-            stock_disponible: linkedCuve?.stock_actuel ?? linkedCuve?.stock_theorique,
-            statut: p.statut || 'ACTIF',
-          }
-        })
+        effectivePistolets = pistData
+          .filter((p: any) => !p.statut || p.statut === 'ACTIF' || p.statut === 'ACTIVE')
+          .map((p: any) => {
+            const linkedCuve = activeCuves.find((c: any) => 
+              (p.cuve_id && c.id === p.cuve_id) || 
+              (p.cuve_nom && c.nom?.toLowerCase() === p.cuve_nom?.toLowerCase()) ||
+              (c.produit && p.produit && c.produit.toLowerCase() === p.produit.toLowerCase())
+            )
+            // Disponibilité strictement liée au stock réel de la cuve associée
+            const realStock = linkedCuve ? Math.max(0, Number(linkedCuve.stock_actuel ?? linkedCuve.stock_theorique ?? 0)) : 0
+            return {
+              id: p.id,
+              code_pistolet: p.code_pistolet || 'P01',
+              numero_pompe: p.numero_pompe || 'Pompe 01',
+              produit: p.produit || 'Essence Super',
+              prix_actuel: Number(p.prix_actuel) || (p.produit?.toLowerCase().includes('gasoil') ? 700 : p.produit?.toLowerCase().includes('pétrole') ? 650 : 680),
+              cuve_id: linkedCuve?.id || p.cuve_id || undefined,
+              cuve_nom: linkedCuve?.nom || p.cuve_nom || undefined,
+              stock_disponible: realStock,
+              statut: p.statut || 'ACTIF',
+            }
+          })
       } else {
         // Recherche dans station_pompes si table alternative
         const { data: pompesData } = await supabaseTenant('station_pompes')
           .select('*')
-          .eq('statut', 'ACTIF')
+          .order('numero_pompe')
 
         if (pompesData && pompesData.length > 0) {
-          effectivePistolets = pompesData.map((p: any) => {
-            const linkedCuve = (cuveData || []).find((c: any) => c.id === p.cuve_id)
-            return {
-              id: p.id,
-              code_pistolet: p.numero_pompe || `P-${p.type_carburant}`,
-              numero_pompe: p.nom_pompe || p.numero_pompe || 'Pompe 01',
-              produit: p.type_carburant || 'Essence Super',
-              prix_actuel: Number(p.prix_litre) || 680,
-              cuve_id: p.cuve_id,
-              cuve_nom: linkedCuve?.nom,
-              stock_disponible: linkedCuve?.stock_actuel,
-              statut: p.statut || 'ACTIF',
-            }
-          })
+          effectivePistolets = pompesData
+            .filter((p: any) => !p.statut || p.statut === 'ACTIVE' || p.statut === 'ACTIF')
+            .map((p: any) => {
+              const linkedCuve = activeCuves.find((c: any) => 
+                (p.cuve_id && c.id === p.cuve_id) || 
+                (p.cuve_associee && c.nom?.toLowerCase() === p.cuve_associee?.toLowerCase()) ||
+                (c.produit && p.type_carburant && c.produit.toLowerCase() === p.type_carburant.toLowerCase())
+              )
+              const realStock = linkedCuve ? Math.max(0, Number(linkedCuve.stock_actuel ?? linkedCuve.stock_theorique ?? 0)) : 0
+              const typeCarb = p.type_carburant || 'Essence Super'
+              return {
+                id: p.id,
+                code_pistolet: `P-${p.numero_pompe || '01'}`,
+                numero_pompe: p.nom_pompe || p.numero_pompe || 'Pompe 01',
+                produit: typeCarb,
+                prix_actuel: Number(p.prix_litre) || (typeCarb.toLowerCase().includes('gasoil') ? 700 : typeCarb.toLowerCase().includes('pétrole') ? 650 : 680),
+                cuve_id: linkedCuve?.id || p.cuve_id || undefined,
+                cuve_nom: linkedCuve?.nom || p.cuve_associee || undefined,
+                stock_disponible: realStock,
+                statut: p.statut || 'ACTIVE',
+              }
+            })
         }
       }
 
-      // Si aucune configuration en base, utiliser le référentiel standard de la station
+      // Si aucune pompe configurée en base, afficher le référentiel des 3 carburants
+      // MAIS leur disponibilité dépend STRICTEMENT des cuves réelles existantes (0 L si aucune cuve) !
       if (effectivePistolets.length === 0) {
-        effectivePistolets = DEFAULT_STATION_FUELS.map(df => ({
-          ...df,
-          statut: 'ACTIF',
-          stock_disponible: 15000,
-        }))
+        effectivePistolets = DEFAULT_STATION_FUELS.map(df => {
+          const linkedCuve = activeCuves.find((c: any) => 
+            c.produit?.toLowerCase()?.includes(df.produit.toLowerCase()) || 
+            df.produit.toLowerCase().includes(c.produit?.toLowerCase())
+          )
+          const realStock = linkedCuve ? Math.max(0, Number(linkedCuve.stock_actuel ?? linkedCuve.stock_theorique ?? 0)) : 0
+          return {
+            ...df,
+            statut: 'ACTIF',
+            cuve_id: linkedCuve?.id || undefined,
+            cuve_nom: linkedCuve?.nom || undefined,
+            stock_disponible: realStock, // Strictement 0 L si aucune cuve enregistrée !
+          }
+        })
       }
 
       setPistolets(effectivePistolets)
@@ -151,11 +178,11 @@ export const VenteDistributeurPage: React.FC = () => {
       setFlotteVehicules(vehData || [])
 
     } catch (err) {
-      console.warn('[VenteDistributeur] Erreur chargement station, utilisation des paramètres par défaut:', err)
+      console.warn('[VenteDistributeur] Notice chargement station, utilisation des paramètres réels:', err)
       const fallbackPistolets = DEFAULT_STATION_FUELS.map(df => ({
         ...df,
         statut: 'ACTIF',
-        stock_disponible: 15000,
+        stock_disponible: 0, // Strictement 0 en cas de fallback
       }))
       setPistolets(fallbackPistolets)
       if (!selectedPistoletId) setSelectedPistoletId(fallbackPistolets[0].id)
@@ -177,56 +204,85 @@ export const VenteDistributeurPage: React.FC = () => {
       produit: 'Essence Super',
       prix_actuel: 680,
       statut: 'ACTIF',
-      stock_disponible: 15000,
+      stock_disponible: 0, // Strictement 0 si non défini
     }
   }, [pistolets, selectedPistoletId])
 
   const unitPrice = Number(currentPistolet?.prix_actuel) || 680
 
-  // Synchronisation Montant <-> Volume
+  // Synchronisation Montant <-> Volume (cohérence stricte prix / montant / volume)
   useEffect(() => {
     if (calcMode === 'montant') {
       const m = parseFloat(inputMontant) || 0
-      if (unitPrice > 0) {
+      if (unitPrice > 0 && m > 0) {
         const v = calculateVolumeFromAmount(m, unitPrice)
-        setInputVolume(v > 0 ? String(v) : '')
+        setInputVolume(String(v))
+      } else {
+        setInputVolume('0.00')
       }
     } else {
       const v = parseFloat(inputVolume) || 0
-      const m = calculateAmountFromVolume(v, unitPrice)
-      setInputMontant(m > 0 ? String(m) : '')
+      if (unitPrice > 0 && v > 0) {
+        const m = calculateAmountFromVolume(v, unitPrice)
+        setInputMontant(String(m))
+      } else {
+        setInputMontant('0')
+      }
     }
   }, [calcMode, unitPrice])
 
   const handleMontantChange = (val: string) => {
     setInputMontant(val)
     const m = parseFloat(val) || 0
-    if (unitPrice > 0) {
+    if (unitPrice > 0 && m > 0) {
       const v = calculateVolumeFromAmount(m, unitPrice)
-      setInputVolume(v > 0 ? String(v) : '')
+      setInputVolume(String(v))
     } else {
-      setInputVolume('0')
+      setInputVolume('0.00')
     }
   }
 
   const handleVolumeChange = (val: string) => {
     setInputVolume(val)
     const v = parseFloat(val) || 0
-    const m = calculateAmountFromVolume(v, unitPrice)
-    setInputMontant(m > 0 ? String(m) : '')
+    if (unitPrice > 0 && v > 0) {
+      const m = calculateAmountFromVolume(v, unitPrice)
+      setInputMontant(String(m))
+    } else {
+      setInputMontant('0')
+    }
   }
 
   // Raccourcis rapides
   const quickAmounts = [1000, 2000, 5000, 10000, 15000, 20000, 50000]
   const quickVolumes = [2, 5, 10, 20, 30, 50]
 
-  // Validation directe et autonome de la vente distributeur
+  // Validation directe et autonome de la vente distributeur avec déstockage réel
   const handleValidateSale = async () => {
     const vol = parseFloat(inputVolume) || 0
     const mnt = parseFloat(inputMontant) || 0
+    const stockDispo = Number(currentPistolet?.stock_disponible || 0)
 
-    if (vol <= 0 || mnt <= 0) {
-      toast.error('Quantité invalide', 'Veuillez saisir un montant ou un volume valide à distribuer.')
+    if (mnt <= 0 || vol <= 0) {
+      toast.error('Montant requis', 'Veuillez saisir un montant ou un volume valide à distribuer (supérieur à 0).')
+      return
+    }
+
+    // 1. Contrôle strict de disponibilité du carburant (pas de vente si 0 cuve ou stock vide)
+    if (stockDispo <= 0) {
+      toast.error(
+        'Vente impossible : Stock épuisé',
+        `Aucun carburant disponible en cuve pour ${currentPistolet.produit} (Disponibilité : 0 L). Veuillez approvisionner la cuve.`
+      )
+      return
+    }
+
+    // 2. Contrôle anti-stock négatif : volume demandé ne doit pas excéder le stock en cuve
+    if (vol > stockDispo) {
+      toast.error(
+        'Stock insuffisant en cuve',
+        `La quantité calculée (${vol} L) dépasse le stock disponible (${stockDispo} L). Vente bloquée pour préserver la cohérence des cuves.`
+      )
       return
     }
 
@@ -242,6 +298,14 @@ export const VenteDistributeurPage: React.FC = () => {
       const clientNom = selectedVeh?.client_nom || (selectedVeh ? `Flotte ${selectedVeh.immatriculation}` : 'Client Comptoir')
 
       const saleNotes = `Vente Distributeur Carburant: ${vol}L de ${currentPistolet.produit} à la ${currentPistolet.numero_pompe} (${currentPistolet.code_pistolet}) - Pompiste: ${pompisteNom}${selectedVeh ? ` - Véhicule: ${selectedVeh.immatriculation}` : ''}`
+
+      // Identifier la cuve raccordée pour déstockage
+      const targetCuveId = currentPistolet.cuve_id || (cuves.find((c: any) => 
+        c.produit?.toLowerCase() === currentPistolet.produit?.toLowerCase()
+      )?.id)
+
+      // Calcul du nouveau stock (garanti >= 0)
+      const newStock = Math.max(0, Math.round((stockDispo - vol) * 100) / 100)
 
       // 1. Enregistrement dans sales_orders
       const salePayload: any = {
@@ -267,7 +331,9 @@ export const VenteDistributeurPage: React.FC = () => {
           pompiste_id: selectedPompisteId || null,
           pompiste_nom: pompisteNom,
           immatriculation: selectedVeh?.immatriculation || null,
-          cuve_id: currentPistolet.cuve_id || null,
+          cuve_id: targetCuveId || null,
+          stock_avant: stockDispo,
+          stock_apres: newStock,
         }
       }
 
@@ -296,22 +362,31 @@ export const VenteDistributeurPage: React.FC = () => {
         console.warn('[VenteDistributeur] Notice insert sales_orders:', orderEx)
       }
 
-      // 3. Décrémentation du stock cuve & mise à jour index pompe
-      if (currentPistolet.cuve_id) {
+      // 3. Décrémentation automatique du stock de la cuve & actualisation
+      if (targetCuveId) {
         try {
-          const targetCuve = cuves.find(c => c.id === currentPistolet.cuve_id)
-          if (targetCuve) {
-            const currentStock = Number(targetCuve.stock_actuel ?? targetCuve.stock_theorique ?? 0)
-            const newStock = Math.max(0, Math.round((currentStock - vol) * 100) / 100)
-            await supabase
-              .from('station_cuves')
-              .update({ stock_actuel: newStock, updated_at: nowIso })
-              .eq('id', currentPistolet.cuve_id)
-          }
+          await supabase
+            .from('station_cuves')
+            .update({ 
+              stock_actuel: newStock, 
+              stock_theorique: newStock,
+              updated_at: nowIso 
+            })
+            .eq('id', targetCuveId)
         } catch (cuveEx) {
           console.warn('[VenteDistributeur] Notice mise à jour cuve:', cuveEx)
         }
       }
+
+      // Actualisation immédiate de l'état local (réactivité instantanée sans attendre le rechargement)
+      if (targetCuveId) {
+        setCuves(prev => prev.map(c => c.id === targetCuveId ? { ...c, stock_actuel: newStock, stock_theorique: newStock } : c))
+      }
+      setPistolets(prev => prev.map(p => 
+        (p.id === currentPistolet.id || (targetCuveId && p.cuve_id === targetCuveId))
+          ? { ...p, stock_disponible: newStock }
+          : p
+      ))
 
       // 4. Intégration en caisse (si espèces ou mobile money)
       if (paymentMethod === 'CASH' || paymentMethod === 'MOMO') {
@@ -359,10 +434,10 @@ export const VenteDistributeurPage: React.FC = () => {
 
       toast.success(
         'Vente distributeur validée !',
-        `${vol} L de ${currentPistolet.produit} (${formatFCFA(mnt)}) enregistrés avec succès.`
+        `${vol} L de ${currentPistolet.produit} (${formatFCFA(mnt)}) enregistrés. Stock cuve actualisé : ${newStock} L.`
       )
 
-      // Recharger les données de cuves
+      // Recharger les données de cuves en tâche de fond pour synchronisation
       loadStationData()
 
     } catch (err: any) {
@@ -373,14 +448,12 @@ export const VenteDistributeurPage: React.FC = () => {
     }
   }
 
-  // Réinitialisation rapide pour le client suivant
+  // Réinitialisation rapide pour le client suivant (Montant remis à 0)
   const handleResetForNextClient = () => {
     setShowTicketModal(false)
     setCalcMode('montant')
-    setInputMontant('5000')
-    if (unitPrice > 0) {
-      setInputVolume(String(calculateVolumeFromAmount(5000, unitPrice)))
-    }
+    setInputMontant('0')
+    setInputVolume('0.00')
   }
 
   return (
@@ -470,6 +543,25 @@ export const VenteDistributeurPage: React.FC = () => {
               </span>
             </div>
 
+            {/* Alerte informative si aucune cuve n'est encore enregistrée */}
+            {cuves.length === 0 && (
+              <div className="bg-rose-500/10 border border-rose-500/30 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-rose-300">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                  <span>
+                    <strong>Aucune cuve enregistrée :</strong> La disponibilité réelle est de <strong>0 L</strong>. Veuillez d'abord créer vos cuves et jauges dans la gestion technique.
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate(`/app/${cleanSectorSlug}/pompes-cuves`)}
+                  className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[11px] whitespace-nowrap transition self-start sm:self-auto"
+                >
+                  Gérer les cuves
+                </button>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               {pistolets.map((p) => {
                 const isSelected = p.id === selectedPistoletId
@@ -482,6 +574,8 @@ export const VenteDistributeurPage: React.FC = () => {
                   ? 'border-blue-500/40 bg-blue-500/10 text-blue-400'
                   : 'border-amber-500/40 bg-amber-500/10 text-amber-400'
 
+                const stockNum = Number(p.stock_disponible || 0)
+
                 return (
                   <button
                     key={p.id}
@@ -491,10 +585,10 @@ export const VenteDistributeurPage: React.FC = () => {
                       const pPrice = Number(p.prix_actuel) || 680
                       if (calcMode === 'montant') {
                         const m = parseFloat(inputMontant) || 0
-                        setInputVolume(String(calculateVolumeFromAmount(m, pPrice)))
+                        setInputVolume(m > 0 && pPrice > 0 ? String(calculateVolumeFromAmount(m, pPrice)) : '0.00')
                       } else {
                         const v = parseFloat(inputVolume) || 0
-                        setInputMontant(String(calculateAmountFromVolume(v, pPrice)))
+                        setInputMontant(v > 0 && pPrice > 0 ? String(calculateAmountFromVolume(v, pPrice)) : '0')
                       }
                     }}
                     className={clsx(
@@ -522,10 +616,19 @@ export const VenteDistributeurPage: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px] text-slate-400">
-                      <span>Disponibilité :</span>
-                      <span className="font-semibold text-emerald-400">
-                        {p.stock_disponible !== undefined ? `${p.stock_disponible.toLocaleString('fr-FR')} L` : 'Disponible'}
+                    <div className="mt-3 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[10px]">
+                      <span className="text-slate-400">Disponibilité :</span>
+                      <span className={clsx(
+                        'font-bold font-mono',
+                        stockNum <= 0
+                          ? 'text-rose-400'
+                          : stockNum <= 500
+                          ? 'text-amber-400'
+                          : 'text-emerald-400'
+                      )}>
+                        {stockNum <= 0
+                          ? (cuves.length === 0 ? '0 L (Aucune cuve)' : '0 L (Épuisé)')
+                          : `${stockNum.toLocaleString('fr-FR')} L`}
                       </span>
                     </div>
                   </button>
@@ -624,60 +727,86 @@ export const VenteDistributeurPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Champs de Saisie Synchronisés */}
+            {/* Champs de Saisie Synchronisés avec fond gris distinct indiquant le champ à renseigner */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {/* Montant FCFA */}
               <div className={clsx(
                 'p-3.5 rounded-2xl border transition',
                 calcMode === 'montant'
-                  ? 'bg-amber-500/10 border-amber-500/60 ring-2 ring-amber-500/20'
-                  : 'bg-slate-950/60 border-slate-800'
+                  ? 'bg-slate-900 border-amber-500/70 ring-2 ring-amber-500/20'
+                  : 'bg-slate-900/60 border-slate-800'
               )}>
-                <label className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block mb-1">
-                  Montant à Servir
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-black text-amber-400 uppercase tracking-wider block">
+                    Montant à Servir
+                  </label>
+                  <span className="text-[10px] text-slate-300 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-md font-semibold">
+                    Champ à renseigner
+                  </span>
+                </div>
                 <div className="relative">
                   <input
                     type="number"
                     min="0"
                     step="100"
                     value={inputMontant}
-                    onFocus={() => setCalcMode('montant')}
+                    onFocus={(e) => {
+                      setCalcMode('montant')
+                      if (e.target.value === '0') {
+                        e.target.select()
+                      }
+                    }}
                     onChange={(e) => handleMontantChange(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xl font-black font-mono text-white focus:outline-none focus:border-amber-400"
+                    className="w-full bg-slate-800 hover:bg-slate-750 border-2 border-slate-600 focus:border-amber-400 focus:bg-slate-700/90 text-white rounded-xl px-3.5 py-2.5 text-2xl font-black font-mono transition focus:outline-none placeholder-slate-400 shadow-inner"
                     placeholder="0"
                   />
-                  <span className="absolute right-3 top-3 text-xs font-bold text-slate-400">
+                  <span className="absolute right-3.5 top-3.5 text-xs font-black text-slate-300 tracking-wider">
                     FCFA
                   </span>
                 </div>
+                <p className="text-[10px] text-slate-400 mt-1.5">
+                  Valeur initiale 0 • Saisissez le montant ou cliquez un raccourci
+                </p>
               </div>
 
               {/* Volume Litres */}
               <div className={clsx(
                 'p-3.5 rounded-2xl border transition',
                 calcMode === 'volume'
-                  ? 'bg-amber-500/10 border-amber-500/60 ring-2 ring-amber-500/20'
-                  : 'bg-slate-950/60 border-slate-800'
+                  ? 'bg-slate-900 border-amber-500/70 ring-2 ring-amber-500/20'
+                  : 'bg-slate-900/60 border-slate-800'
               )}>
-                <label className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block mb-1">
-                  Volume Équivalent
-                </label>
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-[11px] font-black text-amber-400 uppercase tracking-wider block">
+                    Volume Équivalent
+                  </label>
+                  <span className="text-[10px] text-slate-300 bg-slate-800 border border-slate-700 px-2 py-0.5 rounded-md font-semibold">
+                    {calcMode === 'volume' ? 'Champ à renseigner' : 'Calcul automatique'}
+                  </span>
+                </div>
                 <div className="relative">
                   <input
                     type="number"
                     min="0"
                     step="0.01"
                     value={inputVolume}
-                    onFocus={() => setCalcMode('volume')}
+                    onFocus={(e) => {
+                      setCalcMode('volume')
+                      if (e.target.value === '0' || e.target.value === '0.00') {
+                        e.target.select()
+                      }
+                    }}
                     onChange={(e) => handleVolumeChange(e.target.value)}
-                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xl font-black font-mono text-white focus:outline-none focus:border-amber-400"
+                    className="w-full bg-slate-800 hover:bg-slate-750 border-2 border-slate-600 focus:border-amber-400 focus:bg-slate-700/90 text-white rounded-xl px-3.5 py-2.5 text-2xl font-black font-mono transition focus:outline-none placeholder-slate-400 shadow-inner"
                     placeholder="0.00"
                   />
-                  <span className="absolute right-3 top-3 text-xs font-bold text-slate-400">
+                  <span className="absolute right-3.5 top-3.5 text-xs font-black text-slate-300 tracking-wider">
                     Litres
                   </span>
                 </div>
+                <p className="text-[10px] text-slate-400 mt-1.5">
+                  Calculé sur base de {formatFCFA(unitPrice)}/L
+                </p>
               </div>
             </div>
 
@@ -713,23 +842,65 @@ export const VenteDistributeurPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Récapitulatif Visuel de la Vente Carburant */}
-            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2">
+            {/* Récapitulatif Visuel de la Vente Carburant & Contrôle Cuve */}
+            <div className="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-2.5">
               <div className="flex justify-between items-center text-xs">
                 <span className="text-slate-400">Carburant sélectionné :</span>
-                <span className="font-bold text-white">{currentPistolet.produit}</span>
+                <span className="font-bold text-white flex items-center gap-1.5">
+                  <Droplet className="w-3.5 h-3.5 text-amber-400" />
+                  {currentPistolet.produit}
+                </span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-400">Pompe / Pistolet :</span>
+                <span className="text-slate-400">Pompe & Pistolet :</span>
                 <span className="font-mono text-slate-300">{currentPistolet.numero_pompe} ({currentPistolet.code_pistolet})</span>
               </div>
               <div className="flex justify-between items-center text-xs">
-                <span className="text-slate-400">Volume calculé :</span>
-                <span className="font-mono font-bold text-amber-400">{inputVolume || '0.00'} Litres</span>
+                <span className="text-slate-400">Cuve rattachée :</span>
+                <span className={clsx('font-medium', currentPistolet.cuve_nom ? 'text-slate-200' : 'text-amber-400')}>
+                  {currentPistolet.cuve_nom || (cuves.length === 0 ? 'Aucune cuve enregistrée' : 'Non raccordée')}
+                </span>
               </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-slate-400">Stock cuve disponible :</span>
+                <span className={clsx(
+                  'font-mono font-bold',
+                  (currentPistolet.stock_disponible || 0) <= 0 ? 'text-rose-400' : 'text-emerald-400'
+                )}>
+                  {((currentPistolet.stock_disponible || 0)).toLocaleString('fr-FR')} L
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-xs">
+                <span className="text-slate-400">Volume calculé :</span>
+                <span className="font-mono font-black text-amber-400 text-sm">
+                  {parseFloat(inputVolume) > 0 ? `${(parseFloat(inputVolume) || 0).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} L` : '0.00 L'}
+                </span>
+              </div>
+
+              {/* Alertes visuelles de stock */}
+              {(currentPistolet.stock_disponible || 0) <= 0 && (
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-2.5 flex items-center gap-2 text-rose-300 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                  <span>
+                    {cuves.length === 0
+                      ? 'Aucune cuve enregistrée en base. Disponibilité réelle 0 L.'
+                      : 'Stock de la cuve épuisé (0 L). Distribution bloquée.'}
+                  </span>
+                </div>
+              )}
+
+              {(currentPistolet.stock_disponible || 0) > 0 && (parseFloat(inputVolume) || 0) > (currentPistolet.stock_disponible || 0) && (
+                <div className="bg-rose-500/10 border border-rose-500/30 rounded-xl p-2.5 flex items-center gap-2 text-rose-300 text-xs">
+                  <AlertTriangle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                  <span>
+                    Volume demandé ({inputVolume} L) supérieur au stock disponible ({currentPistolet.stock_disponible} L).
+                  </span>
+                </div>
+              )}
+
               <div className="border-t border-slate-800 pt-2 flex justify-between items-baseline">
                 <span className="text-xs font-bold text-slate-300 uppercase">Total à encaisser :</span>
-                <span className="text-xl font-black font-mono text-emerald-400">
+                <span className="text-2xl font-black font-mono text-emerald-400">
                   {formatFCFA(parseFloat(inputMontant) || 0)}
                 </span>
               </div>
@@ -770,30 +941,57 @@ export const VenteDistributeurPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Bouton de Validation & Clôture de la Vente Distributeur */}
-            <button
-              type="button"
-              disabled={processing || (parseFloat(inputMontant) || 0) <= 0}
-              onClick={handleValidateSale}
-              className={clsx(
-                'w-full py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-xl transition',
-                processing || (parseFloat(inputMontant) || 0) <= 0
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed'
-                  : 'bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 shadow-amber-500/20'
-              )}
-            >
-              {processing ? (
-                <>
-                  <RefreshCw className="w-5 h-5 animate-spin" />
-                  <span>Validation & Enregistrement...</span>
-                </>
-              ) : (
-                <>
-                  <Check className="w-5 h-5" />
-                  <span>Valider l'Encaissement & Imprimer le Reçu</span>
-                </>
-              )}
-            </button>
+            {/* Bouton de Validation & Clôture de la Vente Distributeur avec protection stock */}
+            {(() => {
+              const mntVal = parseFloat(inputMontant) || 0
+              const volVal = parseFloat(inputVolume) || 0
+              const currentStockVal = Number(currentPistolet?.stock_disponible || 0)
+              const isStockEmpty = currentStockVal <= 0
+              const isStockExceeded = volVal > currentStockVal
+              const isZero = mntVal <= 0 || volVal <= 0
+              const isBlocked = processing || isZero || isStockEmpty || isStockExceeded
+
+              return (
+                <button
+                  type="button"
+                  disabled={isBlocked}
+                  onClick={handleValidateSale}
+                  className={clsx(
+                    'w-full py-4 rounded-2xl font-black text-sm flex items-center justify-center gap-2 shadow-xl transition',
+                    isBlocked
+                      ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700/80'
+                      : 'bg-amber-500 hover:bg-amber-400 active:bg-amber-600 text-slate-950 shadow-amber-500/20'
+                  )}
+                >
+                  {processing ? (
+                    <>
+                      <RefreshCw className="w-5 h-5 animate-spin" />
+                      <span>Validation & Enregistrement...</span>
+                    </>
+                  ) : isStockEmpty ? (
+                    <>
+                      <AlertTriangle className="w-5 h-5 text-rose-400" />
+                      <span>Stock Cuve Épuisé (0 L) — Vente Bloquée</span>
+                    </>
+                  ) : isStockExceeded ? (
+                    <>
+                      <AlertTriangle className="w-5 h-5 text-rose-400" />
+                      <span>Volume supérieur au stock disponible ({currentStockVal} L)</span>
+                    </>
+                  ) : isZero ? (
+                    <>
+                      <Zap className="w-5 h-5 text-slate-500" />
+                      <span>Saisir le montant à servir</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-5 h-5" />
+                      <span>Valider l'Encaissement & Imprimer le Reçu</span>
+                    </>
+                  )}
+                </button>
+              )
+            })()}
           </div>
         </div>
       </div>

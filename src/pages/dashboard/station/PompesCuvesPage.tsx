@@ -229,9 +229,30 @@ export const PompesCuvesPage: React.FC = () => {
         index_actuel: Number(pompeForm.index_actuel) || 0,
         statut: 'ACTIVE'
       }
-      const { error } = await supabase.from('station_pompes').insert(payload)
+      const { data: newPompe, error } = await supabase.from('station_pompes').insert(payload).select().single()
       if (error) throw error
-      notify('success', 'Pompe ajoutée avec succès')
+
+      // Synchronisation vers station_pistolets pour compatibilité et réactivité immédiate
+      try {
+        const prixDefaut = pompeForm.type_carburant === 'Gasoil' ? 700 : pompeForm.type_carburant?.includes('Pétrole') ? 650 : 680
+        await supabase.from('station_pistolets').insert({
+          company_id: companyId,
+          sector_slug: cleanSlug,
+          pompe_id: newPompe?.id || null,
+          numero_pompe: pompeForm.numero_pompe,
+          code_pistolet: `P-${pompeForm.numero_pompe}`,
+          produit: pompeForm.type_carburant,
+          cuve_id: pompeForm.cuve_id || null,
+          cuve_nom: cuveTrouvee ? cuveTrouvee.nom : null,
+          compteur_index: Number(pompeForm.index_actuel) || 0,
+          prix_actuel: prixDefaut,
+          statut: 'ACTIF'
+        })
+      } catch {
+        // Table optionnelle selon schéma
+      }
+
+      notify('success', 'Pompe ajoutée et reliée à la cuve avec succès')
       setShowPompeModal(false)
       loadAll()
     } catch (err: any) {

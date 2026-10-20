@@ -27,10 +27,10 @@ export const StationFuelDispenser: React.FC<StationFuelDispenserProps> = ({ onAd
   const [selectedPompisteId, setSelectedPompisteId] = useState<string>('')
   const [selectedVehiculeId, setSelectedVehiculeId] = useState<string>('')
 
-  // Mode de saisie : 'montant' ou 'volume'
+  // Mode de saisie : 'montant' ou 'volume' (Initialisé strictement à 0)
   const [calcMode, setCalcMode] = useState<'montant' | 'volume'>('montant')
-  const [inputMontant, setInputMontant] = useState<string>('10000')
-  const [inputVolume, setInputVolume] = useState<string>('')
+  const [inputMontant, setInputMontant] = useState<string>('0')
+  const [inputVolume, setInputVolume] = useState<string>('0.00')
   const [loading, setLoading] = useState(true)
 
   // Produits carburant par défaut si les tables sont encore vierges
@@ -346,20 +346,31 @@ export const StationFuelDispenser: React.FC<StationFuelDispenserProps> = ({ onAd
                 ? 'bg-amber-500/10 border-amber-500/50'
                 : 'bg-slate-800/40 border-slate-700 opacity-80'
             )}>
-              <label className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block mb-1">
-                Montant à Servir
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-[10px] font-bold text-amber-400 uppercase tracking-wider block">
+                  Montant à Servir
+                </label>
+                <span className="text-[9px] text-slate-300 bg-slate-800 border border-slate-700 px-1.5 py-0.5 rounded font-semibold">
+                  Champ à renseigner
+                </span>
+              </div>
               <div className="relative">
                 <input
                   type="number"
                   min="0"
                   step="100"
                   value={inputMontant}
-                  onFocus={() => setCalcMode('montant')}
+                  onFocus={(e) => {
+                    setCalcMode('montant')
+                    if (e.target.value === '0') {
+                      e.target.select()
+                    }
+                  }}
                   onChange={(e) => handleMontantChange(e.target.value)}
-                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-lg font-black font-mono text-white focus:outline-none focus:border-amber-400"
+                  className="w-full bg-slate-800 hover:bg-slate-750 border-2 border-slate-600 focus:border-amber-400 focus:bg-slate-700 text-white rounded-xl px-3 py-2 text-lg font-black font-mono transition focus:outline-none placeholder-slate-400 shadow-inner"
+                  placeholder="0"
                 />
-                <span className="absolute right-3 top-2.5 text-xs font-bold text-slate-400">
+                <span className="absolute right-3 top-2.5 text-xs font-bold text-slate-300">
                   FCFA
                 </span>
               </div>
