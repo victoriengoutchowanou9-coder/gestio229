@@ -1314,6 +1314,19 @@ export function resolveModulesForSector(
 }
 
 /**
+ * Source de référence canonique pour le catalogue exhaustif des modules d'un secteur.
+ * Règle fondamentale : Tous les utilisateurs d'un même secteur disposent du même catalogue.
+ */
+export function getSectorCanonicalModules(sectorSlug: string): SectorModuleConfig[] {
+  const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+  return resolveModulesForSector(clean)
+}
+
+export function getSectorCanonicalModuleIds(sectorSlug: string): string[] {
+  return getSectorCanonicalModules(sectorSlug).map((m) => m.id)
+}
+
+/**
  * Convertit une liste de SectorModuleConfig en NavItems avec le href complet.
  */
 export function modulesToNavItems(

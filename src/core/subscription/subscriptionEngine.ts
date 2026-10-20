@@ -195,19 +195,9 @@ export function checkModuleAccess(
   }
 
   // 3. Niveau 1 : Période d'essai gratuit (30 jours)
-  // - Accès limité au secteur principal déclaré lors de l'inscription
-  // - Accès aux fonctionnalités expressément autorisées pour l'essai (STARTER_ACCESSIBLE_MODULES)
-  // - Blocage des modules avancés réservés aux formules payantes
+  // RÈGLE MÉTIER : En période d'essai, l'intégralité du catalogue des modules du secteur
+  // est accessible pour garantir une évaluation complète (Trésorerie, SYSCOHADA, Reporting inclus).
   if (status === 'trial') {
-    const normMod = moduleId.toLowerCase().trim()
-    if (ADVANCED_MODULES.includes(normMod)) {
-      return {
-        allowed: false,
-        reason: 'starter_restriction',
-        requiredPlan: 'Abonnement Standard (5 000 FCFA/mois) ou Formule Pro',
-        message: `Le module « ${normMod} » est réservé aux abonnements payants. Souscrivez à l'abonnement standard pour y accéder.`
-      }
-    }
     return { allowed: true }
   }
 

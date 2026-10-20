@@ -15,6 +15,7 @@ import { useUIStore } from '../../../store/uiStore'
 import { useTenant } from '../../../hooks/useTenant'
 import { ALL_SECTORS_CATALOG } from '../../../core/modules/moduleRegistry'
 import { getActiveSectorMeta } from '../../../lib/sectorClient'
+import SectorLoader from '../../../lib/SectorLoader'
 import {
   getRolesForSector,
   normalizeSectorSlug,
@@ -2602,7 +2603,10 @@ export const ConfigPage: React.FC = () => {
                 const currentSecSlug = normalizeSectorSlug(newUser.sector)
                 const currentSectorMeta = subscribedSectors.find(s => s.slug === newUser.sector) || ALL_SECTORS_CATALOG.find(s => s.slug === currentSecSlug) || sectorMeta
                 const secteurNom = currentSectorMeta?.name || sectorMeta?.name || newUser.sector
-                const modulesAAfficher = MODULES_PAR_SECTEUR[newUser.sector] || MODULES_PAR_SECTEUR[currentSecSlug] || MODULES_PAR_SECTEUR['default']
+                const availableSectorList = SectorLoader.getAvailableModulesForSector(currentSecSlug, company)
+                const modulesAAfficher = availableSectorList.length > 0
+                  ? availableSectorList
+                  : (MODULES_PAR_SECTEUR[newUser.sector] || MODULES_PAR_SECTEUR[currentSecSlug] || MODULES_PAR_SECTEUR['default'])
 
                 return (
                   <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2">

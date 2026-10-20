@@ -312,13 +312,15 @@ export const SectorLoader = {
       if (normalizedSlugs.length > 0) {
         for (const sSlug of normalizedSlugs) {
           const catMeta = ALL_SECTORS_CATALOG.find((c) => c.slug === sSlug)
+          const canonicalModules = resolveModulesForSector(sSlug)
+          const canonicalModuleIds = canonicalModules.map((m) => m.id)
           rawSectors.push({
             id: `sec-${sSlug}`,
             name: catMeta?.name || sSlug.charAt(0).toUpperCase() + sSlug.slice(1),
             slug: sSlug,
             description: catMeta?.description || '',
             is_active: true,
-            modules: ['ventes', 'caisse', 'stock', 'clients', 'depenses', 'reporting'],
+            modules: canonicalModuleIds,
           } as any)
         }
       }
@@ -632,7 +634,7 @@ export const SectorLoader = {
 
         // GESTION & CONTRÔLE
         { id: 'rapports', label: 'Rapports & Analyses', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
-        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'admin' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
         { id: 'configuration', label: 'Configuration Hôtel', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
         { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
         { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
@@ -1070,17 +1072,33 @@ export const SectorLoader = {
   canAccess(user: UserProfile | null | undefined, moduleId: string, action: string = 'view', company?: Company | null): boolean {
     if (!user) return true // Fallback d'affichage résilient si user est en cours de chargement
 
-    // Vérification prioritaire de l'abonnement entreprise (Plan Starter vs Entreprise)
+    // Super Admin, Administrateurs et Gérants disposent d'un accès intégral au catalogue des modules de leur secteur
+    const isAdmin = Boolean(
+      user.is_super_admin ||
+      user.role === 'administrateur' ||
+      user.role === 'admin' ||
+      user.role === 'gerant'
+    )
+
+    // Vérification de l'état de l'entreprise (suspension / expiration)
     const comp = company || (user as any)?.company || null
     if (comp) {
       try {
         const planCheck = checkModuleAccess(moduleId, comp)
-        if (!planCheck.allowed) return false
+        if (!planCheck.allowed) {
+          // Si l'entreprise est globalement suspendue ou expirée, l'accès est bloqué
+          if (planCheck.reason === 'suspended' || planCheck.reason === 'expired') {
+            return false
+          }
+          // Pour les collaborateurs restreints sous un forfait starter spécifique
+          if (!isAdmin && planCheck.reason === 'starter_restriction') {
+            return false
+          }
+        }
       } catch (err) {}
     }
 
-    if (user.is_super_admin) return true
-    if (user.role === 'administrateur' || user.role === 'admin' || user.role === 'gerant') return true
+    if (isAdmin) return true
     if (moduleId === 'dashboard') return true
 
     // Accès spécifique au module Vendeur
@@ -1092,6 +1110,31 @@ export const SectorLoader = {
 
     // Dictionnaire d'alias pour compatibilité parfaite
     const MODULE_ALIASES: Record<string, string[]> = {
+      finances: ['tresorerie', 'tresorerie_banques', 'banque', 'treasury'],
+      tresorerie: ['finances', 'tresorerie_banques', 'banque', 'treasury'],
+      tresorerie_banques: ['finances', 'tresorerie', 'banque', 'treasury'],
+      syscohada: ['comptabilite_syscohada', 'compta', 'accounting'],
+      comptabilite_syscohada: ['syscohada', 'compta', 'accounting'],
+      rapports: ['reporting', 'reporting_rapports'],
+      reporting: ['rapports', 'reporting_rapports'],
+      reporting_rapports: ['rapports', 'reporting'],
+      ventes: ['vente-pos', 'ventes_pos', 'pos', 'vendeur', 'commercial'],
+      ventes_pos: ['ventes', 'vente-pos', 'pos', 'commercial'],
+      caisse: ['caisse_clotures', 'caisse_du_jour', 'cloture_caisse'],
+      caisse_du_jour: ['caisse', 'caisse_clotures'],
+      fournisseurs: ['fournisseurs_achats', 'achats', 'purchases'],
+      fournisseurs_achats: ['fournisseurs', 'achats', 'purchases'],
+      stock: ['stocks', 'inventaire', 'stocks_inventaires'],
+      stocks: ['stock', 'inventaire', 'stocks_inventaires'],
+      stocks_inventaires: ['stock', 'stocks', 'inventaire'],
+      reception_sejours: ['reception'],
+      reception: ['reception_sejours'],
+      chambres_reservations: ['chambres'],
+      chambres: ['chambres_reservations'],
+      services_consommations: ['services-consommations'],
+      'services-consommations': ['services_consommations'],
+      maintenance_hotel: ['maintenance', 'flotte_maintenance'],
+      maintenance: ['maintenance_hotel', 'flotte_maintenance'],
       vendeur: ['prise_commande', 'bons_commande', 'ventes'],
       prise_commande: ['vendeur', 'bons_commande'],
       bons_commande: ['vendeur', 'prise_commande'],
@@ -1113,8 +1156,6 @@ export const SectorLoader = {
       fiches_techniques: ['fiches'],
       carburant: ['flotte_carburant'],
       flotte_carburant: ['carburant'],
-      maintenance: ['flotte_maintenance'],
-      flotte_maintenance: ['maintenance'],
       carte_gps: ['flotte_carte'],
       flotte_carte: ['carte_gps'],
       vehicules: ['flotte_vehicules'],
@@ -1123,16 +1164,11 @@ export const SectorLoader = {
       flotte_conducteurs: ['conducteurs'],
       missions: ['flotte_missions'],
       flotte_missions: ['missions'],
-      reporting: ['rapports'],
-      rapports: ['reporting'],
-      finances: ['tresorerie'],
-      tresorerie: ['finances'],
       pompes: ['pompes_cuves'],
       pompes_cuves: ['pompes'],
       postes: ['postes_pompiste'],
       postes_pompiste: ['postes'],
       flottes: ['flottes_vehicules'],
-      flottes_vehicules: ['flottes'],
       anomalies: ['anomalies_controles'],
       anomalies_controles: ['anomalies'],
       tontine: ['tontines', 'tontine_cycles'],
@@ -1201,7 +1237,7 @@ export const SectorLoader = {
       ].includes(user.role)
     }
     if (moduleId === 'syscohada' || moduleId === 'finances' || moduleId === 'depenses') {
-      return ['comptable', 'gestionnaire', 'gerant'].includes(user.role)
+      return ['comptable', 'gestionnaire', 'gerant', 'tresorier', 'financier', 'directeur', 'administrateur', 'admin'].includes(user.role)
     }
     if (moduleId === 'clients') {
       return ['caissier', 'vendeur', 'commercial', 'comptable', 'gerant', 'agent_credit', 'receptionniste'].includes(user.role)

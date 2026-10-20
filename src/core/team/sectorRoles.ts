@@ -1,3 +1,4 @@
+import { getSectorCanonicalModules } from '../modules/moduleRegistry'
 // =============================================================================
 // GESTIO 229 SaaS — Référentiel des Rôles Métier par Secteur d'Activité
 // =============================================================================
@@ -1447,6 +1448,16 @@ export interface SectorModuleItem {
  */
 export function getSectorAvailableModules(sectorSlug?: string | null): SectorModuleItem[] {
   const norm = normalizeSectorSlug(sectorSlug)
+  try {
+    const canonical = getSectorCanonicalModules(norm)
+    if (canonical && canonical.length > 0) {
+      return canonical.map((m) => ({
+        id: m.id,
+        label: m.label,
+        category: (m.group as any) || 'commercial',
+      }))
+    }
+  } catch (e) {}
 
   if (norm === 'restaurant' || norm === 'bar-restaurant-maquis' || norm === 'bar' || norm === 'maquis' || norm === 'fastfood') {
     return [
