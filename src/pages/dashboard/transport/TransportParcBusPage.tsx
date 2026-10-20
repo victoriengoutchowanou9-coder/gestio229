@@ -106,19 +106,19 @@ export const TransportParcBusPage: React.FC = () => {
         <button
           onClick={() => {
             setFormBus({
-              immatriculation: `AY ${Math.floor(1000 + Math.random() * 9000)} RB`,
-              marque: 'Mercedes-Benz',
-              modele: 'Travego VIP',
-              categorie: 'VIP Climatise',
-              capacite_passagers: 55,
-              places_commercialisables: 53,
-              capacite_soute_kg: 1500,
+              immatriculation: '',
+              marque: '',
+              modele: '',
+              categorie: 'Standard',
+              capacite_passagers: 50,
+              places_commercialisables: 50,
+              capacite_soute_kg: 1000,
               plan_sieges_actif: true,
-              agence_rattachement: 'Cotonou',
-              kilometrage: 120000,
+              agence_rattachement: '',
+              kilometrage: 0,
               statut: 'DISPONIBLE',
-              date_expiration_assurance: '2027-06-30',
-              date_expiration_visite_technique: '2027-04-15',
+              date_expiration_assurance: '',
+              date_expiration_visite_technique: '',
             })
             setShowModal(true)
           }}

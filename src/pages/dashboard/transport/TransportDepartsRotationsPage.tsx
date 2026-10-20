@@ -49,7 +49,7 @@ export const TransportDepartsRotationsPage: React.FC = () => {
     busId: '',
     chauffeurId: '',
     convoyeurNom: '',
-    prixBase: 8500,
+    prixBase: 0,
   })
   const [errorMessage, setErrorMessage] = useState('')
 

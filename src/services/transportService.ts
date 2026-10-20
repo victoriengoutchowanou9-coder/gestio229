@@ -228,137 +228,9 @@ export interface TransportKPIs {
   departsDuJour: number
 }
 
-// ─── DONNÉES PAR DÉFAUT RÉALISTES (SEED BÉNIN / INTERURBAIN) ──────────────────
-
-export const DEFAULT_TRANSPORT_LIGNES: TransportLigne[] = [
-  {
-    id: 'lig-cot-par',
-    code_ligne: 'L-COT-PAR',
-    nom_ligne: 'Cotonou - Bohicon - Parakou Express',
-    ville_origine: 'Cotonou (Étoile Rouge)',
-    ville_destination: 'Parakou (Gare Centrale)',
-    distance_km: 415,
-    duree_estimee_minutes: 360,
-    est_actif: true,
-    arrêts: [
-      { id: 'arr-cot-01', ordre: 1, nom: 'Gare Étoile Rouge', ville: 'Cotonou', est_actif: true, duree_depuis_depart_min: 0 },
-      { id: 'arr-cot-02', ordre: 2, nom: 'Carrefour Calavi Kpota', ville: 'Abomey-Calavi', est_actif: true, duree_depuis_depart_min: 30 },
-      { id: 'arr-all-01', ordre: 3, nom: 'Gare Allada', ville: 'Allada', est_actif: true, duree_depuis_depart_min: 65 },
-      { id: 'arr-boh-01', ordre: 4, nom: 'Gare Bohicon Carrefour', ville: 'Bohicon', est_actif: true, duree_depuis_depart_min: 135 },
-      { id: 'arr-das-01', ordre: 5, nom: 'Halte Dassa-Zoumè', ville: 'Dassa', est_actif: true, duree_depuis_depart_min: 200 },
-      { id: 'arr-sav-01', ordre: 6, nom: 'Gare Savè', ville: 'Savè', est_actif: true, duree_depuis_depart_min: 260 },
-      { id: 'arr-par-01', ordre: 7, nom: 'Gare Centrale Parakou', ville: 'Parakou', est_actif: true, duree_depuis_depart_min: 360 },
-    ],
-    grille_tarifs: {
-      'arr-cot-01_arr-boh-01': 3500,
-      'arr-cot-01_arr-das-01': 5000,
-      'arr-cot-01_arr-sav-01': 6500,
-      'arr-cot-01_arr-par-01': 8500,
-      'arr-boh-01_arr-par-01': 6000,
-      'arr-das-01_arr-par-01': 4500,
-    },
-    description: 'Ligne principale interurbaine Axe Sud-Nord Bénin'
-  },
-  {
-    id: 'lig-cot-pno',
-    code_ligne: 'L-COT-PNO',
-    nom_ligne: 'Cotonou - Porto-Novo Navette',
-    ville_origine: 'Cotonou (Dantokpa)',
-    ville_destination: 'Porto-Novo (Carrefour Ouando)',
-    distance_km: 32,
-    duree_estimee_minutes: 45,
-    est_actif: true,
-    arrêts: [
-      { id: 'arr-c-dan', ordre: 1, nom: 'Gare Dantokpa', ville: 'Cotonou', est_actif: true, duree_depuis_depart_min: 0 },
-      { id: 'arr-p-sem', ordre: 2, nom: 'Carrefour Sèmè Kpodji', ville: 'Sèmè', est_actif: true, duree_depuis_depart_min: 20 },
-      { id: 'arr-p-oua', ordre: 3, nom: 'Gare Ouando', ville: 'Porto-Novo', est_actif: true, duree_depuis_depart_min: 45 },
-    ],
-    grille_tarifs: {
-      'arr-c-dan_arr-p-sem': 500,
-      'arr-c-dan_arr-p-oua': 1000,
-      'arr-p-sem_arr-p-oua': 500,
-    },
-    description: 'Liaison directe métropolitaine Cotonou - Capitale'
-  }
-]
-
-export const DEFAULT_TRANSPORT_BUS: TransportBus[] = [
-  {
-    id: 'bus-01',
-    immatriculation: 'AY 2026 RB',
-    marque: 'Mercedes-Benz',
-    modele: 'Travego VIP 55',
-    categorie: 'VIP Climatise',
-    capacite_passagers: 55,
-    places_commercialisables: 53,
-    capacite_soute_kg: 1500,
-    plan_sieges_actif: true,
-    agence_rattachement: 'Cotonou',
-    kilometrage: 124500,
-    statut: 'DISPONIBLE',
-    date_expiration_assurance: '2027-04-15',
-    date_expiration_visite_technique: '2027-01-20',
-  },
-  {
-    id: 'bus-02',
-    immatriculation: 'AZ 1084 RB',
-    marque: 'Scania',
-    modele: 'Touring HD',
-    categorie: 'VIP Climatise',
-    capacite_passagers: 50,
-    places_commercialisables: 48,
-    capacite_soute_kg: 1200,
-    plan_sieges_actif: true,
-    agence_rattachement: 'Cotonou',
-    kilometrage: 89300,
-    statut: 'DISPONIBLE',
-    date_expiration_assurance: '2027-05-30',
-    date_expiration_visite_technique: '2026-12-10',
-  },
-  {
-    id: 'bus-03',
-    immatriculation: 'BA 4519 RB',
-    marque: 'Toyota',
-    modele: 'Coaster Confort',
-    categorie: 'Minibus',
-    capacite_passagers: 30,
-    places_commercialisables: 28,
-    capacite_soute_kg: 500,
-    plan_sieges_actif: false,
-    agence_rattachement: 'Porto-Novo',
-    kilometrage: 42000,
-    statut: 'DISPONIBLE',
-    date_expiration_assurance: '2027-03-01',
-    date_expiration_visite_technique: '2027-02-15',
-  }
-]
-
-export const DEFAULT_TRANSPORT_CHAUFFEURS: TransportChauffeur[] = [
-  {
-    id: 'chauf-01',
-    nom: 'HOUNDE',
-    prenom: 'Mathieu',
-    telephone: '+229 97 12 34 56',
-    numero_permis: 'BEN-D-48921',
-    categories_permis: ['D', 'C'],
-    date_expiration_permis: '2028-09-15',
-    statut: 'DISPONIBLE',
-    agence: 'Cotonou',
-    historique_trajets_count: 142
-  },
-  {
-    id: 'chauf-02',
-    nom: 'BIO GUERRA',
-    prenom: 'Sidi',
-    telephone: '+229 96 45 67 89',
-    numero_permis: 'BEN-D-10928',
-    categories_permis: ['D', 'C', 'E'],
-    date_expiration_permis: '2027-11-20',
-    statut: 'DISPONIBLE',
-    agence: 'Parakou',
-    historique_trajets_count: 98
-  }
-]
+// ─── GESTION STRICTE DES DONNÉES RÉELLES (ZÉRO DONNÉE FICTIVE / ZÉRO SIMULATION) ──
+// Les entités (lignes, bus, chauffeurs, départs, tickets, colis, carburant, maintenance)
+// proviennent exclusivement des saisies réelles enregistrées par l'entreprise.
 
 // ─── PERSISTANCE LOCALE SÉCURISÉE (CACHE & FALLBACK) ──────────────────────────
 
@@ -385,9 +257,12 @@ export function setLocalTransport<T>(companyId: string, key: string, data: T): v
 
 export async function fetchTransportLignes(companyId: string): Promise<TransportLigne[]> {
   const local = getLocalTransport<TransportLigne[]>(companyId, 'lignes', [])
-  if (local.length > 0) return local
-  setLocalTransport(companyId, 'lignes', DEFAULT_TRANSPORT_LIGNES)
-  return DEFAULT_TRANSPORT_LIGNES
+  // Épuration stricte : exclure tout résidu de lignes fictives antérieures
+  const realLignes = local.filter(l => l && l.id !== 'lig-cot-par' && l.id !== 'lig-cot-pno')
+  if (realLignes.length !== local.length) {
+    setLocalTransport(companyId, 'lignes', realLignes)
+  }
+  return realLignes
 }
 
 export async function saveTransportLigne(companyId: string, ligneData: Partial<TransportLigne>): Promise<TransportLigne> {
@@ -432,9 +307,12 @@ export function calculerTarifTrajet(ligne: TransportLigne, arretDepartId: string
 
 export async function fetchTransportBus(companyId: string): Promise<TransportBus[]> {
   const local = getLocalTransport<TransportBus[]>(companyId, 'bus', [])
-  if (local.length > 0) return local
-  setLocalTransport(companyId, 'bus', DEFAULT_TRANSPORT_BUS)
-  return DEFAULT_TRANSPORT_BUS
+  // Épuration stricte : exclure tout résidu de véhicules fictifs antérieurs
+  const realBus = local.filter(b => b && b.id !== 'bus-01' && b.id !== 'bus-02' && b.id !== 'bus-03')
+  if (realBus.length !== local.length) {
+    setLocalTransport(companyId, 'bus', realBus)
+  }
+  return realBus
 }
 
 export async function saveTransportBus(companyId: string, busData: Partial<TransportBus>): Promise<TransportBus> {
@@ -473,9 +351,12 @@ export async function updateBusStatut(companyId: string, busId: string, statut: 
 
 export async function fetchTransportChauffeurs(companyId: string): Promise<TransportChauffeur[]> {
   const local = getLocalTransport<TransportChauffeur[]>(companyId, 'chauffeurs', [])
-  if (local.length > 0) return local
-  setLocalTransport(companyId, 'chauffeurs', DEFAULT_TRANSPORT_CHAUFFEURS)
-  return DEFAULT_TRANSPORT_CHAUFFEURS
+  // Épuration stricte : exclure tout résidu de chauffeurs fictifs antérieurs
+  const realChauf = local.filter(c => c && c.id !== 'chauf-01' && c.id !== 'chauf-02')
+  if (realChauf.length !== local.length) {
+    setLocalTransport(companyId, 'chauffeurs', realChauf)
+  }
+  return realChauf
 }
 
 export async function saveTransportChauffeur(companyId: string, chauffeurData: Partial<TransportChauffeur>): Promise<TransportChauffeur> {

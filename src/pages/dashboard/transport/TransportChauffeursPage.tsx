@@ -96,12 +96,12 @@ export const TransportChauffeursPage: React.FC = () => {
             setFormChauf({
               nom: '',
               prenom: '',
-              telephone: '+229 97 00 00 00',
-              numero_permis: `BEN-D-${Math.floor(10000 + Math.random() * 90000)}`,
-              categories_permis: ['D', 'C'],
-              date_expiration_permis: '2028-12-31',
+              telephone: '',
+              numero_permis: '',
+              categories_permis: ['D'],
+              date_expiration_permis: '',
               statut: 'DISPONIBLE',
-              agence: 'Cotonou',
+              agence: '',
             })
             setShowModal(true)
           }}

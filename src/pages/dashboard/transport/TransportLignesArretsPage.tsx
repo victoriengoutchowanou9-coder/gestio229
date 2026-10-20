@@ -204,12 +204,12 @@ export const TransportLignesArretsPage: React.FC = () => {
         <button
           onClick={() => {
             setFormLigne({
-              code_ligne: `L-LIG-${Math.floor(100 + Math.random() * 900)}`,
+              code_ligne: '',
               nom_ligne: '',
               ville_origine: '',
               ville_destination: '',
-              distance_km: 150,
-              duree_estimee_minutes: 180,
+              distance_km: 0,
+              duree_estimee_minutes: 0,
               description: '',
             })
             setShowModalLigne(true)

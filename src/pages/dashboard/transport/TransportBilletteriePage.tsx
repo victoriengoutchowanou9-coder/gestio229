@@ -46,7 +46,7 @@ export const TransportBilletteriePage: React.FC = () => {
     passagerTelephone: '',
     passagerPieceId: '',
     siegeNumero: 1,
-    tarif: 8500,
+    tarif: 0,
     modePaiement: 'ESPECES' as TransportTicket['mode_paiement'],
     estReservationSeule: false,
   })

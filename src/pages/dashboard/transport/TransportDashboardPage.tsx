@@ -47,7 +47,7 @@ export const TransportDashboardPage: React.FC = () => {
       const allDeparts = await transportService.fetchTransportDeparts(companyId)
       const todayStr = new Date().toISOString().slice(0, 10)
       const todays = allDeparts.filter(d => d.date_depart === todayStr).slice(0, 6)
-      setDepartsDuJour(todays.length > 0 ? todays : allDeparts.slice(0, 6))
+      setDepartsDuJour(todays)
 
       const allTickets = await transportService.fetchTransportTickets(companyId)
       setDerniersTickets(allTickets.slice(0, 5))
