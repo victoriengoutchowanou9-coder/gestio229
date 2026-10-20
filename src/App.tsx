@@ -89,9 +89,19 @@ const SupermarcheFidelitePage   = mod('fidelite_clients')
 const SupermarcheAlertesPage    = mod('alertes_pilotage')
 const SupermarcheComparatifPage = mod('comparaison_fournisseurs')
 const SupermarchePerfCaissiersPage = mod('performance_caissiers')
-// Pharmacie
-const OrdonnancesPage        = mod('ordonnances')
-const LotsPeremptionPage     = mod('lots_peremption')
+// Pharmacie & Dépôt Médical (ERP Dédié)
+const PharmacieDashboardPage             = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieDashboardPage'))
+const PharmacieCatalogueProduitsPage     = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieCatalogueProduitsPage'))
+const PharmacieStocksLotsPage            = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieStocksLotsPage'))
+const PharmacieVenteComptoirPage         = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieVenteComptoirPage'))
+const PharmacieOrdonnancesPage           = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieOrdonnancesPage'))
+const PharmacieRappelsVigilancePage       = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieRappelsVigilancePage'))
+const PharmacieInventairesTransfertsPage = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieInventairesTransfertsPage'))
+const PharmacieFournisseursCommandesPage = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieFournisseursCommandesPage'))
+const PharmacieRapportsPage              = safeLazy(() => import('./pages/dashboard/pharmacie/PharmacieRapportsPage'))
+
+const OrdonnancesPage    = PharmacieOrdonnancesPage
+const LotsPeremptionPage = PharmacieStocksLotsPage
 // Station-Service & Hydrocarbures (ERP dédié)
 const PompesPage             = safeLazy(() => import('./pages/dashboard/station/PompesCuvesPage'))
 const PostesPage             = safeLazy(() => import('./pages/dashboard/station/PostesPompistesPage'))
@@ -376,6 +386,9 @@ const SectorAwareDashboard: React.FC = () => {
   if (clean === 'flotte-geolocalisation' || clean === 'flotte' || clean === 'geolocalisation' || clean === 'gps' || clean === 'geoloc') {
     return <FlotteSectorDispatcher />
   }
+  if (clean === 'pharmacie' || clean === 'depot-medical' || clean === 'pharmacie-depot') {
+    return <PharmacieDashboardPage />
+  }
   return <DashboardPage />
 }
 
@@ -389,6 +402,9 @@ const SectorAwareVentes: React.FC = () => {
   if (clean === 'supermarche' || clean === 'superette' || clean === 'supermarche-alimentation' || clean === 'supérette') {
     return <SupermarcheCaissePage />
   }
+  if (clean === 'pharmacie' || clean === 'depot-medical' || clean === 'pharmacie-depot') {
+    return <PharmacieVenteComptoirPage />
+  }
   return <POSPage />
 }
 
@@ -398,6 +414,9 @@ const SectorAwareStocks: React.FC = () => {
   const clean = (sectorSlug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
   if (clean === 'imprimerie' || clean === 'impression') {
     return <ImprimerieMatieresPage />
+  }
+  if (clean === 'pharmacie' || clean === 'depot-medical' || clean === 'pharmacie-depot') {
+    return <PharmacieStocksLotsPage />
   }
   return <StocksPage />
 }
@@ -412,6 +431,9 @@ const SectorAwareReporting: React.FC = () => {
   if (clean === 'restaurant' || clean === 'bar-restaurant-maquis' || clean === 'bar' || clean === 'maquis' || clean === 'fastfood') {
     return <RestaurantReportingPage />
   }
+  if (clean === 'pharmacie' || clean === 'depot-medical' || clean === 'pharmacie-depot') {
+    return <PharmacieRapportsPage />
+  }
   return <ReportingPage />
 }
 
@@ -421,6 +443,9 @@ const SectorAwareFournisseurs: React.FC = () => {
   const clean = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
   if (clean === 'microfinance' || clean === 'microfinance-tontine' || clean === 'tontine') {
     return <MicrofinanceAchatsPage />
+  }
+  if (clean === 'pharmacie' || clean === 'depot-medical' || clean === 'pharmacie-depot') {
+    return <PharmacieFournisseursCommandesPage />
   }
   return <FournisseursPage />
 }
@@ -736,9 +761,13 @@ const AppRoutes: React.FC = () => {
         <Route path="pilotage-alertes"        element={<ModuleGuard moduleId="alertes_pilotage"><SupermarcheAlertesPage /></ModuleGuard>} />
         <Route path="comparatif-fournisseurs" element={<ModuleGuard moduleId="comparaison_fournisseurs"><SupermarcheComparatifPage /></ModuleGuard>} />
         <Route path="performance-caissiers"   element={<ModuleGuard moduleId="performance_caissiers"><SupermarchePerfCaissiersPage /></ModuleGuard>} />
-        {/* ── Modules Pharmacie ── */}
-        <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
-        <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
+        {/* ── Modules Pharmacie & Dépôt Médical ── */}
+        <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><PharmacieOrdonnancesPage /></ModuleGuard>} />
+        <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><PharmacieStocksLotsPage /></ModuleGuard>} />
+        <Route path="catalogue"   element={<ModuleGuard moduleId="catalogue_pharmacie"><PharmacieCatalogueProduitsPage /></ModuleGuard>} />
+        <Route path="inventaires" element={<ModuleGuard moduleId="inventaires_pharmacie"><PharmacieInventairesTransfertsPage /></ModuleGuard>} />
+        <Route path="vigilance"   element={<ModuleGuard moduleId="vigilance_pharmacie"><PharmacieRappelsVigilancePage /></ModuleGuard>} />
+        <Route path="commandes"   element={<ModuleGuard moduleId="commandes_pharmacie"><PharmacieFournisseursCommandesPage /></ModuleGuard>} />
         {/* ── Modules Station-Service & Hydrocarbures ── */}
         <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
         <Route path="cuves"       element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
@@ -913,9 +942,13 @@ const AppRoutes: React.FC = () => {
         <Route path="pilotage-alertes"        element={<ModuleGuard moduleId="alertes_pilotage"><SupermarcheAlertesPage /></ModuleGuard>} />
         <Route path="comparatif-fournisseurs" element={<ModuleGuard moduleId="comparaison_fournisseurs"><SupermarcheComparatifPage /></ModuleGuard>} />
         <Route path="performance-caissiers"   element={<ModuleGuard moduleId="performance_caissiers"><SupermarchePerfCaissiersPage /></ModuleGuard>} />
-        {/* ── Modules Pharmacie ── */}
-        <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><OrdonnancesPage /></ModuleGuard>} />
-        <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><LotsPeremptionPage /></ModuleGuard>} />
+        {/* ── Modules Pharmacie & Dépôt Médical ── */}
+        <Route path="ordonnances" element={<ModuleGuard moduleId="ordonnances"><PharmacieOrdonnancesPage /></ModuleGuard>} />
+        <Route path="lots"        element={<ModuleGuard moduleId="lots_peremption"><PharmacieStocksLotsPage /></ModuleGuard>} />
+        <Route path="catalogue"   element={<ModuleGuard moduleId="catalogue_pharmacie"><PharmacieCatalogueProduitsPage /></ModuleGuard>} />
+        <Route path="inventaires" element={<ModuleGuard moduleId="inventaires_pharmacie"><PharmacieInventairesTransfertsPage /></ModuleGuard>} />
+        <Route path="vigilance"   element={<ModuleGuard moduleId="vigilance_pharmacie"><PharmacieRappelsVigilancePage /></ModuleGuard>} />
+        <Route path="commandes"   element={<ModuleGuard moduleId="commandes_pharmacie"><PharmacieFournisseursCommandesPage /></ModuleGuard>} />
         {/* ── Modules Station-Service & Hydrocarbures ── */}
         <Route path="pompes"      element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
         <Route path="cuves"       element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />

@@ -643,6 +643,43 @@ export const SectorLoader = {
       return { grouped, flat: transportNav }
     }
 
+    // ── Menu spécifique Pharmacie & Dépôt Médical ─────────────────────────────
+    const isPharmacie = cleanSlug === 'pharmacie' || cleanSlug === 'depot-medical' || cleanSlug === 'pharmacie-depot'
+    if (isPharmacie) {
+      const pharmacieNav: NavItem[] = [
+        // VUE D'ENSEMBLE
+        { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
+
+        // VENTES & DÉLIVRANCE
+        { id: 'ventes', label: 'Vente & POS (Comptoir)', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
+        { id: 'ordonnances', label: 'Ordonnances & Prescriptions', icon: 'FileText', href: `${prefix}/ordonnances`, group: 'commercial' },
+        { id: 'caisse', label: 'Caisse Officine', icon: 'Wallet', href: `${prefix}/caisse`, group: 'commercial' },
+
+        // PRODUITS, STOCKS & TRAÇABILITÉ
+        { id: 'catalogue_pharmacie', label: 'Catalogue & DCI', icon: 'Pill', href: `${prefix}/catalogue`, group: 'gestion' },
+        { id: 'stocks', label: 'Stocks & Lots (FEFO)', icon: 'Layers', href: `${prefix}/lots`, group: 'gestion' },
+        { id: 'inventaires_pharmacie', label: 'Multi-Dépôts & Inventaires', icon: 'ClipboardList', href: `${prefix}/inventaires`, group: 'gestion' },
+        { id: 'vigilance_pharmacie', label: 'Rappels & Pharmacovigilance', icon: 'ShieldAlert', href: `${prefix}/vigilance`, group: 'gestion' },
+        { id: 'fournisseurs', label: 'Fournisseurs & Commandes', icon: 'Truck', href: `${prefix}/commandes`, group: 'gestion' },
+
+        // FINANCES & TIERS
+        { id: 'finances', label: 'Trésorerie', icon: 'Landmark', href: `${prefix}/tresorerie`, group: 'finance' },
+        { id: 'clients', label: 'Clients & Assurances', icon: 'Users', href: `${prefix}/clients`, group: 'finance' },
+        { id: 'depenses', label: 'Dépenses', icon: 'Receipt', href: `${prefix}/depenses`, group: 'finance' },
+        { id: 'syscohada', label: 'Comptabilité SYSCOHADA', icon: 'BookOpen', href: `${prefix}/syscohada`, group: 'finance' },
+
+        // PILOTAGE & ADMINISTRATION
+        { id: 'rapports', label: 'Rapports & Rentabilité', icon: 'BarChart3', href: `${prefix}/reporting`, group: 'admin' },
+        { id: 'configuration', label: 'Configuration Officine', icon: 'Settings', href: `${prefix}/configuration`, group: 'admin' },
+        { id: 'utilisateurs', label: 'Gestion Utilisateurs', icon: 'Users', href: `${prefix}/utilisateurs`, group: 'admin' },
+        { id: 'audit', label: "Journal d'Audit", icon: 'Shield', href: `${prefix}/journal-audit`, group: 'admin' },
+        { id: 'abonnement', label: 'Mon Abonnement', icon: 'CreditCard', href: `${prefix}/abonnement`, group: 'admin' },
+      ]
+
+      const grouped = groupNavItems(pharmacieNav)
+      return { grouped, flat: pharmacieNav }
+    }
+
     // ── Menu spécifique Imprimerie & Sérigraphie (Centre d'Impression) ─────────
     const isImprimerie = cleanSlug === 'imprimerie' || cleanSlug === 'impression'
     if (isImprimerie) {
