@@ -198,6 +198,16 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
   // MODULES SPÉCIFIQUES — STATION-SERVICE
   // ══════════════════════════════════════════════════════════════════════
 
+  'vente_distributeur': {
+    id: 'vente_distributeur',
+    label: 'Vente Distributeur (Carburants)',
+    icon: 'Fuel',
+    path: 'vente-distributeur',
+    isCommon: false,
+    sectorSlugs: ['station-service'],
+    group: 'commercial',
+  },
+
   'pompes_cuves': {
     id: 'pompes_cuves',
     label: 'Pompes & Cuves',

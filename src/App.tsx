@@ -98,6 +98,7 @@ const PostesPage             = safeLazy(() => import('./pages/dashboard/station/
 const FlottesPage            = safeLazy(() => import('./pages/dashboard/station/FlottesClientsPage'))
 const AnomaliesPage          = safeLazy(() => import('./pages/dashboard/station/AnomaliesControlesPage'))
 const StationDashboardPage   = safeLazy(() => import('./pages/dashboard/station/StationDashboardPage'))
+const VenteDistributeurPage  = safeLazy(() => import('./pages/dashboard/station/VenteDistributeurPage'))
 const LubrifiantsPage        = mod('lubrifiants')
 // Bar, Restaurant, Maquis & Fast-Food (ERP dédié)
 const RestaurantDashboardPage = safeLazy(() => import('./pages/dashboard/restaurant/RestaurantDashboardPage'))
@@ -691,6 +692,8 @@ const AppRoutes: React.FC = () => {
         <Route path="cuves"       element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
         <Route path="jaugeages"   element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
         <Route path="receptions"  element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="vente-distributeur" element={<ModuleGuard moduleId="ventes"><VenteDistributeurPage /></ModuleGuard>} />
+        <Route path="distributeur" element={<ModuleGuard moduleId="ventes"><VenteDistributeurPage /></ModuleGuard>} />
         <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
         <Route path="flottes"     element={<ModuleGuard moduleId="flottes_vehicules"><FlottesPage /></ModuleGuard>} />
         <Route path="anomalies"   element={<ModuleGuard moduleId="anomalies_controles"><AnomaliesPage /></ModuleGuard>} />
@@ -853,6 +856,8 @@ const AppRoutes: React.FC = () => {
         <Route path="cuves"       element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
         <Route path="jaugeages"   element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
         <Route path="receptions"  element={<ModuleGuard moduleId="pompes_cuves"><PompesPage /></ModuleGuard>} />
+        <Route path="vente-distributeur" element={<ModuleGuard moduleId="ventes"><VenteDistributeurPage /></ModuleGuard>} />
+        <Route path="distributeur" element={<ModuleGuard moduleId="ventes"><VenteDistributeurPage /></ModuleGuard>} />
         <Route path="postes"      element={<ModuleGuard moduleId="postes_pompiste"><PostesPage /></ModuleGuard>} />
         <Route path="flottes"     element={<ModuleGuard moduleId="flottes_vehicules"><FlottesPage /></ModuleGuard>} />
         <Route path="anomalies"   element={<ModuleGuard moduleId="anomalies_controles"><AnomaliesPage /></ModuleGuard>} />

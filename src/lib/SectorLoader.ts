@@ -531,7 +531,8 @@ export const SectorLoader = {
         // Aperçu
         { id: 'dashboard', label: 'Tableau de bord', icon: 'LayoutDashboard', href: `${prefix}/tableau-bord`, group: 'apercu' },
         // Exploitation
-        { id: 'ventes', label: 'Vente & Distribution', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
+        { id: 'vente_distributeur', label: 'Vente Distributeur (Carburants)', icon: 'Fuel', href: `${prefix}/vente-distributeur`, group: 'commercial' },
+        { id: 'ventes', label: 'Vente en Panier (Lubrifiants & Boutique)', icon: 'ShoppingCart', href: `${prefix}/vente-pos`, group: 'commercial' },
         { id: 'pompes_cuves', label: 'Pompes & Cuves', icon: 'Fuel', href: `${prefix}/pompes`, group: 'commercial' },
         { id: 'postes_pompiste', label: 'Postes Pompistes', icon: 'UserCog', href: `${prefix}/postes`, group: 'commercial' },
         { id: 'lubrifiants', label: 'Lubrifiants & Produits', icon: 'Droplets', href: `${prefix}/lubrifiants`, group: 'commercial' },

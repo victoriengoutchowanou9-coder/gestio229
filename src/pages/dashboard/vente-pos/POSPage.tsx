@@ -5,14 +5,15 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
-import { useParams, Link, useLocation } from 'react-router-dom'
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom'
 import {
   ShoppingCart, Search, RefreshCw, Trash2, UserCheck, Check,
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
   ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft, Tag,
-  CheckCircle2, Wine, ChefHat, Edit3, XCircle
+  CheckCircle2, Wine, ChefHat, Edit3, XCircle, Fuel
 } from 'lucide-react'
+import { isFuelProduct } from '../../../utils/stationFuelHelper'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { supabase } from '../../../lib/supabase'
@@ -42,7 +43,6 @@ import {
   calculateLinePricing
 } from '../../../services/brasseriePricingService'
 import clsx from 'clsx'
-import { StationFuelDispenser } from '../station/StationFuelDispenser'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
 import { destockerMatieresPlat } from '../../../services/restaurantService'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
@@ -220,6 +220,7 @@ export const POSPage: React.FC = () => {
   const [recipeProducts, setRecipeProducts] = useState<Product[]>([])
   const [pendingOrders, setPendingOrders] = useState<any[]>([])
   const location = useLocation()
+  const navigate = useNavigate()
 
   // Navigation interne
   const [activeTab, setActiveTab] = useState<'pos' | 'historique'>('pos')
@@ -999,6 +1000,10 @@ export const POSPage: React.FC = () => {
 
   const handleConfirmAddToCart = () => {
     if (!selectedProductForDetail) return
+    if (isStation && isFuelProduct(selectedProductForDetail)) {
+      toast.error('Carburant non autorisé en panier', 'Les ventes de carburant doivent être traitées exclusivement via le module Vente Distributeur.')
+      return
+    }
     const qty = Number(detailQty)
     if (isNaN(qty) || qty <= 0) {
       toast.error('Quantité invalide', 'Veuillez saisir une quantité supérieure à 0.')
@@ -1147,6 +1152,10 @@ export const POSPage: React.FC = () => {
   }
 
   const handleDirectAddToCart = (item: { product: any; qty: number; unitPrice: number; discount: number }) => {
+    if (isStation && isFuelProduct(item.product)) {
+      toast.error('Carburant non autorisé en panier', 'Les ventes de carburant doivent être traitées exclusivement via le module Vente Distributeur.')
+      return
+    }
     // Si produit recette : autoriser l'ajout (consommation cuisine lors de la validation effective)
     if (item.product.is_recipe) {
       if (Number(item.product.selling_price) <= 0) {
@@ -2731,6 +2740,10 @@ export const POSPage: React.FC = () => {
   const filteredProducts = useMemo(() => {
     if (!isRestaurant) {
       return products.filter((p) => {
+        // En secteur station-service, AUCUN carburant (Essence Super, Gasoil, Pétrole) ne doit apparaître dans la Vente en Panier
+        if (isStation && isFuelProduct(p)) {
+          return false
+        }
         if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
           return false
         }
@@ -2943,7 +2956,36 @@ export const POSPage: React.FC = () => {
           )}
 
           {isStation && (
-            <StationFuelDispenser onAddToCart={handleDirectAddToCart} />
+            <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-slate-800 rounded-3xl p-4 mb-4 shadow-lg flex flex-col sm:flex-row items-center justify-between gap-3 text-white">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-amber-500/20 border border-amber-500/30 flex items-center justify-center text-amber-400">
+                  <ShoppingCart className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-sm text-white">Vente en Panier</span>
+                    <span className="bg-indigo-500/20 text-indigo-300 text-[10px] font-bold px-2.5 py-0.5 rounded-full border border-indigo-500/30">
+                      Module 2 : Lubrifiants & Boutique
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Huiles moteur, graisses, liquides, filtres & accessoires • Les carburants sont vendus exclusivement via le distributeur.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => navigate(`/app/${currentSectorSlug}/vente-distributeur`)}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-amber-500 hover:bg-amber-400 text-slate-950 font-black rounded-xl text-xs transition shadow-md shadow-amber-500/20"
+                >
+                  <Fuel className="w-4 h-4" />
+                  <span>Basculer vers Vente Distributeur (Carburants)</span>
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
           )}
           {isRestaurant && (
             <RestaurantOrderWidget
