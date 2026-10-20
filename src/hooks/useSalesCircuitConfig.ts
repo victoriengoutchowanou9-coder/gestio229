@@ -1,6 +1,6 @@
 // =============================================================================
 // GESTIO 229 SaaS — Hook useSalesCircuitConfig
-// Gère la configuration du circuit de vente et d'encaissement par entreprise
+// Gère la configuration du circuit de vente et d'encaissement PAR SECTEUR
 // =============================================================================
 
 import { useState, useEffect, useCallback } from 'react'
@@ -10,18 +10,23 @@ import {
   getSalesCircuitMode,
   setSalesCircuitMode,
   getPendingBonsCount,
+  isSectorCircuitSeparated,
+  normalizeCircuitSectorSlug,
   SalesCircuitMode
 } from '../services/salesCircuitService'
 
-export function useSalesCircuitConfig() {
+export function useSalesCircuitConfig(sectorSlugOverride?: string) {
   const { company } = useAuthStore()
-  const { companyId } = useTenant()
+  const { companyId, sectorSlug: tenantSectorSlug, currentSectorSlug: activeTenantSlug } = useTenant()
   const activeCompanyId = companyId || company?.id || ''
+
+  const resolvedSector = sectorSlugOverride || activeTenantSlug || tenantSectorSlug || ''
+  const cleanSectorSlug = normalizeCircuitSectorSlug(resolvedSector)
 
   const [circuitMode, setCircuitMode] = useState<SalesCircuitMode>(() => {
     if (!activeCompanyId) return 'INTEGRE'
-    const stored = (company as any)?.sales_circuit_mode || localStorage.getItem(`gestio229_sales_circuit_${activeCompanyId}`)
-    return (stored === 'SEPARE_VENDEUR_CAISSIERE') ? 'SEPARE_VENDEUR_CAISSIERE' : 'INTEGRE'
+    const isSep = isSectorCircuitSeparated(cleanSectorSlug, company)
+    return isSep ? 'SEPARE_VENDEUR_CAISSIERE' : 'INTEGRE'
   })
 
   const [pendingCount, setPendingCount] = useState<number>(0)
@@ -36,30 +41,33 @@ export function useSalesCircuitConfig() {
     try {
       setLoading(true)
       const [mode, count] = await Promise.all([
-        getSalesCircuitMode(activeCompanyId),
-        getPendingBonsCount(activeCompanyId)
+        getSalesCircuitMode(activeCompanyId, cleanSectorSlug),
+        getPendingBonsCount(activeCompanyId, cleanSectorSlug)
       ])
       setCircuitMode(mode)
       setPendingCount(count)
     } catch (err) {
-      console.warn('[useSalesCircuitConfig] Erreur chargement configuration:', err)
+      console.warn('[useSalesCircuitConfig] Erreur chargement configuration secteur:', err)
     } finally {
       setLoading(false)
     }
-  }, [activeCompanyId])
+  }, [activeCompanyId, cleanSectorSlug])
 
   useEffect(() => {
     loadConfig()
 
     const handleCircuitChange = (e: any) => {
-      if (e?.detail?.companyId === activeCompanyId && e?.detail?.mode) {
+      const matchComp = e?.detail?.companyId === activeCompanyId
+      const targetSec = e?.detail?.sectorSlug
+      const matchSec = !targetSec || targetSec === cleanSectorSlug || !cleanSectorSlug
+      if (matchComp && matchSec && e?.detail?.mode) {
         setCircuitMode(e.detail.mode)
       }
     }
 
     const handleBonEvent = () => {
       if (activeCompanyId) {
-        getPendingBonsCount(activeCompanyId).then(setPendingCount).catch(() => {})
+        getPendingBonsCount(activeCompanyId, cleanSectorSlug).then(setPendingCount).catch(() => {})
       }
     }
 
@@ -74,16 +82,16 @@ export function useSalesCircuitConfig() {
       window.removeEventListener('gestio:bon_encaisse', handleBonEvent)
       window.removeEventListener('gestio:bon_annule', handleBonEvent)
     }
-  }, [loadConfig, activeCompanyId])
+  }, [loadConfig, activeCompanyId, cleanSectorSlug])
 
   const selectMode = useCallback(async (newMode: SalesCircuitMode): Promise<{ success: boolean; error?: string }> => {
     if (!activeCompanyId) return { success: false, error: 'Entreprise non définie' }
-    const res = await setSalesCircuitMode(activeCompanyId, newMode)
+    const res = await setSalesCircuitMode(activeCompanyId, newMode, cleanSectorSlug)
     if (res.success) {
       setCircuitMode(newMode)
     }
     return res
-  }, [activeCompanyId])
+  }, [activeCompanyId, cleanSectorSlug])
 
   return {
     circuitMode,
@@ -92,6 +100,7 @@ export function useSalesCircuitConfig() {
     pendingCount,
     loading,
     selectMode,
-    reload: loadConfig
+    reload: loadConfig,
+    currentSectorSlug: cleanSectorSlug
   }
 }

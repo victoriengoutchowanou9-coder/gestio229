@@ -44,38 +44,111 @@ export interface PendingBon {
   stock_already_deducted?: boolean
 }
 
-// ─── 1. GESTION PERSISTANTE DU MODE DE CIRCUIT PAR ENTREPRISE ────────────────
+// ─── 1. GESTION PERSISTANTE DU MODE DE CIRCUIT PAR SECTEUR & ENTREPRISE ────────
 
 const CIRCUIT_STORAGE_PREFIX = 'gestio229_sales_circuit_'
 
 /**
- * Récupère le mode de circuit de vente configuré pour l'entreprise
- * Priorité : Supabase (companies.sales_circuit_mode) -> localStorage -> Défaut 'INTEGRE'
+ * Normalise un slug de secteur pour cohérence d'accès
  */
-export async function getSalesCircuitMode(companyId: string): Promise<SalesCircuitMode> {
+export function normalizeCircuitSectorSlug(slug?: string): string {
+  if (!slug) return 'general'
+  return slug.toLowerCase().trim().replace(/^sec-/, '')
+}
+
+/**
+ * Détermine de manière synchrone si un secteur donné fonctionne en Mode Séparé (Mode 2)
+ */
+export function isSectorCircuitSeparated(sectorSlug?: string, company?: any): boolean {
+  if (!sectorSlug) return false
+  const clean = normalizeCircuitSectorSlug(sectorSlug)
+  try {
+    if (typeof window !== 'undefined') {
+      const companyId = company?.id
+      // 1. Clé localStorage spécifique au secteur
+      if (companyId) {
+        const localSectorKey = `${CIRCUIT_STORAGE_PREFIX}${companyId}_${clean}`
+        const localVal = localStorage.getItem(localSectorKey)
+        if (localVal === 'SEPARE_VENDEUR_CAISSIERE') return true
+        if (localVal === 'INTEGRE') return false
+      }
+
+      // 2. Recherche parmi toutes les clés locales pour ce secteur
+      const allKeys = Object.keys(localStorage)
+      const foundKey = allKeys.find(k => k.startsWith(CIRCUIT_STORAGE_PREFIX) && k.endsWith(`_${clean}`))
+      if (foundKey) {
+        const val = localStorage.getItem(foundKey)
+        if (val === 'SEPARE_VENDEUR_CAISSIERE') return true
+        if (val === 'INTEGRE') return false
+      }
+    }
+
+    // 3. Vérification dans l'objet sales_circuit_mode_by_sector de l'entreprise
+    const bySector = company?.sales_circuit_mode_by_sector
+    if (bySector && typeof bySector === 'object') {
+      if (bySector[clean] === 'SEPARE_VENDEUR_CAISSIERE') return true
+      if (bySector[clean] === 'INTEGRE') return false
+    }
+
+    // 4. Fallback sur le mode global de l'entreprise si non spécifié pour ce secteur
+    if (company?.sales_circuit_mode === 'SEPARE_VENDEUR_CAISSIERE') {
+      return true
+    }
+  } catch {}
+  return false
+}
+
+/**
+ * Récupère le mode de circuit de vente configuré pour un secteur spécifique d'une entreprise
+ * Priorité : Supabase (companies.sales_circuit_mode_by_sector[sector]) -> localStorage spécifique -> Supabase global -> Défaut 'INTEGRE'
+ */
+export async function getSalesCircuitMode(
+  companyId: string,
+  sectorSlug?: string
+): Promise<SalesCircuitMode> {
   if (!companyId) return 'INTEGRE'
+  const cleanSector = sectorSlug ? normalizeCircuitSectorSlug(sectorSlug) : ''
 
   try {
     const { data, error } = await supabase
       .from('companies')
-      .select('sales_circuit_mode' as any)
+      .select('sales_circuit_mode, sales_circuit_mode_by_sector' as any)
       .eq('id', companyId)
       .maybeSingle()
 
-    if (!error && (data as any)?.sales_circuit_mode) {
-      const mode = (data as any).sales_circuit_mode as SalesCircuitMode
-      if (mode === 'INTEGRE' || mode === 'SEPARE_VENDEUR_CAISSIERE') {
-        try {
-          localStorage.setItem(`${CIRCUIT_STORAGE_PREFIX}${companyId}`, mode)
-        } catch (_) {}
-        return mode
+    if (!error && data) {
+      const bySector = (data as any)?.sales_circuit_mode_by_sector
+      if (cleanSector && bySector && typeof bySector === 'object' && bySector[cleanSector]) {
+        const mode = bySector[cleanSector] as SalesCircuitMode
+        if (mode === 'INTEGRE' || mode === 'SEPARE_VENDEUR_CAISSIERE') {
+          try {
+            localStorage.setItem(`${CIRCUIT_STORAGE_PREFIX}${companyId}_${cleanSector}`, mode)
+          } catch (_) {}
+          return mode
+        }
+      }
+
+      // Si pas de config spécifique pour ce secteur, vérifier le global
+      const globalMode = (data as any)?.sales_circuit_mode as SalesCircuitMode
+      if (globalMode === 'INTEGRE' || globalMode === 'SEPARE_VENDEUR_CAISSIERE') {
+        return globalMode
       }
     }
   } catch (err) {
-    // Colonne inexistante en base ou problème réseau, fallback local
-    console.warn('[salesCircuitService] Fallback lecture mode circuit:', err)
+    console.warn('[salesCircuitService] Fallback lecture mode circuit secteur:', err)
   }
 
+  // Fallback localStorage spécifique au secteur
+  if (cleanSector) {
+    try {
+      const localSector = localStorage.getItem(`${CIRCUIT_STORAGE_PREFIX}${companyId}_${cleanSector}`)
+      if (localSector === 'INTEGRE' || localSector === 'SEPARE_VENDEUR_CAISSIERE') {
+        return localSector
+      }
+    } catch (_) {}
+  }
+
+  // Fallback localStorage global entreprise
   try {
     const local = localStorage.getItem(`${CIRCUIT_STORAGE_PREFIX}${companyId}`)
     if (local === 'INTEGRE' || local === 'SEPARE_VENDEUR_CAISSIERE') {
@@ -87,33 +160,72 @@ export async function getSalesCircuitMode(companyId: string): Promise<SalesCircu
 }
 
 /**
- * Enregistre le choix du mode de circuit pour l'entreprise
+ * Enregistre le choix du mode de circuit pour un secteur spécifique d'une entreprise
+ * L'activation dans un secteur ne modifie jamais automatiquement les autres secteurs !
  */
 export async function setSalesCircuitMode(
   companyId: string,
-  mode: SalesCircuitMode
+  mode: SalesCircuitMode,
+  sectorSlug?: string
 ): Promise<{ success: boolean; error?: string }> {
   if (!companyId) return { success: false, error: 'Identifiant entreprise manquant' }
+  const cleanSector = sectorSlug ? normalizeCircuitSectorSlug(sectorSlug) : ''
 
+  // 1. Sauvegarde locale immédiate
   try {
+    if (cleanSector) {
+      localStorage.setItem(`${CIRCUIT_STORAGE_PREFIX}${companyId}_${cleanSector}`, mode)
+    }
+    // Conserver aussi pour compatibilité globale si premier secteur
     localStorage.setItem(`${CIRCUIT_STORAGE_PREFIX}${companyId}`, mode)
   } catch (_) {}
 
   try {
+    // 2. Lecture préalable des modes par secteur existants
+    const { data: existingCompany } = await supabase
+      .from('companies')
+      .select('sales_circuit_mode_by_sector, sales_circuit_mode' as any)
+      .eq('id', companyId)
+      .maybeSingle()
+
+    const existingBySector = (existingCompany as any)?.sales_circuit_mode_by_sector || {}
+    const updatedBySector = {
+      ...existingBySector,
+      ...(cleanSector ? { [cleanSector]: mode } : {})
+    }
+
+    const updatePayload: any = {
+      sales_circuit_mode_by_sector: updatedBySector,
+      updated_at: new Date().toISOString()
+    }
+
+    // Mettre à jour aussi la colonne globale de compatibilité
+    if (!cleanSector || (existingCompany as any)?.sales_circuit_mode === undefined) {
+      updatePayload.sales_circuit_mode = mode
+    }
+
     const { error } = await supabase
       .from('companies')
-      .update({
-        sales_circuit_mode: mode,
-        updated_at: new Date().toISOString()
-      } as any)
+      .update(updatePayload)
       .eq('id', companyId)
 
     if (error) {
-      console.warn('[salesCircuitService] Mise à jour base ignorée (colonne optionnelle):', error.message)
+      console.warn('[salesCircuitService] Mise à jour base colonne sectorielle:', error.message)
+      // Si la colonne JSONB n'existe pas encore, tentative sur sales_circuit_mode seul
+      await supabase
+        .from('companies')
+        .update({
+          sales_circuit_mode: mode,
+          updated_at: new Date().toISOString()
+        } as any)
+        .eq('id', companyId)
     }
 
+    // 3. Diffusion de l'événement avec précision du secteur
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('gestio:sales_circuit_changed', { detail: { mode, companyId } }))
+      window.dispatchEvent(new CustomEvent('gestio:sales_circuit_changed', {
+        detail: { mode, companyId, sectorSlug: cleanSector }
+      }))
     }
 
     return { success: true }

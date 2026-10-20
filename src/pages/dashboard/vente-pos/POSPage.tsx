@@ -55,6 +55,7 @@ import {
   creerEtTransmettreBon,
   fetchPendingBons,
   annulerBonDeCommande,
+  encaisserBonDeCommande,
   PendingBon
 } from '../../../services/salesCircuitService'
 
@@ -195,11 +196,14 @@ export const POSPage: React.FC = () => {
     (user?.permissions as any)?.caisse === true
   )
 
+  const { secteurActif, caisseActive } = useAppContext()
+  const currentSectorSlug = (sectorSlug || secteurActif?.slug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
+
   const {
     circuitMode,
     isIntegrated: isCircuitIntegrated,
     isSeparated: isCircuitSeparated
-  } = useSalesCircuitConfig()
+  } = useSalesCircuitConfig(currentSectorSlug)
 
   // État Bon de Commande transmis (Mode Séparé)
   const [transmittedBonModal, setTransmittedBonModal] = useState<any | null>(null)
@@ -207,8 +211,7 @@ export const POSPage: React.FC = () => {
   const [mesBonsModal, setMesBonsModal] = useState<boolean>(false)
   const [mesBonsList, setMesBonsList] = useState<PendingBon[]>([])
   const [loadingMesBons, setLoadingMesBons] = useState<boolean>(false)
-  const { secteurActif, caisseActive } = useAppContext()
-  const currentSectorSlug = (sectorSlug || secteurActif?.slug || getActiveSectorSlug() || '').toLowerCase().trim().replace(/^sec-/, '')
+  const [loadedPendingBon, setLoadedPendingBon] = useState<PendingBon | null>(null)
   const isStation = currentSectorSlug === 'station-service' || currentSectorSlug === 'station' || currentSectorSlug === 'hydrocarbures'
   const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
   const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>('BAR')
@@ -369,6 +372,30 @@ export const POSPage: React.FC = () => {
     }
     loadClientPrecedents()
   }, [selectedCustomerId, selectedCustomer?.name, currentSectorSlug, company, companyId, brasserieEmballagesList])
+
+  // Chargement et rafraîchissement des bons de commande en attente (quand le mode séparé est actif)
+  useEffect(() => {
+    if (!isCircuitSeparated) return
+    const activeCompId = company?.id ?? companyId ?? ''
+    if (!activeCompId) return
+
+    const refreshPending = () => {
+      fetchPendingBons(activeCompId, currentSectorSlug)
+        .then(list => setMesBonsList(list))
+        .catch(() => {})
+    }
+
+    refreshPending()
+
+    window.addEventListener('gestio:bon_transmitted', refreshPending)
+    window.addEventListener('gestio:bon_encaisse', refreshPending)
+    window.addEventListener('gestio:bon_annule', refreshPending)
+    return () => {
+      window.removeEventListener('gestio:bon_transmitted', refreshPending)
+      window.removeEventListener('gestio:bon_encaisse', refreshPending)
+      window.removeEventListener('gestio:bon_annule', refreshPending)
+    }
+  }, [isCircuitSeparated, company?.id, companyId, currentSectorSlug])
 
   // Cumul commercial total du panier pour le secteur Brasserie
   const totalBrasserieQuantity = useMemo(() => {
@@ -1348,6 +1375,7 @@ export const POSPage: React.FC = () => {
     setCart([])
     setSelectedCustomerId('')
     setIsDeferred(false)
+    setLoadedPendingBon(null)
   }
 
   // =============================================================================
@@ -1858,6 +1886,65 @@ export const POSPage: React.FC = () => {
     return { ok: true }
   }
 
+  // ─── Récupération et chargement d'un Bon de Commande dans le Panier POS ────
+  const handleLoadBonIntoCart = (b: PendingBon) => {
+    const newCart: CartItem[] = b.items.map(item => {
+      const p = products.find(prod => prod.id === item.product_id)
+      return {
+        product: p || ({
+          id: item.product_id,
+          name: item.product_name,
+          price_ttc: item.unit_price,
+          selling_price: item.unit_price,
+          cost_price: 0,
+          stock_vente: 9999,
+          stock_alert: 0,
+          active: true,
+          allow_discount: false
+        } as any),
+        qty: item.quantity,
+        unitPrice: item.unit_price,
+        discount: 0
+      }
+    })
+    setCart(newCart)
+    setLoadedPendingBon(b)
+    if (b.customer_name && b.customer_name !== 'Client Comptoir') {
+      const cust = customers.find(c => c.name.toLowerCase() === b.customer_name.toLowerCase())
+      if (cust) {
+        setSelectedCustomerId(cust.id)
+      }
+    }
+    setMesBonsModal(false)
+    setActiveTab('pos')
+    toast.success('Bon de commande chargé', `Bon ${b.order_number} (${fmt(b.total_amount)}) prêt pour encaissement.`)
+  }
+
+  // ─── Annulation d'un Bon de Commande en Attente avec Motif ───────────────────
+  const handleCancelBon = async (b: PendingBon) => {
+    const reason = window.prompt(`Motif d'annulation pour le bon ${b.order_number} :`, 'Annulation demandée par le client')
+    if (reason === null) return
+    try {
+      const activeCompId = company?.id ?? companyId ?? ''
+      const res = await annulerBonDeCommande(
+        b.id,
+        activeCompId,
+        reason.trim() || 'Annulé en caisse',
+        user?.id,
+        user?.full_name
+      )
+      if (res.success) {
+        toast.success('Bon annulé', `Le bon ${b.order_number} a été annulé avec succès.`)
+        const list = await fetchPendingBons(activeCompId, currentSectorSlug)
+        setMesBonsList(list)
+      } else {
+        toast.error('Erreur', res.error || 'Impossible d\'annuler ce bon.')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Erreur lors de l\'annulation')
+    }
+  }
+
   // ─── Transmission du Bon de Commande à la Caisse (Mode Séparé) ─────────────
   const handleTransmettreBonCaisse = async () => {
     if (transmittingBon || cart.length === 0) return
@@ -1993,6 +2080,7 @@ export const POSPage: React.FC = () => {
     const restaurantCouvertsSnapshot = restaurantCouverts
     const restaurantServeurSnapshot = restaurantServeur || 'Serveur de Salle'
     const restaurantServeurIdSnapshot = restaurantServeurId || null
+    const loadedPendingBonSnapshot = loadedPendingBon ? { ...loadedPendingBon } : null
 
     // Génération orderNum avant l'envoi réseau
     const rawSector = (secteurActif?.slug || currentSectorSlug || 'GEN').replace(/^sec-/, '')
@@ -2511,6 +2599,35 @@ export const POSPage: React.FC = () => {
           entityId: savedDbSale.id
         }).catch(() => {})).catch(() => {})
 
+        // Clôture du bon de commande vendeur lié si cette vente provient d'un bon en attente
+        const bonCloseOp = (async () => {
+          if (!loadedPendingBonSnapshot) return
+          try {
+            await supabase
+              .from('sales_orders')
+              .update({
+                status: 'COMPLET',
+                paid_amount: loadedPendingBonSnapshot.total_amount,
+                payment_status: creditAmount >= totalNetTTCSnapshot ? 'credit' : 'paye',
+                payment_method: primaryMethod,
+                cash_session_id: activeCaisseSnapshot?.id || null,
+                notes: JSON.stringify({
+                  ...(typeof loadedPendingBonSnapshot === 'object' ? loadedPendingBonSnapshot : {}),
+                  status_commercial: 'ENCAISSE',
+                  encaisse_par: user?.full_name || 'Caissière',
+                  encaisse_par_id: user?.id,
+                  date_encaissement: new Date().toISOString(),
+                  vente_pos_id: savedDbSale.id,
+                  vente_pos_ref: orderNum,
+                  stock_already_deducted: true
+                })
+              })
+              .eq('id', loadedPendingBonSnapshot.id)
+          } catch (errBon) {
+            console.error('[POS] Erreur clôture bon lié:', errBon)
+          }
+        })()
+
         // Exécution en parallèle de toutes les opérations secondaires avec Promise.all
         await Promise.allSettled([
           supabase.from('sales_order_items').insert(lineItems),
@@ -2521,6 +2638,7 @@ export const POSPage: React.FC = () => {
           ...emballageOps,
           ...restaurantOps,
           auditOp,
+          bonCloseOp,
           comptabiliserVenteAuto({
             companyId: company?.id ?? companyId ?? '',
             sectorSlug: currentSectorSlug,
@@ -2843,7 +2961,13 @@ export const POSPage: React.FC = () => {
               }}
               className="px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 bg-amber-50 text-amber-800 hover:bg-amber-100 border border-amber-200"
             >
-              <ArrowRightLeft className="w-4 h-4 text-amber-600" /> Bons en attente
+              <ArrowRightLeft className="w-4 h-4 text-amber-600" />
+              <span>Bons en attente</span>
+              {mesBonsList.length > 0 && (
+                <span className="px-1.5 py-0.5 bg-amber-600 text-white rounded-full text-[10px] font-black leading-none shadow-sm">
+                  {mesBonsList.length}
+                </span>
+              )}
             </button>
           )}
         </div>
@@ -3289,6 +3413,29 @@ export const POSPage: React.FC = () => {
 
               {/* Corps Défilable Interne : Client, Articles, Totaux Fiscaux, Règlements */}
               <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5 text-xs">
+                {loadedPendingBon && (
+                  <div className="p-2.5 bg-amber-50 text-amber-900 rounded-xl border border-amber-200 text-xs flex items-center justify-between gap-2 shadow-sm animate-fadeIn">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <ArrowRightLeft className="w-4 h-4 text-amber-700 flex-shrink-0" />
+                      <div className="min-w-0">
+                        <p className="font-bold text-amber-900 truncate">
+                          Bon N° {loadedPendingBon.order_number}
+                        </p>
+                        <p className="text-[10px] text-amber-700 font-medium truncate">
+                          Vendeur: <strong>{loadedPendingBon.seller_name}</strong> &bull; Total: {fmt(loadedPendingBon.total_amount)}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setLoadedPendingBon(null)}
+                      className="text-amber-800 hover:text-amber-950 font-bold text-[10px] bg-amber-200/80 hover:bg-amber-200 px-2 py-1 rounded-lg transition shrink-0"
+                      title="Délier ce bon du panier"
+                    >
+                      Délier
+                    </button>
+                  </div>
+                )}
                 {showInactivityWarning && (
                   <div className="p-3 bg-amber-500 text-white rounded-2xl shadow-md border border-amber-600 text-xs space-y-2 animate-fadeIn">
                     <div className="flex items-center gap-1.5 font-black">
@@ -5014,10 +5161,10 @@ export const POSPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── MODALE SUIVI DES BONS EN ATTENTE POUR LE VENDEUR ── */}
+      {/* ── MODALE SUIVI DES BONS EN ATTENTE POUR LE VENDEUR & LA CAISSE ── */}
       {mesBonsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-3xl w-full max-h-[85vh] shadow-2xl border border-slate-100 p-6 flex flex-col gap-4">
+          <div className="bg-white rounded-3xl max-w-4xl w-full max-h-[85vh] shadow-2xl border border-slate-100 p-6 flex flex-col gap-4">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-xl bg-amber-100 text-amber-700 flex items-center justify-center">
@@ -5053,11 +5200,12 @@ export const POSPage: React.FC = () => {
                       <tr>
                         <th className="p-3">N° Bon</th>
                         <th className="p-3">Date</th>
+                        <th className="p-3">Vendeur</th>
                         <th className="p-3">Client</th>
                         <th className="p-3 text-right">Montant Total</th>
                         <th className="p-3 text-right">Reste à payer</th>
                         <th className="p-3 text-center">Statut</th>
-                        <th className="p-3 text-right">Action</th>
+                        <th className="p-3 text-right">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 font-mono">
@@ -5066,6 +5214,9 @@ export const POSPage: React.FC = () => {
                           <td className="p-3 font-bold text-slate-900">{b.order_number}</td>
                           <td className="p-3 font-sans text-slate-500 text-[11px]">
                             {new Date(b.created_at).toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td className="p-3 font-sans text-slate-700 text-xs font-semibold">
+                            {b.seller_name || 'Vendeur'}
                           </td>
                           <td className="p-3 font-sans text-slate-800 font-medium">{b.customer_name}</td>
                           <td className="p-3 text-right font-bold text-slate-900">{fmt(b.total_amount)}</td>
@@ -5076,27 +5227,45 @@ export const POSPage: React.FC = () => {
                             </span>
                           </td>
                           <td className="p-3 text-right font-sans">
-                            <button
-                              onClick={() => {
-                                setTransmittedBonModal({
-                                  order_number: b.order_number,
-                                  date: b.created_at,
-                                  customer_name: b.customer_name,
-                                  seller_name: b.seller_name || user?.full_name || 'Vendeur',
-                                  lines: b.items.map(i => ({
-                                    product: { name: i.product_name },
-                                    qty: i.quantity,
-                                    unitPrice: i.unit_price
-                                  })),
-                                  total_ttc: b.total_amount
-                                })
-                              }}
-                              className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition inline-flex items-center gap-1"
-                              title="Réimprimer le bon pour le client"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
-                              <span>Revoir</span>
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              <button
+                                onClick={() => handleLoadBonIntoCart(b)}
+                                className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold transition inline-flex items-center gap-1 shadow-sm"
+                                title="Charger la commande dans le panier POS pour finaliser la vente"
+                              >
+                                <ShoppingCart className="w-3.5 h-3.5" />
+                                <span>Charger POS</span>
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setTransmittedBonModal({
+                                    order_number: b.order_number,
+                                    date: b.created_at,
+                                    customer_name: b.customer_name,
+                                    seller_name: b.seller_name || user?.full_name || 'Vendeur',
+                                    lines: b.items.map(i => ({
+                                      product: { name: i.product_name },
+                                      qty: i.quantity,
+                                      unitPrice: i.unit_price
+                                    })),
+                                    total_ttc: b.total_amount
+                                  })
+                                }}
+                                className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition inline-flex items-center gap-1"
+                                title="Réimprimer le bon pour le client"
+                              >
+                                <Printer className="w-3.5 h-3.5" />
+                                <span>Revoir</span>
+                              </button>
+                              <button
+                                onClick={() => handleCancelBon(b)}
+                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-xs font-bold transition inline-flex items-center gap-1"
+                                title="Annuler ce bon de commande"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Annuler</span>
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}

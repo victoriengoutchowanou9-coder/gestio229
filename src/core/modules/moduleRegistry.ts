@@ -54,6 +54,16 @@ export const MODULE_REGISTRY: Record<string, SectorModuleConfig> = {
     group: 'commercial',
   },
 
+  'vendeur': {
+    id: 'vendeur',
+    label: 'Module Vendeur (Prise de commande)',
+    icon: 'ClipboardList',
+    path: 'vendeur',
+    isCommon: true,
+    defaultEnabled: false,
+    group: 'commercial',
+  },
+
   'stock': {
     id: 'stock',
     label: 'Stocks',

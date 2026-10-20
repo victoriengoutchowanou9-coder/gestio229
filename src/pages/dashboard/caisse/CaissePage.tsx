@@ -15,7 +15,7 @@ import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
   Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail,
-  Receipt
+  Receipt, Trash2
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -192,7 +192,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     circuitMode,
     isIntegrated: isCircuitIntegrated,
     isSeparated: isCircuitSeparated
-  } = useSalesCircuitConfig()
+  } = useSalesCircuitConfig(currentSectorSlug)
 
   const [bonsEnAttente, setBonsEnAttente] = useState<PendingBon[]>([])
   const [loadingBonsEnAttente, setLoadingBonsEnAttente] = useState<boolean>(false)
@@ -2301,18 +2301,49 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                         </span>
                       </td>
                       <td className="p-3 text-right font-sans">
-                        <button
-                          onClick={() => {
-                            setBonAEncaisser(bon)
-                            setMontantEncaissementBon(bon.remaining_balance)
-                            setModePaiementBon('especes')
-                            setNoteEncaissementBon('')
-                          }}
-                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <Receipt className="w-3.5 h-3.5" />
-                          <span>Encaisser</span>
-                        </button>
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            onClick={() => {
+                              setBonAEncaisser(bon)
+                              setMontantEncaissementBon(bon.remaining_balance)
+                              setModePaiementBon('especes')
+                              setNoteEncaissementBon('')
+                            }}
+                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition inline-flex items-center gap-1 cursor-pointer"
+                          >
+                            <Receipt className="w-3.5 h-3.5" />
+                            <span>Encaisser</span>
+                          </button>
+                          <button
+                            onClick={async () => {
+                              const reason = window.prompt(`Motif d'annulation pour le bon ${bon.order_number} :`, 'Annulation demandée par le client')
+                              if (reason === null) return
+                              try {
+                                const activeCompId = currentCompanyId || company?.id || ''
+                                const res = await annulerBonDeCommande(
+                                  bon.id,
+                                  activeCompId,
+                                  reason.trim() || 'Annulé en caisse',
+                                  user?.id,
+                                  user?.full_name
+                                )
+                                if (res.success) {
+                                  toast.success('Bon annulé', `Le bon ${bon.order_number} a été annulé avec succès.`)
+                                  loadBonsEnAttente()
+                                } else {
+                                  toast.error('Erreur', res.error || 'Impossible d\'annuler ce bon.')
+                                }
+                              } catch (err: any) {
+                                toast.error('Erreur', err?.message || 'Erreur lors de l\'annulation')
+                              }
+                            }}
+                            className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition inline-flex items-center gap-1 cursor-pointer"
+                            title="Annuler ce bon de commande"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            <span>Annuler</span>
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

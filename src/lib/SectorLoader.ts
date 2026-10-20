@@ -20,6 +20,7 @@ import type { Company, Sector, UserProfile, RoutingDecision, RoutingType } from 
 import { checkModuleAccess } from '../core/subscription/subscriptionEngine'
 import { isSectorSubscribed } from './sectorClient'
 import { normalizeSectorSlug, getRolesForSector } from '../core/team/sectorRoles'
+import { isSectorCircuitSeparated } from '../services/salesCircuitService'
 
 // =============================================================================
 // TYPES INTERNES
@@ -455,6 +456,46 @@ export const SectorLoader = {
   // ─── Résolution Nav Globale (avec prise en compte des modules spécifiques par secteur) ─────────────
 
   getDefaultNav(sectorSlug?: string, company?: Company | null): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
+    const raw = this._computeDefaultNav(sectorSlug, company)
+    const cleanSlug = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
+    const prefix = sectorSlug ? `/app/${sectorSlug}` : '/dashboard'
+    return this.finalizeNav(raw, cleanSlug, prefix, company)
+  },
+
+  finalizeNav(
+    nav: { grouped: Record<string, NavItem[]>; flat: NavItem[] },
+    cleanSlug: string,
+    prefix: string,
+    company?: Company | null
+  ): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
+    let flat = [...(nav.flat || [])]
+    const isSeparated = isSectorCircuitSeparated(cleanSlug, company)
+
+    if (isSeparated) {
+      if (!flat.some(i => i.id === 'vendeur')) {
+        const vendeurItem: NavItem = {
+          id: 'vendeur',
+          label: 'Prise de Commande (Vendeur)',
+          icon: 'ClipboardList',
+          href: `${prefix}/vendeur`,
+          group: 'commercial'
+        }
+        const vIdx = flat.findIndex(i => i.id === 'ventes' || i.id === 'vente_distributeur')
+        if (vIdx >= 0) {
+          flat.splice(vIdx + 1, 0, vendeurItem)
+        } else {
+          flat.push(vendeurItem)
+        }
+      }
+    } else {
+      flat = flat.filter(i => i.id !== 'vendeur')
+    }
+
+    const grouped = groupNavItems(flat)
+    return { grouped, flat }
+  },
+
+  _computeDefaultNav(sectorSlug?: string, company?: Company | null): { grouped: Record<string, NavItem[]>; flat: NavItem[] } {
     const cleanSlug = sectorSlug ? sectorSlug.toLowerCase().trim().replace(/^sec-/, '') : ''
     const isStation = cleanSlug === 'station-service' || cleanSlug === 'station' || cleanSlug === 'hydrocarbures'
     const isRestaurant = cleanSlug === 'restaurant' || cleanSlug === 'bar-restaurant-maquis' || cleanSlug === 'bar' || cleanSlug === 'maquis' || cleanSlug === 'fastfood'
@@ -1042,8 +1083,18 @@ export const SectorLoader = {
     if (user.role === 'administrateur' || user.role === 'admin' || user.role === 'gerant') return true
     if (moduleId === 'dashboard') return true
 
+    // Accès spécifique au module Vendeur
+    if (moduleId === 'vendeur' || moduleId === 'prise_commande' || moduleId === 'bons_commande') {
+      const allowedRoles = ['vendeur', 'commercial', 'serveur', 'caissier', 'gerant', 'admin', 'administrateur', 'magasinier', 'responsable']
+      if (allowedRoles.includes((user.role || '').toLowerCase())) return true
+      if (user.permissions?.vendeur || user.permissions?.ventes) return true
+    }
+
     // Dictionnaire d'alias pour compatibilité parfaite
     const MODULE_ALIASES: Record<string, string[]> = {
+      vendeur: ['prise_commande', 'bons_commande', 'ventes'],
+      prise_commande: ['vendeur', 'bons_commande'],
+      bons_commande: ['vendeur', 'prise_commande'],
       tables: ['tables_plan'],
       tables_plan: ['tables'],
       cuisine: ['cuisine_bar'],

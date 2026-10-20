@@ -213,7 +213,7 @@ export const ConfigPage: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'circuit_ventes' | 'imprimerie' | 'garage' | 'ecole'>('etablissement')
 
-  // ─── Configuration Organisation des Ventes & Encaissements ─────────────────
+  // ─── Configuration Organisation des Ventes & Encaissements (Par Secteur) ───
   const {
     circuitMode,
     isIntegrated: isCircuitIntegrated,
@@ -221,7 +221,7 @@ export const ConfigPage: React.FC = () => {
     pendingCount: circuitPendingCount,
     selectMode: selectCircuitMode,
     loading: loadingCircuitMode
-  } = useSalesCircuitConfig()
+  } = useSalesCircuitConfig(currentSectorSlug)
 
   const [switchingCircuitModal, setSwitchingCircuitModal] = useState(false)
   const [targetCircuitMode, setTargetCircuitMode] = useState<SalesCircuitMode | null>(null)
@@ -234,10 +234,10 @@ export const ConfigPage: React.FC = () => {
       const res = await selectCircuitMode(targetCircuitMode)
       if (res.success) {
         toast.success(
-          'Organisation des ventes mise à jour !',
+          `Organisation des ventes mise à jour pour ${sectorMeta?.name || currentSectorSlug} !`,
           targetCircuitMode === 'INTEGRE'
             ? 'Mode 1 activé : Vente et encaissement par le même utilisateur.'
-            : 'Mode 2 activé : Séparation entre vendeur et caissière.'
+            : 'Mode 2 activé : Séparation entre vendeur et caissière (Module Vendeur activé).'
         )
         setSwitchingCircuitModal(false)
       } else {
@@ -1530,15 +1530,15 @@ export const ConfigPage: React.FC = () => {
       {/* =================================================================== */}
       {activeTab === 'circuit_ventes' && (
         <div className="space-y-6 animate-fadeIn">
-          {/* Bannière de l'organisation active */}
+          {/* Bannière de l'organisation active par secteur */}
           <div className="bg-gradient-to-r from-slate-900 via-slate-850 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
             <div className="space-y-2">
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
                 <ArrowRightLeft className="w-3.5 h-3.5" />
-                <span>Paramètres Métier Entreprise</span>
+                <span>Paramétrage Indépendant par Secteur • {sectorMeta?.name || currentSectorSlug}</span>
               </div>
               <h2 className="text-2xl font-black tracking-tight text-white flex items-center gap-2">
-                <span>Organisation active : </span>
+                <span>Organisation active ({sectorMeta?.name || currentSectorSlug}) : </span>
                 <span className={isCircuitSeparated ? 'text-amber-400' : 'text-emerald-400'}>
                   {isCircuitSeparated
                     ? 'Mode 2 — Séparation entre Vendeur et Caissière'
@@ -1547,8 +1547,8 @@ export const ConfigPage: React.FC = () => {
               </h2>
               <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
                 {isCircuitSeparated
-                  ? "Les vendeurs établissent les bons de commande et les transmettent à la caisse. Les caissières visualisent les bons dans leur vue dédiée et procèdent aux encaissements."
-                  : "L'utilisateur autorisé effectue la vente et encaisse directement le client dans le même circuit, conformément aux permissions accordées. Parcours direct historique conservé."}
+                  ? `Pour le secteur ${sectorMeta?.name || currentSectorSlug}, les vendeurs disposent du Module Vendeur pour saisir les bons de commande et les transmettre à la caisse. Les caissières les récupèrent dans Vente ou POS pour l'encaissement.`
+                  : `Pour le secteur ${sectorMeta?.name || currentSectorSlug}, l'utilisateur autorisé effectue la vente et encaisse directement le client dans le même circuit. Les autres secteurs conservent indépendamment leur propre mode.`}
               </p>
             </div>
 
@@ -1561,7 +1561,7 @@ export const ConfigPage: React.FC = () => {
               className="flex items-center justify-center gap-2 px-5 py-3.5 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white font-bold text-xs uppercase tracking-wider rounded-2xl shadow-lg shadow-emerald-500/20 transition shrink-0 cursor-pointer"
             >
               <ArrowRightLeft className="w-4 h-4" />
-              <span>Changer d'organisation</span>
+              <span>Changer pour ce secteur</span>
             </button>
           </div>
 
@@ -1714,12 +1714,15 @@ export const ConfigPage: React.FC = () => {
             </div>
 
             <p className="text-xs text-slate-600 leading-relaxed">
-              Vous êtes sur le point de passer votre établissement en{' '}
+              Vous êtes sur le point de passer le secteur <strong>{sectorMeta?.name || currentSectorSlug}</strong> en{' '}
               <strong>
                 {targetCircuitMode === 'INTEGRE'
                   ? 'Mode 1 (Vente et encaissement intégrés par le même utilisateur)'
                   : 'Mode 2 (Séparation entre vendeur et caissière)'}
               </strong>.
+            </p>
+            <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+              Ce réglage s'applique <strong>exclusivement au secteur {sectorMeta?.name || currentSectorSlug}</strong>. Les autres secteurs d'activité de votre entreprise ne seront pas modifiés.
             </p>
 
             {circuitPendingCount > 0 && targetCircuitMode === 'INTEGRE' && (

@@ -46,6 +46,7 @@ const RegisterPage  = safeLazy(() => import('./pages/auth/RegisterPage'))
 // Dashboard
 const DashboardPage   = safeLazy(() => import('./pages/dashboard/DashboardPage'))
 const POSPage         = safeLazy(() => import('./pages/dashboard/vente-pos/POSPage'))
+const VendeurPage     = safeLazy(() => import('./pages/dashboard/vendeur/VendeurPage'))
 const StocksPage         = safeLazy(() => import('./pages/dashboard/stocks/StocksPage'))
 const CaissePage         = safeLazy(() => import('./pages/dashboard/caisse/CaissePage'))
 const ClotureCaisse      = safeLazy(() => import('./pages/dashboard/caisse/ClotureCaisse'))
@@ -721,6 +722,9 @@ const AppRoutes: React.FC = () => {
         <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="vente"          element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="vendeur"        element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
+        <Route path="prise-commande" element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
+        <Route path="bons-commande"  element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="cloture-caisse" element={<ModuleGuard moduleId="caisse"><ClotureCaisse /></ModuleGuard>} />
@@ -904,6 +908,9 @@ const AppRoutes: React.FC = () => {
         <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="vente"          element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="vendeur"        element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
+        <Route path="prise-commande" element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
+        <Route path="bons-commande"  element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><SectorAwareTresorerie /></ModuleGuard>} />
@@ -1066,6 +1073,9 @@ const AppRoutes: React.FC = () => {
         <Route path="dashboard"      element={<ModuleGuard moduleId="dashboard"><SectorAwareDashboard /></ModuleGuard>} />
         <Route path="vente"          element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
         <Route path="vente-pos"      element={<ModuleGuard moduleId="ventes"><SectorAwareVentes /></ModuleGuard>} />
+        <Route path="vendeur"        element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
+        <Route path="prise-commande" element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
+        <Route path="bons-commande"  element={<ModuleGuard moduleId="vendeur"><VendeurPage /></ModuleGuard>} />
         <Route path="stocks"         element={<ModuleGuard moduleId="stock"><SectorAwareStocks /></ModuleGuard>} />
         <Route path="caisse"         element={<ModuleGuard moduleId="caisse"><CaissePage /></ModuleGuard>} />
         <Route path="tresorerie"     element={<ModuleGuard moduleId="finances"><TresoreriePage /></ModuleGuard>} />
