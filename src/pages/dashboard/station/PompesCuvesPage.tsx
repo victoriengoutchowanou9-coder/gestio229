@@ -13,6 +13,7 @@ import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { showModal, showPrompt } from '../../../components/modals/CustomModalGestio'
+import { safeStationInsert, safeStationUpdate } from '../../../utils/stationFuelHelper'
 
 interface Cuve {
   id: string
@@ -189,20 +190,29 @@ export const PompesCuvesPage: React.FC = () => {
     if (!cuveForm.nom) return notify('error', 'Le nom de la cuve est requis')
     try {
       const cleanSlug = sectorSlug || 'station-service'
+      const capVal = Number(cuveForm.capacite) || 30000
+      const stockVal = Number(cuveForm.stock_actuel) || 0
+      const minVal = Number(cuveForm.niveau_min) || 2000
       const payload = {
+        tenant_id: companyId,
         company_id: companyId,
         sector_slug: cleanSlug,
         code: cuveForm.code || `CUVE-${cuves.length + 1}`,
         nom: cuveForm.nom,
         produit: cuveForm.produit,
-        capacite: Number(cuveForm.capacite) || 30000,
-        stock_initial: Number(cuveForm.stock_actuel) || 0,
-        stock_actuel: Number(cuveForm.stock_actuel) || 0,
-        stock_theorique: Number(cuveForm.stock_actuel) || 0,
-        niveau_min: Number(cuveForm.niveau_min) || 2000,
+        fuel_type: cuveForm.produit,
+        capacite: capVal,
+        capacite_totale: capVal,
+        capacity_liters: capVal,
+        stock_initial: stockVal,
+        stock_actuel: stockVal,
+        stock_theorique: stockVal,
+        current_volume_liters: stockVal,
+        niveau_min: minVal,
+        min_alert_liters: minVal,
         statut: 'ACTIF'
       }
-      const { error } = await supabase.from('station_cuves').insert(payload)
+      const { error } = await safeStationInsert(supabase, 'station_cuves', payload)
       if (error) throw error
       notify('success', 'Cuve enregistrée avec succès')
       setShowCuveModal(false)
@@ -229,7 +239,7 @@ export const PompesCuvesPage: React.FC = () => {
         index_actuel: Number(pompeForm.index_actuel) || 0,
         statut: 'ACTIVE'
       }
-      const { data: newPompe, error } = await supabase.from('station_pompes').insert(payload).select().single()
+      const { data: newPompe, error } = await safeStationInsert(supabase, 'station_pompes', { ...payload, tenant_id: companyId })
       if (error) throw error
 
       // Synchronisation vers station_pistolets pour compatibilité et réactivité immédiate
@@ -291,7 +301,7 @@ export const PompesCuvesPage: React.FC = () => {
         valide: true
       }
 
-      const { error } = await supabase.from('station_jaugeages').insert(payload)
+      const { error } = await safeStationInsert(supabase, 'station_jaugeages', { ...payload, tenant_id: companyId })
       if (error) throw error
 
       // Mettre à jour le stock physique de la cuve
@@ -343,7 +353,7 @@ export const PompesCuvesPage: React.FC = () => {
         observation: receptionForm.observation
       }
 
-      const { error } = await supabase.from('station_receptions_carburant').insert(payload)
+      const { error } = await safeStationInsert(supabase, 'station_receptions_carburant', { ...payload, tenant_id: companyId })
       if (error) throw error
 
       // Augmentation du stock dans la cuve

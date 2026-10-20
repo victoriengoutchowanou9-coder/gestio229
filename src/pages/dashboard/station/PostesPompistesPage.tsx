@@ -11,6 +11,7 @@ import {
   DollarSign, Smartphone, CreditCard, ChevronRight, X, Search, FileText
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
+import { safeStationInsert } from '../../../utils/stationFuelHelper'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { showModal } from '../../../components/modals/CustomModalGestio'
@@ -171,7 +172,7 @@ export const PostesPompistesPage: React.FC = () => {
         solde_responsabilite: Number(pompisteForm.solde_responsabilite) || 0,
         statut: 'ACTIF'
       }
-      const { error } = await supabase.from('station_pompistes').insert(payload)
+      const { error } = await safeStationInsert(supabase, 'station_pompistes', { ...payload, tenant_id: companyId })
       if (error) throw error
 
       notify('success', 'Pompiste enregistré avec succès')
@@ -229,7 +230,7 @@ export const PostesPompistesPage: React.FC = () => {
         statut: ecart < 0 ? 'VALIDE_AVEC_ECART' : 'CLOTURE'
       }
 
-      const { error } = await supabase.from('station_shifts_clotures').insert(payload)
+      const { error } = await safeStationInsert(supabase, 'station_shifts_clotures', { ...payload, tenant_id: companyId })
       if (error) throw error
 
       // Mettre à jour l'index actuel de la pompe

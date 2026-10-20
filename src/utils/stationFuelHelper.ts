@@ -132,3 +132,140 @@ export function calculateVolumeFromAmount(amount: number, unitPrice: number): nu
   if (!amount || amount <= 0 || !unitPrice || unitPrice <= 0) return 0
   return Math.round((amount / unitPrice) * 100) / 100
 }
+
+
+/**
+ * =============================================================================
+ * HELPER RÉSILIENT D'INSERTION ET DE MAPPING MULTI-TENANT STATION
+ * =============================================================================
+ * 1. Garantit l'injection systématique de company_id ET tenant_id
+ * 2. Mappe les colonnes pour les rendre compatibles avec tous les schémas
+ *    (capacite -> capacite_totale -> capacity_liters, fuel_type -> produit, etc.)
+ * 3. En cas d'erreur de cache schéma PostgREST ("Could not find column..."),
+ *    retire automatiquement la colonne absente et réessaie immédiatement.
+ * 4. Valide et remonte un message explicite au lieu d'un plantage silencieux.
+ */
+export async function safeStationInsert(
+  supabaseClient: any,
+  table: string,
+  rawPayload: Record<string, any>
+): Promise<{ data: any; error: any }> {
+  const payload: Record<string, any> = { ...rawPayload }
+
+  // 1. Toujours injecter tenant_id et company_id
+  const compId = payload.company_id || payload.tenant_id
+  if (compId) {
+    payload.company_id = compId
+    payload.tenant_id = compId
+  }
+
+  // 2. Mappings spécifiques par table
+  if (table === 'station_cuves') {
+    const cap = payload.capacite_totale ?? payload.capacity_liters ?? payload.capacite
+    if (cap !== undefined) {
+      payload.capacite_totale = cap
+      payload.capacity_liters = cap
+      payload.capacite = cap
+    }
+    const fuel = payload.produit ?? payload.fuel_type ?? payload.nom
+    if (fuel !== undefined) {
+      payload.produit = fuel
+      payload.fuel_type = fuel
+    }
+    const stock = payload.stock_actuel ?? payload.current_volume_liters ?? payload.stock_initial
+    if (stock !== undefined) {
+      payload.stock_actuel = stock
+      payload.current_volume_liters = stock
+      payload.stock_initial = payload.stock_initial ?? stock
+      payload.stock_theorique = payload.stock_theorique ?? stock
+    }
+    const minAlert = payload.niveau_min ?? payload.min_alert_liters
+    if (minAlert !== undefined) {
+      payload.niveau_min = minAlert
+      payload.min_alert_liters = minAlert
+    }
+  } else if (table === 'station_lubrifiants') {
+    const des = payload.designation ?? payload.nom ?? payload.name ?? payload.reference
+    if (des !== undefined) {
+      payload.designation = des
+      payload.nom = des
+    }
+  } else if (table === 'station_pompes') {
+    const num = payload.numero_pompe ?? payload.nom ?? payload.code
+    if (num !== undefined) {
+      payload.numero_pompe = num
+      payload.nom = num
+    }
+  }
+
+  let currentPayload = { ...payload }
+  let lastError: any = null
+
+  // Tentative itérative avec nettoyage automatique des colonnes manquantes
+  for (let attempt = 0; attempt < 12; attempt++) {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .insert(currentPayload)
+      .select()
+
+    if (!error) {
+      return { data: Array.isArray(data) ? data[0] : data, error: null }
+    }
+
+    lastError = error
+
+    // Détection de colonne absente du cache de schéma
+    const match = error.message?.match(/Could not find the '([^']+)' column/)
+    if (match && match[1]) {
+      const missingCol = match[1]
+      console.warn(`[safeStationInsert] Colonne absente "${missingCol}" sur "${table}", suppression et réessai...`)
+      delete currentPayload[missingCol]
+      continue
+    }
+
+    // Erreur de permission ou autre contrainte
+    break
+  }
+
+  return { data: null, error: lastError }
+}
+
+/**
+ * Mise à jour résiliente pour les tables station
+ */
+export async function safeStationUpdate(
+  supabaseClient: any,
+  table: string,
+  id: string,
+  rawPayload: Record<string, any>
+): Promise<{ data: any; error: any }> {
+  const payload: Record<string, any> = { ...rawPayload }
+
+  let currentPayload = { ...payload }
+  let lastError: any = null
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const { data, error } = await supabaseClient
+      .from(table)
+      .update(currentPayload)
+      .eq('id', id)
+      .select()
+
+    if (!error) {
+      return { data: Array.isArray(data) ? data[0] : data, error: null }
+    }
+
+    lastError = error
+    const match = error.message?.match(/Could not find the '([^']+)' column/)
+    if (match && match[1]) {
+      const missingCol = match[1]
+      console.warn(`[safeStationUpdate] Colonne absente "${missingCol}" sur "${table}", suppression et réessai...`)
+      delete currentPayload[missingCol]
+      continue
+    }
+
+    break
+  }
+
+  return { data: null, error: lastError }
+}

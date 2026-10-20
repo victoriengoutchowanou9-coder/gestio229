@@ -11,6 +11,7 @@ import {
   CheckCircle, Search, X, ShieldAlert, FileText
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
+import { safeStationInsert } from '../../../utils/stationFuelHelper'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { showModal } from '../../../components/modals/CustomModalGestio'
@@ -112,7 +113,7 @@ export const FlottesClientsPage: React.FC = () => {
         statut: 'ACTIF',
         notes: form.notes
       }
-      const { error } = await supabase.from('station_vehicules_flotte').insert(payload)
+      const { error } = await safeStationInsert(supabase, 'station_vehicules_flotte', { ...payload, tenant_id: companyId })
       if (error) throw error
 
       notify('success', 'Véhicule de flotte enregistré')

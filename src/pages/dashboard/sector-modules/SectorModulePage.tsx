@@ -182,7 +182,7 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
       } else {
         const { error } = await supabase
           .from(config.table)
-          .insert({ ...payload, company_id: companyId, sector_slug: sectorSlug })
+          .insert({ ...payload, company_id: companyId, tenant_id: companyId, sector_slug: sectorSlug })
         if (error) throw error
         notify('success', 'Enregistrement créé')
       }
