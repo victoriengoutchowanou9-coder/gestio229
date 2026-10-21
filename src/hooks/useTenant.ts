@@ -21,6 +21,7 @@ export interface TenantContext {
   isValidSector: boolean
   sectorMeta: SectorDefinition | null
   company: any
+  currentCompany: any
   user: any
   isAdmin: boolean
   assignedSectorSlug: string | null
@@ -123,6 +124,7 @@ export function useTenant(): TenantContext {
     isValidSector,
     sectorMeta,
     company,
+    currentCompany: company,
     user,
     isAdmin,
     assignedSectorSlug,

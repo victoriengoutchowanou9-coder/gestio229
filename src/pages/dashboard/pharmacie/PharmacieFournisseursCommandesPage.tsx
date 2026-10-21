@@ -26,8 +26,8 @@ import {
 } from '../../../services/pharmacieService'
 
 export default function PharmacieFournisseursCommandesPage() {
-  const { currentCompany } = useTenant()
-  const companyId = currentCompany?.id || ''
+  const { currentCompany, company, companyId: tenantCompanyId } = useTenant()
+  const companyId = tenantCompanyId || currentCompany?.id || company?.id || ''
 
   const [activeTab, setActiveTab] = useState<'COMMANDES' | 'GROSSISTES'>('COMMANDES')
   const [produits, setProduits] = useState<PharmacieProduit[]>([])

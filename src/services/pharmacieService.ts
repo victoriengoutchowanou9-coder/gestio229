@@ -1163,7 +1163,40 @@ export const pharmacieService = {
   async getGrossistes(companyId: string): Promise<PharmacieGrossiste[]> {
     if (!companyId || companyId === 'demo-company-pharma') return []
     sanitizeCompanyStorage(companyId)
-    return getLocalData<PharmacieGrossiste[]>(companyId, 'grossistes', [])
+    const local = getLocalData<PharmacieGrossiste[]>(companyId, 'grossistes', [])
+    try {
+      const { data: dbSuppliers } = await supabase
+        .from('suppliers')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('company_name')
+
+      if (dbSuppliers && dbSuppliers.length > 0) {
+        const mapped: PharmacieGrossiste[] = dbSuppliers.map((s: any) => ({
+          id: s.id,
+          company_id: s.company_id,
+          nom: s.company_name || s.name || 'Grossiste',
+          code: s.code || `GROSS-${s.id.slice(0, 4)}`,
+          contact: s.contact_person || '',
+          telephone: s.phone || '',
+          email: s.email || '',
+          adresse: s.address || s.city || '',
+          delai_livraison_moyen: '24h - 48h',
+          est_actif: s.is_active !== false
+        }))
+        const existingIds = new Set(local.map((g) => g.id))
+        const merged = [...local]
+        mapped.forEach((m) => {
+          if (!existingIds.has(m.id)) {
+            merged.push(m)
+          }
+        })
+        return merged
+      }
+    } catch (e) {
+      console.warn('[pharmacieService] suppliers query fallback:', e)
+    }
+    return local
   },
 
   async saveGrossiste(companyId: string, grossiste: Partial<PharmacieGrossiste>): Promise<PharmacieGrossiste> {

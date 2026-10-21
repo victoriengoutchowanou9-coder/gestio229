@@ -1753,6 +1753,7 @@ export const FournisseursPage: React.FC = () => {
         onSuccess={handleCreatePoSuccess}
         sectorSlug={currentSectorSlug}
         circuit={isRestaurant ? circuitFournisseur : undefined}
+        initialSuppliers={suppliers}
       />
       <ReceiveBlModal
         isOpen={showReceiveModal}

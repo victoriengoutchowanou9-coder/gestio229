@@ -20,6 +20,7 @@ interface PurchaseOrderModalProps {
   onSuccess?: (order: any) => void
   sectorSlug?: string
   circuit?: 'BAR' | 'CUISINE'
+  initialSuppliers?: any[]
 }
 
 interface OrderItemRow {
@@ -35,12 +36,21 @@ interface OrderItemRow {
   imageUrl?: string
 }
 
-export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, onClose, onSuccess, sectorSlug, circuit }) => {
+export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({
+  isOpen,
+  onClose,
+  onSuccess,
+  sectorSlug,
+  circuit,
+  initialSuppliers
+}) => {
   const { company, user } = useAuthStore()
 
   const demandeurFullName = user?.full_name || user?.name || user?.username || 'Responsable Appro'
   const [ref, setRef] = useState('BC-2026-' + Math.floor(1000 + Math.random() * 9000))
   const [suppliers, setSuppliers] = useState<any[]>([])
+  const [loadingSuppliers, setLoadingSuppliers] = useState(false)
+  const [supplierSearch, setSupplierSearch] = useState('')
   const [products, setProducts] = useState<any[]>([])
   const [selectedSupplierId, setSelectedSupplierId] = useState('')
   const [orderRows, setOrderRows] = useState<Record<string, OrderItemRow>>({})
@@ -53,6 +63,26 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
   const [newSupName, setNewSupName] = useState('')
   const [newSupPhone, setNewSupPhone] = useState('')
   const [newSupCity, setNewSupCity] = useState('Cotonou')
+
+  // Initialisation instantanée si des fournisseurs sont déjà fournis par la page parente
+  useEffect(() => {
+    if (isOpen && initialSuppliers && initialSuppliers.length > 0) {
+      const mapped = initialSuppliers.map((s: any) => ({
+        id: s.id,
+        code: s.code || '',
+        name: s.company_name || s.name || 'Fournisseur inconnu',
+        company_name: s.company_name || s.name || 'Fournisseur inconnu',
+        phone: s.phone || '',
+        city: s.city || 'Cotonou',
+        is_active: s.is_active ?? true,
+        sector_slug: s.sector_slug || s.secteur_slug || ''
+      }))
+      setSuppliers(mapped)
+      if (!selectedSupplierId && mapped.length > 0) {
+        setSelectedSupplierId(mapped[0].id)
+      }
+    }
+  }, [isOpen, initialSuppliers])
 
   useEffect(() => {
     if (!company?.id || !isOpen) return
@@ -67,17 +97,30 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
 
       let rawSuppliers: any[] = []
       let rawProducts: any[] = []
+      setLoadingSuppliers(true)
 
       try {
+        // Requête robuste sur suppliers : SELECT * sans colonnes inexistantes (suppliers n'a pas 'name' ni 'secteur_slug')
         const { data: sData, error: sErr } = await supabase
           .from('suppliers')
-          .select('id, company_name, name, phone, city, sector_slug, secteur_slug, sector_meta, notes')
+          .select('*')
           .eq('company_id', company.id)
           .order('company_name')
-        if (sData) rawSuppliers = sData
-        if (sErr) console.warn('[PurchaseOrderModal] Suppliers fetch warning:', sErr)
+
+        if (sData && !sErr) {
+          rawSuppliers = sData
+        } else if (sErr) {
+          console.warn('[PurchaseOrderModal] Suppliers select * warning, fallback minimal select:', sErr)
+          const { data: sFallback } = await supabase
+            .from('suppliers')
+            .select('id, company_name, phone, city, is_active')
+            .eq('company_id', company.id)
+          if (sFallback) rawSuppliers = sFallback
+        }
       } catch (e) {
         console.warn('[PurchaseOrderModal] Suppliers fetch error:', e)
+      } finally {
+        setLoadingSuppliers(false)
       }
 
       try {
@@ -102,13 +145,24 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         console.warn('[PurchaseOrderModal] Products fetch error:', e)
       }
 
-      // ISOLATION DU SOUS-LOGICIEL :
-      // Chaque secteur n'affiche QUE ses propres fournisseurs et produits.
-      let filteredSData = filterItemsForSector(rawSuppliers, activeSector)
-      if (filteredSData.length === 0 && rawSuppliers.length > 0) {
-        // Si aucun fournisseur strictement marqué pour ce secteur, inclure les fournisseurs génériques de l'entreprise
-        filteredSData = rawSuppliers.filter((s: any) => !s.sector_slug || s.sector_slug === activeSector || s.secteur_slug === activeSector)
-        if (filteredSData.length === 0) filteredSData = rawSuppliers
+      // ISOLATION ET ÉLIGIBILITÉ DES FOURNISSEURS :
+      // 1. Filtrer les fournisseurs explicitement inactifs
+      const activeRawSuppliers = rawSuppliers.filter((s: any) => s.is_active !== false)
+
+      // 2. Déterminer les fournisseurs compatibles avec le secteur actif
+      let filteredSData = activeRawSuppliers.filter((s: any) => {
+        const sSec = s.sector_slug || s.secteur_slug || s.sector_meta?.sector_slug || s.sector_meta?.secteur
+        // Fournisseur transversal (aucun secteur assigné, 'all', 'global' ou null)
+        if (!sSec || sSec === 'all' || sSec === 'global') return true
+        // Fournisseur portant explicitement le secteur actif
+        if (sSec === activeSector) return true
+        // Règle de catégorisation sectorielle
+        return isItemInSector(s, activeSector)
+      })
+
+      // 3. Fallback de sécurité : si aucun fournisseur spécifique trouvé, inclure les fournisseurs actifs de l'entreprise
+      if (filteredSData.length === 0 && activeRawSuppliers.length > 0) {
+        filteredSData = activeRawSuppliers
       }
 
       let filteredPData = filterItemsForSector(rawProducts, activeSector)
@@ -141,10 +195,13 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
 
       const mappedSuppliers = filteredSData.map((s: any) => ({
         id: s.id,
-        name: s.company_name || s.name,
-        company_name: s.company_name || s.name,
-        phone: s.phone,
-        city: s.city
+        code: s.code || '',
+        name: s.company_name || s.name || 'Fournisseur inconnu',
+        company_name: s.company_name || s.name || 'Fournisseur inconnu',
+        phone: s.phone || '',
+        city: s.city || 'Cotonou',
+        is_active: s.is_active ?? true,
+        sector_slug: s.sector_slug || ''
       }))
 
       const mappedProducts = filteredPData.map((p: any) => {
@@ -231,11 +288,10 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
         company_id: company.id,
         code: autoCode,
         company_name: newSupName.trim(),
-        phone: newSupPhone.trim(),
-        city: newSupCity.trim(),
+        phone: newSupPhone.trim() || 'Non renseigné',
+        city: newSupCity.trim() || 'Cotonou',
         current_payable: 0,
         sector_slug: activeSector,
-        secteur_slug: activeSector,
         sector_meta: { sector_slug: activeSector },
         is_active: true
       }).select().single()
@@ -244,9 +300,16 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
 
       const mapped = {
         ...data,
-        name: data.company_name || newSupName.trim()
+        id: data.id,
+        code: data.code || autoCode,
+        name: data.company_name || newSupName.trim(),
+        company_name: data.company_name || newSupName.trim(),
+        phone: data.phone || newSupPhone.trim(),
+        city: data.city || newSupCity.trim() || 'Cotonou',
+        is_active: true,
+        sector_slug: activeSector
       }
-      setSuppliers([...suppliers, mapped])
+      setSuppliers((prev) => [mapped, ...prev.filter((s) => s.id !== mapped.id)])
       setSelectedSupplierId(mapped.id)
       setShowNewSupplierInline(false)
       setNewSupName('')
@@ -260,6 +323,28 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
       })
     }
   }
+
+  // Filtrer les fournisseurs par la recherche en temps réel (nom, code, téléphone, ville)
+  const searchedSuppliers = useMemo(() => {
+    if (!supplierSearch.trim()) return suppliers
+    const q = supplierSearch.toLowerCase().trim()
+    return suppliers.filter((s) => {
+      const nom = String(s.company_name || s.name || '').toLowerCase()
+      const code = String(s.code || '').toLowerCase()
+      const tel = String(s.phone || '').toLowerCase()
+      const ville = String(s.city || '').toLowerCase()
+      return nom.includes(q) || code.includes(q) || tel.includes(q) || ville.includes(q)
+    })
+  }, [suppliers, supplierSearch])
+
+  // Synchronisation de la sélection du fournisseur
+  useEffect(() => {
+    if (suppliers.length > 0) {
+      if (!selectedSupplierId || !suppliers.some((s) => s.id === selectedSupplierId)) {
+        setSelectedSupplierId(suppliers[0].id)
+      }
+    }
+  }, [suppliers, selectedSupplierId])
 
   const selectedSupplier = suppliers.find((s) => s.id === selectedSupplierId)
 
@@ -677,22 +762,61 @@ export const PurchaseOrderModal: React.FC<PurchaseOrderModalProps> = ({ isOpen, 
                   </div>
                 </div>
               ) : (
-                <select
-                  required
-                  value={selectedSupplierId}
-                  onChange={(e) => setSelectedSupplierId(e.target.value)}
-                  className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl font-bold"
-                >
-                  {suppliers.length === 0 ? (
-                    <option value="">Aucun fournisseur (cliquez sur + Nouveau)</option>
-                  ) : (
-                    suppliers.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {s.name} ({s.city || 'Bénin'})
+                <div className="space-y-1.5">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2.5" />
+                    <input
+                      type="text"
+                      placeholder="Filtrer fournisseur (nom, code, téléphone)..."
+                      value={supplierSearch}
+                      onChange={(e) => setSupplierSearch(e.target.value)}
+                      className="w-full pl-8 pr-2 py-1.5 bg-white border border-slate-200 rounded-xl text-xs placeholder:text-slate-400"
+                    />
+                    {supplierSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setSupplierSearch('')}
+                        className="absolute right-2 top-2 text-slate-400 hover:text-slate-600 text-[10px]"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+
+                  <select
+                    required
+                    value={selectedSupplierId}
+                    onChange={(e) => setSelectedSupplierId(e.target.value)}
+                    className="w-full p-2 bg-slate-50 border border-slate-200 rounded-xl font-bold text-xs"
+                  >
+                    {loadingSuppliers ? (
+                      <option value="">Chargement des fournisseurs...</option>
+                    ) : searchedSuppliers.length === 0 ? (
+                      <option value="">
+                        {suppliers.length === 0
+                          ? "Aucun fournisseur enregistré (cliquez sur + Nouveau)"
+                          : "Aucun fournisseur ne correspond à cette recherche"}
                       </option>
-                    ))
+                    ) : (
+                      searchedSuppliers.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name || s.company_name} {s.code ? `[${s.code}]` : ''} ({s.city || 'Bénin'}{s.phone ? ` - ${s.phone}` : ''})
+                        </option>
+                      ))
+                    )}
+                  </select>
+
+                  {selectedSupplier && (
+                    <div className="px-2.5 py-1.5 bg-indigo-50/60 dark:bg-indigo-950/30 rounded-xl border border-indigo-100 dark:border-indigo-900/40 text-[11px] flex items-center justify-between">
+                      <span className="font-bold text-indigo-900 dark:text-indigo-200 truncate">
+                        {selectedSupplier.name || selectedSupplier.company_name} {selectedSupplier.code ? `(${selectedSupplier.code})` : ''}
+                      </span>
+                      <span className="text-indigo-600 dark:text-indigo-400 text-[10px] font-medium shrink-0 ml-2">
+                        {selectedSupplier.phone || selectedSupplier.city || 'Partenaire agréé'}
+                      </span>
+                    </div>
                   )}
-                </select>
+                </div>
               )}
             </div>
           </div>
