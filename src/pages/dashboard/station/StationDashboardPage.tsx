@@ -6,14 +6,16 @@
 // =============================================================================
 
 import React, { useState, useEffect, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Fuel, Database, Gauge, AlertTriangle, TrendingUp, DollarSign,
   Smartphone, CreditCard, Landmark, CheckCircle, RefreshCw, Truck,
-  ArrowUpRight, ArrowDownRight, Layers, ShieldAlert, Award
+  ArrowUpRight, ArrowDownRight, Layers, ShieldAlert, Award, FileText, BarChart3
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { formatFCFA } from '../../../utils/tax'
+import { StationDailyFuelSheetModal } from '../../../components/station/StationDailyFuelSheetModal'
 
 interface CuveStat {
   id: string
@@ -51,8 +53,10 @@ const fmt = (n: number) => formatFCFA(n || 0)
 const fmtVol = (n: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(n || 0) + ' L'
 
 export const StationDashboardPage: React.FC = () => {
-  const { companyId, sectorSlug } = useTenant()
+  const navigate = useNavigate()
+  const { companyId, sectorSlug, company } = useTenant()
   const [loading, setLoading] = useState(true)
+  const [showDailySheet, setShowDailySheet] = useState(false)
 
   const [cuves, setCuves] = useState<CuveStat[]>([])
   const [shiftsToday, setShiftsToday] = useState<ShiftSummary[]>([])
@@ -142,14 +146,28 @@ export const StationDashboardPage: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={loadDashboard}
-          disabled={loading}
-          className="self-start md:self-auto px-4 py-2.5 bg-white text-orange-700 hover:bg-orange-50 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-orange-600' : ''}`} />
-          Actualiser les données
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={() => setShowDailySheet(true)}
+            className="px-4 py-2.5 bg-slate-950 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm"
+          >
+            <FileText className="w-4 h-4 text-amber-400" /> Fiche Journalière
+          </button>
+          <button
+            onClick={() => navigate(`/app/${sectorSlug || 'station-service'}/reporting`)}
+            className="px-4 py-2.5 bg-white/20 hover:bg-white/30 text-white rounded-xl text-xs font-bold transition flex items-center gap-2"
+          >
+            <BarChart3 className="w-4 h-4" /> Marges & Rentabilité
+          </button>
+          <button
+            onClick={loadDashboard}
+            disabled={loading}
+            className="px-3.5 py-2.5 bg-white text-orange-700 hover:bg-orange-50 rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-orange-600' : ''}`} />
+            Actualiser
+          </button>
+        </div>
       </div>
 
       {/* ─── BANDEAU ALERTES ANOMALIES SI PRÉSENTES ─── */}
@@ -352,6 +370,14 @@ export const StationDashboardPage: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* ─── MODALE FICHE JOURNALIÈRE ─── */}
+      <StationDailyFuelSheetModal
+        isOpen={showDailySheet}
+        onClose={() => setShowDailySheet(false)}
+        companyId={companyId || ''}
+        company={company}
+      />
     </div>
   )
 }

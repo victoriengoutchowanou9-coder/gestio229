@@ -12,9 +12,10 @@ import {
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
-import { formatFCFA } from '../../../utils/tax'
+import { formatFCFA, calculateTaxFromTTC } from '../../../utils/tax'
 import { supabase } from '../../../lib/supabase'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
+import { loadFuelCommercialConfigs, FuelCommercialConfig } from '../../../services/stationFuelService'
 import {
   DEFAULT_STATION_FUELS,
   FuelPumpItem,
@@ -35,6 +36,7 @@ export const VenteDistributeurPage: React.FC = () => {
 
   // Données de configuration station
   const [pistolets, setPistolets] = useState<FuelPumpItem[]>([])
+  const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
   const [pompistes, setPompistes] = useState<any[]>([])
   const [cuves, setCuves] = useState<any[]>([])
   const [flotteVehicules, setFlotteVehicules] = useState<any[]>([])
@@ -62,11 +64,27 @@ export const VenteDistributeurPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      // 1. État de la caisse
+      // 1. Paramètres commerciaux et fiscaux officiels des carburants
+      const loadedConfigs = await loadFuelCommercialConfigs(companyId, company?.regime_fiscal, company?.tva_default_rate)
+      setFuelConfigs(loadedConfigs)
+
+      const getOfficialPrice = (productName: string, fallbackPrice: number) => {
+        const pLower = (productName || '').toLowerCase()
+        const conf = loadedConfigs.find(c => {
+          const cLower = c.nom.toLowerCase()
+          return cLower === pLower ||
+            (cLower.includes('super') && pLower.includes('super')) ||
+            (cLower.includes('gasoil') && pLower.includes('gasoil')) ||
+            (cLower.includes('pétrole') && (pLower.includes('pétrole') || pLower.includes('petrole')))
+        })
+        return conf ? conf.prix_vente : fallbackPrice
+      }
+
+      // 2. État de la caisse
       const caisseStatus = await checkSectorCaisseStatus(companyId, cleanSectorSlug)
       setActiveCaisse(caisseStatus?.session || null)
 
-      // 2. Cuves réelles (seules sources valides de stock de carburant)
+      // 3. Cuves réelles (seules sources valides de stock de carburant)
       const { data: cuveData } = await supabaseTenant('station_cuves')
         .select('*')
         .order('nom')
@@ -74,7 +92,7 @@ export const VenteDistributeurPage: React.FC = () => {
       const activeCuves = (cuveData || []).filter((c: any) => !c.statut || c.statut === 'ACTIF')
       setCuves(activeCuves)
 
-      // 3. Pompes / Pistolets
+      // 4. Pompes / Pistolets
       const { data: pistData } = await supabaseTenant('station_pistolets')
         .select('*')
         .order('numero_pompe')
@@ -92,12 +110,14 @@ export const VenteDistributeurPage: React.FC = () => {
             )
             // Disponibilité strictement liée au stock réel de la cuve associée
             const realStock = linkedCuve ? Math.max(0, Number(linkedCuve.stock_actuel ?? linkedCuve.stock_theorique ?? 0)) : 0
+            const defFall = p.produit?.toLowerCase().includes('gasoil') ? 700 : p.produit?.toLowerCase().includes('pétrole') ? 650 : 680
+            const unitP = getOfficialPrice(p.produit, Number(p.prix_actuel) || defFall)
             return {
               id: p.id,
               code_pistolet: p.code_pistolet || 'P01',
               numero_pompe: p.numero_pompe || 'Pompe 01',
               produit: p.produit || 'Essence Super',
-              prix_actuel: Number(p.prix_actuel) || (p.produit?.toLowerCase().includes('gasoil') ? 700 : p.produit?.toLowerCase().includes('pétrole') ? 650 : 680),
+              prix_actuel: unitP,
               cuve_id: linkedCuve?.id || p.cuve_id || undefined,
               cuve_nom: linkedCuve?.nom || p.cuve_nom || undefined,
               stock_disponible: realStock,
@@ -121,12 +141,14 @@ export const VenteDistributeurPage: React.FC = () => {
               )
               const realStock = linkedCuve ? Math.max(0, Number(linkedCuve.stock_actuel ?? linkedCuve.stock_theorique ?? 0)) : 0
               const typeCarb = p.type_carburant || 'Essence Super'
+              const defFall = typeCarb.toLowerCase().includes('gasoil') ? 700 : typeCarb.toLowerCase().includes('pétrole') ? 650 : 680
+              const unitP = getOfficialPrice(typeCarb, Number(p.prix_litre) || defFall)
               return {
                 id: p.id,
                 code_pistolet: `P-${p.numero_pompe || '01'}`,
                 numero_pompe: p.nom_pompe || p.numero_pompe || 'Pompe 01',
                 produit: typeCarb,
-                prix_actuel: Number(p.prix_litre) || (typeCarb.toLowerCase().includes('gasoil') ? 700 : typeCarb.toLowerCase().includes('pétrole') ? 650 : 680),
+                prix_actuel: unitP,
                 cuve_id: linkedCuve?.id || p.cuve_id || undefined,
                 cuve_nom: linkedCuve?.nom || p.cuve_associee || undefined,
                 stock_disponible: realStock,
@@ -208,7 +230,28 @@ export const VenteDistributeurPage: React.FC = () => {
     }
   }, [pistolets, selectedPistoletId])
 
-  const unitPrice = Number(currentPistolet?.prix_actuel) || 680
+  // Configuration commerciale & fiscale officielle du carburant actif
+  const activeFuelConfig = useMemo(() => {
+    if (!currentPistolet) return null
+    const pProd = (currentPistolet.produit || '').toLowerCase()
+    return fuelConfigs.find(c => {
+      const cNom = c.nom.toLowerCase()
+      return cNom === pProd ||
+        (cNom.includes('super') && pProd.includes('super')) ||
+        (cNom.includes('gasoil') && pProd.includes('gasoil')) ||
+        (cNom.includes('pétrole') && (pProd.includes('pétrole') || pProd.includes('petrole')))
+    }) || null
+  }, [currentPistolet, fuelConfigs])
+
+  const unitPrice = activeFuelConfig?.prix_vente || Number(currentPistolet?.prix_actuel) || 680
+
+  // Décomposition fiscale en direct
+  const currentLiveTax = useMemo(() => {
+    const m = parseFloat(inputMontant) || 0
+    const isTaxable = activeFuelConfig ? activeFuelConfig.is_tva_applicable : true
+    const rate = activeFuelConfig ? activeFuelConfig.taux_tva : (company?.tva_default_rate ?? 18)
+    return calculateTaxFromTTC(m, isTaxable, rate)
+  }, [inputMontant, activeFuelConfig, company])
 
   // Synchronisation Montant <-> Volume (cohérence stricte prix / montant / volume)
   useEffect(() => {
@@ -307,6 +350,11 @@ export const VenteDistributeurPage: React.FC = () => {
       // Calcul du nouveau stock (garanti >= 0)
       const newStock = Math.max(0, Math.round((stockDispo - vol) * 100) / 100)
 
+      // Calcul de la décomposition fiscale selon le statut du carburant et de l'entreprise
+      const isTaxable = activeFuelConfig ? activeFuelConfig.is_tva_applicable : true
+      const vatRate = activeFuelConfig ? activeFuelConfig.taux_tva : (company?.tva_default_rate ?? 18)
+      const taxResult = calculateTaxFromTTC(mnt, isTaxable, vatRate)
+
       // 1. Enregistrement dans sales_orders
       const salePayload: any = {
         company_id: companyId,
@@ -317,6 +365,9 @@ export const VenteDistributeurPage: React.FC = () => {
         status: 'COMPLETED',
         total_amount: mnt,
         paid_amount: mnt,
+        subtotal_ht: taxResult.htPrice,
+        total_ht: taxResult.htPrice,
+        total_tax: taxResult.vatAmount,
         payment_method: paymentMethod,
         payment_status: paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID',
         notes: saleNotes,
@@ -328,6 +379,11 @@ export const VenteDistributeurPage: React.FC = () => {
           code_pistolet: currentPistolet.code_pistolet,
           prix_litre: unitPrice,
           volume_litres: vol,
+          subtotal_ht: taxResult.htPrice,
+          total_tax: taxResult.vatAmount,
+          tva_rate: taxResult.vatRate,
+          is_tva_applicable: taxResult.isVatSubject,
+          statut_fiscal: activeFuelConfig?.statut_fiscal || (taxResult.isVatSubject ? `TVA ${taxResult.vatRate}%` : 'Exonéré / TPS'),
           pompiste_id: selectedPompisteId || null,
           pompiste_nom: pompisteNom,
           immatriculation: selectedVeh?.immatriculation || null,
@@ -409,14 +465,14 @@ export const VenteDistributeurPage: React.FC = () => {
         }
       }
 
-      // Préparation du reçu pour impression
+      // Préparation du reçu pour impression avec conformité fiscale
       const ticketData = {
         orderNumber,
         date: now.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }),
         heure: now.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
         stationNom: company?.name || 'STATION-SERVICE GESTIO229',
         telephone: company?.phone || '',
-        ifu: company?.ifu || '',
+        ifu: company?.ifu || company?.ifu_number || '',
         pompisteNom,
         pompe: currentPistolet.numero_pompe,
         pistolet: currentPistolet.code_pistolet,
@@ -424,6 +480,11 @@ export const VenteDistributeurPage: React.FC = () => {
         volume: vol,
         prixLitre: unitPrice,
         montantTotal: mnt,
+        montantHT: taxResult.htPrice,
+        montantTVA: taxResult.vatAmount,
+        tauxTVA: taxResult.vatRate,
+        isVatSubject: taxResult.isVatSubject,
+        mentionFiscale: activeFuelConfig?.statut_fiscal || (taxResult.isVatSubject ? `TVA ${taxResult.vatRate}% comprise` : 'Régime de la TPS — TVA non applicable (Art. 1084 CGI)'),
         modePaiement: paymentMethod,
         vehicule: selectedVeh?.immatriculation || null,
         client: clientNom,
@@ -899,10 +960,33 @@ export const VenteDistributeurPage: React.FC = () => {
               )}
 
               <div className="border-t border-slate-800 pt-2 flex justify-between items-baseline">
-                <span className="text-xs font-bold text-slate-300 uppercase">Total à encaisser :</span>
+                <span className="text-xs font-bold text-slate-300 uppercase">Total à encaisser (TTC) :</span>
                 <span className="text-2xl font-black font-mono text-emerald-400">
                   {formatFCFA(parseFloat(inputMontant) || 0)}
                 </span>
+              </div>
+
+              {/* Décomposition fiscale en direct */}
+              <div className="pt-2 border-t border-slate-850 grid grid-cols-3 gap-2 text-center text-[10px] bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+                <div>
+                  <span className="text-slate-400 block font-semibold uppercase">Net HT</span>
+                  <span className="font-mono font-bold text-slate-200">{formatFCFA(currentLiveTax.htPrice)}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-semibold uppercase">
+                    {currentLiveTax.isVatSubject ? `TVA (${currentLiveTax.vatRate}%)` : 'TVA'}
+                  </span>
+                  <span className={`font-mono font-bold ${currentLiveTax.isVatSubject ? 'text-amber-400' : 'text-slate-400'}`}>
+                    {currentLiveTax.isVatSubject ? formatFCFA(currentLiveTax.vatAmount) : 'Exonéré'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block font-semibold uppercase">TTC</span>
+                  <span className="font-mono font-black text-emerald-400">{formatFCFA(currentLiveTax.ttcPrice)}</span>
+                </div>
+              </div>
+              <div className="text-[10px] text-slate-400 italic text-center">
+                {activeFuelConfig?.statut_fiscal || (currentLiveTax.isVatSubject ? `Assujetti TVA ${currentLiveTax.vatRate}%` : 'Régime fiscal exonéré / TPS')}
               </div>
             </div>
 
@@ -1059,13 +1143,27 @@ export const VenteDistributeurPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Total & Paiement */}
-              <div className="space-y-1 pt-1">
-                <div className="flex justify-between text-sm font-black">
+              {/* Décomposition Fiscale & Paiement */}
+              <div className="space-y-1 pt-1 border-b border-dashed border-slate-300 pb-2">
+                <div className="flex justify-between text-xs text-slate-700">
+                  <span>Montant Net HT :</span>
+                  <span className="font-bold text-slate-900">{formatFCFA(lastTicket.montantHT || lastTicket.montantTotal)}</span>
+                </div>
+                {lastTicket.isVatSubject ? (
+                  <div className="flex justify-between text-xs text-slate-700">
+                    <span>TVA ({lastTicket.tauxTVA || 18}%) :</span>
+                    <span className="font-bold text-slate-900">{formatFCFA(lastTicket.montantTVA || 0)}</span>
+                  </div>
+                ) : (
+                  <div className="text-[10px] text-slate-500 italic py-0.5">
+                    {lastTicket.mentionFiscale || 'Régime fiscal exonéré / TPS'}
+                  </div>
+                )}
+                <div className="flex justify-between text-sm font-black pt-1 border-t border-slate-200">
                   <span>TOTAL TTC :</span>
                   <span className="text-slate-950">{formatFCFA(lastTicket.montantTotal)}</span>
                 </div>
-                <div className="flex justify-between text-[11px] text-slate-600">
+                <div className="flex justify-between text-[11px] text-slate-600 pt-0.5">
                   <span>Mode paiement :</span>
                   <span className="font-bold">{lastTicket.modePaiement}</span>
                 </div>

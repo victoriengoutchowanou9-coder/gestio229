@@ -7,13 +7,16 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   Fuel, Database, Gauge, Truck, Plus, RefreshCw, AlertTriangle, CheckCircle,
-  Clock, Calendar, User, Search, ArrowDownRight, ArrowUpRight, Check, X
+  Clock, Calendar, User, Search, ArrowDownRight, ArrowUpRight, Check, X,
+  DollarSign, FileText
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { showModal, showPrompt } from '../../../components/modals/CustomModalGestio'
 import { safeStationInsert, safeStationUpdate } from '../../../utils/stationFuelHelper'
+import { StationFuelPricingTab } from '../../../components/station/StationFuelPricingTab'
+import { StationDailyFuelSheetModal } from '../../../components/station/StationDailyFuelSheetModal'
 
 interface Cuve {
   id: string
@@ -78,10 +81,10 @@ const fmt = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n ||
 const fmtVol = (n: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 }).format(n || 0) + ' L'
 
 export const PompesCuvesPage: React.FC = () => {
-  const { companyId, sectorSlug } = useTenant()
+  const { companyId, sectorSlug, company, user, isAdmin } = useTenant()
   const { toast } = useUIStore() as any
 
-  const [activeTab, setActiveTab] = useState<'cuves' | 'pompes' | 'jaugeages' | 'receptions'>('cuves')
+  const [activeTab, setActiveTab] = useState<'cuves' | 'pompes' | 'jaugeages' | 'receptions' | 'tarifs'>('cuves')
   const [loading, setLoading] = useState(true)
 
   // Données
@@ -95,6 +98,7 @@ export const PompesCuvesPage: React.FC = () => {
   const [showPompeModal, setShowPompeModal] = useState(false)
   const [showJaugeModal, setShowJaugeModal] = useState(false)
   const [showReceptionModal, setShowReceptionModal] = useState(false)
+  const [showDailySheet, setShowDailySheet] = useState(false)
 
   // Formulaires
   const [cuveForm, setCuveForm] = useState({
@@ -393,6 +397,12 @@ export const PompesCuvesPage: React.FC = () => {
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           <button
+            onClick={() => setShowDailySheet(true)}
+            className="px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-2 shadow-sm"
+          >
+            <FileText className="w-4 h-4 text-amber-400" /> Fiche Journalière
+          </button>
+          <button
             onClick={loadAll}
             disabled={loading}
             className="p-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition"
@@ -503,6 +513,15 @@ export const PompesCuvesPage: React.FC = () => {
           }`}
         >
           <Truck className="w-4 h-4" /> Réceptions Carburant ({receptions.length})
+        </button>
+
+        <button
+          onClick={() => setActiveTab('tarifs')}
+          className={`px-5 py-3 text-xs font-bold border-b-2 transition flex items-center gap-2 whitespace-nowrap ${
+            activeTab === 'tarifs' ? 'border-amber-600 text-amber-700 bg-amber-50/50 rounded-t-2xl' : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <DollarSign className="w-4 h-4" /> Paramètres Commerciaux & Fiscaux
         </button>
       </div>
 
@@ -760,6 +779,17 @@ export const PompesCuvesPage: React.FC = () => {
             </table>
           </div>
         </div>
+      )}
+
+      {/* ─── ONGLET 5 : PARAMÈTRES COMMERCIAUX & FISCAUX ─── */}
+      {activeTab === 'tarifs' && (
+        <StationFuelPricingTab
+          companyId={companyId || ''}
+          company={company}
+          user={user}
+          isAdmin={isAdmin}
+          onPriceUpdated={loadAll}
+        />
       )}
 
       {/* ─── MODALE NOUVELLE CUVE ─── */}
@@ -1157,6 +1187,14 @@ export const PompesCuvesPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ─── MODALE FICHE JOURNALIÈRE DES CARBURANTS ─── */}
+      <StationDailyFuelSheetModal
+        isOpen={showDailySheet}
+        onClose={() => setShowDailySheet(false)}
+        companyId={companyId || ''}
+        company={company}
+      />
     </div>
   )
 }

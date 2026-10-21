@@ -15,7 +15,7 @@ import {
   BarChart3, TrendingUp, TrendingDown, DollarSign, ArrowUpRight, ArrowDownRight,
   RefreshCw, Calendar, Printer, Filter, Users, Package,
   CreditCard, Smartphone, CheckCircle2, ShoppingBag, PieChart,
-  ArrowRight, FileText, Layers, Eye
+  ArrowRight, FileText, Layers, Eye, Fuel
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -27,6 +27,7 @@ import { calculateStockValuation } from '../../../lib/stockCalcul'
 import { computeOrderMargin, computeConsolidatedFinancials, isTrueOperatingExpense } from '../../../lib/financialCalcul'
 import { extractCotonouDate, getCotonouDates } from '../../../services/hubFinancialService'
 import { FinancialDetailModal, FinancialDetailType } from '../../../components/modals/FinancialDetailModal'
+import { StationFuelProfitabilityReport } from '../../../components/station/StationFuelProfitabilityReport'
 
 const fmt = (n: number) =>
   new Intl.NumberFormat('fr-BJ').format(Math.round(n || 0)) + ' FCFA'
@@ -104,6 +105,7 @@ export const ReportingPage: React.FC = () => {
 
   // Filtres additionnels
   const [selectedPaymentMethod, setSelectedPaymentMethod] = useState<string>('all')
+  const [stationTab, setStationTab] = useState<'carburants' | 'general'>('carburants')
   const [loading, setLoading] = useState(true)
 
   // Modale de traçabilité et justification des indicateurs (Point 7)
@@ -570,7 +572,37 @@ export const ReportingPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Filtres de Période Complets ──────────────────────────────────────── */}
+      {/* ── Sélecteur Métier Dédié Station-Service ───────────────────────────── */}
+      {(currentSectorSlug === 'station-service' || (company as any)?.active_sector === 'station-service') && (
+        <div className="flex border-b border-slate-200 gap-2 overflow-x-auto bg-white p-2 rounded-2xl shadow-sm">
+          <button
+            onClick={() => setStationTab('carburants')}
+            className={`px-5 py-3 text-xs font-black rounded-xl transition flex items-center gap-2 ${
+              stationTab === 'carburants'
+                ? 'bg-amber-500 text-slate-950 shadow-md shadow-amber-500/20'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <Fuel className="w-4 h-4" /> Rentabilité des Carburants (Super, Gasoil, Pétrole)
+          </button>
+          <button
+            onClick={() => setStationTab('general')}
+            className={`px-5 py-3 text-xs font-bold rounded-xl transition flex items-center gap-2 ${
+              stationTab === 'general'
+                ? 'bg-slate-900 text-white shadow-md'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            <ShoppingBag className="w-4 h-4" /> Ventes Générales & Lubrifiants
+          </button>
+        </div>
+      )}
+
+      {(currentSectorSlug === 'station-service' || (company as any)?.active_sector === 'station-service') && stationTab === 'carburants' ? (
+        <StationFuelProfitabilityReport companyId={company?.id || ''} company={company} />
+      ) : (
+        <>
+          {/* ── Filtres de Période Complets ──────────────────────────────────────── */}
       <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-slate-100 pb-2">
           <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -859,6 +891,8 @@ export const ReportingPage: React.FC = () => {
           </div>
         )}
       </div>
+      </>
+      )}
 
       {/* ── Modale Universelle de Traçabilité Financière (Point 7) ────────────── */}
       <FinancialDetailModal
