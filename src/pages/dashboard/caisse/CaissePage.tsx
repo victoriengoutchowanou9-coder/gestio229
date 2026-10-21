@@ -757,24 +757,75 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             setAllDepensesTotals({ especes: dEsp, momo: dMo })
           }
 
-          // Retraits validés du secteur pour le sous-texte
-          const { data: retAll } = await supabase
-            .from('demandes_retrait')
-            .select('montant, mode_paiement, statut')
-            .eq('company_id', currentCompanyId)
-            .eq('secteur_id', secId)
-            .in('statut', ['valide', 'APPROVED'])
-          if (retAll && retAll.length > 0) {
-            let rEsp = 0
-            let rMo = 0
-            retAll.forEach((r: any) => {
-              const m = (r.mode_paiement || '').toLowerCase()
-              const amt = Number(r.montant) || 0
-              if (['espece', 'especes', 'cash'].includes(m)) rEsp += amt
-              else rMo += amt
-            })
-            setAllRetraitsTotals({ especes: rEsp, momo: rMo })
+          // Charger toutes les demandes de retrait de caisse (en attente & validées)
+          let loadedRequests: any[] = []
+          try {
+            const { data: retData } = await supabase
+              .from('demandes_retrait')
+              .select('*')
+              .eq('company_id', currentCompanyId)
+              .gte('created_at', startOfDay)
+              .neq('statut', 'refuse')
+              .neq('statut', 'REJECTED')
+              .order('created_at', { ascending: false })
+
+            if (retData && retData.length > 0) {
+              loadedRequests = retData.map((r: any) => ({
+                id: r.id,
+                created_at: r.created_at,
+                requested_by: r.demandeur_nom || 'Caissier',
+                type: (r.mode_paiement === 'momo') ? 'MoMo' : 'Espèces',
+                amount: Number(r.montant) || 0,
+                motif: r.motif || 'Retrait caisse vers trésorerie',
+                sector_slug: currentSectorSlug,
+                status: (r.statut === 'valide' || r.statut === 'APPROVED') ? 'APPROVED' : 'EN_ATTENTE'
+              }))
+            }
+          } catch (_) {}
+
+          if (loadedRequests.length === 0) {
+            try {
+              const { data: transData } = await supabase
+                .from('treasury_transfers')
+                .select('*')
+                .eq('company_id', currentCompanyId)
+                .gte('created_at', startOfDay)
+                .neq('status', 'REJECTED')
+                .neq('status', 'refuse')
+                .order('created_at', { ascending: false })
+
+              if (transData && transData.length > 0) {
+                loadedRequests = transData
+                  .filter((t: any) => !t.motif?.startsWith('[DÉCAISSEMENT]'))
+                  .map((t: any) => ({
+                    id: t.id,
+                    created_at: t.created_at,
+                    requested_by: t.requested_by || 'Caissier',
+                    type: String(t.type || '').toLowerCase().includes('mo') ? 'MoMo' : 'Espèces',
+                    amount: Number(t.amount) || 0,
+                    motif: t.motif || 'Versement caisse vers trésorerie',
+                    sector_slug: t.sector_slug || currentSectorSlug,
+                    status: (t.status === 'APPROVED' || t.status === 'valide') ? 'APPROVED' : 'EN_ATTENTE'
+                  }))
+              }
+            } catch (_) {}
           }
+
+          // Fallback stockage local si réseau indisponible
+          if (loadedRequests.length === 0) {
+            try {
+              const cached = JSON.parse(localStorage.getItem(`gestio_caisse_pending_requests_${currentCompanyId}_${currentSectorSlug}`) || '[]')
+              if (Array.isArray(cached) && cached.length > 0) {
+                loadedRequests = cached
+              }
+            } catch (_) {}
+          }
+
+          setPendingRequests(loadedRequests)
+
+          const rEsp = loadedRequests.filter(r => r.type === 'Espèces' && r.status !== 'REFUSE').reduce((acc, r) => acc + (Number(r.amount) || 0), 0)
+          const rMo = loadedRequests.filter(r => r.type === 'MoMo' && r.status !== 'REFUSE').reduce((acc, r) => acc + (Number(r.amount) || 0), 0)
+          setAllRetraitsTotals({ especes: rEsp, momo: rMo })
           // 6. Total créances de l'entreprise pour le rapport
           try {
             const { data: dbClients } = await supabase
@@ -1112,6 +1163,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         fallbackMomoJour: momoDuJour,
         fallbackDepensesEsp: sumDepensesEspeces,
         fallbackRetraitsEsp: retraitsEspecesJour,
+        fallbackRetraitsMomo: retraitsMomoJour,
         fallbackFondTheoriqueEsp: fondTheoriqueEsp,
         fallbackFondTheoriqueMomo: fondTheoriqueMomo,
       })
@@ -1637,9 +1689,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       } catch (_) {}
     }
 
+    try {
+      localStorage.setItem(`gestio_caisse_pending_requests_${currentCompanyId}_${currentSectorSlug}`, JSON.stringify(updated))
+    } catch (_) {}
+
     toast.success(
-      'Demande envoyée vers la Trésorerie',
-      `Demande de versement de ${fmt(req.amount)} (${req.type}) soumise à validation admin. Montant bloqué en attente.`
+      'Retrait de caisse enregistré !',
+      `Montant de ${fmt(req.amount)} (${req.type}) déduit immédiatement du fond de caisse et transmis à la Trésorerie.`
     )
     loadCaisseData()
   }

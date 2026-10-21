@@ -724,6 +724,7 @@ export async function calculerSoldesSessionAutomatique(params: {
   fallbackMomoJour?: number
   fallbackDepensesEsp?: number
   fallbackRetraitsEsp?: number
+  fallbackRetraitsMomo?: number
   fallbackFondTheoriqueEsp?: number
   fallbackFondTheoriqueMomo?: number
 }): Promise<SessionCalculatedBalances> {
@@ -886,7 +887,8 @@ export async function calculerSoldesSessionAutomatique(params: {
       .select('montant, mode_paiement, statut')
       .eq('company_id', companyId)
       .gte('created_at', startIso)
-      .in('statut', ['valide', 'APPROVED', 'APPROUVE', 'VALIDE'])
+      .neq('statut', 'refuse')
+      .neq('statut', 'REJECTED')
 
     if (rets && rets.length > 0) {
       rets.forEach((r: any) => {
@@ -904,13 +906,15 @@ export async function calculerSoldesSessionAutomatique(params: {
   try {
     const { data: trans } = await supabase
       .from('treasury_transfers')
-      .select('amount, type, status')
+      .select('amount, type, status, motif')
       .eq('company_id', companyId)
       .gte('created_at', startIso)
-      .in('status', ['APPROVED', 'VALIDE', 'valide'])
+      .neq('status', 'REJECTED')
+      .neq('status', 'refuse')
 
     if (trans && trans.length > 0) {
       trans.forEach((t: any) => {
+        if (t.motif && t.motif.startsWith('[DÉCAISSEMENT]')) return
         const amt = Number(t.amount) || 0
         const isCash = t.type === 'Espèces' || t.type === 'especes' || t.type === 'cash'
         if (isCash) sumVersementsEspeces += amt
@@ -924,13 +928,14 @@ export async function calculerSoldesSessionAutomatique(params: {
   const entreesMomo = Math.max(sumVentesMomo + sumRemboursementsMomo, Number(params.fallbackMomoJour) || 0)
   const depensesEspeces = Math.max(sumDepensesEspeces, Number(params.fallbackDepensesEsp) || 0)
   const versementsEspeces = Math.max(sumVersementsEspeces, Number(params.fallbackRetraitsEsp) || 0)
+  const versementsMomo = Math.max(sumVersementsMomo, Number(params.fallbackRetraitsMomo) || 0)
 
   // Équation A : Solde théorique de clôture en espèces
   // Solde théorique = Fond initial + Entrées espèces - Dépenses espèces - Versements sortants espèces
   const soldeTheoriqueEspeces = fondInitialEspeces + entreesEspeces - depensesEspeces - versementsEspeces
 
   // Équation B : Solde théorique Mobile Money
-  const soldeTheoriqueMomo = fondInitialMomo + entreesMomo - sumDepensesMomo - sumVersementsMomo
+  const soldeTheoriqueMomo = fondInitialMomo + entreesMomo - sumDepensesMomo - versementsMomo
 
   // Équation 5 : Montant à reverser = Solde théorique en espèces - Montant conservé en caisse
   // Par défaut dans l'architecture GESTIO 229, le solde théorique calculé reste conservé en caisse pour l'ouverture suivante
@@ -1659,13 +1664,15 @@ export async function calculerFondsActuelsSector(
     try {
       const { data: transfers } = await supabase
         .from('treasury_transfers')
-        .select('amount, type, status')
+        .select('amount, type, status, motif')
         .eq('company_id', companyId)
         .eq('sector_slug', clean)
-        .in('status', ['APPROVED', 'VALIDE', 'valide'])
+        .neq('status', 'REJECTED')
+        .neq('status', 'refuse')
 
       if (transfers && transfers.length > 0) {
         transfers.forEach((t: any) => {
+          if (t.motif && t.motif.startsWith('[DÉCAISSEMENT]')) return
           const isCash = t.type === 'Espèces' || t.type === 'especes' || t.type === 'cash'
           const amt = Number(t.amount || 0)
           if (isCash) totalRetraitsEsp += amt
@@ -1681,7 +1688,8 @@ export async function calculerFondsActuelsSector(
         .select('montant, mode_paiement, statut')
         .eq('company_id', companyId)
         .eq('sector_slug', clean)
-        .in('statut', ['valide', 'APPROVED'])
+        .neq('statut', 'refuse')
+        .neq('statut', 'REJECTED')
 
       if (retAll && retAll.length > 0) {
         retAll.forEach((r: any) => {
