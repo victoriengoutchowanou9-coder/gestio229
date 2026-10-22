@@ -134,6 +134,7 @@ export default defineConfig({
     __APP_DOMAIN__: JSON.stringify('www.gestio229.com'),
   },
   build: {
+    manifest: true,
     chunkSizeWarningLimit: 1000,
     rollupOptions: {
       output: {

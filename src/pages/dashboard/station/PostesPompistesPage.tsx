@@ -15,6 +15,7 @@ import { safeStationInsert } from '../../../utils/stationFuelHelper'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { showModal } from '../../../components/modals/CustomModalGestio'
+import { loadFuelCommercialConfigs, FuelCommercialConfig } from '../../../services/stationFuelService'
 
 interface Pompiste {
   id: string
@@ -61,7 +62,7 @@ const fmt = (n: number) => new Intl.NumberFormat('fr-FR').format(Math.round(n ||
 const fmtVol = (n: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 }).format(n || 0) + ' L'
 
 export const PostesPompistesPage: React.FC = () => {
-  const { companyId, sectorSlug } = useTenant()
+  const { companyId, sectorSlug, company } = useTenant()
   const { toast } = useUIStore() as any
 
   const [activeTab, setActiveTab] = useState<'shifts' | 'equipe'>('shifts')
@@ -70,6 +71,7 @@ export const PostesPompistesPage: React.FC = () => {
   const [pompistes, setPompistes] = useState<Pompiste[]>([])
   const [shifts, setShifts] = useState<ShiftCloture[]>([])
   const [pompes, setPompes] = useState<Pompe[]>([])
+  const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
 
   // Modales
   const [showShiftModal, setShowShiftModal] = useState(false)
@@ -147,12 +149,20 @@ export const PostesPompistesPage: React.FC = () => {
         .eq('sector_slug', cleanSlug)
       setPompes(pmps || [])
 
+      // Tarifs officiels des carburants
+      try {
+        const cfgs = await loadFuelCommercialConfigs(companyId, company?.regime_fiscal, company?.default_tva_rate)
+        setFuelConfigs(cfgs || [])
+      } catch (cErr) {
+        console.warn('Erreur chargement tarifs carburants:', cErr)
+      }
+
     } catch (err: any) {
       console.error(err)
     } finally {
       setLoading(false)
     }
-  }, [companyId, sectorSlug])
+  }, [companyId, sectorSlug, company?.regime_fiscal, company?.default_tva_rate])
 
   useEffect(() => { loadData() }, [loadData])
 
@@ -554,11 +564,26 @@ export const PostesPompistesPage: React.FC = () => {
                     value={shiftForm.pompe_id}
                     onChange={e => {
                       const sel = pompes.find(p => p.id === e.target.value)
+                      let price = 680
+                      if (sel) {
+                        const matchedCfg = fuelConfigs.find(f => {
+                          const tProd = (sel.type_carburant || '').toLowerCase()
+                          const fNom = f.nom.toLowerCase()
+                          return fNom === tProd ||
+                            (fNom.includes('super') && tProd.includes('super')) ||
+                            (fNom.includes('gasoil') && tProd.includes('gasoil')) ||
+                            (fNom.includes('pétrole') && (tProd.includes('pétrole') || tProd.includes('petrole')))
+                        })
+                        if (matchedCfg) price = matchedCfg.prix_vente
+                        else if (sel.type_carburant?.toLowerCase().includes('gasoil')) price = 700
+                        else if (sel.type_carburant?.toLowerCase().includes('pétrole') || sel.type_carburant?.toLowerCase().includes('petrole')) price = 650
+                      }
                       setShiftForm({
                         ...shiftForm,
                         pompe_id: e.target.value,
                         index_debut: sel ? sel.index_actuel : shiftForm.index_debut,
-                        index_fin: sel ? sel.index_actuel : shiftForm.index_fin
+                        index_fin: sel ? sel.index_actuel : shiftForm.index_fin,
+                        prix_litre: price
                       })
                     }}
                     className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1 font-bold text-slate-800"

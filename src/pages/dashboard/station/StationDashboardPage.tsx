@@ -10,12 +10,14 @@ import { useNavigate } from 'react-router-dom'
 import {
   Fuel, Database, Gauge, AlertTriangle, TrendingUp, DollarSign,
   Smartphone, CreditCard, Landmark, CheckCircle, RefreshCw, Truck,
-  ArrowUpRight, ArrowDownRight, Layers, ShieldAlert, Award, FileText, BarChart3
+  ArrowUpRight, ArrowDownRight, Layers, ShieldAlert, Award, FileText, BarChart3,
+  Receipt, ArrowRight
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
 import { formatFCFA } from '../../../utils/tax'
 import { StationDailyFuelSheetModal } from '../../../components/station/StationDailyFuelSheetModal'
+import { loadFuelCommercialConfigs, FuelCommercialConfig } from '../../../services/stationFuelService'
 
 interface CuveStat {
   id: string
@@ -49,6 +51,19 @@ interface JaugeageSummary {
   date_jaugeage: string
 }
 
+interface TankerReceptionSummary {
+  id: string
+  reference: string
+  fournisseur_nom: string
+  cuve_nom: string
+  produit: string
+  quantite_recue: number
+  ecart_livraison: number
+  montant_total: number
+  date_reception: string
+  statut: string
+}
+
 const fmt = (n: number) => formatFCFA(n || 0)
 const fmtVol = (n: number) => new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 1 }).format(n || 0) + ' L'
 
@@ -61,6 +76,8 @@ export const StationDashboardPage: React.FC = () => {
   const [cuves, setCuves] = useState<CuveStat[]>([])
   const [shiftsToday, setShiftsToday] = useState<ShiftSummary[]>([])
   const [jaugeagesRecent, setJaugeagesRecent] = useState<JaugeageSummary[]>([])
+  const [receptionsRecent, setReceptionsRecent] = useState<TankerReceptionSummary[]>([])
+  const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
 
   const loadDashboard = useCallback(async () => {
     if (!companyId) return
@@ -96,12 +113,30 @@ export const StationDashboardPage: React.FC = () => {
         .limit(10)
       setJaugeagesRecent(jData || [])
 
+      // Dernières réceptions citernes
+      const { data: rData } = await supabase
+        .from('station_receptions_carburant')
+        .select('id, reference, fournisseur_nom, cuve_nom, produit, quantite_recue, ecart_livraison, montant_total, date_reception, statut')
+        .eq('company_id', companyId)
+        .eq('sector_slug', cleanSlug)
+        .order('created_at', { ascending: false })
+        .limit(5)
+      setReceptionsRecent(rData || [])
+
+      // Configurations commerciales et fiscales
+      try {
+        const cfgs = await loadFuelCommercialConfigs(companyId, company?.regime_fiscal, company?.default_tva_rate)
+        setFuelConfigs(cfgs || [])
+      } catch (fErr) {
+        console.warn('Erreur chargement fuelConfigs:', fErr)
+      }
+
     } catch (err: any) {
       console.error(err)
     } finally {
       setLoading(false)
     }
-  }, [companyId, sectorSlug])
+  }, [companyId, sectorSlug, company?.regime_fiscal, company?.default_tva_rate])
 
   useEffect(() => { loadDashboard() }, [loadDashboard])
 
@@ -369,6 +404,158 @@ export const StationDashboardPage: React.FC = () => {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ─── TARIFS OFFICIELS & MARGES CARBURANTS ─── */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+              <TrendingUp className="w-5 h-5 text-emerald-600" />
+              Tarifs Officiels & Rentabilité par Carburant
+            </h3>
+            <p className="text-xs text-slate-500">
+              Paramètres commerciaux, statut fiscal et marges brutes unitaires réglementées
+            </p>
+          </div>
+          <button
+            onClick={() => navigate(`/app/${sectorSlug || 'station-service'}/pompes-cuves`)}
+            className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 self-start sm:self-auto"
+          >
+            Gérer les tarifs <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {fuelConfigs.map(f => {
+            const puVenteTTC = f.prix_vente
+            const puAchatTTC = f.prix_achat_reference
+            const isTax = f.is_tva_applicable
+            const tauxTva = isTax ? f.taux_tva : 0
+
+            const puVenteHT = isTax && tauxTva > 0 ? Math.round((puVenteTTC / (1 + tauxTva / 100)) * 100) / 100 : puVenteTTC
+            const puAchatHT = isTax && tauxTva > 0 ? Math.round((puAchatTTC / (1 + tauxTva / 100)) * 100) / 100 : puAchatTTC
+            const margeBruteUnitaire = puAchatTTC > 0 ? Math.round((puVenteHT - puAchatHT) * 100) / 100 : null
+            const tauxMarque = (margeBruteUnitaire !== null && puVenteHT > 0)
+              ? Math.round((margeBruteUnitaire / puVenteHT) * 1000) / 10
+              : null
+
+            return (
+              <div key={f.code} className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="font-black text-slate-900 text-sm">{f.nom}</span>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-200 text-slate-700">
+                    {f.code}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                    <span className="text-[10px] text-slate-400 block font-bold">Prix Vente Officiel</span>
+                    <span className="text-sm font-black text-slate-900 font-mono mt-0.5 block">
+                      {fmt(puVenteTTC)} / L
+                    </span>
+                    <span className="text-[9px] text-slate-500">
+                      HT : {fmt(puVenteHT)} {isTax && tauxTva > 0 ? `(+${tauxTva}% TVA)` : '(Exonéré)'}
+                    </span>
+                  </div>
+
+                  <div className="p-2.5 bg-white rounded-xl border border-slate-200">
+                    <span className="text-[10px] text-slate-400 block font-bold">Prix Achat Réf. TTC</span>
+                    <span className="text-sm font-black text-slate-700 font-mono mt-0.5 block">
+                      {puAchatTTC > 0 ? `${fmt(puAchatTTC)} / L` : 'Non défini'}
+                    </span>
+                    <span className="text-[9px] text-slate-500">
+                      HT : {fmt(puAchatHT)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between">
+                  <div>
+                    <span className="text-[10px] font-bold text-emerald-900 block">Marge Brute / Litre</span>
+                    <span className="text-xs text-emerald-700 font-semibold">
+                      {tauxMarque !== null ? `Taux marque : ${tauxMarque}%` : 'Coût requis'}
+                    </span>
+                  </div>
+                  <span className="text-sm font-black text-emerald-800 font-mono">
+                    {margeBruteUnitaire !== null ? `${fmt(margeBruteUnitaire)} / L` : '—'}
+                  </span>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* ─── DERNIÈRES RÉCEPTIONS CITERNES ─── */}
+      <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+              <Truck className="w-5 h-5 text-emerald-600" />
+              Derniers Dépotages Camion-Citerne
+            </h3>
+            <p className="text-xs text-slate-500">
+              Historique récent des livraisons, volumes dépotés et contrôle des écarts de livraison
+            </p>
+          </div>
+          <button
+            onClick={() => navigate(`/app/${sectorSlug || 'station-service'}/pompes-cuves`)}
+            className="text-xs font-bold text-orange-600 hover:text-orange-700 flex items-center gap-1 self-start sm:self-auto"
+          >
+            Voir tous les approvisionnements <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {receptionsRecent.length === 0 ? (
+          <p className="text-xs text-slate-400 py-6 text-center">Aucune réception de camion-citerne enregistrée.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-50 border-b border-slate-100 text-slate-500 font-semibold uppercase">
+                <tr>
+                  <th className="p-2.5">Date / Réf</th>
+                  <th className="p-2.5">Fournisseur</th>
+                  <th className="p-2.5">Cuve Réceptrice</th>
+                  <th className="p-2.5 text-right">Volume Dépoté</th>
+                  <th className="p-2.5 text-right">Écart Livraison</th>
+                  <th className="p-2.5 text-right">Montant Total</th>
+                  <th className="p-2.5 text-center">Statut</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {receptionsRecent.map(r => {
+                  const ec = Number(r.ecart_livraison || 0)
+                  return (
+                    <tr key={r.id} className="hover:bg-slate-50 transition">
+                      <td className="p-2.5 whitespace-nowrap">
+                        <span className="font-bold text-slate-900">{r.reference}</span>
+                        <div className="text-[10px] text-slate-400">{r.date_reception}</div>
+                      </td>
+                      <td className="p-2.5 font-bold text-slate-700">{r.fournisseur_nom}</td>
+                      <td className="p-2.5 text-orange-600 font-bold">{r.cuve_nom} ({r.produit})</td>
+                      <td className="p-2.5 text-right font-mono font-black text-emerald-700">{fmtVol(r.quantite_recue)}</td>
+                      <td className={`p-2.5 text-right font-mono font-black ${
+                        ec < 0 ? 'text-rose-600' : ec > 0 ? 'text-blue-600' : 'text-slate-400'
+                      }`}>
+                        {ec > 0 ? '+' : ''}{fmtVol(ec)}
+                      </td>
+                      <td className="p-2.5 text-right font-mono font-bold text-slate-900">{fmt(r.montant_total)}</td>
+                      <td className="p-2.5 text-center">
+                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                          r.statut === 'AVEC_ECART' ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                        }`}>
+                          {r.statut}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {/* ─── MODALE FICHE JOURNALIÈRE ─── */}

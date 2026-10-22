@@ -111,6 +111,12 @@ if (typeof window !== 'undefined') {
     }
   })
 
+  // Récupération automatique immédiate en cas d'invalidation de chunk par déploiement Vercel
+  window.addEventListener('vite:preloadError', (event) => {
+    event.preventDefault()
+    handleSafeAutoReload('vite:preloadError chunk missing')
+  })
+
   window.addEventListener('error', (event) => {
     const msg = (event?.error?.message || event?.message || '')
     if (msg.includes('Cannot access') && msg.includes('before initialization')) {

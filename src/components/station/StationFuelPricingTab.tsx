@@ -288,37 +288,60 @@ export const StationFuelPricingTab: React.FC<Props> = ({
                     <span className="text-xs font-black text-slate-700">
                       {formatFCFA(puHT)} / L
                     </span>
+                    {conf.is_tva_applicable && (
+                      <span className="text-[10px] text-blue-600 block mt-0.5">
+                        +{formatFCFA(Math.round(conf.prix_vente - puHT))} TVA
+                      </span>
+                    )}
                   </div>
                 </div>
 
-                {/* Coût d'achat retenu (CUMP / Référence) */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <span className="text-[10px] font-bold text-slate-500 block uppercase">
-                      Coût d'Acquisition
-                    </span>
-                    <span className="text-sm font-black text-slate-800">
-                      {unitCost > 0 ? `${formatFCFA(unitCost)} / L` : 'Non renseigné'}
-                    </span>
-                    <span className="text-[9px] text-slate-400 block mt-0.5 truncate">
-                      {cost?.hasActual ? 'CUMP (Réceptions réelles)' : 'Coût de référence'}
-                    </span>
-                  </div>
+                {/* Coût d'achat (TTC / HT / CUMP) */}
+                {(() => {
+                  const costTtc = unitCost > 0 ? unitCost : conf.prix_achat_reference
+                  const costHt = conf.is_tva_applicable && conf.taux_tva > 0
+                    ? Math.round((costTtc / (1 + conf.taux_tva / 100)) * 100) / 100
+                    : costTtc
+                  const costTva = conf.is_tva_applicable && conf.taux_tva > 0
+                    ? Math.round((costTtc - costHt) * 100) / 100
+                    : 0
 
-                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <span className="text-[10px] font-bold text-slate-500 block uppercase">
-                      Marge Brute / Litre
-                    </span>
-                    <span className={`text-sm font-black ${
-                      margeUnitaire !== null && margeUnitaire >= 0 ? 'text-emerald-700' : 'text-rose-600'
-                    }`}>
-                      {margeUnitaire !== null ? `${formatFCFA(margeUnitaire)} / L` : 'Indisponible'}
-                    </span>
-                    <span className="text-[9px] text-slate-500 block mt-0.5 font-bold">
-                      {tauxMarque !== null ? `Taux de marque: ${tauxMarque}%` : 'Coût requis'}
-                    </span>
-                  </div>
-                </div>
+                  return (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="text-[10px] font-bold text-slate-500 block uppercase">
+                          Prix Achat TTC
+                        </span>
+                        <span className="text-sm font-black text-slate-800">
+                          {costTtc > 0 ? `${formatFCFA(costTtc)} / L` : 'Non renseigné'}
+                        </span>
+                        <span className="text-[9px] text-slate-400 block mt-0.5">
+                          HT : {formatFCFA(costHt)} {costTva > 0 ? `(TVA: ${formatFCFA(costTva)})` : ''}
+                        </span>
+                        <span className="text-[9px] text-indigo-600 block font-semibold truncate mt-0.5">
+                          {cost?.hasActual ? 'CUMP (Réceptions réelles)' : 'Coût référence'}
+                        </span>
+                      </div>
+
+                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                        <span className="text-[10px] font-bold text-slate-500 block uppercase">
+                          Marge Brute / Litre
+                        </span>
+                        <span className={`text-sm font-black ${
+                          margeUnitaire !== null && margeUnitaire >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                        }`}>
+                          {margeUnitaire !== null ? `${formatFCFA(margeUnitaire)} / L` : 'Indisponible'}
+                        </span>
+                        <span className="text-[9px] text-slate-500 block mt-0.5 font-bold">
+                          {tauxMarque !== null ? `Taux de marque: ${tauxMarque}%` : 'Coût requis'}
+                        </span>
+                        <span className="text-[9px] text-slate-400 block">
+                          {unitCost > 0 && margeUnitaire !== null ? `Taux marge: ${Math.round((margeUnitaire / unitCost) * 1000) / 10}%` : ''}
+                        </span>
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Paramétrage Fiscal */}
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
@@ -449,7 +472,7 @@ export const StationFuelPricingTab: React.FC<Props> = ({
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-slate-700 mb-1">
-                    Prix de Vente Officiel (FCFA / L) <span className="text-rose-500">*</span>
+                    Prix de Vente Officiel (TTC / L) <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -460,12 +483,12 @@ export const StationFuelPricingTab: React.FC<Props> = ({
                     required
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-black text-slate-900 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">Tarif fixé par décret ou arrêté ministériel.</p>
+                  <p className="text-[10px] text-slate-400 mt-1">Tarif officiel fixé par arrêté ministériel.</p>
                 </div>
 
                 <div>
                   <label className="block text-slate-700 mb-1">
-                    Coût d'Achat Référence (FCFA / L)
+                    Prix Unitaire d'Achat TTC (FCFA / L) <span className="text-rose-500">*</span>
                   </label>
                   <input
                     type="number"
@@ -473,9 +496,10 @@ export const StationFuelPricingTab: React.FC<Props> = ({
                     step="1"
                     value={formCostPrice}
                     onChange={(e) => setFormCostPrice(Number(e.target.value))}
+                    required
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-300 font-black text-slate-900 text-sm focus:ring-2 focus:ring-amber-500 focus:outline-none"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">Utilisé en secours si aucune citerne n'est jaugée.</p>
+                  <p className="text-[10px] text-slate-400 mt-1">Coût d'achat réel par litre TTC (facture fournisseur).</p>
                 </div>
               </div>
 
@@ -509,54 +533,99 @@ export const StationFuelPricingTab: React.FC<Props> = ({
               </div>
 
               {/* Paramétrage Fiscal & TVA */}
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="font-bold text-slate-900 block text-xs">Statut Fiscal & TVA</span>
-                    <span className="text-[10px] text-slate-500 font-normal">
-                      Régime entreprise : {company?.regime_fiscal || 'Régime Réel Simplifié'}
-                    </span>
-                  </div>
+              {(() => {
+                const liveAchatHT = formTvaApplicable && formTvaRate > 0
+                  ? Math.round(formCostPrice / (1 + formTvaRate / 100))
+                  : formCostPrice
+                const liveTvaAchat = formTvaApplicable && formTvaRate > 0
+                  ? formCostPrice - liveAchatHT
+                  : 0
 
-                  <label className="relative inline-flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={formTvaApplicable}
-                      onChange={(e) => setFormTvaApplicable(e.target.checked)}
-                      className="sr-only peer"
-                    />
-                    <div className="w-9 h-5 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-amber-600"></div>
-                  </label>
-                </div>
+                const liveVenteHT = formTvaApplicable && formTvaRate > 0
+                  ? Math.round(formPrice / (1 + formTvaRate / 100))
+                  : formPrice
+                const liveTvaVente = formTvaApplicable && formTvaRate > 0
+                  ? formPrice - liveVenteHT
+                  : 0
 
-                {formTvaApplicable && (
-                  <div className="grid grid-cols-2 gap-3 pt-2 border-t border-slate-200">
-                    <div>
-                      <label className="block text-[11px] text-slate-600 mb-0.5">Taux TVA (%)</label>
-                      <input
-                        type="number"
-                        min="0"
-                        max="100"
-                        value={formTvaRate}
-                        onChange={(e) => setFormTvaRate(Number(e.target.value))}
-                        className="w-full px-3 py-1.5 rounded-lg border border-slate-300 font-bold text-xs"
-                      />
-                    </div>
-                    <div>
-                      <span className="block text-[11px] text-slate-500 mb-0.5">Montant HT calculé</span>
-                      <span className="font-black text-slate-900 text-xs">
-                        {formatFCFA(Math.round(formPrice / (1 + (formTvaRate / 100))))} / L
+                const liveMarge = formTvaApplicable
+                  ? liveVenteHT - liveAchatHT
+                  : formPrice - formCostPrice
+
+                return (
+                  <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          id="modal_fuel_tva_checkbox"
+                          checked={formTvaApplicable}
+                          onChange={(e) => setFormTvaApplicable(e.target.checked)}
+                          className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500 border-slate-300 cursor-pointer"
+                        />
+                        <label
+                          htmlFor="modal_fuel_tva_checkbox"
+                          className="font-bold text-slate-900 cursor-pointer select-none text-xs flex items-center gap-1.5"
+                        >
+                          <Shield className="w-3.5 h-3.5 text-amber-600" />
+                          TVA applicable sur les carburants
+                        </label>
+                      </div>
+
+                      <span className="text-[10px] text-slate-500 font-medium">
+                        Régime : {company?.regime_fiscal || 'Régime Réel Simplifié (RRS)'}
                       </span>
                     </div>
-                  </div>
-                )}
 
-                {!formTvaApplicable && (
-                  <p className="text-[10px] text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-200">
-                    TVA désactivée conformément au régime fiscal validé (Exonération / Régime de la TPS). La mention légale d'exonération sera apposée sur les reçus.
-                  </p>
-                )}
-              </div>
+                    {formTvaApplicable ? (
+                      <div className="space-y-2 pt-2 border-t border-slate-200">
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-[11px] text-slate-600 mb-0.5">Taux TVA (%)</label>
+                            <input
+                              type="number"
+                              min="0"
+                              max="100"
+                              value={formTvaRate}
+                              onChange={(e) => setFormTvaRate(Number(e.target.value))}
+                              className="w-full px-3 py-1.5 rounded-lg border border-slate-300 font-bold text-xs"
+                            />
+                          </div>
+                          <div>
+                            <span className="block text-[11px] text-slate-500 mb-0.5">Achat Net HT</span>
+                            <span className="font-black text-slate-900 text-xs block mt-1">
+                              {formatFCFA(liveAchatHT)} / L
+                            </span>
+                            <span className="text-[9px] text-slate-400">+{formatFCFA(liveTvaAchat)} TVA</span>
+                          </div>
+                          <div>
+                            <span className="block text-[11px] text-slate-500 mb-0.5">Vente Net HT</span>
+                            <span className="font-black text-slate-900 text-xs block mt-1">
+                              {formatFCFA(liveVenteHT)} / L
+                            </span>
+                            <span className="text-[9px] text-blue-600">+{formatFCFA(liveTvaVente)} TVA</span>
+                          </div>
+                        </div>
+
+                        <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200 flex items-center justify-between text-emerald-900">
+                          <span className="font-bold">Marge brute unitaire estimée (HT) :</span>
+                          <span className="font-black text-sm">{formatFCFA(liveMarge)} / Litre</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="pt-2 border-t border-slate-200 space-y-2">
+                        <p className="text-[10px] text-amber-800 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                          TVA décochée / non applicable (Régime TPS ou exonération légale). Aucune TVA n'est imputée ni ajoutée aux prix d'achat ou de vente.
+                        </p>
+                        <div className="p-2.5 bg-slate-100 rounded-xl border border-slate-200 flex items-center justify-between text-slate-800">
+                          <span className="font-bold">Marge brute unitaire estimée (TTC) :</span>
+                          <span className="font-black text-sm">{formatFCFA(liveMarge)} / Litre</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {/* Source Réglementaire & Notes */}
               <div>

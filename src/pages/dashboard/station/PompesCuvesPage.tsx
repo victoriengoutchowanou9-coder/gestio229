@@ -8,7 +8,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import {
   Fuel, Database, Gauge, Truck, Plus, RefreshCw, AlertTriangle, CheckCircle,
   Clock, Calendar, User, Search, ArrowDownRight, ArrowUpRight, Check, X,
-  DollarSign, FileText
+  DollarSign, FileText, Building2, Receipt, ShieldCheck
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useTenant } from '../../../hooks/useTenant'
@@ -17,6 +17,7 @@ import { showModal, showPrompt } from '../../../components/modals/CustomModalGes
 import { safeStationInsert, safeStationUpdate } from '../../../utils/stationFuelHelper'
 import { StationFuelPricingTab } from '../../../components/station/StationFuelPricingTab'
 import { StationDailyFuelSheetModal } from '../../../components/station/StationDailyFuelSheetModal'
+import { loadFuelCommercialConfigs, FuelCommercialConfig } from '../../../services/stationFuelService'
 
 interface Cuve {
   id: string
@@ -63,14 +64,26 @@ interface Reception {
   id: string
   reference: string
   fournisseur_nom: string
+  fournisseur_id?: string
   date_reception: string
   produit: string
   cuve_nom: string
+  cuve_id?: string
+  quantite_commandee?: number
   quantite_facturee: number
   quantite_recue: number
   ecart_livraison: number
   prix_achat_litre: number
+  prix_achat_ht?: number
+  is_tva_applicable?: boolean
+  taux_tva?: number
+  montant_ht?: number
+  montant_tva?: number
+  frais_transport?: number
   montant_total: number
+  numero_bl?: string
+  numero_facture?: string
+  numero_bc?: string
   numero_camion?: string
   chauffeur?: string
   statut: string
@@ -92,6 +105,9 @@ export const PompesCuvesPage: React.FC = () => {
   const [pompes, setPompes] = useState<Pompe[]>([])
   const [jaugeages, setJaugeages] = useState<Jaugeage[]>([])
   const [receptions, setReceptions] = useState<Reception[]>([])
+  const [suppliers, setSuppliers] = useState<{ id: string; company_name: string; phone?: string }[]>([])
+  const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
+  const [isManualSupplier, setIsManualSupplier] = useState(false)
 
   // Modales
   const [showCuveModal, setShowCuveModal] = useState(false)
@@ -115,9 +131,24 @@ export const PompesCuvesPage: React.FC = () => {
   })
 
   const [receptionForm, setReceptionForm] = useState({
-    fournisseur_nom: 'SONACOP / Dépôt Akpakpa', date_reception: new Date().toISOString().slice(0, 10),
-    produit: 'Essence Super', cuve_id: '', quantite_facturee: 10000, quantite_recue: 10000,
-    prix_achat_litre: 600, numero_camion: '', chauffeur: '', observation: ''
+    fournisseur_id: '',
+    fournisseur_nom: 'SONACOP / Dépôt Akpakpa',
+    date_reception: new Date().toISOString().slice(0, 10),
+    produit: 'Essence Super',
+    cuve_id: '',
+    quantite_commandee: 10000,
+    quantite_facturee: 10000,
+    quantite_recue: 10000,
+    prix_achat_litre: 620, // TTC par défaut
+    is_tva_applicable: true,
+    taux_tva: 18,
+    frais_transport: 0,
+    numero_bl: '',
+    numero_facture: '',
+    numero_bc: '',
+    numero_camion: '',
+    chauffeur: '',
+    observation: ''
   })
 
   const notify = useCallback((type: 'success' | 'error', msg: string) => {
@@ -179,12 +210,32 @@ export const PompesCuvesPage: React.FC = () => {
         .limit(50)
       setReceptions(rData || [])
 
+      // 5. Fournisseurs réels de l'entreprise
+      try {
+        const { data: sData } = await supabase
+          .from('suppliers')
+          .select('id, company_name, phone')
+          .eq('company_id', companyId)
+          .order('company_name')
+        setSuppliers(sData || [])
+      } catch (sErr) {
+        console.warn('Erreur chargement fournisseurs:', sErr)
+      }
+
+      // 6. Tarifs & Paramètres fiscaux carburants
+      try {
+        const cfgs = await loadFuelCommercialConfigs(companyId, company?.regime_fiscal, company?.default_tva_rate)
+        setFuelConfigs(cfgs || [])
+      } catch (cErr) {
+        console.warn('Erreur chargement tarifs carburants:', cErr)
+      }
+
     } catch (err: any) {
       console.error(err)
     } finally {
       setLoading(false)
     }
-  }, [companyId, sectorSlug])
+  }, [companyId, sectorSlug, company?.regime_fiscal, company?.default_tva_rate])
 
   useEffect(() => { loadAll() }, [loadAll])
 
@@ -326,31 +377,68 @@ export const PompesCuvesPage: React.FC = () => {
   const handleSaveReception = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!receptionForm.cuve_id) return notify('error', 'Veuillez sélectionner la cuve destinataire')
+    const targetCuve = cuves.find(c => c.id === receptionForm.cuve_id)
+    if (!targetCuve) return notify('error', 'Cuve introuvable')
+
+    const nomFournisseur = (receptionForm.fournisseur_nom || '').trim()
+    if (!nomFournisseur) return notify('error', 'Le nom du fournisseur ou dépôt est requis')
+
     try {
       const cleanSlug = sectorSlug || 'station-service'
-      const targetCuve = cuves.find(c => c.id === receptionForm.cuve_id)
-      if (!targetCuve) return
-
       const qteFacturee = Number(receptionForm.quantite_facturee) || 0
       const qteRecue = Number(receptionForm.quantite_recue) || 0
+      const qteCommandee = Number(receptionForm.quantite_commandee) || qteFacturee
       const ecart = qteRecue - qteFacturee
-      const prixLitre = Number(receptionForm.prix_achat_litre) || 0
-      const total = qteFacturee * prixLitre
+      const prixLitreTTC = Number(receptionForm.prix_achat_litre) || 0
+      const fraisTransport = Number(receptionForm.frais_transport) || 0
+
+      // Décomposition fiscale rigoureuse (sans double TVA)
+      // Le prix saisi est TTC par défaut
+      const isTaxable = receptionForm.is_tva_applicable
+      const tauxTva = isTaxable ? (Number(receptionForm.taux_tva) || 18) : 0
+      const totalCarburantTTC = qteRecue * prixLitreTTC
+      const montantHT = isTaxable && tauxTva > 0
+        ? Math.round((totalCarburantTTC / (1 + tauxTva / 100)) * 100) / 100
+        : totalCarburantTTC
+      const montantTVA = isTaxable && tauxTva > 0
+        ? Math.round((totalCarburantTTC - montantHT) * 100) / 100
+        : 0
+      const puHT = isTaxable && tauxTva > 0
+        ? Math.round((prixLitreTTC / (1 + tauxTva / 100)) * 100) / 100
+        : prixLitreTTC
+      const montantTotal = totalCarburantTTC + fraisTransport
+
+      const refNum = receptionForm.numero_bl
+        ? `BL-${receptionForm.numero_bl}`
+        : receptionForm.numero_facture
+          ? `FAC-${receptionForm.numero_facture}`
+          : `REC-${Date.now().toString().slice(-6)}`
 
       const payload = {
         company_id: companyId,
         sector_slug: cleanSlug,
-        fournisseur_nom: receptionForm.fournisseur_nom,
+        reference: refNum,
+        fournisseur_id: receptionForm.fournisseur_id || null,
+        fournisseur_nom: nomFournisseur,
+        numero_bl: receptionForm.numero_bl,
+        numero_facture: receptionForm.numero_facture,
+        numero_bc: receptionForm.numero_bc,
         date_reception: receptionForm.date_reception,
         produit: targetCuve.produit,
         cuve_id: targetCuve.id,
         cuve_nom: targetCuve.nom,
-        quantite_commandee: qteFacturee,
+        quantite_commandee: qteCommandee,
         quantite_facturee: qteFacturee,
         quantite_recue: qteRecue,
         ecart_livraison: ecart,
-        prix_achat_litre: prixLitre,
-        montant_total: total,
+        prix_achat_litre: prixLitreTTC,
+        prix_achat_ht: puHT,
+        is_tva_applicable: isTaxable,
+        taux_tva: tauxTva,
+        montant_ht: montantHT,
+        montant_tva: montantTVA,
+        frais_transport: fraisTransport,
+        montant_total: montantTotal,
         numero_camion: receptionForm.numero_camion,
         chauffeur: receptionForm.chauffeur,
         statut: ecart !== 0 ? 'AVEC_ECART' : 'VALIDE',
@@ -360,14 +448,32 @@ export const PompesCuvesPage: React.FC = () => {
       const { error } = await safeStationInsert(supabase, 'station_receptions_carburant', { ...payload, tenant_id: companyId })
       if (error) throw error
 
-      // Augmentation du stock dans la cuve
-      const nouveauStock = (targetCuve.stock_actuel || 0) + qteRecue
+      // Augmentation du stock dans la cuve UNIQUEMENT après validation effective
+      const stockAvant = targetCuve.stock_actuel || 0
+      const nouveauStock = stockAvant + qteRecue
       await supabase
         .from('station_cuves')
         .update({ stock_actuel: nouveauStock, stock_theorique: nouveauStock, updated_at: new Date().toISOString() })
         .eq('id', targetCuve.id)
 
-      notify('success', `Réception enregistrée (+${fmtVol(qteRecue)} dans ${targetCuve.nom})`)
+      // Traçabilité mouvement de cuve
+      try {
+        await safeStationInsert(supabase, 'station_mouvements_cuves', {
+          company_id: companyId,
+          sector_slug: cleanSlug,
+          cuve_id: targetCuve.id,
+          type_mouvement: 'RECEPTION_CITERNE',
+          quantite: qteRecue,
+          stock_avant: stockAvant,
+          stock_apres: nouveauStock,
+          reference: refNum,
+          description: `Réception citerne ${nomFournisseur} (+${fmtVol(qteRecue)} ${targetCuve.produit})`
+        })
+      } catch (mErr) {
+        console.warn('Mouvement cuve log notice:', mErr)
+      }
+
+      notify('success', `Réception validée : +${fmtVol(qteRecue)} dans ${targetCuve.nom} (${fmt(montantTotal)} FCFA)`)
       setShowReceptionModal(false)
       loadAll()
     } catch (err: any) {
@@ -1062,42 +1168,166 @@ export const PompesCuvesPage: React.FC = () => {
       {/* ─── MODALE RÉCEPTION CITERNE ─── */}
       {showReceptionModal && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg p-6 space-y-4">
+          <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-              <h2 className="font-black text-slate-900 text-base flex items-center gap-2">
-                <Truck className="w-5 h-5 text-emerald-600" /> Réception Citerne Carburant
-              </h2>
-              <button onClick={() => setShowReceptionModal(false)} className="p-1 rounded-lg hover:bg-slate-100"><X className="w-5 h-5 text-slate-400" /></button>
-            </div>
-            <form onSubmit={handleSaveReception} className="space-y-3">
               <div>
-                <label className="text-xs font-bold text-slate-700">Fournisseur / Dépôt pétrolier *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="Ex: SONACOP, TotalEnergies, Oryx..."
-                  value={receptionForm.fournisseur_nom}
-                  onChange={e => setReceptionForm({ ...receptionForm, fournisseur_nom: e.target.value })}
-                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1 font-bold"
-                />
+                <h2 className="font-black text-slate-900 text-base flex items-center gap-2">
+                  <Truck className="w-5 h-5 text-emerald-600" /> Réception Citerne & Achat Carburant
+                </h2>
+                <p className="text-[11px] text-slate-500">
+                  Dépotage en cuve, rapprochement BL / Facture et décomposition fiscale réelle
+                </p>
+              </div>
+              <button onClick={() => setShowReceptionModal(false)} className="p-1 rounded-lg hover:bg-slate-100">
+                <X className="w-5 h-5 text-slate-400" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveReception} className="space-y-4">
+              {/* Fournisseur & Références */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-slate-500" />
+                    Fournisseur / Dépôt Pétrolier *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setIsManualSupplier(!isManualSupplier)}
+                    className="text-[11px] text-orange-600 font-bold hover:underline"
+                  >
+                    {isManualSupplier ? 'Choisir dans la liste des fournisseurs' : '+ Saisie manuelle / Autre dépôt'}
+                  </button>
+                </div>
+
+                {!isManualSupplier && suppliers.length > 0 ? (
+                  <select
+                    required
+                    value={receptionForm.fournisseur_id}
+                    onChange={(e) => {
+                      const selId = e.target.value
+                      const sel = suppliers.find(s => s.id === selId)
+                      setReceptionForm({
+                        ...receptionForm,
+                        fournisseur_id: selId,
+                        fournisseur_nom: sel?.company_name || receptionForm.fournisseur_nom
+                      })
+                    }}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white font-bold text-slate-800"
+                  >
+                    <option value="">— Sélectionner le fournisseur enregistré —</option>
+                    {suppliers.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.company_name} {s.phone ? `(${s.phone})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ex: SONACOP Dépôt Akpakpa, Oryx Energies, TotalEnergies..."
+                    value={receptionForm.fournisseur_nom}
+                    onChange={e => setReceptionForm({ ...receptionForm, fournisseur_nom: e.target.value, fournisseur_id: '' })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl bg-white font-bold"
+                  />
+                )}
+
+                <div className="grid grid-cols-3 gap-3 pt-1">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-600">N° Bon Commande (BC)</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: BC-2026-0042"
+                      value={receptionForm.numero_bc}
+                      onChange={e => setReceptionForm({ ...receptionForm, numero_bc: e.target.value })}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-white font-mono"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-600">N° Bordereau BL *</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: BL-89412"
+                      value={receptionForm.numero_bl}
+                      onChange={e => setReceptionForm({ ...receptionForm, numero_bl: e.target.value })}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-white font-mono font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-600">N° Facture Fournisseur</label>
+                    <input
+                      type="text"
+                      placeholder="Ex: FAC-45129"
+                      value={receptionForm.numero_facture}
+                      onChange={e => setReceptionForm({ ...receptionForm, numero_facture: e.target.value })}
+                      className="w-full px-3 py-1.5 text-xs border border-slate-200 rounded-xl bg-white font-mono"
+                    />
+                  </div>
+                </div>
               </div>
 
+              {/* Cuve destinataire & Détection automatique du produit et tarif */}
               <div>
-                <label className="text-xs font-bold text-slate-700">Cuve de dépotage *</label>
+                <label className="text-xs font-bold text-slate-700">Cuve réceptrice de dépotage *</label>
                 <select
                   required
                   value={receptionForm.cuve_id}
-                  onChange={e => setReceptionForm({ ...receptionForm, cuve_id: e.target.value })}
+                  onChange={e => {
+                    const cId = e.target.value
+                    const target = cuves.find(c => c.id === cId)
+                    if (target) {
+                      // Chercher la configuration tarifaire du carburant associé
+                      const matchedCfg = fuelConfigs.find(f => {
+                        const tProd = (target.produit || '').toLowerCase()
+                        const fNom = f.nom.toLowerCase()
+                        return fNom === tProd ||
+                          (fNom.includes('super') && tProd.includes('super')) ||
+                          (fNom.includes('gasoil') && tProd.includes('gasoil')) ||
+                          (fNom.includes('pétrole') && (tProd.includes('pétrole') || tProd.includes('petrole')))
+                      })
+
+                      const pAchat = matchedCfg ? matchedCfg.prix_achat_reference : (target.produit.toLowerCase().includes('gasoil') ? 640 : 620)
+                      const isTax = matchedCfg ? matchedCfg.is_tva_applicable : true
+                      const tvaRate = matchedCfg ? matchedCfg.taux_tva : (company?.default_tva_rate ?? 18)
+
+                      setReceptionForm({
+                        ...receptionForm,
+                        cuve_id: cId,
+                        produit: target.produit,
+                        prix_achat_litre: pAchat,
+                        is_tva_applicable: isTax,
+                        taux_tva: tvaRate
+                      })
+                    } else {
+                      setReceptionForm({ ...receptionForm, cuve_id: cId })
+                    }
+                  }}
                   className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1 font-bold text-slate-800"
                 >
-                  <option value="">— Choisir la cuve réceptrice —</option>
-                  {cuves.map(c => (
-                    <option key={c.id} value={c.id}>{c.nom} ({c.produit}) — Reste disponible : {fmtVol(c.capacite - c.stock_actuel)}</option>
-                  ))}
+                  <option value="">— Choisir la cuve destinataire —</option>
+                  {cuves.map(c => {
+                    const restant = Math.max(0, c.capacite - c.stock_actuel)
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.nom} ({c.produit}) — Stock actuel : {fmtVol(c.stock_actuel)} / {fmtVol(c.capacite)} (Espace libre : {fmtVol(restant)})
+                      </option>
+                    )
+                  })}
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* Volumes : Commandé, Facturé BL et Réel Dépoté */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Volume Commandé (L)</label>
+                  <input
+                    type="number"
+                    value={receptionForm.quantite_commandee}
+                    onChange={e => setReceptionForm({ ...receptionForm, quantite_commandee: Number(e.target.value) })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1 font-mono"
+                  />
+                </div>
                 <div>
                   <label className="text-xs font-bold text-slate-700">Volume Facturé BL (L) *</label>
                   <input
@@ -1120,17 +1350,17 @@ export const PompesCuvesPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Rapprochement immédiat */}
+              {/* Rapprochement immédiat de volume */}
               {(() => {
                 const ecart = Number(receptionForm.quantite_recue) - Number(receptionForm.quantite_facturee)
                 if (ecart !== 0) {
                   return (
                     <div className="p-3 bg-amber-50 border border-amber-200 rounded-2xl text-xs flex items-center justify-between text-amber-900">
-                      <span className="font-bold flex items-center gap-1">
+                      <span className="font-bold flex items-center gap-1.5">
                         <AlertTriangle className="w-4 h-4 text-amber-600" /> Écart de livraison détecté :
                       </span>
-                      <span className="font-mono font-black text-sm text-rose-600">
-                        {ecart > 0 ? '+' : ''}{fmtVol(ecart)}
+                      <span className={`font-mono font-black text-sm ${ecart < 0 ? 'text-rose-600' : 'text-blue-600'}`}>
+                        {ecart > 0 ? '+' : ''}{fmtVol(ecart)} ({ecart < 0 ? 'Perte / Manquant transporteur' : 'Excédent livraison'})
                       </span>
                     </div>
                   )
@@ -1138,25 +1368,147 @@ export const PompesCuvesPage: React.FC = () => {
                 return null
               })()}
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Prix d'achat au Litre (FCFA)</label>
-                  <input
-                    type="number"
-                    value={receptionForm.prix_achat_litre}
-                    onChange={e => setReceptionForm({ ...receptionForm, prix_achat_litre: Number(e.target.value) })}
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-slate-700">Totalité Facturée (FCFA)</label>
-                  <div className="px-3 py-2 text-sm border border-slate-200 bg-slate-50 rounded-xl mt-1 font-mono font-black text-slate-900">
-                    {fmt(Number(receptionForm.quantite_facturee) * Number(receptionForm.prix_achat_litre))} F
+              {/* Prix d'achat, TVA et Frais de transport */}
+              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-slate-700">
+                      Prix d'Achat unitaire au Litre (FCFA TTC) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      value={receptionForm.prix_achat_litre}
+                      onChange={e => setReceptionForm({ ...receptionForm, prix_achat_litre: Number(e.target.value) })}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 bg-white rounded-xl mt-1 font-mono font-bold text-slate-900"
+                    />
+                    <span className="text-[10px] text-slate-400">Prix unitaire TTC figurant sur la facture fournisseur</span>
                   </div>
+
+                  <div>
+                    <label className="text-xs font-bold text-slate-700">Frais d'Approche / Transport (FCFA)</label>
+                    <input
+                      type="number"
+                      value={receptionForm.frais_transport}
+                      onChange={e => setReceptionForm({ ...receptionForm, frais_transport: Number(e.target.value) })}
+                      className="w-full px-3 py-2 text-sm border border-slate-200 bg-white rounded-xl mt-1 font-mono"
+                      placeholder="0"
+                    />
+                    <span className="text-[10px] text-slate-400">Incorporés au coût de revient réel</span>
+                  </div>
+                </div>
+
+                {/* Case à cocher TVA visible immédiatement à côté du libellé TVA */}
+                <div className="pt-2 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="modal_reception_tva_checkbox"
+                      checked={receptionForm.is_tva_applicable}
+                      onChange={(e) => setReceptionForm({ ...receptionForm, is_tva_applicable: e.target.checked })}
+                      className="w-4 h-4 rounded text-orange-600 focus:ring-orange-500 border-slate-300 cursor-pointer"
+                    />
+                    <label
+                      htmlFor="modal_reception_tva_checkbox"
+                      className="font-bold text-slate-900 cursor-pointer select-none text-xs flex items-center gap-1.5"
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5 text-orange-600" />
+                      TVA applicable sur cette livraison
+                    </label>
+                  </div>
+
+                  {receptionForm.is_tva_applicable ? (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-slate-600">Taux :</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="100"
+                        value={receptionForm.taux_tva}
+                        onChange={e => setReceptionForm({ ...receptionForm, taux_tva: Number(e.target.value) })}
+                        className="w-20 px-2.5 py-1 text-xs border border-slate-200 rounded-lg bg-white font-bold font-mono"
+                      />
+                      <span className="text-xs font-bold text-slate-600">%</span>
+                    </div>
+                  ) : (
+                    <span className="text-[11px] text-amber-700 font-medium bg-amber-50 px-2.5 py-1 rounded-lg border border-amber-200">
+                      Régime exonéré / TPS (Aucun ajout de TVA, HT = TTC)
+                    </span>
+                  )}
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              {/* Synthèse financière et décomposition fiscale en direct */}
+              {(() => {
+                const qteRec = Number(receptionForm.quantite_recue) || 0
+                const puTtc = Number(receptionForm.prix_achat_litre) || 0
+                const fraisTr = Number(receptionForm.frais_transport) || 0
+                const isTax = receptionForm.is_tva_applicable
+                const tvaRate = isTax ? (Number(receptionForm.taux_tva) || 18) : 0
+
+                const totalCarburantTTC = qteRec * puTtc
+                const netHT = isTax && tvaRate > 0
+                  ? Math.round((totalCarburantTTC / (1 + tvaRate / 100)) * 100) / 100
+                  : totalCarburantTTC
+                const tvaAmount = isTax && tvaRate > 0
+                  ? Math.round((totalCarburantTTC - netHT) * 100) / 100
+                  : 0
+                const totalGlobal = totalCarburantTTC + fraisTr
+                const coutRevientUnitaire = qteRec > 0 ? Math.round((totalGlobal / qteRec) * 100) / 100 : 0
+
+                return (
+                  <div className="p-4 bg-slate-900 text-white rounded-2xl space-y-2 text-xs">
+                    <div className="flex items-center justify-between pb-2 border-b border-slate-800 text-slate-300">
+                      <span className="font-bold flex items-center gap-1.5">
+                        <Receipt className="w-4 h-4 text-emerald-400" />
+                        Décomposition de la Facturation Fournisseur :
+                      </span>
+                      <span className="font-mono text-emerald-400 font-bold">{fmtVol(qteRec)}</span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1 font-mono text-[11px]">
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Net HT Carburant</span>
+                        <span className="font-black text-slate-100">{fmt(netHT)} F</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">TVA Déductible</span>
+                        <span className={`font-black ${tvaAmount > 0 ? 'text-blue-400' : 'text-slate-500'}`}>
+                          {tvaAmount > 0 ? `${fmt(tvaAmount)} F` : '0 F (Exonéré)'}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Frais Approche</span>
+                        <span className="font-black text-amber-300">{fmt(fraisTr)} F</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Total TTC Global</span>
+                        <span className="font-black text-emerald-400 text-xs">{fmt(totalGlobal)} F</span>
+                      </div>
+                    </div>
+
+                    <div className="pt-2 border-t border-slate-800 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-300">Coût de revient réel unitaire (CUMP de cette livraison) :</span>
+                      <span className="font-mono font-black text-amber-300 text-sm">
+                        {fmt(coutRevientUnitaire)} FCFA / L
+                      </span>
+                    </div>
+                  </div>
+                )
+              })()}
+
+              {/* Logistique camion & chauffeur */}
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-700">Date réception *</label>
+                  <input
+                    type="date"
+                    required
+                    value={receptionForm.date_reception}
+                    onChange={e => setReceptionForm({ ...receptionForm, date_reception: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1 font-medium"
+                  />
+                </div>
                 <div>
                   <label className="text-xs font-bold text-slate-700">N° Camion Citerne</label>
                   <input
@@ -1179,9 +1531,32 @@ export const PompesCuvesPage: React.FC = () => {
                 </div>
               </div>
 
-              <div className="pt-3 flex justify-end gap-2">
-                <button type="button" onClick={() => setShowReceptionModal(false)} className="px-4 py-2 border rounded-xl text-xs font-bold text-slate-600">Annuler</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm">Valider la Réception</button>
+              <div>
+                <label className="text-xs font-bold text-slate-700">Observations / Certificat de jaugeage</label>
+                <textarea
+                  rows={2}
+                  placeholder="Notes sur la livraison, densité mesurée, température de dépotage..."
+                  value={receptionForm.observation}
+                  onChange={e => setReceptionForm({ ...receptionForm, observation: e.target.value })}
+                  className="w-full px-3 py-2 text-sm border border-slate-200 rounded-xl mt-1"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowReceptionModal(false)}
+                  className="px-4 py-2 border rounded-xl text-xs font-bold text-slate-600 hover:bg-slate-50 transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Valider la Réception & Augmenter le Stock
+                </button>
               </div>
             </form>
           </div>

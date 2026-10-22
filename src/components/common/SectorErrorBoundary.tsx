@@ -106,16 +106,28 @@ export class SectorErrorBoundary extends Component<Props, State> {
     console.error('[SectorErrorBoundary] Erreur interceptée dans le sous-logiciel :', error, errorInfo)
     this.setState({ errorInfo })
 
-    // ── Auto-reload si chunk error ou TDZ error (post-déploiement) ──────
-    const isAutoRecoverable = detectChunkError(error) || detectTDZError(error)
+    // ── Auto-réparation immédiate si chunk JS absent (post-déploiement Vercel) ──
+    const isChunkErr = detectChunkError(error)
+    if (error.message.includes('Failed to fetch dynamically imported module') || isChunkErr) {
+      // Supprime le cache et force le rechargement vers la nouvelle version
+      try {
+        localStorage.clear()
+        sessionStorage.clear()
+      } catch (_) {}
+      if ('caches' in window) {
+        caches.keys().then((names) => names.forEach((name) => caches.delete(name)))
+      }
+      window.location.reload()
+      return
+    }
+
+    // ── Auto-reload si TDZ error ──────
+    const isAutoRecoverable = detectTDZError(error)
     if (isAutoRecoverable) {
-      // 1. Garde anti-boucle stricte : ne recharger automatiquement QU'UNE SEULE FOIS
       const alreadyReloaded = sessionStorage.getItem('gestio229_chunk_reload_done') === '1'
       if (!alreadyReloaded) {
-        console.warn('[SectorErrorBoundary] Incident post-déploiement détecté — purge du cache et rechargement dans 3 secondes…')
         sessionStorage.setItem('gestio229_chunk_reload_done', '1')
-        this.setState({ isAutoReloading: true, countdown: 3 })
-
+        this.setState({ isAutoReloading: true, countdown: 2 })
         this.countdownTimer = setInterval(async () => {
           if (this.state.countdown <= 1) {
             if (this.countdownTimer) clearInterval(this.countdownTimer)
@@ -126,8 +138,6 @@ export class SectorErrorBoundary extends Component<Props, State> {
           this.setState((prev) => ({ countdown: prev.countdown - 1 }))
         }, 1000)
       } else {
-        // Déjà rechargé : NE JAMAIS RECHARGER EN BOUCLE
-        console.warn('[SectorErrorBoundary] Rechargement automatique déjà exécuté une fois. Boucle bloquée, affichage des boutons manuels.')
         this.setState({ isAutoReloading: false, countdown: 0 })
       }
     }
