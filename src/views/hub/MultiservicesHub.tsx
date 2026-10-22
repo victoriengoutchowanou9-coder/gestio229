@@ -26,10 +26,12 @@ import {
   LogOut,
   Sun,
   Moon,
+  Fuel,
+  Droplets,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { supabase } from '../../lib/supabase';
-import { fetchHubFinancialMetrics, HubFinancialTotals } from '../../services/hubFinancialService';
+import { fetchHubFinancialMetrics, HubFinancialTotals, StationSectorFinancials } from '../../services/hubFinancialService';
 import { useUIStore } from '../../store/uiStore';
 import { formatNumber, formatFCFA } from '../../utils/formatters';
 import {
@@ -78,6 +80,8 @@ export interface ActivityEntry {
   netMargin: number;           // MARGE NETTE DU MOIS
   monthNetMargin: number;      // MARGE NETTE DU MOIS
   archivedAt?: string;         // Date d'archivage (si statut = ARCHIVEE)
+  /** Indicateurs financiers Station-Service (6 KPI Hub) */
+  stationFinancials?: StationSectorFinancials;
 }
 
 export interface MultiservicesHubProps {
@@ -582,6 +586,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             revenue: card.monthRevenue,
             expenses: card.monthExpenses,
             netMargin: card.monthNetMargin,
+            // Indicateurs financiers Station-Service (6 KPI)
+            stationFinancials: card.stationFinancials,
           };
         })
       );
@@ -1485,27 +1491,117 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     );
                   })()}
 
-                  {/* 5.1 Corps financier obligatoire : CA, Dépenses, Marge Nette (Cumul mensuel Cotonou UTC+1) */}
-                  <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
-                    darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
-                  }`}>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
-                      <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(act.monthRevenue ?? act.revenue)} F CFA</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs">
-                      <span className={darkMode ? "text-slate-400" : "text-slate-500"}>Dépenses :</span>
-                      <span className="font-mono font-bold text-rose-500">{fmt(act.monthExpenses ?? act.expenses)} F CFA</span>
-                    </div>
-                    <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
-                      darkMode ? 'border-slate-800/80' : 'border-slate-200'
-                    }`}>
-                      <span className={`font-semibold ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
-                      <span className={`font-mono font-black ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                        {fmt(act.monthNetMargin ?? act.netMargin)} F CFA {(act.monthNetMargin ?? act.netMargin) < 0 ? '(Déficit)' : ''}
-                      </span>
-                    </div>
-                  </div>
+                  {/* 5.1 Corps financier : Standard pour tous secteurs, Spécialisé 6 KPI pour Station-Service */}
+                  {(() => {
+                    const normSlug = (act.sectorSlug || '').toLowerCase().replace(/^sec-/, '');
+                    const isStation = normSlug === 'station-service' || normSlug === 'station';
+                    const sf = act.stationFinancials;
+
+                    if (isStation && sf) {
+                      // ═══ CARTE STATION-SERVICE — 6 INDICATEURS FINANCIERS ═══
+                      return (
+                        <div className={`rounded-xl p-4 space-y-1.5 mb-6 border ${
+                          darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+                        }`}>
+                          {/* Titre section */}
+                          <div className={`flex items-center gap-1.5 mb-2 pb-1.5 border-b ${
+                            darkMode ? 'border-slate-800' : 'border-slate-200'
+                          }`}>
+                            <Fuel size={13} className="text-amber-500" />
+                            <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                              darkMode ? 'text-amber-400/80' : 'text-amber-700'
+                            }`}>Indicateurs financiers — {currentMonthLabel}</span>
+                          </div>
+
+                          {/* 1. Marge brute des carburants */}
+                          <div className="flex items-center justify-between text-xs">
+                            <span className={`flex items-center gap-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                              <Fuel size={11} className="text-amber-500 shrink-0" />
+                              Marge brute carburants :
+                            </span>
+                            <span className={`font-mono font-bold ${sf.margeBruteCarburants >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {fmt(sf.margeBruteCarburants)} F
+                            </span>
+                          </div>
+
+                          {/* 2. Marge brute des ventes générales et lubrifiants */}
+                          <div className="flex items-center justify-between text-xs">
+                            <span className={`flex items-center gap-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                              <Droplets size={11} className="text-blue-500 shrink-0" />
+                              Marge brute lubrifiants :
+                            </span>
+                            <span className={`font-mono font-bold ${sf.margeBruteGeneraleLubrifiants >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {fmt(sf.margeBruteGeneraleLubrifiants)} F
+                            </span>
+                          </div>
+
+                          {/* 3. Marge brute globale */}
+                          <div className={`flex items-center justify-between text-xs pt-1 border-t ${
+                            darkMode ? 'border-slate-800/60' : 'border-slate-200/80'
+                          }`}>
+                            <span className={`font-semibold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                              Marge brute globale :
+                            </span>
+                            <span className={`font-mono font-black ${sf.margeBruteGlobale >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {fmt(sf.margeBruteGlobale)} F
+                            </span>
+                          </div>
+
+                          {/* 4. Chiffre d'affaires global */}
+                          <div className="flex items-center justify-between text-xs">
+                            <span className={darkMode ? 'text-slate-400' : 'text-slate-500'}>CA global :</span>
+                            <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+                              {fmt(sf.caGlobal)} F
+                            </span>
+                          </div>
+
+                          {/* 5. Dépenses globales */}
+                          <div className="flex items-center justify-between text-xs">
+                            <span className={darkMode ? 'text-slate-400' : 'text-slate-500'}>Dépenses globales :</span>
+                            <span className="font-mono font-bold text-rose-500">
+                              {fmt(sf.depensesGlobales)} F
+                            </span>
+                          </div>
+
+                          {/* 6. Marge nette globale */}
+                          <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
+                            darkMode ? 'border-slate-800/80' : 'border-slate-200'
+                          }`}>
+                            <span className={`font-semibold ${sf.margeNetteGlobale >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              Marge nette globale :
+                            </span>
+                            <span className={`font-mono font-black ${sf.margeNetteGlobale >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                              {fmt(sf.margeNetteGlobale)} F {sf.margeNetteGlobale < 0 ? '(Déficit)' : ''}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    // ═══ CARTE STANDARD (Tous les autres secteurs) ═══
+                    return (
+                      <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
+                        darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
+                      }`}>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
+                          <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(act.monthRevenue ?? act.revenue)} F CFA</span>
+                        </div>
+                        <div className="flex items-center justify-between text-xs">
+                          <span className={darkMode ? "text-slate-400" : "text-slate-500"}>Dépenses :</span>
+                          <span className="font-mono font-bold text-rose-500">{fmt(act.monthExpenses ?? act.expenses)} F CFA</span>
+                        </div>
+                        <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
+                          darkMode ? 'border-slate-800/80' : 'border-slate-200'
+                        }`}>
+                          <span className={`font-semibold ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
+                          <span className={`font-mono font-black ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {fmt(act.monthNetMargin ?? act.netMargin)} F CFA {(act.monthNetMargin ?? act.netMargin) < 0 ? '(Déficit)' : ''}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* 5.1 Boutons obligatoires : OUVRIR, Paramètres, Supprimer */}

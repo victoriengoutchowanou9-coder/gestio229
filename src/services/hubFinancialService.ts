@@ -16,6 +16,35 @@ import {
   isTrueOperatingExpense,
   safeNum,
 } from '../lib/financialCalcul';
+import { OFFICIAL_STATION_FUELS } from './stationFuelService';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Interface des 6 indicateurs financiers spécifiques au secteur Station-Service
+// ─────────────────────────────────────────────────────────────────────────────
+export interface StationSectorFinancials {
+  /** 1. Marge brute des carburants (Essence Super + Gasoil + Pétrole lampant) */
+  margeBruteCarburants: number;
+  /** 2. Marge brute des ventes générales et lubrifiants */
+  margeBruteGeneraleLubrifiants: number;
+  /** 3. Marge brute globale (carburants + lubrifiants/général) */
+  margeBruteGlobale: number;
+  /** 4. Chiffre d'affaires global TTC (carburants + lubrifiants + boutique) */
+  caGlobal: number;
+  /** 4b. Chiffre d'affaires global HT */
+  caGlobalHT: number;
+  /** 5. Dépenses globales d'exploitation validées */
+  depensesGlobales: number;
+  /** 6. Marge nette globale (Marge brute globale - Dépenses globales) */
+  margeNetteGlobale: number;
+  /** CA carburants TTC */
+  caCarburantsTTC: number;
+  /** CA carburants HT */
+  caCarburantsHT: number;
+  /** CA lubrifiants/général TTC */
+  caLubrifiantsGeneralTTC: number;
+  /** CA lubrifiants/général HT */
+  caLubrifiantsGeneralHT: number;
+}
 
 export interface SectorMetrics {
   sector_slug: string;
@@ -32,6 +61,8 @@ export interface SectorMetrics {
   monthExpenses: number;  // DÉPENSES D'EXPLOITATION DU MOIS
   monthNetMargin: number; // MARGE NETTE DU MOIS (Marge brute - Dépenses)
   hasKnownCost: boolean;
+  /** Indicateurs financiers dédiés au secteur Station-Service (6 KPI) */
+  stationFinancials?: StationSectorFinancials;
 }
 
 export interface HubFinancialTotals {
@@ -407,6 +438,226 @@ export async function fetchHubFinancialMetrics(
 
     const monthMarginBase = (c.monthGrossMargin > 0 || c.monthCogsHT > 0) ? c.monthGrossMargin : c.monthRevenue;
     c.monthNetMargin = Math.round((monthMarginBase - c.monthExpenses) * 100) / 100;
+  }
+
+  // 4B. Calcul des 6 indicateurs financiers spécifiques au secteur Station-Service
+  // ─────────────────────────────────────────────────────────────────────────────────
+  const stationCard = sectorsMap['station-service'] || sectorsMap['station'];
+  if (stationCard) {
+    try {
+      // Charger les configs officielles des 3 carburants pour les coûts d'achat
+      const fuelConfigsMap = new Map<string, { prix_achat_reference: number; taux_tva: number; is_tva_applicable: boolean }>();
+      try {
+        const { data: fuelProducts } = await supabase
+          .from('products')
+          .select('code, name, selling_price, cost_price, tva_rate, is_taxable, sector_meta')
+          .eq('company_id', companyId)
+          .eq('sector_slug', 'station-service');
+
+        for (const fuelDef of OFFICIAL_STATION_FUELS) {
+          const found = (fuelProducts || []).find((p: any) => {
+            const code = (p.code || '').toUpperCase();
+            const name = (p.name || '').toLowerCase();
+            if (code === fuelDef.code) return true;
+            if (fuelDef.nom === 'Essence Super' && (name.includes('super') || name.includes('essence'))) return true;
+            if (fuelDef.nom === 'Gasoil' && name.includes('gasoil')) return true;
+            if (fuelDef.nom === 'Pétrole lampant' && (name.includes('pétrole') || name.includes('petrole'))) return true;
+            return false;
+          });
+
+          fuelConfigsMap.set(fuelDef.nom.toLowerCase(), {
+            prix_achat_reference: found ? (Number(found.cost_price) || fuelDef.defaultCostPrice) : fuelDef.defaultCostPrice,
+            taux_tva: found ? (typeof found.tva_rate === 'number' ? found.tva_rate : 18) : 18,
+            is_tva_applicable: found ? (found.is_taxable !== false) : true,
+          });
+        }
+      } catch {
+        // Fallback aux valeurs par défaut
+        for (const f of OFFICIAL_STATION_FUELS) {
+          fuelConfigsMap.set(f.nom.toLowerCase(), {
+            prix_achat_reference: f.defaultCostPrice,
+            taux_tva: 18,
+            is_tva_applicable: true,
+          });
+        }
+      }
+
+      // Séparer les ventes station-service entre carburants et lubrifiants/général
+      const stationSales = salesRes.status === 'fulfilled' && salesRes.value.data
+        ? salesRes.value.data.filter((s: any) => {
+            const slug = (s.sector_slug || '').toLowerCase().replace(/^sec-/, '');
+            return slug === 'station-service' || slug === 'station';
+          })
+        : [];
+
+      let fuelRevenueTTC = 0;
+      let fuelRevenueHT = 0;
+      let fuelCogsHT = 0;
+      let generalRevenueTTC = 0;
+      let generalRevenueHT = 0;
+      let generalCogsHT = 0;
+
+      // Noms de carburants pour classifier les ventes
+      const fuelKeywords = ['super', 'essence', 'gasoil', 'pétrole', 'petrole'];
+
+      const isFuelSale = (item: any): boolean => {
+        const meta = item.metadata || {};
+        if (meta.is_carburant === true) return true;
+        const orderType = (item.order_type || '').toLowerCase();
+        if (orderType === 'carburant_distributeur' || orderType === 'carburant') return true;
+        const produit = (meta.produit || '').toLowerCase();
+        const notes = typeof item.notes === 'string' ? item.notes.toLowerCase() : '';
+        return fuelKeywords.some(kw => produit.includes(kw) || notes.includes(kw));
+      };
+
+      const identifyFuelType = (item: any): string | null => {
+        const meta = item.metadata || {};
+        const produit = (meta.produit || '').toLowerCase();
+        const notes = typeof item.notes === 'string' ? item.notes.toLowerCase() : '';
+        const combined = produit + ' ' + notes;
+        if (combined.includes('super') || combined.includes('essence')) return 'essence super';
+        if (combined.includes('gasoil')) return 'gasoil';
+        if (combined.includes('pétrole') || combined.includes('petrole')) return 'pétrole lampant';
+        return null;
+      };
+
+      // Dates de ventes carburants enregistrées dans sales_orders (pour anti-doublon avec shifts)
+      const fuelSalesDates = new Set<string>();
+
+      for (const item of stationSales) {
+        const itemDate = extractCotonouDate(item.order_date, item.created_at);
+        if (!itemDate) continue;
+        const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
+        if (!isThisMonth) continue;
+
+        const orderMargin = computeOrderMargin(item);
+
+        if (isFuelSale(item)) {
+          fuelSalesDates.add(itemDate);
+          fuelRevenueTTC += orderMargin.revenueTTC;
+          fuelRevenueHT += orderMargin.revenueHT;
+
+          // Calcul COGS carburant avec prix d'achat de référence converti en HT
+          const fuelType = identifyFuelType(item);
+          if (fuelType && orderMargin.cogsHT <= 0) {
+            const conf = fuelConfigsMap.get(fuelType);
+            if (conf && conf.prix_achat_reference > 0) {
+              const meta = item.metadata || {};
+              const volLitres = Number(meta.volume_litres) || 0;
+              if (volLitres > 0) {
+                const costTTC = conf.prix_achat_reference;
+                const costHT = (conf.is_tva_applicable && conf.taux_tva > 0)
+                  ? costTTC / (1 + conf.taux_tva / 100)
+                  : costTTC;
+                fuelCogsHT += volLitres * costHT;
+              } else {
+                fuelCogsHT += orderMargin.cogsHT;
+              }
+            } else {
+              fuelCogsHT += orderMargin.cogsHT;
+            }
+          } else {
+            fuelCogsHT += orderMargin.cogsHT;
+          }
+        } else {
+          generalRevenueTTC += orderMargin.revenueTTC;
+          generalRevenueHT += orderMargin.revenueHT;
+          generalCogsHT += orderMargin.cogsHT;
+        }
+      }
+
+      // Intégrer les clôtures de shift (station_shifts_clotures) sur les dates sans vente carburant dans sales_orders
+      try {
+        const { data: shifts } = await supabase
+          .from('station_shifts_clotures')
+          .select('date, volume_distribue, prix_litre, montant_theorique, montant_verse, produit')
+          .eq('company_id', companyId)
+          .gte('date', monthStartStr)
+          .lte('date', monthEndStr);
+
+        if (shifts && shifts.length > 0) {
+          for (const shift of shifts) {
+            const shiftDate = (shift.date || '').slice(0, 10);
+            // Anti-doublon : n'inclure les shifts que si aucune vente carburant sales_orders n'existe ce jour-là
+            if (fuelSalesDates.has(shiftDate)) continue;
+
+            const vol = Number(shift.volume_distribue) || 0;
+            const prixLitre = Number(shift.prix_litre) || 0;
+            const montant = Number(shift.montant_theorique) || Number(shift.montant_verse) || (vol * prixLitre);
+
+            if (montant > 0) {
+              // Identifier le type de carburant du shift
+              const produitLower = (shift.produit || '').toLowerCase();
+              let shiftFuelType: string | null = null;
+              if (produitLower.includes('super') || produitLower.includes('essence')) shiftFuelType = 'essence super';
+              else if (produitLower.includes('gasoil')) shiftFuelType = 'gasoil';
+              else if (produitLower.includes('pétrole') || produitLower.includes('petrole')) shiftFuelType = 'pétrole lampant';
+
+              // Le montant du shift est en TTC
+              fuelRevenueTTC += montant;
+              // Calcul HT
+              const conf = shiftFuelType ? fuelConfigsMap.get(shiftFuelType) : null;
+              const tvaRate = conf?.taux_tva ?? 18;
+              const isTaxable = conf?.is_tva_applicable ?? true;
+              const shiftHT = (isTaxable && tvaRate > 0) ? montant / (1 + tvaRate / 100) : montant;
+              fuelRevenueHT += shiftHT;
+
+              // COGS du shift
+              if (vol > 0 && conf && conf.prix_achat_reference > 0) {
+                const costTTC = conf.prix_achat_reference;
+                const costHT = (isTaxable && tvaRate > 0) ? costTTC / (1 + tvaRate / 100) : costTTC;
+                fuelCogsHT += vol * costHT;
+              }
+            }
+          }
+        }
+      } catch (shiftErr) {
+        console.warn('[hubFinancialService] Notice lecture station_shifts_clotures:', shiftErr);
+      }
+
+      // Arrondis
+      fuelRevenueTTC = Math.round(fuelRevenueTTC * 100) / 100;
+      fuelRevenueHT = Math.round(fuelRevenueHT * 100) / 100;
+      fuelCogsHT = Math.round(fuelCogsHT * 100) / 100;
+      generalRevenueTTC = Math.round(generalRevenueTTC * 100) / 100;
+      generalRevenueHT = Math.round(generalRevenueHT * 100) / 100;
+      generalCogsHT = Math.round(generalCogsHT * 100) / 100;
+
+      // 1. Marge brute des carburants = CA HT carburants - COGS HT carburants
+      const margeBruteCarburants = Math.round((fuelRevenueHT - fuelCogsHT) * 100) / 100;
+
+      // 2. Marge brute des ventes générales et lubrifiants
+      const margeBruteGeneraleLubrifiants = Math.round((generalRevenueHT - generalCogsHT) * 100) / 100;
+
+      // 3. Marge brute globale = somme des deux marges brutes
+      const margeBruteGlobale = Math.round((margeBruteCarburants + margeBruteGeneraleLubrifiants) * 100) / 100;
+
+      // 4. CA global (TTC et HT)
+      const caGlobal = Math.round((fuelRevenueTTC + generalRevenueTTC) * 100) / 100;
+      const caGlobalHT = Math.round((fuelRevenueHT + generalRevenueHT) * 100) / 100;
+
+      // 5. Dépenses globales = dépenses d'exploitation validées pour le secteur station
+      const depensesGlobales = stationCard.monthExpenses;
+
+      // 6. Marge nette globale = Marge brute globale - Dépenses globales
+      const margeNetteGlobale = Math.round((margeBruteGlobale - depensesGlobales) * 100) / 100;
+
+      stationCard.stationFinancials = {
+        margeBruteCarburants,
+        margeBruteGeneraleLubrifiants,
+        margeBruteGlobale,
+        caGlobal,
+        caGlobalHT,
+        depensesGlobales,
+        margeNetteGlobale,
+        caCarburantsTTC: fuelRevenueTTC,
+        caCarburantsHT: fuelRevenueHT,
+        caLubrifiantsGeneralTTC: generalRevenueTTC,
+        caLubrifiantsGeneralHT: generalRevenueHT,
+      };
+    } catch (stationErr) {
+      console.warn('[hubFinancialService] Erreur calcul indicateurs station-service:', stationErr);
+    }
   }
 
   // 5. Calculer les totaux consolidés globaux
