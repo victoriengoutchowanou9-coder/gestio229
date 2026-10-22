@@ -231,13 +231,31 @@ export const StationFuelPricingTab: React.FC<Props> = ({
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         {configs.map((conf) => {
           const cost = costs[conf.code]
-          const unitCost = cost ? cost.unitCost : conf.prix_achat_reference
-          const puHT = conf.is_tva_applicable && conf.taux_tva > 0
-            ? Math.round((conf.prix_vente / (1 + conf.taux_tva / 100)) * 100) / 100
-            : conf.prix_vente
-          const margeUnitaire = unitCost > 0 ? Math.round((puHT - unitCost) * 100) / 100 : null
-          const tauxMarque = (unitCost > 0 && puHT > 0 && margeUnitaire !== null)
-            ? Math.round(((margeUnitaire / puHT) * 100) * 10) / 10
+          const costTtc = cost && cost.unitCost > 0 ? cost.unitCost : conf.prix_achat_reference
+          const isTax = conf.is_tva_applicable
+          const tauxTva = (isTax && conf.taux_tva > 0) ? conf.taux_tva : 0
+
+          // Toujours convertir les deux en HT ou les deux en TTC (jamais HT - TTC)
+          const puVenteTTC = conf.prix_vente
+          const puVenteHT = tauxTva > 0
+            ? Math.round((puVenteTTC / (1 + tauxTva / 100)) * 100) / 100
+            : puVenteTTC
+
+          const costHt = tauxTva > 0
+            ? Math.round((costTtc / (1 + tauxTva / 100)) * 100) / 100
+            : costTtc
+          const costTva = tauxTva > 0
+            ? Math.round((costTtc - costHt) * 100) / 100
+            : 0
+
+          const margeBruteHT = costTtc > 0 ? Math.round((puVenteHT - costHt) * 100) / 100 : null
+          const margeBruteTTC = costTtc > 0 ? Math.round((puVenteTTC - costTtc) * 100) / 100 : null
+
+          const tauxMarque = (margeBruteHT !== null && puVenteHT > 0)
+            ? Math.round(((margeBruteHT / puVenteHT) * 100) * 10) / 10
+            : null
+          const tauxMarge = (margeBruteHT !== null && costHt > 0)
+            ? Math.round(((margeBruteHT / costHt) * 100) * 10) / 10
             : null
 
           const isSuper = conf.nom.includes('Super')
@@ -286,62 +304,57 @@ export const StationFuelPricingTab: React.FC<Props> = ({
                   <div className="text-right">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block">Net HT</span>
                     <span className="text-xs font-black text-slate-700">
-                      {formatFCFA(puHT)} / L
+                      {formatFCFA(puVenteHT)} / L
                     </span>
                     {conf.is_tva_applicable && (
                       <span className="text-[10px] text-blue-600 block mt-0.5">
-                        +{formatFCFA(Math.round(conf.prix_vente - puHT))} TVA
+                        +{formatFCFA(Math.round(conf.prix_vente - puVenteHT))} TVA
                       </span>
                     )}
                   </div>
                 </div>
 
-                {/* Coût d'achat (TTC / HT / CUMP) */}
-                {(() => {
-                  const costTtc = unitCost > 0 ? unitCost : conf.prix_achat_reference
-                  const costHt = conf.is_tva_applicable && conf.taux_tva > 0
-                    ? Math.round((costTtc / (1 + conf.taux_tva / 100)) * 100) / 100
-                    : costTtc
-                  const costTva = conf.is_tva_applicable && conf.taux_tva > 0
-                    ? Math.round((costTtc - costHt) * 100) / 100
-                    : 0
+                {/* Coût d'achat (TTC / HT / CUMP) & Marge Brute HT/TTC */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <span className="text-[10px] font-bold text-slate-500 block uppercase">
+                      Prix Achat TTC
+                    </span>
+                    <span className="text-sm font-black text-slate-800">
+                      {costTtc > 0 ? `${formatFCFA(costTtc)} / L` : 'Non renseigné'}
+                    </span>
+                    <span className="text-[9px] text-slate-400 block mt-0.5">
+                      HT : {formatFCFA(costHt)} {costTva > 0 ? `(TVA: ${formatFCFA(costTva)})` : ''}
+                    </span>
+                    <span className="text-[9px] text-indigo-600 block font-semibold truncate mt-0.5">
+                      {cost?.hasActual ? 'CUMP (Réceptions réelles)' : 'Coût référence'}
+                    </span>
+                  </div>
 
-                  return (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                        <span className="text-[10px] font-bold text-slate-500 block uppercase">
-                          Prix Achat TTC
-                        </span>
-                        <span className="text-sm font-black text-slate-800">
-                          {costTtc > 0 ? `${formatFCFA(costTtc)} / L` : 'Non renseigné'}
-                        </span>
-                        <span className="text-[9px] text-slate-400 block mt-0.5">
-                          HT : {formatFCFA(costHt)} {costTva > 0 ? `(TVA: ${formatFCFA(costTva)})` : ''}
-                        </span>
-                        <span className="text-[9px] text-indigo-600 block font-semibold truncate mt-0.5">
-                          {cost?.hasActual ? 'CUMP (Réceptions réelles)' : 'Coût référence'}
-                        </span>
-                      </div>
-
-                      <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                        <span className="text-[10px] font-bold text-slate-500 block uppercase">
-                          Marge Brute / Litre
-                        </span>
-                        <span className={`text-sm font-black ${
-                          margeUnitaire !== null && margeUnitaire >= 0 ? 'text-emerald-700' : 'text-rose-600'
-                        }`}>
-                          {margeUnitaire !== null ? `${formatFCFA(margeUnitaire)} / L` : 'Indisponible'}
-                        </span>
-                        <span className="text-[9px] text-slate-500 block mt-0.5 font-bold">
-                          {tauxMarque !== null ? `Taux de marque: ${tauxMarque}%` : 'Coût requis'}
-                        </span>
-                        <span className="text-[9px] text-slate-400 block">
-                          {unitCost > 0 && margeUnitaire !== null ? `Taux marge: ${Math.round((margeUnitaire / unitCost) * 1000) / 10}%` : ''}
-                        </span>
-                      </div>
-                    </div>
-                  )
-                })()}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
+                    <span className="text-[10px] font-bold text-slate-500 block uppercase">
+                      Marge Brute / Litre
+                    </span>
+                    <span className={`text-sm font-black ${
+                      margeBruteHT !== null && margeBruteHT >= 0 ? 'text-emerald-700' : 'text-rose-600'
+                    }`}>
+                      {margeBruteHT !== null
+                        ? `${margeBruteHT >= 0 ? '+' : ''}${Math.round(margeBruteHT)} FCFA / L (HT)`
+                        : 'Indisponible'}
+                    </span>
+                    {margeBruteTTC !== null && (
+                      <span className="text-[10px] text-slate-600 font-bold block mt-0.5">
+                        ({margeBruteTTC >= 0 ? '+' : ''}{Math.round(margeBruteTTC)} FCFA TTC)
+                      </span>
+                    )}
+                    <span className="text-[9px] text-slate-500 block mt-0.5 font-bold">
+                      {tauxMarque !== null ? `Taux de marque: ${tauxMarque}%` : 'Coût requis'}
+                    </span>
+                    <span className="text-[9px] text-slate-400 block">
+                      {costHt > 0 && tauxMarge !== null ? `Taux marge: ${tauxMarge}%` : ''}
+                    </span>
+                  </div>
+                </div>
 
                 {/* Paramétrage Fiscal */}
                 <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
@@ -353,7 +366,7 @@ export const StationFuelPricingTab: React.FC<Props> = ({
                     </span>
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono">
-                    {conf.is_tva_applicable ? `${Math.round(conf.prix_vente - puHT)} FCFA TVA/L` : '0 FCFA TVA'}
+                    {conf.is_tva_applicable ? `${Math.round(conf.prix_vente - puVenteHT)} FCFA TVA/L` : '0 FCFA TVA'}
                   </span>
                 </div>
               </div>

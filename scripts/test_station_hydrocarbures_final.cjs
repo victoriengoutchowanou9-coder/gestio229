@@ -137,6 +137,52 @@ assert(
 )
 
 console.log('\n=============================================================================')
+console.log('TEST 5 : COHÉRENCE MARGES CARBURANTS — NON-MÉLANGE HT ET TTC')
+console.log('=============================================================================')
+
+const pricingTabContent = fs.readFileSync(path.join(__dirname, '../src/components/station/StationFuelPricingTab.tsx'), 'utf8')
+
+// Vérifier l'absence de l'ancien calcul erroné (HT - TTC)
+assert(
+  !pricingTabContent.includes('puHT - unitCost'),
+  `Suppression du calcul erroné qui soustrayait le coût TTC du prix HT (puHT - unitCost)`
+)
+
+// Test CARB-SUPER : 680 TTC vente / 620 TTC achat -> Vente HT 576.27, Achat HT 525.42
+const superTauxTVA = 18
+const superVenteTTC = 680
+const superAchatTTC = 620
+const superVenteHT = Math.round((superVenteTTC / (1 + superTauxTVA / 100)) * 100) / 100
+const superAchatHT = Math.round((superAchatTTC / (1 + superTauxTVA / 100)) * 100) / 100
+const superMargeHT = Math.round((superVenteHT - superAchatHT) * 100) / 100
+const superMargeTTC = superVenteTTC - superAchatTTC
+
+assert(Math.round(superMargeHT) === 51, `CARB-SUPER : Marge brute HT = +${Math.round(superMargeHT)} FCFA/L (attendu: +51, PAS -44)`)
+assert(superMargeTTC === 60, `CARB-SUPER : Marge brute TTC = +${superMargeTTC} FCFA/L`)
+
+// Test CARB-GASOIL : 700 TTC vente / 640 TTC achat -> Vente HT 593.22, Achat HT 542.37
+const gasoilVenteTTC = 700
+const gasoilAchatTTC = 640
+const gasoilVenteHT = Math.round((gasoilVenteTTC / (1 + superTauxTVA / 100)) * 100) / 100
+const gasoilAchatHT = Math.round((gasoilAchatTTC / (1 + superTauxTVA / 100)) * 100) / 100
+const gasoilMargeHT = Math.round((gasoilVenteHT - gasoilAchatHT) * 100) / 100
+const gasoilMargeTTC = gasoilVenteTTC - gasoilAchatTTC
+
+assert(Math.round(gasoilMargeHT) === 51, `CARB-GASOIL : Marge brute HT = +${Math.round(gasoilMargeHT)} FCFA/L (attendu: +51, PAS négatif)`)
+assert(gasoilMargeTTC === 60, `CARB-GASOIL : Marge brute TTC = +${gasoilMargeTTC} FCFA/L`)
+
+// Test CARB-PETROLE : 650 TTC vente / 590 TTC achat -> Vente HT 550.85, Achat HT 500.00
+const petroleVenteTTC = 650
+const petroleAchatTTC = 590
+const petroleVenteHT = Math.round((petroleVenteTTC / (1 + superTauxTVA / 100)) * 100) / 100
+const petroleAchatHT = Math.round((petroleAchatTTC / (1 + superTauxTVA / 100)) * 100) / 100
+const petroleMargeHT = Math.round((petroleVenteHT - petroleAchatHT) * 100) / 100
+const petroleMargeTTC = petroleVenteTTC - petroleAchatTTC
+
+assert(Math.round(petroleMargeHT) === 51, `CARB-PETROLE : Marge brute HT = +${Math.round(petroleMargeHT)} FCFA/L (attendu: +51, PAS négatif)`)
+assert(petroleMargeTTC === 60, `CARB-PETROLE : Marge brute TTC = +${petroleMargeTTC} FCFA/L`)
+
+console.log('\n=============================================================================')
 console.log(`BILAN DES TESTS : ${totalPassed} réussis, ${totalFailed} échoués.`)
 console.log('=============================================================================')
 

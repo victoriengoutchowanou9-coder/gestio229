@@ -435,9 +435,10 @@ export const StationDashboardPage: React.FC = () => {
 
             const puVenteHT = isTax && tauxTva > 0 ? Math.round((puVenteTTC / (1 + tauxTva / 100)) * 100) / 100 : puVenteTTC
             const puAchatHT = isTax && tauxTva > 0 ? Math.round((puAchatTTC / (1 + tauxTva / 100)) * 100) / 100 : puAchatTTC
-            const margeBruteUnitaire = puAchatTTC > 0 ? Math.round((puVenteHT - puAchatHT) * 100) / 100 : null
-            const tauxMarque = (margeBruteUnitaire !== null && puVenteHT > 0)
-              ? Math.round((margeBruteUnitaire / puVenteHT) * 1000) / 10
+            const margeBruteHT = puAchatTTC > 0 ? Math.round((puVenteHT - puAchatHT) * 100) / 100 : null
+            const margeBruteTTC = puAchatTTC > 0 ? Math.round((puVenteTTC - puAchatTTC) * 100) / 100 : null
+            const tauxMarque = (margeBruteHT !== null && puVenteHT > 0)
+              ? Math.round((margeBruteHT / puVenteHT) * 1000) / 10
               : null
 
             return (
@@ -477,9 +478,14 @@ export const StationDashboardPage: React.FC = () => {
                     <span className="text-xs text-emerald-700 font-semibold">
                       {tauxMarque !== null ? `Taux marque : ${tauxMarque}%` : 'Coût requis'}
                     </span>
+                    {margeBruteTTC !== null && (
+                      <span className="text-[10px] text-slate-500 font-bold block">
+                        ({margeBruteTTC >= 0 ? '+' : ''}{Math.round(margeBruteTTC)} FCFA TTC)
+                      </span>
+                    )}
                   </div>
                   <span className="text-sm font-black text-emerald-800 font-mono">
-                    {margeBruteUnitaire !== null ? `${fmt(margeBruteUnitaire)} / L` : '—'}
+                    {margeBruteHT !== null ? `${margeBruteHT >= 0 ? '+' : ''}${Math.round(margeBruteHT)} FCFA / L (HT)` : '—'}
                   </span>
                 </div>
               </div>

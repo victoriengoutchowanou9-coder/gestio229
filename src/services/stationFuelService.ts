@@ -674,13 +674,16 @@ export async function generateFuelProfitabilityReport(
       isTaxable ? Math.round((conf.prix_vente / (1 + tvaRate / 100)) * 100) / 100 : conf.prix_vente
     )
 
-    // Coût des ventes (COGS)
-    const coutUnitaire = costInfo.unitCost
-    const cogs = costInfo.hasKnownCost ? Math.round(volVendu * coutUnitaire) : 0
+    // Coût des ventes (COGS) — Conversion en HT pour cohérence stricte avec caNetHT (jamais HT - TTC)
+    const coutUnitaireTTC = costInfo.unitCost
+    const coutUnitaireHT = (isTaxable && tvaRate > 0 && coutUnitaireTTC > 0)
+      ? Math.round((coutUnitaireTTC / (1 + tvaRate / 100)) * 100) / 100
+      : coutUnitaireTTC
+    const cogs = costInfo.hasKnownCost ? Math.round(volVendu * coutUnitaireHT) : 0
 
-    // Marge brute totale & unitaire
+    // Marge brute totale & unitaire (HT - HT)
     const margeTotale = costInfo.hasKnownCost ? Math.round((caNetHT - cogs) * 100) / 100 : 0
-    const margeUnitaire = costInfo.hasKnownCost ? Math.round((puVenteHT - coutUnitaire) * 100) / 100 : 0
+    const margeUnitaire = costInfo.hasKnownCost ? Math.round((puVenteHT - coutUnitaireHT) * 100) / 100 : 0
 
     // Taux de marge = (Marge / Coût Achat) * 100
     const tauxMarge = (costInfo.hasKnownCost && cogs > 0)
@@ -874,9 +877,12 @@ export async function getDailyFuelSheet(
       const caNetHT = taxCalc.htPrice
       const tvaCollectee = taxCalc.vatAmount
 
-      const coutUnitaire = conf.prix_achat_reference || 0
-      const hasCout = coutUnitaire > 0
-      const coutVentes = hasCout ? Math.round(soldVol * coutUnitaire) : 0
+      const coutUnitaireTTC = conf.prix_achat_reference || 0
+      const coutUnitaireHT = (conf.is_tva_applicable && conf.taux_tva > 0 && coutUnitaireTTC > 0)
+        ? Math.round((coutUnitaireTTC / (1 + conf.taux_tva / 100)) * 100) / 100
+        : coutUnitaireTTC
+      const hasCout = coutUnitaireTTC > 0
+      const coutVentes = hasCout ? Math.round(soldVol * coutUnitaireHT) : 0
       const margeBrute = hasCout ? Math.round((caNetHT - coutVentes) * 100) / 100 : 0
 
       return {
