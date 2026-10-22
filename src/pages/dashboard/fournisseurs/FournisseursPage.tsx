@@ -137,6 +137,7 @@ export const FournisseursPage: React.FC = () => {
   const [selectedSupplierForPay, setSelectedSupplierForPay] = useState<Supplier | null>(null)
   const [paymentAmount, setPaymentAmount] = useState<number>(0)
   const [paymentMode, setPaymentMode] = useState<'especes' | 'momo' | 'banque' | 'virement' | 'cheque'>('banque')
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false)
 
   // Déclaration nouvelle dette fournisseur
   const [showNewDebtModal, setShowNewDebtModal] = useState(false)
@@ -302,6 +303,13 @@ export const FournisseursPage: React.FC = () => {
     )
     toast.success('BC Soumis pour visa', 'Le Gérant doit maintenant valider la commande.')
 
+    try {
+      await supabaseTenant('purchase_orders').update({ status: 'A_VALIDER', updated_at: new Date().toISOString() }).eq('id', poId)
+      await supabaseTenant('bons_commande').update({ status: 'A_VALIDER', statut: 'A_VALIDER', updated_at: new Date().toISOString() }).eq('id', poId)
+    } catch (updErr) {
+      console.warn('[FournisseursPage] Notice update BC A_VALIDER:', updErr)
+    }
+
     if (company?.id && po) {
       await logAuditEvent({
         companyId: company.id,
@@ -331,6 +339,13 @@ export const FournisseursPage: React.FC = () => {
     )
     toast.success('Bon de Commande Validé', 'Le bon peut maintenant être envoyé au fournisseur.')
 
+    try {
+      await supabaseTenant('purchase_orders').update({ status: 'VALIDE', updated_at: new Date().toISOString() }).eq('id', poId)
+      await supabaseTenant('bons_commande').update({ status: 'VALIDE', statut: 'VALIDE', updated_at: new Date().toISOString() }).eq('id', poId)
+    } catch (updErr) {
+      console.warn('[FournisseursPage] Notice update BC VALIDE:', updErr)
+    }
+
     if (company?.id && po) {
       await logAuditEvent({
         companyId: company.id,
@@ -356,6 +371,13 @@ export const FournisseursPage: React.FC = () => {
     )
     toast.error('Bon de Commande Rejeté', 'La commande a été refusée.')
 
+    try {
+      await supabaseTenant('purchase_orders').update({ status: 'REJETE', updated_at: new Date().toISOString() }).eq('id', poId)
+      await supabaseTenant('bons_commande').update({ status: 'REJETE', statut: 'REJETE', updated_at: new Date().toISOString() }).eq('id', poId)
+    } catch (updErr) {
+      console.warn('[FournisseursPage] Notice update BC REJETE:', updErr)
+    }
+
     if (company?.id && po) {
       await logAuditEvent({
         companyId: company.id,
@@ -380,6 +402,13 @@ export const FournisseursPage: React.FC = () => {
       prev.map((p) => (p.id === poId ? { ...p, status: 'COMMANDE' as const } : p))
     )
     toast.success('Commande transmise', 'En attente de livraison par le fournisseur.')
+
+    try {
+      await supabaseTenant('purchase_orders').update({ status: 'COMMANDE', updated_at: new Date().toISOString() }).eq('id', poId)
+      await supabaseTenant('bons_commande').update({ status: 'COMMANDE', statut: 'COMMANDE', updated_at: new Date().toISOString() }).eq('id', poId)
+    } catch (updErr) {
+      console.warn('[FournisseursPage] Notice update BC COMMANDE:', updErr)
+    }
 
     if (company?.id && po) {
       await logAuditEvent({
@@ -588,9 +617,12 @@ export const FournisseursPage: React.FC = () => {
     loadData()
   }
 
+  const [isProcessingDebt, setIsProcessingDebt] = useState(false)
+
   // Règlement dette fournisseur avec débit strict du coffre-fort
   const handleProcessPayment = async () => {
-    if (!selectedSupplierForPay || paymentAmount <= 0) return
+    if (!selectedSupplierForPay || paymentAmount <= 0 || isProcessingPayment) return
+    setIsProcessingPayment(true)
 
     try {
       // 1. Vérification et débit strict du coffre-fort selon le mode choisi
@@ -724,16 +756,16 @@ export const FournisseursPage: React.FC = () => {
       )
     } catch (err: any) {
       toast.error('Erreur règlement', err.message)
+    } finally {
+      setIsProcessingPayment(false)
     }
   }
 
   // Déclaration d'une nouvelle dette fournisseur
   const handleCreateNewDebt = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!newDebtSupplierId || newDebtAmount <= 0) {
-      toast.error('Champs invalides', 'Veuillez sélectionner un fournisseur et saisir un montant supérieur à 0.')
-      return
-    }
+    if (!newDebtSupplierId || newDebtAmount <= 0 || isProcessingDebt) return
+    setIsProcessingDebt(true)
 
     try {
       const targetSup = suppliers.find(s => s.id === newDebtSupplierId)
@@ -791,6 +823,8 @@ export const FournisseursPage: React.FC = () => {
       toast.success('Dette enregistrée', `Dette de ${fmt(newDebtAmount)} ajoutée pour ${targetSup.company_name || targetSup.name}.`)
     } catch (err: any) {
       toast.error('Erreur enregistrement dette', err.message)
+    } finally {
+      setIsProcessingDebt(false)
     }
   }
 
@@ -1646,10 +1680,20 @@ export const FournisseursPage: React.FC = () => {
               <button
                 type="button"
                 onClick={handleProcessPayment}
-                disabled={paymentAmount <= 0}
+                disabled={paymentAmount <= 0 || isProcessingPayment}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
               >
-                <Check className="w-4 h-4" /> Confirmer le Règlement
+                {isProcessingPayment ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Règlement...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Confirmer le Règlement</span>
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -1730,10 +1774,20 @@ export const FournisseursPage: React.FC = () => {
               </button>
               <button
                 type="submit"
-                disabled={!newDebtSupplierId || newDebtAmount <= 0}
+                disabled={!newDebtSupplierId || newDebtAmount <= 0 || isProcessingDebt}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50"
               >
-                <Check className="w-4 h-4" /> Enregistrer la Dette
+                {isProcessingDebt ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    <span>Enregistrement...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    <span>Enregistrer la Dette</span>
+                  </>
+                )}
               </button>
             </div>
           </form>

@@ -108,6 +108,7 @@ export const PompesCuvesPage: React.FC = () => {
   const [suppliers, setSuppliers] = useState<{ id: string; company_name: string; phone?: string }[]>([])
   const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
   const [isManualSupplier, setIsManualSupplier] = useState(false)
+  const [isSavingReception, setIsSavingReception] = useState(false)
 
   // Modales
   const [showCuveModal, setShowCuveModal] = useState(false)
@@ -376,6 +377,7 @@ export const PompesCuvesPage: React.FC = () => {
   // ─── Actions : Enregistrer une Réception Citerne ─────────────────────────
   const handleSaveReception = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSavingReception) return
     if (!receptionForm.cuve_id) return notify('error', 'Veuillez sélectionner la cuve destinataire')
     const targetCuve = cuves.find(c => c.id === receptionForm.cuve_id)
     if (!targetCuve) return notify('error', 'Cuve introuvable')
@@ -383,6 +385,7 @@ export const PompesCuvesPage: React.FC = () => {
     const nomFournisseur = (receptionForm.fournisseur_nom || '').trim()
     if (!nomFournisseur) return notify('error', 'Le nom du fournisseur ou dépôt est requis')
 
+    setIsSavingReception(true)
     try {
       const cleanSlug = sectorSlug || 'station-service'
       const qteFacturee = Number(receptionForm.quantite_facturee) || 0
@@ -478,6 +481,8 @@ export const PompesCuvesPage: React.FC = () => {
       loadAll()
     } catch (err: any) {
       notify('error', err.message || 'Erreur lors de la réception')
+    } finally {
+      setIsSavingReception(false)
     }
   }
 
@@ -1552,10 +1557,20 @@ export const PompesCuvesPage: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5"
+                  disabled={isSavingReception}
+                  className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5"
                 >
-                  <CheckCircle className="w-4 h-4" />
-                  Valider la Réception & Augmenter le Stock
+                  {isSavingReception ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Validation en cours...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      <span>Valider la Réception & Augmenter le Stock</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

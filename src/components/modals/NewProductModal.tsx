@@ -381,6 +381,7 @@ export const NewProductModal: React.FC<NewProductModalProps> = ({ isOpen, onClos
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSaving) return
 
     if (!form.name || !form.name.trim()) {
       await showModal({

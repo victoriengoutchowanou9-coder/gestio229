@@ -102,6 +102,9 @@ export const PostesPompistesPage: React.FC = () => {
     solde_responsabilite: 0
   })
 
+  const [isSavingShift, setIsSavingShift] = useState(false)
+  const [isSavingPompiste, setIsSavingPompiste] = useState(false)
+
   const notify = useCallback((type: 'success' | 'error', msg: string) => {
     try {
       if (toast?.[type]) toast[type](msg)
@@ -169,7 +172,9 @@ export const PostesPompistesPage: React.FC = () => {
   // ─── Enregistrer un Nouveau Pompiste ─────────────────────────────────────
   const handleSavePompiste = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSavingPompiste) return
     if (!pompisteForm.nom_complet) return notify('error', 'Nom complet requis')
+    setIsSavingPompiste(true)
     try {
       const cleanSlug = sectorSlug || 'station-service'
       const payload = {
@@ -190,12 +195,15 @@ export const PostesPompistesPage: React.FC = () => {
       loadData()
     } catch (err: any) {
       notify('error', err.message || 'Erreur lors de l\'enregistrement')
+    } finally {
+      setIsSavingPompiste(false)
     }
   }
 
   // ─── Clôturer un Shift ───────────────────────────────────────────────────
   const handleSaveShift = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isSavingShift) return
     if (!shiftForm.pompiste_id || !shiftForm.pompe_id) {
       return notify('error', 'Sélectionnez le pompiste et la pompe')
     }
@@ -213,6 +221,7 @@ export const PostesPompistesPage: React.FC = () => {
     const totalVerse = Number(shiftForm.montant_especes || 0) + Number(shiftForm.montant_momo || 0) + Number(shiftForm.montant_credit || 0)
     const ecart = totalVerse - caTheorique // négatif = manquant
 
+    setIsSavingShift(true)
     try {
       const cleanSlug = sectorSlug || 'station-service'
       const payload = {
@@ -254,6 +263,8 @@ export const PostesPompistesPage: React.FC = () => {
       loadData()
     } catch (err: any) {
       notify('error', err.message || 'Erreur lors de la clôture')
+    } finally {
+      setIsSavingShift(false)
     }
   }
 
@@ -751,7 +762,20 @@ export const PostesPompistesPage: React.FC = () => {
 
               <div className="pt-3 flex justify-end gap-2">
                 <button type="button" onClick={() => setShowShiftModal(false)} className="px-4 py-2 border rounded-xl text-xs font-bold text-slate-600">Annuler</button>
-                <button type="submit" className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm">Valider la Clôture</button>
+                <button
+                  type="submit"
+                  disabled={isSavingShift}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-sm transition flex items-center gap-1.5"
+                >
+                  {isSavingShift ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Clôture en cours...</span>
+                    </>
+                  ) : (
+                    <span>Valider la Clôture</span>
+                  )}
+                </button>
               </div>
             </form>
           </div>

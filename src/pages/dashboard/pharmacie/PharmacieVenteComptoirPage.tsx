@@ -208,8 +208,8 @@ export default function PharmacieVenteComptoirPage() {
   const monnaieRendue = Math.max(0, montantRecuNum - partPatient)
 
   const handleValiderDélivrance = async () => {
-    if (panier.length === 0) {
-      alert('Le panier de vente est vide.')
+    if (validating || panier.length === 0) {
+      if (panier.length === 0) alert('Le panier de vente est vide.')
       return
     }
 

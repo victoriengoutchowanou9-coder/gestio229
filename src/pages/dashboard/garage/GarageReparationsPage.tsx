@@ -53,7 +53,7 @@ export const GarageReparationsPage: React.FC = () => {
     remise_totale: 0,
   })
   const [orderLignes, setOrderLignes] = useState<Partial<GarageOrdreLigne>[]>([
-    { type_ligne: 'MAIN_DOEUVRE', designation: 'Main d\'œuvre diagnostic et révision', quantite: 1, prix_unitaire_ht: 15000, montant_ht: 15000 }
+    { type_ligne: 'MAIN_DOEUVRE', designation: '', quantite: 1, prix_unitaire_ht: 0, montant_ht: 0 }
   ])
 
   // Modale Nouveau Devis
@@ -66,8 +66,7 @@ export const GarageReparationsPage: React.FC = () => {
     notes: '',
   })
   const [devisLignes, setDevisLignes] = useState<Partial<GarageDevisLigne>[]>([
-    { type_ligne: 'PIECE', designation: 'Plaquettes de frein avant', quantite: 1, prix_unitaire_ht: 22000, montant_ht: 22000 },
-    { type_ligne: 'MAIN_DOEUVRE', designation: 'Remplacement plaquettes', quantite: 1, prix_unitaire_ht: 8000, montant_ht: 8000 }
+    { type_ligne: 'PIECE', designation: '', quantite: 1, prix_unitaire_ht: 0, montant_ht: 0 }
   ])
 
   // Détails / Actions sur un OR

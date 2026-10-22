@@ -1088,6 +1088,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   // ─── Action : Ouvrir la Caisse (Silo étanche par caisse_id et secteur) ───────
   const handleOpenCaisse = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (isOperatingCaisse) return
     setIsOperatingCaisse(true)
     const opBy = user?.full_name || user?.username || 'Caissier'
     const initC = Number(openInputCash) || 0
@@ -1723,6 +1724,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   // ─── Action : Clôturer la caisse d'hier (CORRECTIF BUG CRITIQUE) ─────────────
   const handleCloturerHier = async () => {
+    if (loading) return
     setLoading(true)
     const compId = currentCompanyId || company?.id
     const secId = secteurActif?.id

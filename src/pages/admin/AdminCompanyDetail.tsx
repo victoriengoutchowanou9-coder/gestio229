@@ -296,7 +296,7 @@ const AdminCompanyDetail: React.FC = () => {
   const handleFlagSuspicious = async () => {
     const reason = window.prompt(`Motif du signalement suspect pour « ${company.name} » :`, "Activité suspecte ou tentative de contournement")
     if (reason === null) return
-    if (!reason.trim()) { alert("Le motif est obligatoire."); return }
+    if (!reason.trim()) { setActionError("Le motif est obligatoire."); return }
     setActionLoading(true)
     setActionError('')
     try {
@@ -397,7 +397,7 @@ const AdminCompanyDetail: React.FC = () => {
       ? company.authorized_sectors
       : (company.selected_sectors || [company.primary_sector || 'commerce'])
     if (currentList.includes(sectorSlug)) {
-      alert("Ce secteur est déjà accordé.")
+      setActionError("Ce secteur est déjà accordé.")
       return
     }
     const updated = [...currentList, sectorSlug]
@@ -429,7 +429,7 @@ const AdminCompanyDetail: React.FC = () => {
       : (company.selected_sectors || [company.primary_sector || 'commerce'])
     
     if (currentList.length <= 1) {
-      alert("Impossible de retirer le seul secteur actif de l'entreprise.")
+      setActionError("Impossible de retirer le seul secteur actif de l'entreprise.")
       return
     }
 
@@ -460,7 +460,7 @@ const AdminCompanyDetail: React.FC = () => {
   const handleBlock = async () => {
     const reason = window.prompt(`Motif du blocage de l'accès pour « ${company.name} » :`, "Défaut de paiement / suspension administrative")
     if (reason === null) return
-    if (!reason.trim()) { alert("Le motif de blocage est obligatoire."); return }
+    if (!reason.trim()) { setActionError("Le motif de blocage est obligatoire."); return }
     setActionLoading(true)
     setActionError('')
     try {
@@ -509,7 +509,7 @@ const AdminCompanyDetail: React.FC = () => {
   const handleSoftDelete = async () => {
     const reason = window.prompt(`ATTENTION : Suppression logique de « ${company.name} ».\n\nSes accès seront bloqués mais toutes ses données seront conservées.\n\nSaisissez le motif obligatoire :`)
     if (reason === null) return
-    if (!reason.trim()) { alert("Le motif de la suppression est obligatoire."); return }
+    if (!reason.trim()) { setActionError("Le motif de la suppression est obligatoire."); return }
     setActionLoading(true)
     setActionError('')
     try {

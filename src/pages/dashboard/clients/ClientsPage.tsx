@@ -574,6 +574,7 @@ const ClientsPage: React.FC = () => {
   // Création Client avec validation stricte
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (saving) return
     if (!company?.id) {
       toast.error('Session invalide', 'Veuillez vous reconnecter pour enregistrer un client.')
       return
@@ -687,7 +688,7 @@ const ClientsPage: React.FC = () => {
   // Ajouter dette initiale (synchronisé avec client_debts & clients)
   const handleAddInitialDebt = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!initialDebtForm.customerId || initialDebtForm.amount <= 0) return
+    if (savingInitialDebt || !initialDebtForm.customerId || initialDebtForm.amount <= 0) return
 
     setSavingInitialDebt(true)
     try {
@@ -758,7 +759,7 @@ const ClientsPage: React.FC = () => {
   // Valider le remboursement (Transaction complète : caisse, client_debts, debt_payments, cash_sessions)
   const handleProcessPayment = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedCustomer || paymentAmount <= 0) return
+    if (isProcessingPayment || !selectedCustomer || paymentAmount <= 0) return
 
     const { soldeDu, totalDette, totalRembourse, debts } = getCustomerDetteInfo(selectedCustomer)
     if (paymentAmount > soldeDu) {

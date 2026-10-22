@@ -183,7 +183,6 @@ const AdminDashboard: React.FC = () => {
           color="text-emerald-400"
           bgColor="bg-emerald-900/30"
           href="/admin/finances"
-          trend="+12%"
         />
         <StatCard
           icon={DollarSign}

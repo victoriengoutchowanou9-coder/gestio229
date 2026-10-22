@@ -202,7 +202,7 @@ export const ClotureCaisse: React.FC = () => {
 
   // Exécution de la clôture de la journée
   const handleExecuterCloture = async () => {
-    if (!companyId) return
+    if (!companyId || cloturant) return
     setCloturant(true)
 
     try {

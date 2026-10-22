@@ -264,6 +264,7 @@ export const DepensesPage: React.FC = () => {
   // Enregistrement d'une nouvelle dépense
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (saving) return
     const numAmount = Number(form.montant)
     if (!companyId || !numAmount || numAmount <= 0) {
       toast.error('Veuillez indiquer un montant supérieur à 0.')

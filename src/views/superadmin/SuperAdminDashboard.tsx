@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Building2,
   CreditCard,
@@ -14,9 +14,12 @@ import {
   Shield,
   Layers,
   Calendar,
-  Filter
+  Filter,
+  RefreshCw
 } from 'lucide-react';
-import { showSuccess } from '../../components/modals/CustomModalGestio';
+import { showSuccess, showError } from '../../components/modals/CustomModalGestio';
+import { supabase } from '../../lib/supabase';
+import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry';
 
 export interface SaaSCompany {
   id: string;
@@ -50,110 +53,71 @@ export const SuperAdminDashboard: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'tenants' | 'subscriptions' | 'sectors'>('tenants');
   const [searchTerm, setSearchTerm] = useState('');
 
-  // 1. ENTREPRISES SAAS RÉFÉRENCÉES
-  const [companies, setCompanies] = useState<SaaSCompany[]>([
-    {
-      id: 'c1',
-      name: 'Quincaillerie Centrale Dantokpa SARL',
-      ifu: '3202612345678',
-      responsible: 'Marc Agossou',
-      phone: '+229 01 97 12 34 56',
-      email: 'contact@quincaillerie-dantokpa.bj',
-      plan: 'solo',
-      status: 'active',
-      activeSectors: ['quincaillerie'],
-      mrr: 15000,
-      createdAt: '2026-08-10'
-    },
-    {
-      id: 'c2',
-      name: 'Pharmacie de la Paix & Bien-Être',
-      ifu: '3202698765432',
-      responsible: 'Dr. Estelle Dossou',
-      phone: '+229 01 95 44 33 22',
-      email: 'officine@pharmaciedelapaix.bj',
-      plan: 'solo',
-      status: 'trial',
-      activeSectors: ['pharmacie'],
-      mrr: 0,
-      trialEndsAt: '2026-10-05',
-      createdAt: '2026-09-05'
-    },
-    {
-      id: 'c3',
-      name: 'Complexe Multiservices Le Carrefour',
-      ifu: '3202655555555',
-      responsible: 'Jean-Paul Houndé',
-      phone: '+229 01 96 88 77 66',
-      email: 'direction@groupe-carrefour.bj',
-      plan: 'multiservices',
-      status: 'active',
-      activeSectors: ['quincaillerie', 'station', 'location'],
-      mrr: 45000,
-      createdAt: '2026-07-15'
-    },
-    {
-      id: 'c4',
-      name: 'Imprimerie Moderne du Littoral',
-      ifu: '3202633333333',
-      responsible: 'Alain Tossou',
-      phone: '+229 01 62 11 22 33',
-      email: 'littoral.print@gmail.com',
-      plan: 'solo',
-      status: 'suspended',
-      activeSectors: ['impression'],
-      mrr: 15000,
-      createdAt: '2026-06-01'
-    }
-  ]);
+  // 1. ENTREPRISES SAAS RÉFÉRENCÉES (chargées depuis la base réelle - zéro mock)
+  const [companies, setCompanies] = useState<SaaSCompany[]>([]);
+  const [loadingCompanies, setLoadingCompanies] = useState(true);
 
-  // 2. CATALOGUE DYNAMIQUE DES SECTEURS
-  const [sectors, setSectors] = useState<DynamicSector[]>([
-    {
-      id: 'sec-quincaillerie',
-      slug: 'quincaillerie',
-      name: 'Quincaillerie & Matériaux',
-      description: 'Ventes en gros et détail, ciment, fer, gestion double stock magasin/comptoir',
-      icon: 'Store',
-      color: '#3B82F6',
+  // 2. CATALOGUE DYNAMIQUE DES SECTEURS (issu du registre officiel GESTIO 229)
+  const [sectors, setSectors] = useState<DynamicSector[]>(() =>
+    ALL_SECTORS_CATALOG.map((s) => ({
+      id: `sec-${s.slug}`,
+      slug: s.slug,
+      name: s.name,
+      description: s.description,
+      icon: s.icon || 'Store',
+      color: s.color || '#059669',
       commonModules: ['ventes', 'stock', 'finances', 'clients', 'fournisseurs', 'depenses', 'rapports', 'audit'],
-      specificModules: ['tarifs_gros_detail', 'devis_btp'],
-      isActive: true
-    },
-    {
-      id: 'sec-pharmacie',
-      slug: 'pharmacie',
-      name: 'Pharmacie & Parapharmacie',
-      description: 'Médicaments, suivi DLUO péremption, alertes de lot et ordonnances',
-      icon: 'HeartPulse',
-      color: '#10B981',
-      commonModules: ['ventes', 'stock', 'finances', 'clients', 'fournisseurs', 'depenses', 'rapports', 'audit'],
-      specificModules: ['gestion_lots_peremption', 'ordonnances_medicales', 'alerte_dluo'],
-      isActive: true
-    },
-    {
-      id: 'sec-station',
-      slug: 'station',
-      name: 'Station-Service',
-      description: 'Gestion des cuves, jauges, index pompes et encaissements pompistes',
-      icon: 'Fuel',
-      color: '#F59E0B',
-      commonModules: ['ventes', 'stock', 'finances', 'depenses', 'rapports', 'audit'],
-      specificModules: ['pompes_cuves', 'index_carburant', 'cloture_poste'],
-      isActive: true
-    },
-    {
-      id: 'sec-location',
-      slug: 'location',
-      name: 'Gestion de Location & Baux',
-      description: 'Immeubles, appartements, contrats de bail, cautions et quittances',
-      icon: 'Building',
-      color: '#8B5CF6',
-      commonModules: ['finances', 'clients', 'depenses', 'rapports', 'audit'],
-      specificModules: ['contrats_baux', 'quittances_loyer', 'charges_reparations'],
-      isActive: true
+      specificModules: [],
+      isActive: true,
+    }))
+  );
+
+  const loadRealCompanies = useCallback(async () => {
+    setLoadingCompanies(true);
+    try {
+      const { data, error } = await supabase
+        .from('companies')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('[SuperAdminDashboard] Notice chargement companies:', error.message);
+      } else if (data) {
+        const mapped: SaaSCompany[] = data.map((c: any) => {
+          const rawSectors = c.selected_sectors || c.sectors || (c.active_sector ? [c.active_sector] : []);
+          const activeSectors = Array.isArray(rawSectors)
+            ? rawSectors.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase())
+            : [];
+          const status = c.subscription_status || 'trial';
+          const plan = activeSectors.length > 1 ? 'multiservices' : 'solo';
+          const mrr = status === 'active' ? (activeSectors.length > 1 ? 45000 : 15000) : 0;
+
+          return {
+            id: c.id,
+            name: c.name || 'Entreprise sans nom',
+            ifu: c.ifu || '—',
+            responsible: c.responsible_name || '—',
+            phone: c.phone || '—',
+            email: c.email || '—',
+            plan,
+            status,
+            activeSectors,
+            mrr,
+            createdAt: c.created_at ? c.created_at.slice(0, 10) : new Date().toISOString().slice(0, 10),
+          };
+        });
+        setCompanies(mapped);
+      }
+    } catch (err: any) {
+      console.error('[SuperAdminDashboard] Erreur chargement companies:', err);
+    } finally {
+      setLoadingCompanies(false);
     }
-  ]);
+  }, []);
+
+  useEffect(() => {
+    loadRealCompanies();
+  }, [loadRealCompanies]);
 
   // Modal Nouvelle Entreprise
   const [showAddCompanyModal, setShowAddCompanyModal] = useState(false);
@@ -191,48 +155,89 @@ export const SuperAdminDashboard: React.FC = () => {
     c.responsible.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  // Bascule du statut d'une entreprise (Actif <-> Suspendu)
-  const toggleCompanyStatus = (companyId: string) => {
-    setCompanies(prev => prev.map(c => {
-      if (c.id !== companyId) return c;
-      const nextStatus = c.status === 'active' ? 'suspended' : 'active';
-      return { ...c, status: nextStatus };
-    }));
+  const [isSubmittingCompany, setIsSubmittingCompany] = useState(false);
+
+  // Bascule du statut d'une entreprise (Actif <-> Suspendu) avec persistance DB
+  const toggleCompanyStatus = async (companyId: string) => {
+    const current = companies.find(c => c.id === companyId);
+    if (!current) return;
+    const nextStatus = current.status === 'active' ? 'suspended' : 'active';
+    const isActive = nextStatus === 'active';
+    try {
+      const { error } = await supabase
+        .from('companies')
+        .update({
+          subscription_status: nextStatus,
+          is_active: isActive,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', companyId);
+
+      if (error) throw error;
+      setCompanies(prev => prev.map(c => c.id === companyId ? { ...c, status: nextStatus } : c));
+      showSuccess(`Statut mis à jour : ${nextStatus.toUpperCase()}`, 'Modification enregistrée');
+    } catch (err: any) {
+      showError(err.message || 'Erreur lors de la mise à jour du statut');
+    }
   };
 
-  // Bascule d'un secteur pour une entreprise
-  const toggleCompanySector = (companyId: string, sectorSlug: string) => {
-    setCompanies(prev => prev.map(c => {
-      if (c.id !== companyId) return c;
-      const exists = c.activeSectors.includes(sectorSlug);
-      const updatedSectors = exists
-        ? (c.activeSectors.length > 1 ? c.activeSectors.filter(s => s !== sectorSlug) : c.activeSectors)
-        : [...c.activeSectors, sectorSlug];
+  // Bascule d'un secteur pour une entreprise avec persistance DB
+  const toggleCompanySector = async (companyId: string, sectorSlug: string) => {
+    const current = companies.find(c => c.id === companyId);
+    if (!current) return;
+    const exists = current.activeSectors.includes(sectorSlug);
+    const updatedSectors = exists
+      ? (current.activeSectors.length > 1 ? current.activeSectors.filter(s => s !== sectorSlug) : current.activeSectors)
+      : [...current.activeSectors, sectorSlug];
 
+    try {
+      const { error } = await supabase
+        .from('companies')
+        .update({
+          selected_sectors: updatedSectors,
+          sectors: updatedSectors,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', companyId);
+
+      if (error) throw error;
       const newPlan = updatedSectors.length > 1 ? 'multiservices' : 'solo';
-      return { ...c, activeSectors: updatedSectors, plan: newPlan };
-    }));
+      setCompanies(prev => prev.map(c => c.id === companyId ? { ...c, activeSectors: updatedSectors, plan: newPlan } : c));
+    } catch (err: any) {
+      showError(err.message || 'Erreur lors de la mise à jour des secteurs');
+    }
   };
 
-  // Création d'une nouvelle entreprise
-  const handleCreateCompany = (e: React.FormEvent) => {
+  // Création d'une nouvelle entreprise avec persistance réelle en base
+  const handleCreateCompany = async (e: React.FormEvent) => {
     e.preventDefault();
-    const newComp: SaaSCompany = {
-      id: 'c_' + Date.now(),
-      name: newCompanyForm.name,
-      ifu: newCompanyForm.ifu,
-      responsible: newCompanyForm.responsible,
-      phone: newCompanyForm.phone,
-      email: newCompanyForm.email,
-      plan: newCompanyForm.selectedSectors.length > 1 ? 'multiservices' : 'solo',
-      status: 'trial',
-      activeSectors: newCompanyForm.selectedSectors,
-      mrr: newCompanyForm.selectedSectors.length > 1 ? 45000 : 15000,
-      createdAt: new Date().toISOString().split('T')[0]
-    };
-    setCompanies([newComp, ...companies]);
-    setShowAddCompanyModal(false);
-    showSuccess(`Entreprise "${newCompanyForm.name}" créée avec succès en période d'essai 30 jours !`, 'Entreprise créée');
+    if (isSubmittingCompany) return;
+    setIsSubmittingCompany(true);
+    try {
+      const payload: any = {
+        name: newCompanyForm.name.trim(),
+        ifu: newCompanyForm.ifu.trim(),
+        responsible_name: newCompanyForm.responsible.trim(),
+        phone: newCompanyForm.phone.trim(),
+        email: newCompanyForm.email.trim(),
+        subscription_status: 'trial',
+        selected_sectors: newCompanyForm.selectedSectors,
+        sectors: newCompanyForm.selectedSectors,
+        active_sector: newCompanyForm.selectedSectors[0] || 'boutique',
+        is_active: true,
+      };
+
+      const { error } = await supabase.from('companies').insert([payload]);
+      if (error) throw error;
+
+      await loadRealCompanies();
+      setShowAddCompanyModal(false);
+      showSuccess(`Entreprise "${newCompanyForm.name}" créée et enregistrée avec succès en base de données !`, 'Entreprise créée');
+    } catch (err: any) {
+      showError(err.message || 'Erreur lors de la création en base de données');
+    } finally {
+      setIsSubmittingCompany(false);
+    }
   };
 
   // Création d'un nouveau secteur dynamique
@@ -320,9 +325,9 @@ export const SuperAdminDashboard: React.FC = () => {
         <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
           <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">En Période d'Essai (Trial 30j)</div>
           <div className="text-2xl sm:text-3xl font-black text-amber-400 mt-2 font-mono">
-            {trialTenantsCount} <span className="text-xs text-amber-400 font-semibold">prospects</span>
+            {trialTenantsCount} <span className="text-xs text-amber-400 font-semibold">entreprises</span>
           </div>
-          <div className="text-xs text-slate-400 mt-1">Conversion moyenne : 42%</div>
+          <div className="text-xs text-slate-400 mt-1">Essais gratuits en cours</div>
         </div>
 
         <div className="bg-slate-900 border border-slate-800 p-5 rounded-2xl">
@@ -349,13 +354,23 @@ export const SuperAdminDashboard: React.FC = () => {
               />
             </div>
 
-            <button
-              onClick={() => setShowAddCompanyModal(true)}
-              className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
-            >
-              <Plus size={16} />
-              <span>Créer une Entreprise</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadRealCompanies}
+                disabled={loadingCompanies}
+                className="p-2.5 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white rounded-xl transition border border-slate-700"
+                title="Actualiser les données"
+              >
+                <RefreshCw size={16} className={loadingCompanies ? 'animate-spin text-emerald-500' : ''} />
+              </button>
+              <button
+                onClick={() => setShowAddCompanyModal(true)}
+                className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 font-bold rounded-xl text-sm flex items-center justify-center gap-2 transition-all shadow-lg"
+              >
+                <Plus size={16} />
+                <span>Créer une Entreprise</span>
+              </button>
+            </div>
           </div>
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
@@ -372,7 +387,23 @@ export const SuperAdminDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/70">
-                  {filteredCompanies.map((comp) => {
+                  {loadingCompanies ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-slate-400">
+                        <div className="inline-flex items-center gap-2">
+                          <RefreshCw size={16} className="animate-spin text-emerald-500" />
+                          <span>Chargement des entreprises...</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : filteredCompanies.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="p-8 text-center text-slate-500">
+                        {searchTerm ? 'Aucune entreprise ne correspond à votre recherche.' : 'Aucune entreprise enregistrée dans la plateforme.'}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredCompanies.map((comp) => {
                     const isSuspended = comp.status === 'suspended';
                     return (
                       <tr key={comp.id} className="hover:bg-slate-800/30 transition-colors">
@@ -438,7 +469,7 @@ export const SuperAdminDashboard: React.FC = () => {
                         </td>
                       </tr>
                     );
-                  })}
+                  }))}
                 </tbody>
               </table>
             </div>
@@ -638,9 +669,17 @@ export const SuperAdminDashboard: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-xs font-bold"
+                  disabled={isSubmittingCompany}
+                  className="px-5 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5"
                 >
-                  Créer et Activer Essai
+                  {isSubmittingCompany ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Enregistrement...</span>
+                    </>
+                  ) : (
+                    <span>Créer et Activer Essai</span>
+                  )}
                 </button>
               </div>
             </form>
