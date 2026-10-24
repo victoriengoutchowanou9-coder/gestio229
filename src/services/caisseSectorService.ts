@@ -627,6 +627,48 @@ export async function ouvrirSessionCaisse(
       }
     }
 
+    // Synchronisation obligatoire dans public.cash_sessions (référencée par sales_orders_cash_session_id_fkey)
+    try {
+      const validCashierId = (userId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId)) ? userId : null
+      const { data: existingCashSess } = await supabase
+        .from('cash_sessions')
+        .select('id')
+        .eq('id', newSess.id)
+        .maybeSingle()
+
+      if (existingCashSess) {
+        await supabase
+          .from('cash_sessions')
+          .update({
+            company_id: companyId,
+            cashier_id: validCashierId,
+            opened_at: nowIso,
+            closed_at: null,
+            opening_cash: fondEspeces,
+            opening_momo: fondMomo,
+            status: 'ouverte',
+            closing_notes: `[SECTOR:${clean}][CAISSE:${caisse.id}]`,
+          })
+          .eq('id', newSess.id)
+      } else {
+        await supabase
+          .from('cash_sessions')
+          .insert({
+            id: newSess.id,
+            company_id: companyId,
+            cashier_id: validCashierId,
+            opened_at: nowIso,
+            closed_at: null,
+            opening_cash: fondEspeces,
+            opening_momo: fondMomo,
+            status: 'ouverte',
+            closing_notes: `[SECTOR:${clean}][CAISSE:${caisse.id}]`,
+          })
+      }
+    } catch (csSyncErr) {
+      console.warn('[CAISSE-SERVICE] Synchronisation cash_sessions ouverture:', csSyncErr)
+    }
+
     try {
       localStorage.setItem(`gestio_caisse_active_${clean}_${companyId}`, JSON.stringify(newSess))
       localStorage.setItem(`gestio_caisse_active_${clean}`, JSON.stringify(newSess))
@@ -776,7 +818,7 @@ export async function calculerSoldesSessionAutomatique(params: {
   try {
     const { data: salesList } = await supabase
       .from('sales_orders')
-      .select('id, total_amount, paid_amount, payment_method, payment_status, notes, e_mecef_uid, created_at, sector_slug, sector_meta')
+      .select('id, total_amount, paid_amount, credit_amount, payment_method, payment_status, status, notes, e_mecef_uid, created_at, sector_slug, sector_meta')
       .eq('company_id', companyId)
       .eq('sector_slug', clean)
       .gte('created_at', startIso)
@@ -784,8 +826,21 @@ export async function calculerSoldesSessionAutomatique(params: {
 
     if (salesList && salesList.length > 0) {
       salesList.forEach((s: any) => {
+        const orderStatus = String(s.status || '').toLowerCase().trim()
+        const payStatus = String(s.payment_status || '').toLowerCase().trim()
+        // Ignorer les commandes non encore encaissées ou annulées
+        if (
+          orderStatus === 'pending_cashier' ||
+          orderStatus === 'annule' ||
+          orderStatus === 'annulée' ||
+          orderStatus === 'cancelled' ||
+          payStatus === 'en_attente' ||
+          payStatus === 'annule'
+        ) {
+          return
+        }
+
         const tot = Number(s.total_amount) || 0
-        const paid = Number(s.paid_amount ?? s.total_amount) || 0
         caDuJour += tot
         nbVentes += 1
 
@@ -797,15 +852,52 @@ export async function calculerSoldesSessionAutomatique(params: {
           } catch (_) {}
         }
 
+        // Vérifier si la commande contient une répartition multi-modes dans notes
+        let parsedBreakdown: Array<{ method: string; amount: number }> | null = null
+        if (s.notes) {
+          try {
+            const parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+            if (parsedNotes && Array.isArray(parsedNotes.payment_breakdown) && parsedNotes.payment_breakdown.length > 0) {
+              parsedBreakdown = parsedNotes.payment_breakdown
+            } else if (parsedNotes && Array.isArray(parsedNotes.payments) && parsedNotes.payments.length > 0) {
+              parsedBreakdown = parsedNotes.payments
+            }
+          } catch (_) {}
+        }
+
+        if (parsedBreakdown && parsedBreakdown.length > 0) {
+          parsedBreakdown.forEach((pItem: any) => {
+            const m = String(pItem.method || pItem.mode || '').toLowerCase().trim()
+            const amt = Number(pItem.amount ?? pItem.montant) || 0
+            if (amt <= 0 || m === 'credit') return
+            if (['espece', 'especes', 'cash'].includes(m)) {
+              sumVentesEspeces += amt
+            } else if (m.includes('momo') || m.includes('mtn') || m.includes('moov') || m.includes('wave') || m.includes('flooz')) {
+              sumVentesMomo += amt
+            } else if (m) {
+              sumAutresModes[m] = (sumAutresModes[m] || 0) + amt
+            }
+          })
+          return
+        }
+
+        // Mode unique : un règlement à crédit n'augmente JAMAIS les espèces ni le Mobile Money
+        if (pm === 'credit') {
+          return
+        }
+
+        const paid = s.paid_amount !== null && s.paid_amount !== undefined
+          ? Number(s.paid_amount) || 0
+          : tot
+
+        if (paid <= 0) return
+
         if (['espece', 'especes', 'cash'].includes(pm)) {
           sumVentesEspeces += paid
         } else if (pm.includes('momo') || pm.includes('mtn') || pm.includes('moov') || pm.includes('wave') || pm.includes('flooz')) {
           sumVentesMomo += paid
         } else if (pm && pm !== 'credit') {
           sumAutresModes[pm] = (sumAutresModes[pm] || 0) + paid
-        } else {
-          // Par défaut si non spécifié
-          sumVentesEspeces += paid
         }
       })
     }
@@ -1036,8 +1128,17 @@ export async function cloturerSessionCaisseAutomatique(params: {
       }
     }
 
-    // Clôturer également dans sessions_caisse
+    // Clôturer également dans sessions_caisse et cash_sessions
     try {
+      if (sessionId) {
+        await supabase
+          .from('cash_sessions')
+          .update({
+            status: 'fermee',
+            closed_at: nowIso,
+          })
+          .eq('id', sessionId)
+      }
       if (caisseId) {
         await supabase
           .from('sessions_caisse')
@@ -1271,8 +1372,17 @@ export async function cloturerSessionCaisse(
       }
     }
 
-    // Clôturer également dans sessions_caisse si présent
+    // Clôturer également dans sessions_caisse et cash_sessions si présent
     try {
+      if (sessionId) {
+        await supabase
+          .from('cash_sessions')
+          .update({
+            status: 'fermee',
+            closed_at: nowIso,
+          })
+          .eq('id', sessionId)
+      }
       if (caisseId) {
         await supabase
           .from('sessions_caisse')
@@ -2033,4 +2143,209 @@ export async function cloturerCaisseOfficielle(
     return { success: false, error: fallbackErr?.message || 'Erreur lors de la clôture.' }
   }
 }
+
+export interface ValidCashSessionResolution {
+  valid: boolean
+  cashSessionId: string | null
+  caisseSessionId: string | null
+  caisseId: string | null
+  caisseCode?: string
+  error?: string
+}
+
+/**
+ * Vérifie et résout de manière stricte l'identifiant réel de la session de caisse ouverte
+ * dans la table référencée par la contrainte `sales_orders_cash_session_id_fkey` (`public.cash_sessions`).
+ *
+ * Règles garanties :
+ * 1. Refuse l'encaissement si aucune session n'est ouverte pour (companyId, sectorSlug).
+ * 2. Refuse l'encaissement si une session d'un jour antérieur n'a pas été clôturée.
+ * 3. Refuse tout cash_session_id fictif, expiré, fermé, inexistant ou appartenant à un autre secteur/établissement.
+ * 4. Garantit que l'UUID retourné existe réellement dans `public.cash_sessions(id)` avec status='ouverte'.
+ */
+export async function resolveValidCashSession(
+  companyId: string,
+  sectorSlug: string,
+  candidateSessionId?: string | null,
+  candidateCaisseId?: string | null,
+  userId?: string | null
+): Promise<ValidCashSessionResolution> {
+  const isValidUUID = (u?: string | null) =>
+    !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(u).trim())
+
+  if (!isValidUUID(companyId)) {
+    return {
+      valid: false,
+      cashSessionId: null,
+      caisseSessionId: null,
+      caisseId: null,
+      error: 'Identifiant entreprise (company_id) manquant ou invalide.',
+    }
+  }
+
+  const clean = cleanSectorSlug(sectorSlug)
+
+  // 1. Si un candidateSessionId est explicitement fourni, refuser immédiatement toute valeur non-UUID fictive
+  if (candidateSessionId !== undefined && candidateSessionId !== null && String(candidateSessionId).trim() !== '') {
+    const trimmedCandidate = String(candidateSessionId).trim()
+    if (!isValidUUID(trimmedCandidate)) {
+      return {
+        valid: false,
+        cashSessionId: null,
+        caisseSessionId: null,
+        caisseId: null,
+        error: `Session de caisse invalide ou fictive ("${trimmedCandidate}"). Veuillez ouvrir une session de caisse valide.`,
+      }
+    }
+  }
+
+  // 2. Vérifier l'état réel de la caisse du secteur
+  const status = await checkSectorCaisseStatus(companyId, clean)
+
+  if (status.statusType === 'FERMEE' || !status.session || !status.caisse) {
+    return {
+      valid: false,
+      cashSessionId: null,
+      caisseSessionId: null,
+      caisseId: status.caisse?.id || null,
+      error: `Aucune session de caisse n'est ouverte pour le secteur "${clean.toUpperCase()}". Veuillez d'abord ouvrir la caisse avant de valider l'encaissement.`,
+    }
+  }
+
+  if (status.statusType === 'ANTERIEURE_OUVERTE' || status.isPreviousDay) {
+    return {
+      valid: false,
+      cashSessionId: null,
+      caisseSessionId: status.session.id,
+      caisseId: status.caisse.id,
+      error: `Une session de caisse d'une journée antérieure (${status.dateOuvertureFormatee}) est restée ouverte. Veuillez la clôturer puis ouvrir la session du jour avant d'encaisser.`,
+    }
+  }
+
+  // 3. Si candidateCaisseId est fourni, vérifier qu'il correspond bien à la caisse du secteur actif
+  if (candidateCaisseId && isValidUUID(candidateCaisseId) && candidateCaisseId !== status.caisse.id && candidateCaisseId !== status.session.id) {
+    return {
+      valid: false,
+      cashSessionId: null,
+      caisseSessionId: null,
+      caisseId: null,
+      error: 'La caisse sélectionnée appartient à un autre secteur ou établissement.',
+    }
+  }
+
+  // 4. Si candidateSessionId est fourni, vérifier qu'il correspond à la session ouverte (ou à la caisse ouverte de ce secteur)
+  if (candidateSessionId && isValidUUID(candidateSessionId)) {
+    const trimmedCandidate = String(candidateSessionId).trim()
+    if (trimmedCandidate !== status.session.id && trimmedCandidate !== status.caisse.id) {
+      return {
+        valid: false,
+        cashSessionId: null,
+        caisseSessionId: null,
+        caisseId: null,
+        error: 'La session de caisse transmise est fermée, inexistante ou appartient à un autre secteur/établissement.',
+      }
+    }
+  }
+
+  const targetSessionId = status.session.id
+  const validCashierId = isValidUUID(userId) ? userId : (isValidUUID(status.session.ouvert_par) ? status.session.ouvert_par : null)
+  const openedAtIso = status.session.date_ouverture || new Date().toISOString()
+  const openCash = Number(status.session.fond_ouverture_especes) || 0
+  const openMomo = Number(status.session.fond_actuel_momo ?? status.caisse.fond_ouverture_momo) || 0
+
+  // 5. Garantir l'existence et l'état 'ouverte' dans public.cash_sessions (référencée par sales_orders_cash_session_id_fkey)
+  try {
+    const { data: existingCashSession, error: checkErr } = await supabase
+      .from('cash_sessions')
+      .select('id, company_id, status, closed_at, closing_notes')
+      .eq('id', targetSessionId)
+      .maybeSingle()
+
+    if (checkErr) {
+      return {
+        valid: false,
+        cashSessionId: null,
+        caisseSessionId: targetSessionId,
+        caisseId: status.caisse.id,
+        error: `Erreur de vérification de la session de caisse : ${checkErr.message}`,
+      }
+    }
+
+    if (existingCashSession) {
+      if (existingCashSession.company_id !== companyId) {
+        return {
+          valid: false,
+          cashSessionId: null,
+          caisseSessionId: null,
+          caisseId: null,
+          error: 'Violation d\'isolation : la session de caisse appartient à une autre entreprise.',
+        }
+      }
+
+      if (existingCashSession.status !== 'ouverte' && existingCashSession.status !== 'open' || existingCashSession.closed_at !== null) {
+        const { error: reopenSyncErr } = await supabase
+          .from('cash_sessions')
+          .update({
+            status: 'ouverte',
+            closed_at: null,
+            closing_notes: `[SECTOR:${clean}][CAISSE:${status.caisse.id}]`,
+          })
+          .eq('id', targetSessionId)
+
+        if (reopenSyncErr) {
+          return {
+            valid: false,
+            cashSessionId: null,
+            caisseSessionId: targetSessionId,
+            caisseId: status.caisse.id,
+            error: `Impossible de synchroniser l'état de la session de caisse : ${reopenSyncErr.message}`,
+          }
+        }
+      }
+    } else {
+      const { data: insertedCashSession, error: insertCashErr } = await supabase
+        .from('cash_sessions')
+        .insert({
+          id: targetSessionId,
+          company_id: companyId,
+          cashier_id: validCashierId,
+          opened_at: openedAtIso,
+          closed_at: null,
+          opening_cash: openCash,
+          opening_momo: openMomo,
+          status: 'ouverte',
+          closing_notes: `[SECTOR:${clean}][CAISSE:${status.caisse.id}]`,
+        })
+        .select('id')
+        .single()
+
+      if (insertCashErr || !insertedCashSession?.id) {
+        return {
+          valid: false,
+          cashSessionId: null,
+          caisseSessionId: targetSessionId,
+          caisseId: status.caisse.id,
+          error: `Impossible d'initialiser la référence de session de caisse (${insertCashErr?.message || 'Erreur inconnue'}).`,
+        }
+      }
+    }
+
+    return {
+      valid: true,
+      cashSessionId: targetSessionId,
+      caisseSessionId: targetSessionId,
+      caisseId: status.caisse.id,
+      caisseCode: status.caisseCode,
+    }
+  } catch (err: any) {
+    return {
+      valid: false,
+      cashSessionId: null,
+      caisseSessionId: targetSessionId,
+      caisseId: status.caisse.id,
+      error: err?.message || 'Erreur lors de la résolution de la session de caisse.',
+    }
+  }
+}
+
 

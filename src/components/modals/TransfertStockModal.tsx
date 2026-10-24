@@ -87,6 +87,8 @@ export const TransfertStockModal: React.FC<TransfertStockModalProps> = ({
       const { error: upErr } = await supabase
         .from('products')
         .update({
+          stock_magasin: futureStockMagasin,
+          stock_vente: futureStockVente,
           sector_meta: updatedMeta,
           updated_at: new Date().toISOString()
         })

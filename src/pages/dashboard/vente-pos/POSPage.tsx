@@ -45,7 +45,7 @@ import {
 import clsx from 'clsx'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
 import { destockerMatieresPlat } from '../../../services/restaurantService'
-import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
+import { enregistrerMouvementCaisse, checkSectorCaisseStatus, resolveValidCashSession } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { isVraiCodeEmballage } from '../../../utils/emballages'
 import { getCachedData, setCachedData, invalidateCache } from '../../../utils/cache'
@@ -2346,7 +2346,7 @@ export const POSPage: React.FC = () => {
           const updatedMeta = { ...currentMeta, stock_vente: newStockVente }
           const res = await supabase
             .from('products')
-            .update({ sector_meta: updatedMeta, updated_at: new Date().toISOString() })
+            .update({ stock_vente: newStockVente, sector_meta: updatedMeta, updated_at: new Date().toISOString() })
             .eq('id', line.product.id)
           if (res.error) {
             console.error('[POSPage] Erreur mise à jour stock produit:', line.product.id, res.error)
@@ -2610,7 +2610,7 @@ export const POSPage: React.FC = () => {
                 paid_amount: loadedPendingBonSnapshot.total_amount,
                 payment_status: creditAmount >= totalNetTTCSnapshot ? 'credit' : 'paye',
                 payment_method: primaryMethod,
-                cash_session_id: activeCaisseSnapshot?.id || null,
+                cash_session_id: (await resolveValidCashSession(company?.id ?? companyId ?? '', currentSectorSlug, activeCaisseSnapshot?.id || null, activeCaisseSnapshot?.caisse_id || null, user?.id || null)).cashSessionId,
                 notes: JSON.stringify({
                   ...(typeof loadedPendingBonSnapshot === 'object' ? loadedPendingBonSnapshot : {}),
                   status_commercial: 'ENCAISSE',
@@ -3284,7 +3284,7 @@ export const POSPage: React.FC = () => {
                               )}
                               title={`Stock disponible vente directe : ${stockVente} ${unitVente}`}
                             >
-                              Vente : {stockVente} {unitVente}
+                              Stock vente : {stockVente} {unitVente}
                             </span>
                           )}
                         </div>
@@ -3310,7 +3310,7 @@ export const POSPage: React.FC = () => {
                         {!p.is_recipe && (
                           <div className="text-[10px] text-slate-500 flex items-center justify-between mt-1 bg-slate-100/80 px-2 py-1 rounded-lg border border-slate-200 font-medium">
                             <span className="flex items-center gap-1">
-                              <Package className="w-3 h-3 text-indigo-600" /> Magasin :
+                              <Package className="w-3 h-3 text-indigo-600" /> Stock magasin :
                             </span>
                             <span className="font-bold text-indigo-700 font-mono">{stockMagasin} {unitMagasin}</span>
                           </div>

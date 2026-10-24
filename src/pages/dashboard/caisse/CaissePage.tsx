@@ -15,7 +15,7 @@ import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
   Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail,
-  Receipt, Trash2
+  Receipt, Trash2, Eye, CreditCard, Users, CheckCircle2
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -50,7 +50,10 @@ import {
   fetchPendingBons,
   encaisserBonDeCommande,
   annulerBonDeCommande,
-  PendingBon
+  isOrderEligibleForCollection,
+  PendingBon,
+  EncaissementPaymentMethod,
+  MultiPaymentSplitItem
 } from '../../../services/salesCircuitService'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -196,9 +199,24 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   const [bonsEnAttente, setBonsEnAttente] = useState<PendingBon[]>([])
   const [loadingBonsEnAttente, setLoadingBonsEnAttente] = useState<boolean>(false)
+  const [bonDetailModal, setBonDetailModal] = useState<PendingBon | null>(null)
   const [bonAEncaisser, setBonAEncaisser] = useState<PendingBon | null>(null)
   const [montantEncaissementBon, setMontantEncaissementBon] = useState<number>(0)
-  const [modePaiementBon, setModePaiementBon] = useState<'especes' | 'momo_mtn' | 'momo_moov' | 'wave' | 'banque' | 'carte'>('especes')
+  const [modePaiementBon, setModePaiementBon] = useState<EncaissementPaymentMethod>('especes')
+  const [isMultiPaymentBon, setIsMultiPaymentBon] = useState<boolean>(false)
+  const [multiPaymentSplits, setMultiPaymentSplits] = useState<Record<string, number>>({
+    especes: 0,
+    momo_mtn: 0,
+    momo_moov: 0,
+    carte: 0,
+    banque: 0,
+    credit: 0
+  })
+  const [sectorCustomers, setSectorCustomers] = useState<any[]>([])
+  const [selectedCreditCustomerId, setSelectedCreditCustomerId] = useState<string>('')
+  const [creditDueDate, setCreditDueDate] = useState<string>(
+    () => new Date(Date.now() + 30 * 86400000).toISOString().split('T')[0]
+  )
   const [noteEncaissementBon, setNoteEncaissementBon] = useState<string>('')
   const [isProcessingEncaissementBon, setIsProcessingEncaissementBon] = useState<boolean>(false)
   const [receiptSuccessBon, setReceiptSuccessBon] = useState<any | null>(null)
@@ -365,11 +383,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       } catch (_) {}
     }
 
-    if (!duJour && caisseStatus === 'OUVERTE' && openedAt) {
+    if (!duJour && caisseStatus === 'OUVERTE' && openedAt && activeSessionId) {
       const opDateStr = openedAt.split('T')[0]
-      if (opDateStr === todayStr) {
+      if (opDateStr === todayStr && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeSessionId)) {
         duJour = {
-          id: activeSessionId || 'sess-today',
+          id: activeSessionId,
           statut: 'ouverte',
           date_ouverture: todayStr
         }
@@ -401,14 +419,25 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     setInitialMomo(initM)
   }
 
-  // ── Chargement des Bons de Commande en attente d'encaissement (Mode Séparé) ──
+  // ── Chargement des Bons de Commande en attente d'encaissement et des Clients du secteur ──
   const loadBonsEnAttente = useCallback(async () => {
     const compId = currentCompanyId || company?.id
     if (!compId) return
     try {
       setLoadingBonsEnAttente(true)
-      const list = await fetchPendingBons(compId, currentSectorSlug)
+      const [list, custRes] = await Promise.all([
+        fetchPendingBons(compId, currentSectorSlug),
+        supabase
+          .from('customers')
+          .select('id, code, name, phone, current_debt, credit_limit, credit_authorized, is_active, sector_slug')
+          .eq('company_id', compId)
+          .order('name')
+      ])
       setBonsEnAttente(list)
+      if (!custRes.error && custRes.data) {
+        const filteredCusts = filterItemsForSector(custRes.data, currentSectorSlug).filter((c: any) => c.is_active !== false)
+        setSectorCustomers(filteredCusts)
+      }
     } catch (err) {
       console.warn('[CaissePage] Erreur chargement bons en attente:', err)
     } finally {
@@ -433,18 +462,97 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     }
   }, [loadBonsEnAttente])
 
-  // ── Validation de l'encaissement d'un Bon par la Caissière ──
+  // Calculs temps réel pour le Paiement en plusieurs modes (Section 6)
+  const totalMultiAllocated = useMemo(() => {
+    return Object.values(multiPaymentSplits).reduce((sum, val) => sum + (Number(val) > 0 ? Math.round(Number(val)) : 0), 0)
+  }, [multiPaymentSplits])
+
+  const resteMultiARepartir = useMemo(() => {
+    if (!bonAEncaisser) return 0
+    return Math.round(bonAEncaisser.remaining_balance) - totalMultiAllocated
+  }, [bonAEncaisser, totalMultiAllocated])
+
+  const hasCreditInCurrentPayment = useMemo(() => {
+    if (!bonAEncaisser) return false
+    if (isMultiPaymentBon) {
+      return Number(multiPaymentSplits.credit || 0) > 0
+    }
+    return modePaiementBon === 'credit'
+  }, [bonAEncaisser, isMultiPaymentBon, multiPaymentSplits, modePaiementBon])
+
+  // ── Validation de l'encaissement d'un Bon par la Caissière (Simple, Crédit ou Multi-modes) ──
   const handleValiderEncaissementBon = async () => {
     if (!bonAEncaisser || isProcessingEncaissementBon) return
-    if (montantEncaissementBon <= 0) {
-      toast.error('Montant invalide', 'Le montant à encaisser doit être supérieur à zéro.')
-      return
-    }
 
     // Contrôle d'état de caisse
     if (caisseStatus !== 'OUVERTE' && (!sessionDuJour || sessionDuJour.statut === 'fermée')) {
-      toast.error('Caisse fermée', 'Veuillez ouvrir la caisse avant de procéder à l\'encaissement.')
+      toast.error('Caisse fermée', 'Veuillez ouvrir une session de caisse avant de procéder à l\'encaissement.')
       return
+    }
+
+    let paymentsList: MultiPaymentSplitItem[] | undefined = undefined
+    let effectiveMontant = montantEncaissementBon
+    let effectiveMode: EncaissementPaymentMethod = modePaiementBon
+
+    if (isMultiPaymentBon) {
+      // Vérification qu'aucun montant n'est négatif
+      for (const [modeKey, val] of Object.entries(multiPaymentSplits)) {
+        if (Number(val) < 0 || isNaN(Number(val))) {
+          toast.error('Montant invalide', `Le montant saisi pour ${modeKey} est invalide ou négatif.`)
+          return
+        }
+      }
+
+      paymentsList = Object.entries(multiPaymentSplits)
+        .map(([method, amount]) => ({
+          method: method as EncaissementPaymentMethod,
+          amount: Math.round(Number(amount || 0))
+        }))
+        .filter(item => item.amount > 0)
+
+      if (paymentsList.length === 0) {
+        toast.error('Répartition vide', 'Veuillez renseigner les montants répartis sur les modes de paiement.')
+        return
+      }
+
+      if (Math.abs(resteMultiARepartir) > 1) {
+        toast.error(
+          'Répartition incomplète ou incohérente',
+          `La somme répartie (${fmt(totalMultiAllocated)}) doit correspondre exactement au montant à encaisser (${fmt(bonAEncaisser.remaining_balance)}).`
+        )
+        return
+      }
+
+      effectiveMontant = totalMultiAllocated
+      effectiveMode = paymentsList.length > 1 ? 'mixte' : paymentsList[0].method
+    } else {
+      if (montantEncaissementBon <= 0) {
+        toast.error('Montant invalide', 'Le montant doit être strictement supérieur à zéro.')
+        return
+      }
+      if (montantEncaissementBon > bonAEncaisser.remaining_balance + 1) {
+        toast.error('Montant excessif', `Le montant saisi dépasse le montant exigible (${fmt(bonAEncaisser.remaining_balance)}).`)
+        return
+      }
+    }
+
+    // Si le crédit est utilisé (en mode unique ou en paiement multiple), exiger un client identifié
+    const chosenCustomer = sectorCustomers.find(c => c.id === selectedCreditCustomerId)
+    if (hasCreditInCurrentPayment) {
+      if (!selectedCreditCustomerId || !chosenCustomer) {
+        toast.error(
+          'Client requis pour le crédit',
+          'Veuillez obligatoirement sélectionner un client existant pour enregistrer un règlement à crédit.'
+        )
+        return
+      }
+      if (chosenCustomer.credit_authorized === false) {
+        toast.error(
+          'Crédit non autorisé',
+          `Le client "${chosenCustomer.name}" n'est pas autorisé à acheter à crédit.`
+        )
+        return
+      }
     }
 
     setIsProcessingEncaissementBon(true)
@@ -459,8 +567,14 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         caisseSessionId: activeSessionId || sessionDuJour?.id || null,
         cashierId: user?.id || '',
         cashierName: user?.full_name || 'Caissière',
-        montantEncaisse: montantEncaissementBon,
-        modePaiement: modePaiementBon,
+        montantEncaisse: effectiveMontant,
+        modePaiement: effectiveMode,
+        isMultiPayment: isMultiPaymentBon,
+        payments: paymentsList,
+        customerId: chosenCustomer?.id || bonAEncaisser.customer_id || null,
+        customerName: chosenCustomer?.name || bonAEncaisser.customer_name || 'Client Comptoir',
+        customerPhone: chosenCustomer?.phone || '',
+        dueDate: creditDueDate,
         notes: noteEncaissementBon
       })
 
@@ -470,21 +584,29 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         return
       }
 
+      const immediatelyPaidAmt = (res.paidCash || 0) + (res.paidMomo || 0) + (res.paidBankCard || 0)
+      const creditCreatedAmt = res.creditAmount || 0
+
       toast.success(
         'Encaissement validé avec succès !',
-        `Bon ${bonAEncaisser.order_number} encaissé (${fmt(montantEncaissementBon)}).`
+        creditCreatedAmt > 0
+          ? `Bon ${bonAEncaisser.order_number} validé (Encaissé: ${fmt(immediatelyPaidAmt)} • Créance client: ${fmt(creditCreatedAmt)}).`
+          : `Bon ${bonAEncaisser.order_number} encaissé (${fmt(immediatelyPaidAmt)}).`
       )
 
       setReceiptSuccessBon({
         transaction_ref: res.transactionRef,
         order_number: bonAEncaisser.order_number,
         date: new Date().toISOString(),
-        customer_name: bonAEncaisser.customer_name,
+        customer_name: chosenCustomer?.name || bonAEncaisser.customer_name || 'Client Comptoir',
         seller_name: bonAEncaisser.seller_name,
         cashier_name: user?.full_name || 'Caissière',
-        amount_paid: montantEncaissementBon,
-        payment_method: modePaiementBon,
-        remaining_balance: Math.max(0, bonAEncaisser.remaining_balance - montantEncaissementBon),
+        amount_paid: immediatelyPaidAmt,
+        credit_amount: creditCreatedAmt,
+        payment_method: isMultiPaymentBon
+          ? (paymentsList || []).map(p => `${p.method.toUpperCase()}: ${fmt(p.amount)}`).join(' | ')
+          : effectiveMode,
+        remaining_balance: Math.max(0, bonAEncaisser.remaining_balance - effectiveMontant),
         items: bonAEncaisser.items
       })
 
@@ -2338,83 +2460,114 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 font-mono">
-                  {bonsEnAttente.map((bon) => (
-                    <tr key={bon.id} className="hover:bg-amber-50/20 transition">
-                      <td className="p-3 font-bold text-slate-900">{bon.order_number}</td>
-                      <td className="p-3 font-sans text-slate-500 text-[11px]">
-                        {new Date(bon.created_at).toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
-                        <span className="block text-[10px] text-slate-400">{new Date(bon.created_at).toLocaleDateString('fr-BJ')}</span>
-                      </td>
-                      <td className="p-3 font-sans text-slate-700">
-                        <span className="font-semibold text-slate-900">{bon.seller_name || 'Vendeur'}</span>
-                      </td>
-                      <td className="p-3 font-sans text-slate-800">
-                        <span className="font-bold">{bon.customer_name || 'Client Comptoir'}</span>
-                      </td>
-                      <td className="p-3 font-sans text-slate-600 max-w-xs">
-                        <div className="truncate text-[11px]" title={bon.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ')}>
-                          {bon.items.length > 0
-                            ? bon.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ')
-                            : 'Commande comptoir'}
-                        </div>
-                      </td>
-                      <td className="p-3 text-right font-bold text-slate-900">{fmt(bon.total_amount)}</td>
-                      <td className="p-3 text-right font-medium text-slate-500">{fmt(bon.paid_amount)}</td>
-                      <td className="p-3 text-right font-black text-amber-700">{fmt(bon.remaining_balance)}</td>
-                      <td className="p-3 text-center font-sans">
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          bon.paid_amount > 0 ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
-                        }`}>
-                          {bon.paid_amount > 0 ? 'Partiel' : 'En attente'}
-                        </span>
-                      </td>
-                      <td className="p-3 text-right font-sans">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <button
-                            onClick={() => {
-                              setBonAEncaisser(bon)
-                              setMontantEncaissementBon(bon.remaining_balance)
-                              setModePaiementBon('especes')
-                              setNoteEncaissementBon('')
-                            }}
-                            className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition inline-flex items-center gap-1 cursor-pointer"
-                          >
-                            <Receipt className="w-3.5 h-3.5" />
-                            <span>Encaisser</span>
-                          </button>
-                          <button
-                            onClick={async () => {
-                              const reason = window.prompt(`Motif d'annulation pour le bon ${bon.order_number} :`, 'Annulation demandée par le client')
-                              if (reason === null) return
-                              try {
-                                const activeCompId = currentCompanyId || company?.id || ''
-                                const res = await annulerBonDeCommande(
-                                  bon.id,
-                                  activeCompId,
-                                  reason.trim() || 'Annulé en caisse',
-                                  user?.id,
-                                  user?.full_name
-                                )
-                                if (res.success) {
-                                  toast.success('Bon annulé', `Le bon ${bon.order_number} a été annulé avec succès.`)
-                                  loadBonsEnAttente()
-                                } else {
-                                  toast.error('Erreur', res.error || 'Impossible d\'annuler ce bon.')
-                                }
-                              } catch (err: any) {
-                                toast.error('Erreur', err?.message || 'Erreur lors de l\'annulation')
-                              }
-                            }}
-                            className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition inline-flex items-center gap-1 cursor-pointer"
-                            title="Annuler ce bon de commande"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                            <span>Annuler</span>
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {bonsEnAttente.map((bon) => {
+                    const isEligible = isOrderEligibleForCollection(bon)
+                    return (
+                      <tr key={bon.id} className="hover:bg-amber-50/20 transition">
+                        <td className="p-3 font-bold text-slate-900">{bon.order_number}</td>
+                        <td className="p-3 font-sans text-slate-500 text-[11px]">
+                          {new Date(bon.created_at).toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
+                          <span className="block text-[10px] text-slate-400">{new Date(bon.created_at).toLocaleDateString('fr-BJ')}</span>
+                        </td>
+                        <td className="p-3 font-sans text-slate-700">
+                          <span className="font-semibold text-slate-900">{bon.seller_name || 'Vendeur'}</span>
+                        </td>
+                        <td className="p-3 font-sans text-slate-800">
+                          <span className="font-bold">{bon.customer_name || 'Client Comptoir'}</span>
+                        </td>
+                        <td className="p-3 font-sans text-slate-600 max-w-xs">
+                          <div className="truncate text-[11px]" title={bon.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ')}>
+                            {bon.items.length > 0
+                              ? bon.items.map(i => `${i.quantity}x ${i.product_name}`).join(', ')
+                              : 'Commande comptoir'}
+                          </div>
+                        </td>
+                        <td className="p-3 text-right font-bold text-slate-900">{fmt(bon.total_amount)}</td>
+                        <td className="p-3 text-right font-medium text-slate-500">{fmt(bon.paid_amount)}</td>
+                        <td className="p-3 text-right font-black text-amber-700">{fmt(bon.remaining_balance)}</td>
+                        <td className="p-3 text-center font-sans">
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            bon.paid_amount > 0 ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
+                          }`}>
+                            {bon.paid_amount > 0 ? 'Partiel' : 'En attente'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-sans">
+                          <div className="flex items-center justify-end gap-1.5">
+                            {/* Bouton Œil : Voir les détails complets de la commande (Section 4.1) */}
+                            <button
+                              type="button"
+                              onClick={() => setBonDetailModal(bon)}
+                              className="p-2 bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-800 border border-slate-200 hover:border-amber-300 rounded-xl transition inline-flex items-center justify-center cursor-pointer"
+                              title="Voir les détails de la commande"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+
+                            {/* Seules les commandes autorisées à être encaissées proposent l'action « Encaisser » (Section 4.2) */}
+                            {isEligible && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setBonAEncaisser(bon)
+                                  setMontantEncaissementBon(bon.remaining_balance)
+                                  setModePaiementBon('especes')
+                                  setIsMultiPaymentBon(false)
+                                  setMultiPaymentSplits({
+                                    especes: 0,
+                                    momo_mtn: 0,
+                                    momo_moov: 0,
+                                    carte: 0,
+                                    banque: 0,
+                                    credit: 0
+                                  })
+                                  setSelectedCreditCustomerId(bon.customer_id || '')
+                                  setNoteEncaissementBon('')
+                                }}
+                                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-xs transition inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <Receipt className="w-3.5 h-3.5" />
+                                <span>Encaisser</span>
+                              </button>
+                            )}
+
+                            {bon.paid_amount <= 0 && (
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  const reason = window.prompt(`Motif d'annulation pour le bon ${bon.order_number} :`, 'Annulation demandée par le client')
+                                  if (reason === null) return
+                                  try {
+                                    const activeCompId = currentCompanyId || company?.id || ''
+                                    const res = await annulerBonDeCommande(
+                                      bon.id,
+                                      activeCompId,
+                                      reason.trim() || 'Annulé en caisse',
+                                      user?.full_name || 'Caissier',
+                                      user?.id || ''
+                                    )
+                                    if (res.success) {
+                                      toast.success('Bon annulé', `Le bon ${bon.order_number} a été annulé avec succès.`)
+                                      loadBonsEnAttente()
+                                    } else {
+                                      toast.error('Erreur', res.error || 'Impossible d\'annuler ce bon.')
+                                    }
+                                  } catch (err: any) {
+                                    toast.error('Erreur', err?.message || 'Erreur lors de l\'annulation')
+                                  }
+                                }}
+                                className="px-2 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition inline-flex items-center gap-1 cursor-pointer"
+                                title="Annuler ce bon de commande"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                                <span>Annuler</span>
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -2422,10 +2575,198 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         </div>
       )}
 
-      {/* ── Modal d'Encaissement du Bon de Commande par la Caissière ── */}
+      {/* ── Modal Détails de la Commande (Icône Œil — Section 4.1) ── */}
+      {bonDetailModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
+            <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-100 text-amber-800">
+                    Détails de la commande
+                  </span>
+                  <span className={clsx(
+                    'px-2.5 py-0.5 rounded-full text-[10px] font-bold',
+                    bonDetailModal.paid_amount > 0 ? 'bg-indigo-100 text-indigo-800' : 'bg-amber-100 text-amber-800'
+                  )}>
+                    Statut : {bonDetailModal.paid_amount > 0 ? 'Partiellement payé' : 'En attente d\'encaissement'}
+                  </span>
+                </div>
+                <h3 className="text-base font-black text-slate-900 font-mono mt-1">
+                  Bon N° {bonDetailModal.order_number}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBonDetailModal(null)}
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl bg-slate-100"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Informations générales de la commande */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-2xl p-3.5">
+              <div>
+                <span className="text-[10px] font-bold uppercase text-slate-400 block">N° Commande</span>
+                <span className="font-mono font-bold text-slate-900">{bonDetailModal.order_number}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase text-slate-400 block">Date & Heure</span>
+                <span className="font-bold text-slate-800">
+                  {new Date(bonDetailModal.created_at).toLocaleString('fr-BJ', {
+                    day: '2-digit',
+                    month: '2-digit',
+                    year: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit'
+                  })}
+                </span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase text-slate-400 block">Vendeur</span>
+                <span className="font-bold text-amber-700">{bonDetailModal.seller_name || 'Vendeur'}</span>
+              </div>
+              <div>
+                <span className="text-[10px] font-bold uppercase text-slate-400 block">Client</span>
+                <span className="font-bold text-slate-900">{bonDetailModal.customer_name || 'Client Comptoir'}</span>
+              </div>
+            </div>
+
+            {/* Tableau complet des articles de la commande */}
+            <div className="border border-slate-200 rounded-2xl overflow-hidden">
+              <div className="bg-slate-50 px-3.5 py-2 border-b border-slate-200 font-bold text-slate-700 flex items-center justify-between">
+                <span>Liste complète des articles ({bonDetailModal.items.length})</span>
+                <span className="text-[10px] text-slate-400">Données réelles de la commande sélectionnée</span>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50/70 text-slate-500 font-bold border-b border-slate-200">
+                    <tr>
+                      <th className="p-2.5">Réf.</th>
+                      <th className="p-2.5">Article</th>
+                      <th className="p-2.5 text-center">Qté</th>
+                      <th className="p-2.5 text-right">Prix Unitaire</th>
+                      <th className="p-2.5 text-right">Remise</th>
+                      <th className="p-2.5 text-right">Taxe</th>
+                      <th className="p-2.5 text-right">Montant Ligne</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {bonDetailModal.items.length === 0 ? (
+                      <tr>
+                        <td colSpan={7} className="p-4 text-center text-slate-400">
+                          Aucun détail d'article disponible pour ce bon.
+                        </td>
+                      </tr>
+                    ) : (
+                      bonDetailModal.items.map((item, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50">
+                          <td className="p-2.5 font-mono text-[11px] text-slate-500">
+                            {item.product_code || '—'}
+                          </td>
+                          <td className="p-2.5 font-bold text-slate-900">
+                            {item.product_name}
+                          </td>
+                          <td className="p-2.5 text-center font-mono font-bold text-slate-800">
+                            {item.quantity}
+                          </td>
+                          <td className="p-2.5 text-right font-mono text-slate-700">
+                            {fmt(item.unit_price)}
+                          </td>
+                          <td className="p-2.5 text-right font-mono text-slate-500">
+                            {fmt(Number(item.discount || 0))}
+                          </td>
+                          <td className="p-2.5 text-right font-mono text-slate-500">
+                            {Number(item.tva_rate || 0) > 0 ? `${item.tva_rate}%` : '0%'}
+                          </td>
+                          <td className="p-2.5 text-right font-mono font-black text-slate-900">
+                            {fmt(item.total_ttc || item.quantity * item.unit_price)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Synthèse financière de la commande */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-1.5">
+              <div className="flex justify-between text-slate-600">
+                <span>Sous-total HT :</span>
+                <span className="font-mono font-bold">{fmt(Number(bonDetailModal.subtotal_ht ?? bonDetailModal.total_amount))}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Remises éventuelles :</span>
+                <span className="font-mono font-bold">{fmt(Number(bonDetailModal.discount_total || 0))}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Taxes applicables (TVA + AIB) :</span>
+                <span className="font-mono font-bold">
+                  {fmt(Number(bonDetailModal.tva_amount || 0) + Number(bonDetailModal.aib_amount || 0))}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-700 font-bold pt-1 border-t border-slate-200">
+                <span>Montant total TTC de la commande :</span>
+                <span className="font-mono">{fmt(bonDetailModal.total_amount)}</span>
+              </div>
+              {bonDetailModal.paid_amount > 0 && (
+                <div className="flex justify-between text-emerald-700 font-semibold">
+                  <span>Montant déjà encaissé :</span>
+                  <span className="font-mono">{fmt(bonDetailModal.paid_amount)}</span>
+                </div>
+              )}
+              <div className="flex justify-between items-baseline text-amber-800 font-black text-sm pt-2 border-t border-slate-200">
+                <span>MONTANT TOTAL À ENCAISSER :</span>
+                <span className="font-mono text-base">{fmt(bonDetailModal.remaining_balance)}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              {isOrderEligibleForCollection(bonDetailModal) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const targetBon = bonDetailModal
+                    setBonDetailModal(null)
+                    setBonAEncaisser(targetBon)
+                    setMontantEncaissementBon(targetBon.remaining_balance)
+                    setModePaiementBon('especes')
+                    setIsMultiPaymentBon(false)
+                    setMultiPaymentSplits({
+                      especes: 0,
+                      momo_mtn: 0,
+                      momo_moov: 0,
+                      carte: 0,
+                      banque: 0,
+                      credit: 0
+                    })
+                    setSelectedCreditCustomerId(targetBon.customer_id || '')
+                    setNoteEncaissementBon('')
+                  }}
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Receipt className="w-4 h-4" />
+                  <span>Encaisser cette commande</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setBonDetailModal(null)}
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition cursor-pointer"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Modal d'Encaissement du Bon de Commande par la Caissière (Sections 5, 6 & 7) ── */}
       {bonAEncaisser && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4 overflow-y-auto animate-fadeIn">
-          <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
+          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -2444,10 +2785,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </button>
             </div>
 
-            {/* Récapitulatif pré-rempli non modifiable */}
-            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2.5">
+            {/* Récapitulatif de la commande */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
               <div className="flex justify-between text-slate-600">
-                <span>Client :</span>
+                <span>Client initial :</span>
                 <span className="font-bold text-slate-900">{bonAEncaisser.customer_name || 'Client Comptoir'}</span>
               </div>
               <div className="flex justify-between text-slate-600">
@@ -2461,15 +2802,14 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                 </div>
               )}
               <div className="flex justify-between text-amber-800 font-black text-sm border-t border-slate-200 pt-2">
-                <span>Solde restant à percevoir :</span>
+                <span>Montant exigible à encaisser :</span>
                 <span className="font-mono">{fmt(bonAEncaisser.remaining_balance)}</span>
               </div>
 
-              {/* Lignes d'articles */}
               {bonAEncaisser.items.length > 0 && (
-                <div className="mt-3 pt-2 border-t border-dashed border-slate-300">
+                <div className="mt-2 pt-2 border-t border-dashed border-slate-300">
                   <p className="text-[10px] font-bold uppercase text-slate-500 mb-1">Détail des articles :</p>
-                  <div className="max-h-28 overflow-y-auto space-y-1">
+                  <div className="max-h-24 overflow-y-auto space-y-1">
                     {bonAEncaisser.items.map((item, idx) => (
                       <div key={idx} className="flex justify-between text-[11px] text-slate-700">
                         <span>{item.quantity} × {item.product_name}</span>
@@ -2481,43 +2821,218 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               )}
             </div>
 
+            {/* Case à cocher « Paiement en plusieurs modes » (Section 6) */}
+            <label className="flex items-center justify-between p-3.5 rounded-2xl border-2 border-indigo-200 bg-indigo-50/60 hover:bg-indigo-50 cursor-pointer transition">
+              <div className="flex items-center gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={isMultiPaymentBon}
+                  onChange={(e) => {
+                    const checked = e.target.checked
+                    setIsMultiPaymentBon(checked)
+                    if (checked) {
+                      setMultiPaymentSplits({
+                        especes: bonAEncaisser.remaining_balance,
+                        momo_mtn: 0,
+                        momo_moov: 0,
+                        carte: 0,
+                        banque: 0,
+                        credit: 0
+                      })
+                    } else {
+                      setMontantEncaissementBon(bonAEncaisser.remaining_balance)
+                    }
+                  }}
+                  className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+                />
+                <div>
+                  <span className="font-black text-slate-900 text-xs block">
+                    Paiement en plusieurs modes
+                  </span>
+                  <span className="text-[11px] text-slate-500">
+                    Répartir le montant total entre Espèces, Mobile Money, Carte, Virement ou Crédit client
+                  </span>
+                </div>
+              </div>
+              <CreditCard className="w-5 h-5 text-indigo-600 shrink-0" />
+            </label>
+
             {/* Formulaire d'encaissement caissière */}
             <div className="space-y-3 pt-1">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  Montant réellement perçu (FCFA) *
-                </label>
-                <input
-                  type="number"
-                  required
-                  min="1"
-                  max={bonAEncaisser.remaining_balance}
-                  value={montantEncaissementBon || ''}
-                  onChange={(e) => setMontantEncaissementBon(Math.max(0, Number(e.target.value) || 0))}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-black text-base text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                />
-                {montantEncaissementBon < bonAEncaisser.remaining_balance && montantEncaissementBon > 0 && (
-                  <p className="text-[11px] text-amber-700 mt-1">
-                    ⚠️ Paiement partiel : il restera un solde dû de {fmt(bonAEncaisser.remaining_balance - montantEncaissementBon)}.
-                  </p>
-                )}
-              </div>
+              {!isMultiPaymentBon ? (
+                /* ── Section 6.1 : Case non cochée (Mode de règlement unique) ── */
+                <>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">Mode de règlement *</label>
+                    <select
+                      value={modePaiementBon}
+                      onChange={(e) => {
+                        const newMode = e.target.value as EncaissementPaymentMethod
+                        setModePaiementBon(newMode)
+                        if (newMode === 'credit') {
+                          setMontantEncaissementBon(bonAEncaisser.remaining_balance)
+                        }
+                      }}
+                      className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-xl font-bold text-slate-900"
+                    >
+                      <option value="especes">💵 Espèces (Tiroir Caisse)</option>
+                      <option value="momo_mtn">📱 MTN Mobile Money</option>
+                      <option value="momo_moov">📱 Moov Money</option>
+                      <option value="wave">🌊 Wave</option>
+                      <option value="carte">💳 Carte Bancaire</option>
+                      <option value="banque">🏦 Virement / Chèque Bancaire</option>
+                      <option value="credit">📝 Crédit Client (Créance)</option>
+                    </select>
+                  </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Mode de règlement *</label>
-                <select
-                  value={modePaiementBon}
-                  onChange={(e) => setModePaiementBon(e.target.value as any)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl font-bold"
-                >
-                  <option value="especes">💵 Espèces (Tiroir Caisse)</option>
-                  <option value="momo_mtn">📱 MTN Mobile Money</option>
-                  <option value="momo_moov">📱 Moov Money</option>
-                  <option value="wave">🌊 Wave</option>
-                  <option value="banque">🏦 Banque / Virement</option>
-                  <option value="carte">💳 Carte Bancaire</option>
-                </select>
-              </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      {modePaiementBon === 'credit'
+                        ? 'Montant porté en créance client (FCFA) *'
+                        : 'Montant réellement perçu (FCFA) *'}
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="1"
+                      max={bonAEncaisser.remaining_balance}
+                      value={montantEncaissementBon || ''}
+                      onChange={(e) => setMontantEncaissementBon(Math.max(0, Number(e.target.value) || 0))}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-xl font-mono font-black text-base text-slate-900 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    />
+                    {montantEncaissementBon < bonAEncaisser.remaining_balance && montantEncaissementBon > 0 && (
+                      <p className="text-[11px] text-amber-700 mt-1">
+                        ⚠️ Règlement partiel : il restera un solde dû de {fmt(bonAEncaisser.remaining_balance - montantEncaissementBon)}.
+                      </p>
+                    )}
+                  </div>
+                </>
+              ) : (
+                /* ── Section 6.2 : Case cochée (Paiement en plusieurs modes) ── */
+                <div className="space-y-2.5 p-3.5 rounded-2xl bg-slate-50 border border-slate-200">
+                  <div className="flex items-center justify-between text-[11px] font-bold text-slate-600 pb-1 border-b border-slate-200">
+                    <span>Mode de règlement</span>
+                    <span>Montant affecté (FCFA)</span>
+                  </div>
+
+                  {[
+                    { key: 'especes', label: '💵 Espèces' },
+                    { key: 'momo_mtn', label: '📱 Mobile Money (MTN)' },
+                    { key: 'momo_moov', label: '📱 Mobile Money (Moov / Wave)' },
+                    { key: 'carte', label: '💳 Carte bancaire' },
+                    { key: 'banque', label: '🏦 Virement / Chèque' },
+                    { key: 'credit', label: '📝 Crédit client (Créance)' }
+                  ].map((mRow) => {
+                    const currentVal = Number(multiPaymentSplits[mRow.key] || 0)
+                    return (
+                      <div key={mRow.key} className="flex items-center justify-between gap-2">
+                        <span className="font-bold text-slate-800 text-xs flex-1">{mRow.label}</span>
+                        <div className="flex items-center gap-1.5">
+                          {resteMultiARepartir > 0 && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setMultiPaymentSplits(prev => ({
+                                  ...prev,
+                                  [mRow.key]: Math.max(0, Math.round(Number(prev[mRow.key] || 0) + resteMultiARepartir))
+                                }))
+                              }
+                              className="px-2 py-1 text-[10px] font-bold bg-indigo-100 hover:bg-indigo-200 text-indigo-800 rounded-lg transition whitespace-nowrap"
+                              title="Affecter le reste à ce mode"
+                            >
+                              + Reste
+                            </button>
+                          )}
+                          <input
+                            type="number"
+                            min={0}
+                            step="any"
+                            value={currentVal === 0 ? '' : currentVal}
+                            placeholder="0"
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              const val = raw === '' ? 0 : Math.max(0, Math.round(Number(raw) || 0))
+                              setMultiPaymentSplits(prev => ({
+                                ...prev,
+                                [mRow.key]: val
+                              }))
+                            }}
+                            className="w-36 px-2.5 py-1.5 bg-white border border-slate-300 rounded-xl font-mono font-bold text-right text-slate-900 focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    )
+                  })}
+
+                  {/* Synthèse automatique de la répartition (Section 6.3) */}
+                  <div className="pt-2.5 mt-2 border-t border-slate-200 space-y-1">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-bold text-slate-700">Total réparti :</span>
+                      <span className="font-mono font-black text-slate-900">{fmt(totalMultiAllocated)}</span>
+                    </div>
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="font-bold text-slate-700">Reste à payer / à répartir :</span>
+                      <span className={clsx(
+                        'font-mono font-black text-sm',
+                        resteMultiARepartir === 0
+                          ? 'text-emerald-600'
+                          : 'text-rose-600'
+                      )}>
+                        {fmt(resteMultiARepartir)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Section 5.2 & 6.3 : Sélection obligatoire du client lorsque le Crédit est utilisé ── */}
+              {hasCreditInCurrentPayment && (
+                <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-300 space-y-2.5">
+                  <div className="flex items-center gap-2 text-amber-900 font-black text-xs">
+                    <Users className="w-4 h-4 text-amber-700 shrink-0" />
+                    <span>Identification obligatoire du client pour la créance</span>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-900 mb-1">
+                      Sélectionner un client existant *
+                    </label>
+                    <select
+                      value={selectedCreditCustomerId}
+                      onChange={(e) => setSelectedCreditCustomerId(e.target.value)}
+                      className="w-full px-3 py-2 bg-white border border-amber-300 rounded-xl font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    >
+                      <option value="">— Choisir un client identifié —</option>
+                      {sectorCustomers.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name} {c.phone ? `(${c.phone})` : ''} — Dette actuelle : {fmt(Number(c.current_debt || 0))}
+                        </option>
+                      ))}
+                    </select>
+                    {!selectedCreditCustomerId && (
+                      <p className="text-[11px] text-rose-700 font-bold mt-1">
+                        ⚠️ Veuillez sélectionner un client identifié pour autoriser le règlement à crédit.
+                      </p>
+                    )}
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-amber-900 mb-1">
+                      Date d'échéance de la créance
+                    </label>
+                    <input
+                      type="date"
+                      value={creditDueDate}
+                      onChange={(e) => setCreditDueDate(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-white border border-amber-300 rounded-xl text-xs font-mono text-slate-900"
+                    />
+                  </div>
+
+                  <p className="text-[10px] text-amber-800 leading-relaxed">
+                    La part à crédit ({fmt(isMultiPaymentBon ? Number(multiPaymentSplits.credit || 0) : montantEncaissementBon)}) créera automatiquement une créance dans « Clients et Créances » sans augmenter les espèces ni le Mobile Money.
+                  </p>
+                </div>
+              )}
 
               <div>
                 <label className="block font-semibold text-slate-600 mb-1">Note ou observation (facultatif)</label>
@@ -2541,7 +3056,12 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                 </button>
                 <button
                   type="button"
-                  disabled={isProcessingEncaissementBon || montantEncaissementBon <= 0}
+                  disabled={
+                    isProcessingEncaissementBon ||
+                    (!isMultiPaymentBon && montantEncaissementBon <= 0) ||
+                    (isMultiPaymentBon && (totalMultiAllocated <= 0 || Math.abs(resteMultiARepartir) > 1)) ||
+                    (hasCreditInCurrentPayment && !selectedCreditCustomerId)
+                  }
                   onClick={handleValiderEncaissementBon}
                   className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold shadow-md transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer"
                 >
@@ -2611,12 +3131,18 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               <div className="border-t border-dashed border-slate-300 pt-2 space-y-1">
                 <div className="flex justify-between items-center font-bold">
                   <span>Mode de paiement :</span>
-                  <span className="uppercase text-slate-900">{receiptSuccessBon.payment_method}</span>
+                  <span className="uppercase text-slate-900 text-right">{receiptSuccessBon.payment_method}</span>
                 </div>
                 <div className="flex justify-between items-center text-sm font-black text-emerald-700">
                   <span>MONTANT ENCAISSÉ :</span>
                   <span className="font-mono text-base">{fmt(receiptSuccessBon.amount_paid)}</span>
                 </div>
+                {Number(receiptSuccessBon.credit_amount || 0) > 0 && (
+                  <div className="flex justify-between items-center text-xs text-amber-800 font-bold">
+                    <span>CRÉANCE CLIENT ENREGISTRÉE :</span>
+                    <span className="font-mono">{fmt(receiptSuccessBon.credit_amount)}</span>
+                  </div>
+                )}
                 {receiptSuccessBon.remaining_balance > 0 && (
                   <div className="flex justify-between items-center text-xs text-rose-700 font-bold">
                     <span>SOLDE RESTANT DÛ :</span>
