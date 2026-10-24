@@ -392,6 +392,8 @@ export async function getFondInitialOuverture(
         q = q.eq('caisse_id', targetCaisseId)
       } else if (secteurId) {
         q = q.eq('secteur_id', secteurId)
+      } else {
+        q = q.or(`sector_slug.eq.${clean},secteur_slug.eq.${clean}`)
       }
 
       const { data: lastClo } = await q.maybeSingle()
@@ -672,7 +674,7 @@ export async function ouvrirSessionCaisse(
     try {
       localStorage.setItem(`gestio_caisse_active_${clean}_${companyId}`, JSON.stringify(newSess))
       localStorage.setItem(`gestio_caisse_active_${clean}`, JSON.stringify(newSess))
-      localStorage.setItem('active_caisse_session', JSON.stringify(newSess))
+      /* un-isolated key removed */
     } catch (_) {}
 
     // 3. Mettre à jour l'état de la table caisses (Table maîtresse accessible sans colonnes non reconnues)

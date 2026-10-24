@@ -11,7 +11,7 @@ import { supabase } from './lib/supabase'
 // GESTIO 229 — Initialisation globale (thème, PWA, version check, chunk guard, modales pro)
 // =============================================================================
 
-// Élimination définitive des popups natives browser (gestio229.vercel.app indique)
+// Élimination définitive des popups natives browser (gestio229.com indique)
 installGlobalModalInterceptors()
 installGlobalPrintHelper()
 

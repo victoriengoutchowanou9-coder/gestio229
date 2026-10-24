@@ -283,8 +283,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         .order('date_ouverture', { ascending: false })
         .limit(1)
 
-      if (targetCaisseId) q1 = q1.eq('caisse_id', targetCaisseId)
-      if (targetSecteurId) q1 = q1.eq('secteur_id', targetSecteurId)
+      if (targetCaisseId) {
+        q1 = q1.eq('caisse_id', targetCaisseId)
+      } else if (targetSecteurId) {
+        q1 = q1.eq('secteur_id', targetSecteurId)
+      } else {
+        q1 = q1.eq('caisse_id', '00000000-0000-0000-0000-000000000000') // prevent unscoped query
+      }
 
       const { data: ant1 } = await q1.maybeSingle()
       if (ant1) {
@@ -304,7 +309,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           .order('date_ouverture', { ascending: false })
           .limit(10)
 
-        if (targetCaisseId) q2 = q2.eq('caisse_id', targetCaisseId)
+        if (targetCaisseId) {
+          q2 = q2.eq('caisse_id', targetCaisseId)
+        } else {
+          q2 = q2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
+        }
 
         const { data: csList } = await q2
         if (csList && csList.length > 0) {
@@ -355,8 +364,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         .eq('company_id', compId)
         .eq('date_ouverture', todayStr)
 
-      if (targetCaisseId) qJ1 = qJ1.eq('caisse_id', targetCaisseId)
-      if (targetSecteurId) qJ1 = qJ1.eq('secteur_id', targetSecteurId)
+      if (targetCaisseId) {
+        qJ1 = qJ1.eq('caisse_id', targetCaisseId)
+      } else if (targetSecteurId) {
+        qJ1 = qJ1.eq('secteur_id', targetSecteurId)
+      } else {
+        qJ1 = qJ1.eq('caisse_id', '00000000-0000-0000-0000-000000000000') // prevent unscoped query
+      }
 
       const { data: j1 } = await qJ1.maybeSingle()
       if (j1) {
@@ -374,7 +388,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           .order('date_ouverture', { ascending: false })
           .limit(1)
 
-        if (targetCaisseId) qJ2 = qJ2.eq('caisse_id', targetCaisseId)
+        if (targetCaisseId) {
+          qJ2 = qJ2.eq('caisse_id', targetCaisseId)
+        } else {
+          qJ2 = qJ2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
+        }
 
         const { data: j2 } = await qJ2.maybeSingle()
         if (j2) {
@@ -1945,7 +1963,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         try {
           localStorage.removeItem(`gestio_caisse_active_${currentSectorSlug}_${compId}`)
           localStorage.removeItem(`gestio_caisse_active_${currentSectorSlug}`)
-          localStorage.removeItem('active_caisse_session')
+          /* un-isolated key removed */
         } catch (_) {}
       }
 

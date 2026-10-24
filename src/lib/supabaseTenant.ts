@@ -858,10 +858,12 @@ export async function getCurrentCashSession(
     const localSessStr =
       localStorage.getItem(`gestio_caisse_active_${cleanSlug}_${companyId}`) ||
       localStorage.getItem(`gestio_caisse_active_${cleanSlug}`) ||
-      localStorage.getItem('active_caisse_session')
+      '' /* un-isolated key removed */
     if (localSessStr) {
       const parsed = JSON.parse(localSessStr)
       if (parsed && (parsed.statut === 'ouverte' || parsed.statut === 'open' || parsed.is_open === true)) {
+        const parsedSlug = (parsed.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '');
+        if (parsedSlug && parsedSlug !== cleanSlug) return null;
         const openDate = new Date(parsed.date_ouverture || Date.now())
         const isDiffDate =
           openDate.getFullYear() !== now.getFullYear() ||

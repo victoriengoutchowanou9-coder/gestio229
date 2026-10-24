@@ -29,5 +29,18 @@
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }
+  ],
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "gestio229.vercel.app"
+        }
+      ],
+      "destination": "https://gestio229.com/$1",
+      "permanent": true
+    }
   ]
 }

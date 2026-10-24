@@ -184,7 +184,7 @@ export const TresoreriePage: React.FC = () => {
   const loadTreasuryData = useCallback(async () => {
     const compId = currentCompanyId || company?.id
     const secSlug = (currentSectorSlug || 'boutique').toLowerCase().trim()
-    if (!compId) return
+    if (!compId || !secSlug) return
     setLoading(true)
     try {
       // 1. Charger les comptes réels du secteur actif de l'entreprise

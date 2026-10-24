@@ -109,7 +109,7 @@ export function closeCustomModal(): void {
 
 /**
  * Interception globale de window.alert, window.confirm, window.prompt
- * Empêche définitivement l'apparition de toute popup native "gestio229.vercel.app indique"
+ * Empêche définitivement l'apparition de toute popup native "gestio229.com indique"
  */
 export function installGlobalModalInterceptors(): void {
   if (typeof window === 'undefined') return

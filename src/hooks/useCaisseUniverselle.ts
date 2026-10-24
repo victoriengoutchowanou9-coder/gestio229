@@ -75,7 +75,7 @@ export const useCaisse = (sectorKey: string) => {
   // Récupère la VRAIE caisse UUID depuis BDD
   const fetchCaisse = useCallback(async (): Promise<CaisseUniverselle | null> => {
     const compId = company?.id
-    if (!compId) {
+    if (!compId || !clean) {
       setLoading(false)
       return null
     }

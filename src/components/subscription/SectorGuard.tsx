@@ -32,23 +32,14 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   const { sectorSlug } = useParams<{ sectorSlug: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const { company, user } = useAuthStore()
+  const { company, user, status } = useAuthStore()
 
   const [accessState, setAccessState] = useState<VerificationAccesSecteurResult | null>(null)
   const [checking, setChecking] = useState(false)
   const [addingSector, setAddingSector] = useState(false)
 
-  // Le Super Admin universel traverse librement
-  if (user?.role === 'super_admin' || user?.is_super_admin) {
-    return <>{children}</>
-  }
-
-  if (!sectorSlug || !company) {
-    return <>{children}</>
-  }
-
-  const cleanSlug = canonicalSectorSlug(sectorSlug)
-  const isSubscribed = isSectorSubscribed(cleanSlug, company)
+  const cleanSlug = sectorSlug ? canonicalSectorSlug(sectorSlug) : ''
+  const isSubscribed = Boolean(company && cleanSlug && isSectorSubscribed(cleanSlug, company))
 
   // Déterminer le sous-chemin courant dans /app/:sectorSlug/...
   const pathParts = location.pathname.split('/').filter(Boolean)
@@ -59,6 +50,8 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
     currentSubPath === 'dashboard' ||
     currentSubPath === 'abonnement'
 
+  // FIX CRITIQUE REACT #300 : Les Hooks (useEffect) DOIVENT être exécutés inconditionnellement
+  // au tout début du composant AVANT tout return conditionnel.
   useEffect(() => {
     let mounted = true
     if (!company?.id || !cleanSlug) return
@@ -79,6 +72,40 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
       mounted = false
     }
   }, [company?.id, cleanSlug, isSubscribed, location.pathname])
+
+  // 1. État de chargement initial de l'authentification (FIX #300 - Toujours retourner un JSX valide, jamais null ou objet)
+  if (status === 'loading' || status === 'idle') {
+    return (
+      <div className="min-h-[50vh] p-10 flex flex-col items-center justify-center text-center">
+        <div className="w-8 h-8 border-3 border-emerald-500 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-white font-semibold">Chargement secteur {sectorSlug || '...'}...</p>
+        <p className="text-xs text-slate-500 mt-1">Initialisation de la session...</p>
+      </div>
+    )
+  }
+
+  // 2. Si l'entreprise ou le secteur n'est pas sélectionné (FIX #300)
+  if (!company?.id || !cleanSlug) {
+    return (
+      <div className="min-h-[50vh] p-10 flex flex-col items-center justify-center text-center">
+        <p className="text-white font-bold text-lg mb-1">Secteur {sectorSlug || '...'} introuvable</p>
+        <p className="text-sm text-slate-400 mb-6">Entreprise ou secteur non sélectionné</p>
+        <button
+          type="button"
+          onClick={() => navigate('/hub')}
+          className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition shadow-lg shadow-emerald-500/20"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          Retour au HUB
+        </button>
+      </div>
+    )
+  }
+
+  // 3. Le Super Admin universel traverse librement
+  if (user?.role === 'super_admin' || user?.is_super_admin) {
+    return <>{children}</>
+  }
 
   // Si le secteur est ajouté à l'entreprise (ou trouvé dans abonnements_secteurs) :
   // - Si l'abonnement du secteur est actif (`accessState.autorise === true`), tous les modules sont autorisés.
