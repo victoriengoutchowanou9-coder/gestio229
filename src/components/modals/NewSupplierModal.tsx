@@ -115,24 +115,50 @@ export const NewSupplierModal: React.FC<NewSupplierModalProps> = ({
     e.preventDefault()
     if (!validate()) return
 
-    if (!company?.id) {
+    const activeCompanyId = companyId || company?.id || ''
+    if (!activeCompanyId) {
       toast.error('Erreur', 'Aucune entreprise active détectée.')
       return
     }
 
     setIsSubmitting(true)
     try {
+      // Vérification anti-doublon dans la même entreprise et le même secteur
+      const trimmedName = form.company_name.trim()
+      const trimmedPhone = form.phone.trim()
+      const trimmedIfu = form.ifu_number.trim()
+
+      const { data: existingSuppliers } = await supabaseTenant('suppliers')
+        .select('id, code, company_name, phone, ifu_number')
+        .eq('is_active', true)
+
+      const duplicate = (existingSuppliers || []).find((s: any) => {
+        if (trimmedIfu && s.ifu_number && String(s.ifu_number).trim() === trimmedIfu) return true
+        const sameName = String(s.company_name || '').trim().toLowerCase() === trimmedName.toLowerCase()
+        const samePhone = String(s.phone || '').replace(/\s+/g, '') === trimmedPhone.replace(/\s+/g, '')
+        return sameName && samePhone
+      })
+
+      if (duplicate) {
+        toast.error(
+          'Fournisseur déjà existant',
+          `Un fournisseur "${duplicate.company_name}" (${duplicate.code}) existe déjà dans ce secteur avec ces mêmes références.`
+        )
+        setIsSubmitting(false)
+        return
+      }
+
       let finalCode = form.code.trim().toUpperCase()
       if (!finalCode || finalCode === defaultCode) {
-        finalCode = await getNextSectorCode('suppliers', 'FOURN', companyId || '', sectorSlug)
+        finalCode = await getNextSectorCode('suppliers', 'FOURN', activeCompanyId, sectorSlug)
       }
 
       const corePayload = {
         code: finalCode,
-        company_name: form.company_name.trim(),
+        company_name: trimmedName,
         contact_person: form.contact_person.trim() || null,
-        ifu_number: form.ifu_number.trim() || null,
-        phone: form.phone.trim(),
+        ifu_number: trimmedIfu || null,
+        phone: trimmedPhone,
         email: form.email.trim() || null,
         address: form.address.trim() || null,
         city: form.city.trim() || 'Cotonou',

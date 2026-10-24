@@ -92,7 +92,6 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
   const targetCanon = canonicalSectorSlug(sectorSlug)
   const normSlug = String(sectorSlug).replace(/^sec-/, '').toLowerCase().trim()
 
-  // Liste des secteurs autorisés dans authorized_sectors, primary_sector, company_sectors ou selected_sectors
   const rawList: any[] = []
   if ((company as any).primary_sector) {
     rawList.push((company as any).primary_sector)
@@ -118,7 +117,6 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
     }
   }
 
-  // RÈGLE DE SÉCURITÉ : Si aucun secteur configuré, accès strictement refusé
   if (rawList.length === 0) return false
 
   for (const s of rawList) {
@@ -142,6 +140,10 @@ export function isSectorSubscribed(sectorSlug: string, company?: Company | null)
  */
 export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   if (!item) return false
+  // Exclusion stricte des articles ou entités supprimés logiquement (soft-delete)
+  if (item.deleted_at || item.sector_meta?.deleted_at || item.sector_meta?.is_archived === true) {
+    return false
+  }
   const rawActive = targetSectorSlug || getActiveSectorSlug() || 'boutique'
   const active = rawActive.toLowerCase().trim().replace(/^sec-/, '')
   const activeCanon = canonicalSectorSlug(active) || 'boutique'
@@ -206,27 +208,21 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
   // 3. Cas sémantique d'isolation pour articles et fournisseurs historiques orphelins (sans marqueur explicite)
   const itemName = String(item.name || item.product_name || item.designation || item.company_name || item.nom || '').toLowerCase()
 
-  // Les boissons brasserie, bières et casiers (Beaufort, Béninoise, Castel, Sobebra, etc.) appartiennent TOUJOURS à Brasserie
   const isDrinkOrBeer = /beaufort|béninoise|beninoise|castel|guinness|sobebra|youki|casier|casiers|capsule|c12t|c20t|c24t|bière|biere|xxl|flag|doppel|chill|panach/i.test(itemName)
   if (isDrinkOrBeer) {
     return activeCanon === 'brasserie'
   }
 
-  // Les matériaux et fournisseurs BTP / Ciment (Ciment 50kg, Nocibé, CimBénin, Fer à béton, etc.) appartiennent TOUJOURS à Quincaillerie/BTP
   const isBTP = /ciment|nocibe|nocibé|cimbenin|cimbénin|fer à béton|fer a beton|béton|beton|tôle|tole|quincaillerie|pointes|brouette|gravier|sable|brique|btp/i.test(itemName)
   if (isBTP) {
     return activeCanon === 'quincaillerie' || activeCanon === 'btp'
   }
 
-  // Les produits frigorifiques / poissons -> Poissonnerie
   const isFish = /tilapia|hake|hm 16|cuisse|poisson|chinchard|machoiron|bar |crevette|crabe|capitaine/i.test(itemName)
   if (isFish) {
     return activeCanon === 'poissonnerie'
   }
 
-  // 4. Règle absolue d'isolation : les données résiduelles sans marqueur sectoriel explicite
-  // n'apparaissent QUE dans 'boutique' (secteur historique par défaut) et JAMAIS
-  // dans les autres sous-logiciels spécialisés (Supermarché, Brasserie, Poissonnerie, Pharmacie, etc.)
   return activeCanon === 'boutique'
 }
 

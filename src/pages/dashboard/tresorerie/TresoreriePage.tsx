@@ -79,8 +79,8 @@ export const TresoreriePage: React.FC = () => {
     alert_threshold: 50000
   })
 
-  // Initialisation automatique des comptes COFFRE-FORT + MOMO MARCHANDS si manquants (PARTIE 2D)
-  const ensureDefaultAccounts = async (compId: string, existingList: TreasuryAccount[]): Promise<TreasuryAccount[]> => {
+  // Initialisation automatique des comptes COFFRE-FORT + MOMO MARCHANDS isolés par (company_id, sector_slug)
+  const ensureDefaultAccounts = async (compId: string, secSlug: string, existingList: TreasuryAccount[]): Promise<TreasuryAccount[]> => {
     const list = [...existingList]
     const hasVault = list.some((a) => a.type === 'vault')
     const hasMomo = list.some((a) => a.type === 'mobile_money')
@@ -88,10 +88,11 @@ export const TresoreriePage: React.FC = () => {
     if (!hasVault) {
       let createdVault: TreasuryAccount | null = null
       try {
-        const { data: vault, error } = await supabase
+        const { data: vault } = await supabase
           .from('treasury_accounts')
           .insert({
             company_id: compId,
+            sector_slug: secSlug,
             name: 'COFFRE-FORT (Espèces)',
             type: 'vault',
             account_number: 'COFFRE-PRINCIPAL',
@@ -116,10 +117,9 @@ export const TresoreriePage: React.FC = () => {
         console.warn('Erreur insertion Supabase Coffre-Fort:', err)
       }
 
-      // Si l'insertion Supabase n'a pas renvoyé de ligne, fallback déterministe pour ne jamais bloquer l'affichage
       if (!createdVault) {
         createdVault = {
-          id: `${compId}-vault`,
+          id: `${compId}-${secSlug}-vault`,
           name: 'COFFRE-FORT (Espèces)',
           type: 'vault',
           institution: 'Trésorerie Centrale',
@@ -134,10 +134,11 @@ export const TresoreriePage: React.FC = () => {
     if (!hasMomo) {
       let createdMomo: TreasuryAccount | null = null
       try {
-        const { data: momo, error } = await supabase
+        const { data: momo } = await supabase
           .from('treasury_accounts')
           .insert({
             company_id: compId,
+            sector_slug: secSlug,
             name: 'MOMO MARCHANDS Central',
             type: 'mobile_money',
             account_number: 'MOMO-CENTRAL',
@@ -162,10 +163,9 @@ export const TresoreriePage: React.FC = () => {
         console.warn('Erreur insertion Supabase MoMo Marchands:', err)
       }
 
-      // Si l'insertion Supabase n'a pas renvoyé de ligne, fallback déterministe
       if (!createdMomo) {
         createdMomo = {
-          id: `${compId}-momo`,
+          id: `${compId}-${secSlug}-momo`,
           name: 'MOMO MARCHANDS Central',
           type: 'mobile_money',
           institution: 'MTN / Moov Central',
@@ -180,17 +180,19 @@ export const TresoreriePage: React.FC = () => {
     return list
   }
 
-  // Charger les comptes trésorerie réels et recalculer les soldes exacts
+  // Charger les comptes trésorerie réels isolés par (company_id, sector_slug)
   const loadTreasuryData = useCallback(async () => {
     const compId = currentCompanyId || company?.id
+    const secSlug = (currentSectorSlug || 'boutique').toLowerCase().trim()
     if (!compId) return
     setLoading(true)
     try {
-      // 1. Charger les comptes réels de l'entreprise (Trésorerie Centrale non restreinte par secteur)
+      // 1. Charger les comptes réels du secteur actif de l'entreprise
       const { data: dbAccounts } = await supabase
         .from('treasury_accounts')
         .select('*')
         .eq('company_id', compId)
+        .eq('sector_slug', secSlug)
         .order('created_at', { ascending: true })
 
       let rawAccounts: TreasuryAccount[] = (dbAccounts || []).map((a: any) => ({
@@ -203,10 +205,10 @@ export const TresoreriePage: React.FC = () => {
         alert_threshold: Number(a.alert_threshold) || 50000
       }))
 
-      // Fallback local storage si la base est vide (ex: offline ou RLS)
+      // Fallback local storage si la base est vide (isolé par companyId + sectorSlug)
       if (rawAccounts.length === 0) {
         try {
-          const cached = localStorage.getItem(`gestio_treasury_accounts_${compId}`)
+          const cached = localStorage.getItem(`gestio_treasury_accounts_${compId}_${secSlug}`)
           if (cached) {
             const parsed = JSON.parse(cached)
             if (Array.isArray(parsed) && parsed.length > 0) {
@@ -216,19 +218,20 @@ export const TresoreriePage: React.FC = () => {
         } catch (_) {}
       }
 
-      // Garantir l'existence d'au moins 1 Coffre-Fort et 1 MoMo Marchands
-      rawAccounts = await ensureDefaultAccounts(compId, rawAccounts)
+      // Garantir l'existence d'au moins 1 Coffre-Fort et 1 MoMo Marchands pour ce secteur
+      rawAccounts = await ensureDefaultAccounts(compId, secSlug, rawAccounts)
 
-      // 2. Charger toutes les opérations de retrait / versement enregistrées
+      // 2. Charger toutes les opérations de retrait / versement enregistrées dans ce secteur
       let allTransfers: PendingTransfer[] = []
       const seenTransfers = new Set<string>()
 
-      // 2a. Depuis treasury_transfers
+      // 2a. Depuis treasury_transfers isolé par sector_slug
       try {
         const { data: dbTransfers } = await supabase
           .from('treasury_transfers')
           .select('*')
           .eq('company_id', compId)
+          .eq('sector_slug', secSlug)
           .order('created_at', { ascending: false })
           .limit(200)
 
@@ -300,9 +303,9 @@ export const TresoreriePage: React.FC = () => {
       // RÈGLE FONDAMENTALE : Aucun recalcul artificiel qui réinjecterait les montants déjà décaissés.
       const finalAccounts = [...rawAccounts]
 
-      // Sauvegarde dans le localStorage pour persistance hors-ligne et rechargement immédiat
+      // Sauvegarde dans le localStorage pour persistance hors-ligne et rechargement immédiat (isolé par secteur)
       try {
-        localStorage.setItem(`gestio_treasury_accounts_${compId}`, JSON.stringify(finalAccounts))
+        localStorage.setItem(`gestio_treasury_accounts_${compId}_${secSlug}`, JSON.stringify(finalAccounts))
       } catch (_) {}
 
       setAccounts(finalAccounts)
@@ -310,9 +313,9 @@ export const TresoreriePage: React.FC = () => {
       setPendingTransfers(allTransfers.filter((t) => t.status === 'EN_ATTENTE'))
     } catch (err: any) {
       console.error('Erreur chargement trésorerie :', err)
-      // En cas d'erreur de requête, tenter de charger le cache local
+      // En cas d'erreur de requête, tenter de charger le cache local du secteur
       try {
-        const cached = localStorage.getItem(`gestio_treasury_accounts_${compId}`)
+        const cached = localStorage.getItem(`gestio_treasury_accounts_${compId}_${secSlug}`)
         if (cached) {
           setAccounts(JSON.parse(cached))
         } else {
@@ -325,19 +328,20 @@ export const TresoreriePage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [currentCompanyId, company?.id])
+  }, [currentCompanyId, company?.id, currentSectorSlug])
 
   useEffect(() => {
     loadTreasuryData()
   }, [loadTreasuryData])
 
-  // Mettre à jour les comptes dans l'état local et dans le localStorage
+  // Mettre à jour les comptes dans l'état local et dans le localStorage (isolé par secteur)
   const saveAccounts = (updated: TreasuryAccount[]) => {
     setAccounts(updated)
     const compId = currentCompanyId || company?.id
+    const secSlug = (currentSectorSlug || 'boutique').toLowerCase().trim()
     if (compId) {
       try {
-        localStorage.setItem(`gestio_treasury_accounts_${compId}`, JSON.stringify(updated))
+        localStorage.setItem(`gestio_treasury_accounts_${compId}_${secSlug}`, JSON.stringify(updated))
       } catch (_) {}
     }
   }
@@ -353,12 +357,13 @@ export const TresoreriePage: React.FC = () => {
 
     let createdId = `acc-${Date.now()}`
 
-    // Insertion directe et persistante dans Supabase
+    // Insertion directe et persistante dans Supabase isolée par (company_id, sector_slug)
     try {
-      const { data: dbAcc, error } = await supabase
+      const { data: dbAcc } = await supabase
         .from('treasury_accounts')
         .insert({
           company_id: currentCompanyId,
+          sector_slug: (currentSectorSlug || 'boutique').toLowerCase().trim(),
           name: newAccForm.name.trim(),
           type: newAccForm.type,
           account_number: fullAccNum,
@@ -412,10 +417,15 @@ export const TresoreriePage: React.FC = () => {
     })
   }
 
+  const processingTransfersRef = React.useRef<Set<string>>(new Set())
+
   // Approuver une demande de versement — DOUBLE TRANSACTION (PARTIE 2B)
   // Espèces : incrémente COFFRE-FORT (Espèces)
   // MoMo : incrémente MOMO MARCHANDS central
   const handleApproveTransfer = async (transfer: PendingTransfer) => {
+    const tKey = String(transfer.id)
+    if (processingTransfersRef.current.has(tKey)) return
+    processingTransfersRef.current.add(tKey)
     const compId = currentCompanyId || company?.id
     const isEspeces = /esp|cash/i.test(String(transfer.type || ''))
 

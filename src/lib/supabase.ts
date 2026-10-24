@@ -3,6 +3,7 @@
 // =============================================================================
 
 import { createClient } from '@supabase/supabase-js'
+import { createResilientFetch } from './supabaseResilientFetch'
 
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : (typeof process !== 'undefined' ? process.env : {}) as any
 
@@ -22,6 +23,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     storage: typeof window !== 'undefined' ? window.localStorage : undefined,
   },
   global: {
+    fetch: createResilientFetch(supabaseUrl, supabaseAnonKey),
     headers: {
       'x-application-name': 'GESTIO229-SAAS-V3',
     },

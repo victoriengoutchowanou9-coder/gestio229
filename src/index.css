@@ -246,32 +246,48 @@ textarea,
   background: #94a3b8;
 }
 
-/* Print styles */
+/* Print styles — Anti-page-blanche universel */
 @media print {
   @page {
     size: auto;
     margin: 8mm;
   }
-  body {
-    background: white !important;
-    color: black !important;
+  html, body, #root {
+    height: auto !important;
+    min-height: 0 !important;
+    max-height: none !important;
+    overflow: visible !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
   }
-  body * { visibility: hidden; }
-  #printable-area, #printable-area * { visibility: visible; }
-  #printable-area {
-    position: absolute;
-    left: 0;
-    top: 0;
+
+  /* Cas 1 : Clone d'impression généré par printHelper.ts */
+  body.gestio-printing-active > *:not(#gestio-print-root) {
+    display: none !important;
+  }
+  #gestio-print-root {
+    display: block !important;
+    visibility: visible !important;
+    position: static !important;
     width: 100% !important;
     max-width: 100% !important;
-    background: white !important;
-    color: black !important;
+    background: #ffffff !important;
+    color: #000000 !important;
     box-shadow: none !important;
     border: none !important;
     padding: 0 !important;
     margin: 0 !important;
   }
-  .no-print { display: none !important; }
+  #gestio-print-root * {
+    visibility: visible !important;
+  }
+
+  /* Cas 2 : Impression directe sans clone actif */
+  aside, nav, header.no-print, .no-print, .print\:hidden {
+    display: none !important;
+  }
 }
 
 /* Thermal ticket */

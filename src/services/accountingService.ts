@@ -503,11 +503,12 @@ export async function syncOperationalDataToAccounting(
       (existingRecords || []).map((r: any) => `${r.source_module}_${r.source_id}_${r.journal_code}`)
     )
 
-    // 2. Traitement des VENTES (sales_orders)
+    // 2. Traitement des VENTES (sales_orders) isolées par sector_slug
     const { data: sales } = await supabase
       .from('sales_orders')
       .select('*')
       .eq('company_id', companyId)
+      .eq('sector_slug', sectorSlug)
       .order('created_at', { ascending: false })
       .limit(100)
 
@@ -664,11 +665,12 @@ export async function syncOperationalDataToAccounting(
       }
     }
 
-    // 3. Traitement des ACHATS (purchase_orders)
+    // 3. Traitement des ACHATS (purchase_orders) isolés par sector_slug
     const { data: purchases } = await supabase
       .from('purchase_orders')
       .select('*')
       .eq('company_id', companyId)
+      .eq('sector_slug', sectorSlug)
       .order('created_at', { ascending: false })
       .limit(50)
 
@@ -820,11 +822,12 @@ export async function syncOperationalDataToAccounting(
       }
     }
 
-    // 4. Traitement des DÉPENSES (expenses)
+    // 4. Traitement des DÉPENSES (expenses) isolées par sector_slug
     const { data: expenses } = await supabase
       .from('expenses')
       .select('*')
       .eq('company_id', companyId)
+      .eq('sector_slug', sectorSlug)
       .order('created_at', { ascending: false })
       .limit(60)
 

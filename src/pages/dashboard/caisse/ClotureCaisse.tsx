@@ -63,11 +63,9 @@ export const ClotureCaisse: React.FC = () => {
       const startOfDay = `${dateCloture}T00:00:00.000Z`
       const endOfDay = `${dateCloture}T23:59:59.999Z`
 
-      // 1. Déterminer la liste des secteurs concernés
-      const subscribedSectors = ALL_SECTORS_CATALOG.filter((s) => {
-        if (!currentSectorSlug || currentSectorSlug === 'boutique' || currentSectorSlug === 'hub') return true
-        return s.slug === currentSectorSlug
-      }).slice(0, 8)
+      // 1. Isoler strictement au secteur actif (ne jamais mélanger tous les secteurs dans une clôture)
+      const targetSectorSlug = (currentSectorSlug && currentSectorSlug !== 'hub') ? currentSectorSlug : 'boutique'
+      const subscribedSectors = ALL_SECTORS_CATALOG.filter((s) => s.slug === targetSectorSlug)
 
       // Récupérer les caisses
       const { data: caissesData } = await supabase
@@ -83,14 +81,7 @@ export const ClotureCaisse: React.FC = () => {
         .gte('created_at', startOfDay)
         .lte('created_at', endOfDay)
 
-      // Récupérer les dépenses du jour (depenses & expenses)
-      const { data: depensesData } = await supabase
-        .from('depenses')
-        .select('*')
-        .eq('company_id', companyId)
-        .gte('created_at', startOfDay)
-        .lte('created_at', endOfDay)
-
+      // Récupérer les dépenses du jour depuis la table officielle expenses
       const { data: expensesData } = await supabase
         .from('expenses')
         .select('*')
@@ -125,7 +116,7 @@ export const ClotureCaisse: React.FC = () => {
           // Solde actuel depuis table fonds_actuels ou calculé
           const fondRow = (fondsData || []).find((f: any) =>
             (f.type_fond === mode.key || (mode.key === 'espece' && f.type_fond === 'especes')) &&
-            (f.caisse_id === caisse.id || !f.caisse_id)
+            f.caisse_id === caisse.id
           )
 
           // Calculer Total Entrées du jour pour ce secteur et ce mode
@@ -140,25 +131,17 @@ export const ClotureCaisse: React.FC = () => {
             })
             .reduce((sum: number, s: any) => sum + (Number(s.paid_amount || s.total_amount) || 0), 0)
 
-          // Calculer Total Sorties (Dépenses) du jour pour ce secteur et ce mode
-          const sortiesDepenses = [
-            ...(depensesData || []).filter((d: any) => {
-              const sec = (d.sector_slug || d.secteur_slug || '').toLowerCase().replace(/^sec-/, '')
-              if (sec && sec !== cleanSlug) return false
-              const pm = (d.mode_paiement || 'espece').toLowerCase()
-              if (mode.key === 'espece') return pm === 'espece' || pm === 'especes'
-              if (mode.key === 'mtn_momo') return pm.includes('momo') || pm.includes('moov')
-              return false
-            }),
-            ...(expensesData || []).filter((e: any) => {
-              const sec = (e.sector_slug || e.secteur_slug || '').toLowerCase().replace(/^sec-/, '')
-              if (sec && sec !== cleanSlug) return false
+          // Calculer Total Sorties (Dépenses) du jour strictement pour ce secteur et ce mode (sans double comptage)
+          const sortiesDepenses = (expensesData || [])
+            .filter((e: any) => {
+              const sec = (e.sector_slug || e.secteur_slug || 'boutique').toLowerCase().replace(/^sec-/, '')
+              if (sec !== cleanSlug) return false
               const pm = (e.payment_method || 'especes').toLowerCase()
               if (mode.key === 'espece') return pm === 'especes' || pm === 'espece' || pm === 'cash'
-              if (mode.key === 'mtn_momo') return pm.includes('momo') || pm.includes('wave')
+              if (mode.key === 'mtn_momo') return pm.includes('momo') || pm.includes('wave') || pm.includes('moov')
               return false
             })
-          ].reduce((sum: number, exp: any) => sum + (Number(exp.amount || exp.montant) || 0), 0)
+            .reduce((sum: number, exp: any) => sum + (Number(exp.amount || exp.montant) || 0), 0)
 
           // Récupérer le solde de début (par exemple ouverture de caisse)
           let soldeDebut = Number(caisse.fond_ouverture_especes || 0)

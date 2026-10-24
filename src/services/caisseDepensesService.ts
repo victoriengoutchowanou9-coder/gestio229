@@ -158,26 +158,29 @@ export async function getSoldeFondActuel(
 ): Promise<number> {
   if (!companyId || !secteurId) return 0
   const lKey = getLocalKey(companyId, secteurId, caisseId, typeFond)
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(secteurId)
 
-  try {
-    const query = supabase
-      .from('fonds_actuels')
-      .select('solde_actuel')
-      .eq('company_id', companyId)
-      .eq('secteur_id', secteurId)
-      .eq('type_fond', typeFond)
+  if (isUuid) {
+    try {
+      const query = supabase
+        .from('fonds_actuels')
+        .select('solde_actuel')
+        .eq('company_id', companyId)
+        .eq('secteur_id', secteurId)
+        .eq('type_fond', typeFond)
 
-    if (caisseId) {
-      query.eq('caisse_id', caisseId)
+      if (caisseId) {
+        query.eq('caisse_id', caisseId)
+      }
+
+      const { data, error } = await query.maybeSingle()
+      if (!error && data && typeof data.solde_actuel === 'number') {
+        setLocalFond(lKey, data.solde_actuel)
+        return data.solde_actuel
+      }
+    } catch (e) {
+      console.warn('[caisseDepensesService] BDD fonds_actuels fallback:', e)
     }
-
-    const { data, error } = await query.maybeSingle()
-    if (!error && data && typeof data.solde_actuel === 'number') {
-      setLocalFond(lKey, data.solde_actuel)
-      return data.solde_actuel
-    }
-  } catch (e) {
-    console.warn('[caisseDepensesService] BDD fonds_actuels fallback:', e)
   }
 
   // Fallback local
@@ -186,7 +189,7 @@ export async function getSoldeFondActuel(
 }
 
 /**
- * Enregistre une dépense via la fonction SQL atomique `fn_creer_depense_caisse`
+ * Enregistre une dépense dans caisse_mouvements et fonds_actuels
  * RÈGLE D'OR : Négatif autorisé (Découvert), jamais de blocage si solde insuffisant
  */
 export async function enregistrerDepenseCaisse(params: {
@@ -203,36 +206,6 @@ export async function enregistrerDepenseCaisse(params: {
   const numMontant = Number(montant) || 0
   const lKey = getLocalKey(company_id, secteur_id, caisse_id, mode_paiement)
 
-  // 1. Tenter via la RPC officielle Supabase
-  try {
-    const { data, error } = await supabase.rpc('fn_creer_depense_caisse', {
-      p_company_id: company_id,
-      p_secteur_id: secteur_id,
-      p_caisse_id: caisse_id || null,
-      p_categorie: categorie,
-      p_description: description || '',
-      p_montant: numMontant,
-      p_mode_paiement: mode_paiement,
-      p_user_id: user_id || null,
-    })
-
-    if (!error && data && data.success) {
-      setLocalFond(lKey, Number(data.apres))
-      return {
-        success: true,
-        depense_id: data.depense_id,
-        avant: Number(data.avant),
-        apres: Number(data.apres),
-      }
-    }
-    if (error) {
-      console.warn('[caisseDepensesService] RPC fn_creer_depense_caisse non disponible, fallback direct:', error.message)
-    }
-  } catch (rpcErr) {
-    console.warn('[caisseDepensesService] RPC exception, fallback direct:', rpcErr)
-  }
-
-  // 2. Fallback SQL direct / synchrone (ex: tables directes)
   try {
     const soldeAvant = await getSoldeFondActuel(company_id, secteur_id, caisse_id, mode_paiement)
     const soldeApres = soldeAvant - numMontant // NÉGATIF AUTORISÉ STRICTEMENT
@@ -266,58 +239,24 @@ export async function enregistrerDepenseCaisse(params: {
       }
     } catch (_) {}
 
-    try {
-      await supabase
-        .from('depenses')
-        .insert({
-          company_id,
-          secteur_id,
-          sector_slug: cleanSlug,
-          caisse_id: caisse_id || null,
-          categorie,
-          description: description || '',
-          montant: numMontant,
-          mode_paiement,
-          fond_avant: soldeAvant,
-          fond_apres: soldeApres,
-          created_by: user_id || null,
-        })
-    } catch (_) {}
-
-    // Mise à jour fond_actuel
-    try {
-      await supabase
-        .from('fonds_actuels')
-        .upsert({
-          company_id,
-          secteur_id,
-          caisse_id: caisse_id || null,
-          type_fond: mode_paiement,
-          solde_actuel: soldeApres,
-          updated_at: new Date().toISOString(),
-        }, {
-          onConflict: 'company_id,secteur_id,caisse_id,type_fond'
-        })
-    } catch (_) {}
-
-    // Audit mouvement trésorerie
-    try {
-      await supabase
-        .from('mouvements_tresorerie')
-        .insert({
-          company_id,
-          secteur_id,
-          caisse_id: caisse_id || null,
-          type: 'SORTIE',
-          source: 'DEPENSE',
-          montant: numMontant,
-          mode_paiement,
-          fond_avant: soldeAvant,
-          fond_apres: soldeApres,
-          reference_id: depenseId,
-          description: categorie,
-        })
-    } catch (_) {}
+    // Mise à jour fond_actuel si secteur_id est un UUID
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(secteur_id)
+    if (isUuid) {
+      try {
+        await supabase
+          .from('fonds_actuels')
+          .upsert({
+            company_id,
+            secteur_id,
+            caisse_id: caisse_id || null,
+            type_fond: mode_paiement,
+            solde_actuel: soldeApres,
+            updated_at: new Date().toISOString(),
+          }, {
+            onConflict: 'company_id,secteur_id,caisse_id,type_fond'
+          })
+      } catch (_) {}
+    }
 
     setLocalFond(lKey, soldeApres)
     try {

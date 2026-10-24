@@ -470,32 +470,15 @@ export async function getFondInitialOuverture(
     } catch (_) {}
   }
 
-  // Priorité F : Fallback démarrage initial coffre-fort si aucune clôture antérieure n'a jamais eu lieu
-  if (fondInitialEspeces === 0) {
-    try {
-      const { data: vault } = await supabase
-        .from('treasury_accounts')
-        .select('balance')
-        .eq('company_id', companyId)
-        .eq('type', 'vault')
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .maybeSingle()
-
-      if (vault && Number(vault.balance) > 0) {
-        fondInitialEspeces = Number(vault.balance)
-        sourceEspeces = 'treasury_vault'
-      }
-    } catch (_) {}
-  }
-
-  // 3. FOND INITIAL MOBILE MONEY : Récupération automatique du solde marchand
-  // RÈGLE MÉTIER B : Solde du compte marchand Mobile Money concerné
+  // ISOLATION STRICTE : Ne jamais injecter le coffre-fort global de l'entreprise
+  // dans le fond initial d'une caisse de secteur qui n'a jamais été clôturée.
+  // 3. FOND INITIAL MOBILE MONEY : Récupération du solde marchand du secteur uniquement
   try {
     const { data: momoAcc } = await supabase
       .from('treasury_accounts')
       .select('balance')
       .eq('company_id', companyId)
+      .eq('sector_slug', clean)
       .in('type', ['mobile_money', 'momo', 'marchand', 'momo_mtn', 'momo_moov'])
       .order('created_at', { ascending: true })
       .limit(1)
@@ -505,11 +488,12 @@ export async function getFondInitialOuverture(
       fondInitialMomo = Number(momoAcc.balance)
       sourceMomo = 'treasury_accounts'
     } else if (fondInitialMomo === 0) {
-      // Recherche alternative par nom
+      // Recherche alternative par nom dans le même secteur uniquement
       const { data: momoNameAcc } = await supabase
         .from('treasury_accounts')
         .select('balance')
         .eq('company_id', companyId)
+        .eq('sector_slug', clean)
         .ilike('name', '%momo%')
         .limit(1)
         .maybeSingle()
@@ -790,14 +774,14 @@ export async function calculerSoldesSessionAutomatique(params: {
   let nbVentes = 0
 
   try {
-    let salesQuery = supabase
+    const { data: salesList } = await supabase
       .from('sales_orders')
-      .select('id, total_amount, paid_amount, payment_method, payment_status, notes, e_mecef_uid, created_at')
+      .select('id, total_amount, paid_amount, payment_method, payment_status, notes, e_mecef_uid, created_at, sector_slug, sector_meta')
       .eq('company_id', companyId)
+      .eq('sector_slug', clean)
       .gte('created_at', startIso)
       .not('payment_status', 'in', '("avoir","ANNULE","annule")')
 
-    const { data: salesList } = await salesQuery
     if (salesList && salesList.length > 0) {
       salesList.forEach((s: any) => {
         const tot = Number(s.total_amount) || 0
@@ -829,15 +813,16 @@ export async function calculerSoldesSessionAutomatique(params: {
     console.warn('[CAISSE-SERVICE] Erreur calcul ventes session:', sErr)
   }
 
-  // 3. Remboursements créances (debt_payments & customer_repayments)
+  // 3. Remboursements créances (debt_payments isolés par sector_code)
   let sumRemboursementsEspeces = 0
   let sumRemboursementsMomo = 0
 
   try {
     const { data: debtPays } = await supabase
       .from('debt_payments')
-      .select('amount, payment_method')
+      .select('amount, payment_method, sector_code')
       .eq('company_id', companyId)
+      .eq('sector_code', clean)
       .gte('created_at', startIso)
 
     if (debtPays && debtPays.length > 0) {
@@ -853,21 +838,22 @@ export async function calculerSoldesSessionAutomatique(params: {
     }
   } catch (_) {}
 
-  // 4. Dépenses de la session (depenses & expenses)
+  // 4. Dépenses de la session (table officielle expenses isolée par sector_slug)
   let sumDepensesEspeces = 0
   let sumDepensesMomo = 0
 
   try {
     const { data: deps } = await supabase
-      .from('depenses')
-      .select('montant, mode_paiement')
+      .from('expenses')
+      .select('amount, payment_method, sector_slug')
       .eq('company_id', companyId)
+      .eq('sector_slug', clean)
       .gte('created_at', startIso)
 
     if (deps && deps.length > 0) {
       deps.forEach((d: any) => {
-        const amt = Number(d.montant) || 0
-        const m = (d.mode_paiement || '').toLowerCase()
+        const amt = Number(d.amount) || 0
+        const m = (d.payment_method || '').toLowerCase()
         if (['espece', 'especes', 'cash'].includes(m)) {
           sumDepensesEspeces += amt
         } else if (m.includes('momo') || m.includes('mtn') || m.includes('moov')) {
@@ -877,18 +863,24 @@ export async function calculerSoldesSessionAutomatique(params: {
     }
   } catch (_) {}
 
-  // 5. Versements sortants vers trésorerie (demandes_retrait & treasury_transfers)
+  // 5. Versements sortants vers trésorerie (demandes_retrait & treasury_transfers isolés par secteur/caisse)
   let sumVersementsEspeces = 0
   let sumVersementsMomo = 0
 
   try {
-    const { data: rets } = await supabase
+    let retsQuery = supabase
       .from('demandes_retrait')
-      .select('montant, mode_paiement, statut')
+      .select('montant, mode_paiement, statut, caisse_id, secteur_id')
       .eq('company_id', companyId)
       .gte('created_at', startIso)
       .neq('statut', 'refuse')
       .neq('statut', 'REJECTED')
+
+    if (caisseId) {
+      retsQuery = retsQuery.eq('caisse_id', caisseId)
+    }
+
+    const { data: rets } = await retsQuery
 
     if (rets && rets.length > 0) {
       rets.forEach((r: any) => {
@@ -906,8 +898,9 @@ export async function calculerSoldesSessionAutomatique(params: {
   try {
     const { data: trans } = await supabase
       .from('treasury_transfers')
-      .select('amount, type, status, motif')
+      .select('amount, type, status, motif, sector_slug')
       .eq('company_id', companyId)
+      .eq('sector_slug', clean)
       .gte('created_at', startIso)
       .neq('status', 'REJECTED')
       .neq('status', 'refuse')

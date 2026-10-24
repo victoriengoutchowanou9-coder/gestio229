@@ -629,6 +629,29 @@ const ClientsPage: React.FC = () => {
 
     setSaving(true)
     try {
+      // Vérification anti-doublon dans la même entreprise et le même secteur
+      const trimmedName = form.name.trim()
+      const trimmedPhone = form.phone.trim()
+      const { data: existingClients } = await supabaseTenant('clients')
+        .select('id, code, name, phone, ifu_number')
+        .eq('is_active', true)
+
+      const duplicate = (existingClients || []).find((c: any) => {
+        if (trimmedIfu && c.ifu_number && String(c.ifu_number).trim() === trimmedIfu) return true
+        const sameName = String(c.name || '').trim().toLowerCase() === trimmedName.toLowerCase()
+        const samePhone = String(c.phone || '').replace(/\s+/g, '') === trimmedPhone.replace(/\s+/g, '')
+        return sameName && samePhone
+      })
+
+      if (duplicate) {
+        toast.error(
+          'Client déjà existant',
+          `Le client "${duplicate.name}" (${duplicate.code}) existe déjà dans ce secteur avec ces mêmes références.`
+        )
+        setSaving(false)
+        return
+      }
+
       // Auto-génération du code client séquentiel PAR (company_id, sector_slug)
       let autoCode = form.code.trim()
       if (!autoCode) {
@@ -642,13 +665,16 @@ const ClientsPage: React.FC = () => {
 
       const corePayload = {
         code: autoCode,
-        name: form.name.trim(),
+        name: trimmedName,
         ifu_number: trimmedIfu || null,
-        phone: form.phone.trim(),
+        phone: trimmedPhone,
         email: form.email.trim() || null,
         address: form.address.trim() || null,
         city: form.city.trim() || 'Cotonou',
         credit_limit: creditLimit,
+        credit_authorized: isCreditAuthorized,
+        discount_eligible: isDiscountEligible,
+        discount_rate: discountRate,
         payment_terms_days: Number(form.payment_terms_days) || 30,
         current_debt: 0,
         is_active: true,

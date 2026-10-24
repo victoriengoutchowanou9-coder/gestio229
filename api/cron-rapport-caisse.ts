@@ -47,7 +47,14 @@ function getSmtpConfig() {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  console.log('[cron-rapport-caisse] ⏰ Démarrage du Cron Job Quotidien de 23h00 via Gmail SMTP...')
+  if (req.query?.trigger !== 'cloture_validee') {
+    console.log('[cron-rapport-caisse] 🛑 Envoi automatique 23h00 désactivé (déclenchement uniquement à la clôture réelle).')
+    return res.status(200).json({
+      success: true,
+      disabled: true,
+      message: 'Envoi automatique programmé (23h00) désactivé. Le rapport de caisse est envoyé uniquement lors de la validation d’une clôture réelle de caisse.'
+    })
+  }
 
   let smtpConfig: ReturnType<typeof getSmtpConfig>
   try {

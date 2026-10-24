@@ -138,30 +138,40 @@ export const ReportingPage: React.FC = () => {
           .limit(1000),
         supabase
           .from('expenses')
-          .select('id, reference_number, category, amount, payment_method, expense_date, description, created_at, sector_slug')
+          .select('id, expense_number, title, beneficiary, notes, category, amount, payment_method, expense_date, created_at, sector_slug, sector_meta')
           .eq('company_id', company.id)
           .order('created_at', { ascending: false })
           .limit(500),
         supabase
           .from('customers')
-          .select('id, name, code, phone, current_debt, is_active')
+          .select('id, name, code, phone, current_debt, is_active, sector_slug, sector_meta')
           .eq('company_id', company.id)
+          .neq('is_active', false)
           .limit(500),
         supabase
           .from('products')
-          .select('id, name, code, selling_price, cost_price, is_active, sector_meta, category_id')
+          .select('id, name, code, selling_price, cost_price, is_active, sector_meta, category_id, sector_slug, secteur_slug, stock_magasin, stock_vente, ucd, uv, coef, coefficient_conversion, cout_achat, prix_vente, min_stock_alert, tva_rate')
           .eq('company_id', company.id)
+          .neq('is_active', false)
           .limit(500)
       ])
 
       if (salesErr) console.warn('Erreur chargement ventes:', salesErr)
       if (expErr) console.warn('Erreur chargement dépenses:', expErr)
 
-      // Isolation stricte par sous-logiciel (aucun mélange inter-secteurs)
+      // Isolation stricte par sous-logiciel (aucun mélange inter-secteurs) + exclusion des produits archivés/supprimés
       const sectorSales = filterItemsForSector(salesData || [], currentSectorSlug)
       const sectorExpenses = filterItemsForSector(expData || [], currentSectorSlug)
-      const sectorCustomers = filterItemsForSector(custData || [], currentSectorSlug)
-      const sectorProducts = filterItemsForSector(prodData || [], currentSectorSlug)
+      const sectorCustomers = filterItemsForSector(custData || [], currentSectorSlug).filter(
+        (c: any) => c.is_active !== false
+      )
+      const sectorProducts = filterItemsForSector(prodData || [], currentSectorSlug).filter(
+        (p: any) =>
+          p.is_active !== false &&
+          !p.deleted_at &&
+          !p.sector_meta?.deleted_at &&
+          !p.sector_meta?.is_archived
+      )
 
       // Lecture des dépenses de caisse enregistrées dans caisse_mouvements
       let caisseDepensesData: any[] = []
@@ -250,12 +260,12 @@ export const ReportingPage: React.FC = () => {
         processedExpenseIds.add(String(e.id));
         unifiedExpenses.push({
           id: e.id,
-          reference: e.reference_number || `DEP-${e.id.slice(0, 6)}`,
+          reference: e.expense_number || e.reference_number || `DEP-${e.id.slice(0, 6)}`,
           expense_date: e.expense_date || e.created_at,
           amount: Number(e.amount) || 0,
           category: e.category || 'Autres charges',
-          description: e.description || e.title,
-          title: e.title,
+          description: e.notes || e.description || e.title || e.beneficiary,
+          title: e.title || e.beneficiary,
           payment_method: e.payment_method || 'Espèces',
           caisse_name: 'Caisse principale',
           status: 'Validé',
@@ -265,7 +275,7 @@ export const ReportingPage: React.FC = () => {
         });
       });
 
-      // 2. Ajouter depuis caisse_mouvements uniquement les véritables charges d'exploitation
+      // 2. Ajouter depuis caisse_mouvements uniquement les véritables charges d'exploitation non déjà présentes dans expenses
       const rawCaisseDepenses = caisseDepensesData || [];
       rawCaisseDepenses.forEach((m: any) => {
         if (m.source_id && processedExpenseIds.has(String(m.source_id))) return;
@@ -294,6 +304,15 @@ export const ReportingPage: React.FC = () => {
           (mSens === 'sortie' && mType === 'depense')
 
         if (!isTrueDepense) return
+
+        const mAmount = Number(m.montant) || 0
+        const mDay = extractCotonouDate(null, m.created_at)
+        const alreadyInExpenses = unifiedExpenses.some((ue) => {
+          if (ue.source !== 'expenses') return false
+          const ueDay = extractCotonouDate(ue.expense_date, ue.created_at)
+          return ueDay === mDay && Math.abs(ue.amount - mAmount) < 1
+        })
+        if (alreadyInExpenses) return
 
         processedExpenseIds.add(String(m.id))
 

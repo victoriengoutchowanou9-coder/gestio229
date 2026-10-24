@@ -757,10 +757,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             setAllDepensesTotals({ especes: dEsp, momo: dMo })
           }
 
-          // Charger toutes les demandes de retrait de caisse (en attente & validées)
+          // Charger toutes les demandes de retrait de caisse du secteur actif (en attente & validées)
           let loadedRequests: any[] = []
           try {
-            const { data: retData } = await supabase
+            let retQuery = supabase
               .from('demandes_retrait')
               .select('*')
               .eq('company_id', currentCompanyId)
@@ -768,6 +768,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               .neq('statut', 'refuse')
               .neq('statut', 'REJECTED')
               .order('created_at', { ascending: false })
+
+            const activeRegId = cashRegisterId || caisseActive?.id
+            if (activeRegId) {
+              retQuery = retQuery.eq('caisse_id', activeRegId)
+            }
+
+            const { data: retData } = await retQuery
 
             if (retData && retData.length > 0) {
               loadedRequests = retData.map((r: any) => ({
@@ -789,6 +796,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                 .from('treasury_transfers')
                 .select('*')
                 .eq('company_id', currentCompanyId)
+                .eq('sector_slug', currentSectorSlug)
                 .gte('created_at', startOfDay)
                 .neq('status', 'REJECTED')
                 .neq('status', 'refuse')
@@ -826,14 +834,16 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           const rEsp = loadedRequests.filter(r => r.type === 'Espèces' && r.status !== 'REFUSE').reduce((acc, r) => acc + (Number(r.amount) || 0), 0)
           const rMo = loadedRequests.filter(r => r.type === 'MoMo' && r.status !== 'REFUSE').reduce((acc, r) => acc + (Number(r.amount) || 0), 0)
           setAllRetraitsTotals({ especes: rEsp, momo: rMo })
-          // 6. Total créances de l'entreprise pour le rapport
+          // 6. Total créances du secteur actif de l'entreprise pour le rapport
           try {
             const { data: dbClients } = await supabase
-              .from('clients')
-              .select('solde_creance, current_debt')
+              .from('customers')
+              .select('current_debt, sector_slug')
               .eq('company_id', currentCompanyId)
+              .eq('sector_slug', currentSectorSlug)
+              .neq('is_active', false)
             if (dbClients && dbClients.length > 0) {
-              const cTot = dbClients.reduce((acc, c: any) => acc + (Number(c.solde_creance ?? c.current_debt ?? 0)), 0)
+              const cTot = dbClients.reduce((acc, c: any) => acc + (Number(c.current_debt ?? 0)), 0)
               setTotalCreances(cTot)
             }
           } catch (_) {}

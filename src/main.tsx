@@ -4,6 +4,7 @@ import App from './App'
 import './index.css'
 import './App.css'
 import { installGlobalModalInterceptors } from './components/modals/CustomModalGestio'
+import { installGlobalPrintHelper } from './utils/printHelper'
 import { supabase } from './lib/supabase'
 
 // =============================================================================
@@ -12,6 +13,7 @@ import { supabase } from './lib/supabase'
 
 // Élimination définitive des popups natives browser (gestio229.vercel.app indique)
 installGlobalModalInterceptors()
+installGlobalPrintHelper()
 
 declare const __APP_VERSION__: string
 

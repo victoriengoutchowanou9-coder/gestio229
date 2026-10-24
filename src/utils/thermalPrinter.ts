@@ -267,7 +267,7 @@ export function imprimerTicketThermique(
 
   <script>
     window.onload = function() {
-      ${options.autoPrint ? 'window.print();' : ''}
+      ${options.autoPrint ? 'setTimeout(function() { window.focus(); window.print(); }, 180);' : ''}
     };
   </script>
 </body>

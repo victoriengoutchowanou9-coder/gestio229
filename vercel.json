@@ -1,10 +1,5 @@
 {
-  "crons": [
-    {
-      "path": "/api/cron-rapport-caisse",
-      "schedule": "0 23 * * *"
-    }
-  ],
+  "crons": [],
   "headers": [
     {
       "source": "/(index.html|sw.js|registerSW.js|manifest.webmanifest|manifest.json|version.json)",

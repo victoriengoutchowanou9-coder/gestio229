@@ -78,6 +78,9 @@ export const DepensesPage: React.FC = () => {
   const { companyId, secteurActif, caisseActive, refreshFonds } = useAppContext()
   const { sectorSlug } = useTenant()
 
+  const activeSectorSlug = (sectorSlug || secteurActif?.slug || 'boutique').toLowerCase().trim()
+  const isRestaurantSector = ['restaurant', 'bar', 'maquis', 'bar-restaurant-maquis', 'fastfood'].includes(activeSectorSlug)
+
   const [expenses, setExpenses] = useState<Expense[]>([])
   const [usersList, setUsersList] = useState<{ id: string; name: string }[]>([])
   const [loading, setLoading] = useState(true)
@@ -158,14 +161,7 @@ export const DepensesPage: React.FC = () => {
         setUsersList(profiles.map((p: any) => ({ id: p.id, name: p.full_name || p.username || 'Utilisateur' })))
       }
 
-      // 1. Chercher dans table `depenses`
-      const { data: depList, error: depErr } = await supabase
-        .from('depenses')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('created_at', { ascending: false })
-
-      // 2. Chercher dans table `expenses`
+      // Chercher dans la table officielle `expenses` avec isolation stricte par (company_id, sector_slug)
       const { data: expList } = await supabase
         .from('expenses')
         .select('*')
@@ -193,43 +189,22 @@ export const DepensesPage: React.FC = () => {
 
       const combined: Expense[] = []
 
-      if (!depErr && depList && depList.length > 0) {
-        depList.forEach((d: any) => {
-          const sec = parseSectorImputation(d.description || d.notes)
-          combined.push({
-            id: d.id,
-            expense_number: `DEP-${d.id.slice(0, 6)}`,
-            title: d.description || d.categorie,
-            description: d.description,
-            category: d.categorie,
-            categorie: d.categorie,
-            amount: Number(d.montant) || 0,
-            montant: Number(d.montant) || 0,
-            payment_method: d.mode_paiement,
-            mode_paiement: d.mode_paiement,
-            expense_date: d.date_depense || (d.created_at ? d.created_at.split('T')[0] : ''),
-            fond_avant: d.fond_avant,
-            fond_apres: d.fond_apres,
-            created_by: d.created_by,
-            created_at: d.created_at,
-            user_name: d.created_by ? userMap.get(d.created_by) || 'Utilisateur' : 'Non précisé',
-            secteur_imputation: sec.secteur,
-            ventilation_bar_pct: sec.barPct,
-            ventilation_cuisine_pct: sec.cuisinePct
-          })
-        })
-      }
-
       if (expList && expList.length > 0) {
-        const sectorExps = filterItemsForSector(expList, sectorSlug || secteurActif?.slug)
+        const sectorExps = filterItemsForSector(expList, activeSectorSlug)
         sectorExps.forEach((exp: any) => {
           if (!combined.some((c) => c.id === exp.id)) {
             const sec = parseSectorImputation(exp.notes || exp.title || exp.beneficiary)
+            const cleanTitle = String(exp.title || exp.beneficiary || exp.notes || 'Dépense')
+              .replace(/\s*\[SECTEUR:[^\]]+\]/gi, '')
+              .trim()
+            const cleanDesc = String(exp.notes || exp.title || '')
+              .replace(/\s*\[SECTEUR:[^\]]+\]/gi, '')
+              .trim()
             combined.push({
               id: exp.id,
               expense_number: exp.expense_number || `DEP-${exp.id.slice(0, 6)}`,
-              title: exp.title || exp.beneficiary || exp.notes || 'Dépense',
-              description: exp.notes || exp.title,
+              title: cleanTitle || 'Dépense',
+              description: cleanDesc,
               category: exp.category || 'Autres charges',
               categorie: exp.category || 'Autres charges',
               amount: Number(exp.amount) || 0,
@@ -240,9 +215,13 @@ export const DepensesPage: React.FC = () => {
               created_by: exp.created_by,
               created_at: exp.created_at,
               user_name: exp.created_by ? userMap.get(exp.created_by) || 'Utilisateur' : 'Non précisé',
-              secteur_imputation: sec.secteur,
-              ventilation_bar_pct: sec.barPct,
-              ventilation_cuisine_pct: sec.cuisinePct
+              ...(isRestaurantSector
+                ? {
+                    secteur_imputation: sec.secteur,
+                    ventilation_bar_pct: sec.barPct,
+                    ventilation_cuisine_pct: sec.cuisinePct,
+                  }
+                : {}),
             })
           }
         })
@@ -255,7 +234,7 @@ export const DepensesPage: React.FC = () => {
     } finally {
       setLoading(false)
     }
-  }, [companyId, sectorSlug, secteurActif?.slug])
+  }, [companyId, activeSectorSlug, isRestaurantSector])
 
   useEffect(() => {
     loadExpenses()
@@ -274,19 +253,22 @@ export const DepensesPage: React.FC = () => {
     setSaving(true)
     try {
       const desc = form.description.trim() || form.categorie
-      const ventilationTag = form.secteur_imputation === 'COMMUN'
-        ? `[SECTEUR:COMMUN:${form.ventilation_bar_pct}/${form.ventilation_cuisine_pct}]`
-        : `[SECTEUR:${form.secteur_imputation}]`
+      const ventilationTag = isRestaurantSector
+        ? form.secteur_imputation === 'COMMUN'
+          ? `[SECTEUR:COMMUN:${form.ventilation_bar_pct}/${form.ventilation_cuisine_pct}]`
+          : `[SECTEUR:${form.secteur_imputation}]`
+        : ''
 
-      const enrichedNotes = `${form.notes.trim() ? form.notes.trim() + ' ' : ''}${ventilationTag} (Date: ${form.date_depense})`
+      const enrichedNotes = `${form.notes.trim() ? form.notes.trim() + ' ' : ''}${ventilationTag ? ventilationTag + ' ' : ''}(Date: ${form.date_depense})`
+      const finalDescription = ventilationTag ? `${desc} ${ventilationTag}` : desc
 
-      // Appel de la fonction de création de dépense
+      // Appel de la fonction de création de dépense (met à jour fonds_actuels et caisse_mouvements)
       const res = await enregistrerDepenseCaisse({
         company_id: companyId,
-        secteur_id: secteurActif.id,
+        secteur_id: secteurActif?.id || activeSectorSlug,
         caisse_id: caisseActive?.id || null,
         categorie: form.categorie,
-        description: `${desc} ${ventilationTag}`,
+        description: finalDescription,
         montant: numAmount,
         mode_paiement: form.mode_paiement,
         user_id: user?.id || null,
@@ -298,29 +280,37 @@ export const DepensesPage: React.FC = () => {
         return
       }
 
-      // Synchronisation miroir dans expenses pour reporting général
+      // Enregistrement officiel dans expenses isolé par (company_id, sector_slug)
       let expNum = `DEP-${Date.now()}`
+      let insertedExpId: string | undefined = res.depense_id
       try {
-        expNum = await getNextSectorCode('expenses', 'DEP', companyId, secteurActif.slug)
-        await supabase.from('expenses').insert({
-          company_id: companyId,
-          sector_slug: secteurActif.slug,
-          expense_number: expNum,
-          category: form.categorie,
-          beneficiary: desc,
-          amount: numAmount,
-          payment_method: form.mode_paiement === 'espece' ? 'especes' : form.mode_paiement,
-          notes: enrichedNotes,
-          created_by: user?.id || null
-        })
+        expNum = await getNextSectorCode('expenses', 'DEP', companyId, activeSectorSlug)
+        const { data: expInserted } = await supabase
+          .from('expenses')
+          .insert({
+            company_id: companyId,
+            sector_slug: activeSectorSlug,
+            expense_number: expNum,
+            title: desc,
+            expense_date: form.date_depense,
+            category: form.categorie,
+            beneficiary: desc,
+            amount: numAmount,
+            payment_method: form.mode_paiement === 'espece' ? 'especes' : form.mode_paiement,
+            notes: enrichedNotes,
+            created_by: user?.id || null
+          })
+          .select('id')
+          .maybeSingle()
+        if (expInserted?.id) insertedExpId = expInserted.id
       } catch (_) {}
 
-      // Comptabilisation automatique SYSCOHADA dans JC / JB
+      // Comptabilisation automatique SYSCOHADA dans JC / JB (sans doublon)
       try {
         await comptabiliserDepenseAuto({
           companyId,
-          sectorSlug: secteurActif.slug,
-          expenseId: res.depense_id || expNum,
+          sectorSlug: activeSectorSlug,
+          expenseId: insertedExpId || expNum,
           expenseNumber: expNum,
           expenseDate: form.date_depense,
           amount: numAmount,
@@ -333,24 +323,6 @@ export const DepensesPage: React.FC = () => {
       } catch (comptaErr) {
         console.warn('[compta_auto] Erreur comptabilisation dépense:', comptaErr)
       }
-
-      // Mettre à jour le mouvement de caisse
-      try {
-        await enregistrerMouvementCaisse({
-          company_id: companyId,
-          sector_slug: secteurActif.slug,
-          caisse_id: caisseActive?.id,
-          type: 'depense',
-          sens: 'sortie',
-          montant_especes: form.mode_paiement === 'espece' ? numAmount : 0,
-          montant_momo: ['mtn_momo', 'moov', 'orange_money'].includes(form.mode_paiement) ? numAmount : 0,
-          source_module: 'depenses',
-          source_id: res.depense_id,
-          motif: `Dépense: ${desc} (${form.categorie})`,
-          user_name: user?.full_name || user?.username || 'Utilisateur',
-          user_id: user?.id,
-        })
-      } catch (_) {}
 
       // Alertes selon la règle officielle
       if (res.apres < 0) {
@@ -368,6 +340,9 @@ export const DepensesPage: React.FC = () => {
         montant: 0,
         mode_paiement: 'espece',
         date_depense: new Date().toISOString().split('T')[0],
+        secteur_imputation: 'COMMUN',
+        ventilation_bar_pct: 50,
+        ventilation_cuisine_pct: 50,
         notes: ''
       })
 
@@ -384,7 +359,7 @@ export const DepensesPage: React.FC = () => {
   // Filtrage Réactif
   const filteredExpenses = useMemo(() => {
     return expenses.filter((e) => {
-      if (selectedSectorImputation !== 'all' && e.secteur_imputation !== selectedSectorImputation) {
+      if (isRestaurantSector && selectedSectorImputation !== 'all' && e.secteur_imputation !== selectedSectorImputation) {
         return false
       }
 
@@ -521,20 +496,22 @@ export const DepensesPage: React.FC = () => {
             </select>
           </div>
 
-          <div>
-            <label className="block text-slate-500 dark:text-slate-400 font-bold mb-1">Secteur / Imputation</label>
-            <select
-              value={selectedSectorImputation}
-              onChange={(e) => setSelectedSectorImputation(e.target.value)}
-              className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-xs font-medium text-slate-800 dark:text-slate-100"
-            >
-              <option value="all">Tous les secteurs</option>
-              <option value="BAR">🍾 Bar</option>
-              <option value="CUISINE">🍽️ Cuisine</option>
-              <option value="RESTAURANT">🏠 Salle / Restaurant</option>
-              <option value="COMMUN">⚖️ Dépenses Communes</option>
-            </select>
-          </div>
+          {isRestaurantSector && (
+            <div>
+              <label className="block text-slate-500 dark:text-slate-400 font-bold mb-1">Secteur / Imputation</label>
+              <select
+                value={selectedSectorImputation}
+                onChange={(e) => setSelectedSectorImputation(e.target.value)}
+                className="w-full p-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-xs font-medium text-slate-800 dark:text-slate-100"
+              >
+                <option value="all">Tous les secteurs</option>
+                <option value="BAR">🍾 Bar</option>
+                <option value="CUISINE">🍽️ Cuisine</option>
+                <option value="RESTAURANT">🏠 Salle / Restaurant</option>
+                <option value="COMMUN">⚖️ Dépenses Communes</option>
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-slate-500 dark:text-slate-400 font-bold mb-1">Utilisateur</label>
@@ -594,7 +571,7 @@ export const DepensesPage: React.FC = () => {
                 <th className="py-3 px-4">Date</th>
                 <th className="py-3 px-4">Réf</th>
                 <th className="py-3 px-4">Bénéficiaire / Description</th>
-                <th className="py-3 px-4">Secteur</th>
+                {isRestaurantSector && <th className="py-3 px-4">Secteur</th>}
                 <th className="py-3 px-4">Catégorie</th>
                 <th className="py-3 px-4">Mode</th>
                 <th className="py-3 px-4">Fond Avant → Après</th>
@@ -605,14 +582,14 @@ export const DepensesPage: React.FC = () => {
             <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-500">
+                  <td colSpan={isRestaurantSector ? 9 : 8} className="py-8 text-center text-slate-500">
                     <RefreshCw className="w-5 h-5 animate-spin mx-auto mb-2 text-rose-600" />
                     Chargement des dépenses...
                   </td>
                 </tr>
               ) : filteredExpenses.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-500">
+                  <td colSpan={isRestaurantSector ? 9 : 8} className="py-8 text-center text-slate-500">
                     Aucune dépense enregistrée pour les critères sélectionnés.
                   </td>
                 </tr>
@@ -628,19 +605,21 @@ export const DepensesPage: React.FC = () => {
                     <td className="py-3 px-4 font-semibold text-slate-900 dark:text-white">
                       {exp.title || exp.description}
                     </td>
-                    <td className="py-3 px-4">
-                      <span className={clsx(
-                        'px-2 py-0.5 rounded-full text-[10px] font-black',
-                        exp.secteur_imputation === 'BAR' ? 'bg-blue-100 text-blue-800' :
-                        exp.secteur_imputation === 'CUISINE' ? 'bg-orange-100 text-orange-800' :
-                        exp.secteur_imputation === 'RESTAURANT' ? 'bg-rose-100 text-rose-800' :
-                        'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200'
-                      )}>
-                        {exp.secteur_imputation === 'COMMUN'
-                          ? `COMMUN (${exp.ventilation_bar_pct || 50}/${exp.ventilation_cuisine_pct || 50})`
-                          : (exp.secteur_imputation || 'COMMUN')}
-                      </span>
-                    </td>
+                    {isRestaurantSector && (
+                      <td className="py-3 px-4">
+                        <span className={clsx(
+                          'px-2 py-0.5 rounded-full text-[10px] font-black',
+                          exp.secteur_imputation === 'BAR' ? 'bg-blue-100 text-blue-800' :
+                          exp.secteur_imputation === 'CUISINE' ? 'bg-orange-100 text-orange-800' :
+                          exp.secteur_imputation === 'RESTAURANT' ? 'bg-rose-100 text-rose-800' :
+                          'bg-slate-100 dark:bg-slate-700 text-slate-800 dark:text-slate-200'
+                        )}>
+                          {exp.secteur_imputation === 'COMMUN'
+                            ? `COMMUN (${exp.ventilation_bar_pct || 50}/${exp.ventilation_cuisine_pct || 50})`
+                            : (exp.secteur_imputation || 'COMMUN')}
+                        </span>
+                      </td>
+                    )}
                     <td className="py-3 px-4">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
                         {exp.category || exp.categorie}
@@ -707,7 +686,8 @@ export const DepensesPage: React.FC = () => {
               {fondApres < 0 && '(NÉGATIF - DÉCOUVERT AUTORISÉ)'}
             </div>
 
-            {/* SECTEUR D'IMPUTATION & VENTILATION (EXIGENCE PAGES 14-15) */}
+            {/* SECTEUR D'IMPUTATION & VENTILATION (EXCLUSIVEMENT SECTEUR RESTAURANT / BAR / MAQUIS) */}
+            {isRestaurantSector && (
             <div className="p-3 bg-slate-50 dark:bg-slate-700/40 rounded-2xl border border-slate-200 dark:border-slate-600 space-y-2.5">
               <label className="block font-black text-slate-800 dark:text-slate-200 text-xs uppercase tracking-wider">
                 Secteur d'Imputation de la Dépense *
@@ -785,6 +765,7 @@ export const DepensesPage: React.FC = () => {
                 </div>
               )}
             </div>
+            )}
 
             <div>
               <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">

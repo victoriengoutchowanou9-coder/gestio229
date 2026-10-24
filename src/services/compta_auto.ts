@@ -1140,6 +1140,106 @@ export async function synchroniserToutAutomatiquement(
         }
       }
     }
+
+    // 5. Récupérer les remboursements de créances clients (debt_payments) non comptabilisés
+    let dpQuery = supabase
+      .from('debt_payments')
+      .select('*')
+      .eq('company_id', companyId)
+      .order('created_at', { ascending: false })
+      .limit(80)
+
+    if (sectorSlug && sectorSlug !== 'all' && sectorSlug !== 'ALL' && sectorSlug !== 'global') {
+      dpQuery = dpQuery.eq('sector_code', sectorSlug)
+    }
+
+    const { data: debtPayments } = await dpQuery
+    for (const dp of debtPayments || []) {
+      const dpId = dp.id
+      const isBank = String(dp.payment_method || '').toLowerCase().includes('banque') || String(dp.payment_method || '').toLowerCase().includes('virement')
+      const jCode = isBank ? 'JB' : 'JC'
+      const dpKey = `reglement_creance_${dpId}_${jCode}`
+      if (!existingSet.has(dpKey) && Number(dp.amount) > 0) {
+        const dpRes = await comptabiliserReglementCreanceAuto({
+          companyId,
+          sectorSlug: dp.sector_code || sectorSlug || 'boutique',
+          paymentId: dpId,
+          reference: dp.reference || `REG-${dpId.slice(0, 6)}`,
+          paymentDate: dp.payment_date || dp.created_at,
+          amount: Number(dp.amount),
+          customerName: dp.notes || 'Client',
+          customerId: dp.client_id,
+          paymentMethod: dp.payment_method,
+          createdById: dp.created_by || userId,
+        })
+        if (dpRes.success) {
+          count++
+          existingSet.add(dpKey)
+        }
+      }
+    }
+
+    // 6. Récupérer les transferts de trésorerie validés (treasury_transfers) non comptabilisés
+    let trQuery = supabase
+      .from('treasury_transfers')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('status', 'APPROVED')
+      .order('created_at', { ascending: false })
+      .limit(60)
+
+    if (sectorSlug && sectorSlug !== 'all' && sectorSlug !== 'ALL' && sectorSlug !== 'global') {
+      trQuery = trQuery.eq('sector_slug', sectorSlug)
+    }
+
+    const { data: transfers } = await trQuery
+    for (const tr of transfers || []) {
+      const trId = tr.id
+      const trKey = `transfert_tresorerie_${trId}_OD`
+      if (!existingSet.has(trKey) && Number(tr.amount) > 0) {
+        const isEsp = String(tr.type || '').toLowerCase().includes('esp') || String(tr.type || '').toLowerCase().includes('cash')
+        const destAcc = isEsp ? '571100' : '521100'
+        const dateStr = (tr.approved_at || tr.created_at || new Date().toISOString()).slice(0, 10)
+        const amt = Math.round(Number(tr.amount) * 100) / 100
+        const trRes = await createAccountingEntry(
+          {
+            company_id: companyId,
+            sector_slug: tr.sector_slug || sectorSlug || 'boutique',
+            journal_code: 'OD',
+            entry_date: dateStr,
+            reference: `TRF-${trId.slice(0, 6).toUpperCase()}`,
+            document_type: 'virement_interne',
+            document_id: trId,
+            description: `Transfert Caisse vers Trésorerie (${tr.type || 'Espèces'}) - ${tr.motif || 'Versement'}`,
+            source_module: 'transfert_tresorerie',
+            source_id: trId,
+            created_by: userId || null,
+          },
+          [
+            {
+              line_number: 1,
+              account_number: destAcc,
+              account_label: isEsp ? 'Coffre-fort / Trésorerie Espèces' : 'Banque / Mobile Money Marchand',
+              description: `Encaissement Trésorerie - ${tr.motif || 'Versement caisse'}`,
+              debit: amt,
+              credit: 0,
+            },
+            {
+              line_number: 2,
+              account_number: '585000',
+              account_label: 'Virements de fonds (Caisse vers Trésorerie)',
+              description: `Sortie Caisse pour virement interne - ${tr.motif || 'Versement caisse'}`,
+              debit: 0,
+              credit: amt,
+            },
+          ]
+        )
+        if (trRes.success) {
+          count++
+          existingSet.add(trKey)
+        }
+      }
+    }
   } catch (err) {
     console.warn('[compta_auto] synchroniserToutAutomatiquement avertissement:', err)
   }

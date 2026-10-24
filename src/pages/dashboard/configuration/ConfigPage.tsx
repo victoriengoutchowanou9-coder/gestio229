@@ -338,12 +338,11 @@ export const ConfigPage: React.FC = () => {
     return ALL_SECTORS_CATALOG.filter((sec) => normalizedSlugs.has(sec.slug))
   }, [company, currentSectorSlug])
 
-  // ─── Configuration Métier : Imprimerie & Sérigraphie ───────────────────────
+  // ─── Configuration Métier : Imprimerie & Sérigraphie (STRICTEMENT SECTEUR ACTIF) ───
   const isImprimerie = React.useMemo(() => {
     const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
-    if (slug === 'imprimerie' || slug === 'impression') return true
-    return subscribedSectors.some((s) => s.slug === 'imprimerie' || s.slug === 'impression')
-  }, [currentSectorSlug, subscribedSectors])
+    return slug === 'imprimerie' || slug === 'impression' || slug === 'serigraphie'
+  }, [currentSectorSlug])
 
   const [imprimerieCfg, setImprimerieCfg] = useState<ImprimerieConfig>({
     company_id: company?.id || '',
@@ -384,12 +383,11 @@ export const ConfigPage: React.FC = () => {
     }
   }
 
-  // ─── Configuration Métier : Atelier, Garage & BTP Multisite ───────────────
+  // ─── Configuration Métier : Atelier, Garage & BTP Multisite (STRICTEMENT SECTEUR ACTIF) ───
   const isGarage = React.useMemo(() => {
     const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
-    if (slug === 'garage' || slug === 'atelier' || slug === 'mecanique') return true
-    return subscribedSectors.some((s) => s.slug === 'garage' || s.slug === 'atelier' || s.slug === 'mecanique')
-  }, [currentSectorSlug, subscribedSectors])
+    return slug === 'garage' || slug === 'atelier' || slug === 'mecanique' || slug === 'btp'
+  }, [currentSectorSlug])
 
   const {
     versionMode: garageMode,
@@ -455,12 +453,17 @@ export const ConfigPage: React.FC = () => {
     }
   }
 
-  // ─── Configuration Métier : École & Centre de Formation ───────────────────
+  // ─── Configuration Métier : École & Centre de Formation (STRICTEMENT SECTEUR ACTIF) ───
   const isEcole = React.useMemo(() => {
     const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
-    if (slug === 'ecole' || slug === 'formation' || slug === 'education') return true
-    return subscribedSectors.some((s) => s.slug === 'ecole' || s.slug === 'formation' || s.slug === 'education')
-  }, [currentSectorSlug, subscribedSectors])
+    return slug === 'ecole' || slug === 'formation' || slug === 'education'
+  }, [currentSectorSlug])
+
+  useEffect(() => {
+    if (activeTab === 'imprimerie' && !isImprimerie) setActiveTab('profil')
+    if (activeTab === 'garage_version' && !isGarage) setActiveTab('profil')
+    if (activeTab === 'ecole_version' && !isEcole) setActiveTab('profil')
+  }, [activeTab, isImprimerie, isGarage, isEcole])
 
   const {
     typeEtablissement: ecoleType,
