@@ -1,164 +1,93 @@
 // =============================================================================
-// GESTIO 229 SaaS — Modale d'Activation d'un Nouveau Secteur (Essai 30j Indépendant)
+// GESTIO 229 SaaS — MODALE D'INFORMATION SECTEUR (Refonte V4 — Section 3 & 4)
 // =============================================================================
-// Règle 3 : Quand on clique sur un secteur sans abonnement :
-// "Activer [Secteur] ? C'est votre 1ère activation pour ce secteur. Il bénéficie
-// de 30 jours d'essai gratuit INDÉPENDANT. Après ces 30 jours, il rejoindra
-// automatiquement votre abonnement global existant."
+// La première activation gratuite individuelle de 30 jours par secteur est supprimée.
+// Cette modale permet soit d'ouvrir le Tableau de bord du secteur, soit d'accéder
+// directement à la page d'activation d'abonnement.
 // =============================================================================
 
-import React, { useState } from 'react';
-import { Sparkles, Calendar, CheckCircle2, X, Shield, ArrowRight, Loader2 } from 'lucide-react';
-import { activerEssaiIndividuelSecteur } from '../../services/abonnementService';
-import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
-import { canonicalSectorSlug } from '../../lib/sectorClient';
+import React from 'react'
+import { useNavigate } from 'react-router-dom'
+import { CreditCard, X, ArrowRight, LayoutDashboard, Lock } from 'lucide-react'
+import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
 
 interface ActiverSecteurModalProps {
-  isOpen: boolean;
-  sectorSlugOrCode: string;
-  sectorName?: string;
-  companyId: string;
-  onClose: () => void;
-  onActivated: (sectorSlug: string) => void;
+  isOpen: boolean
+  entrepriseId: string
+  sectorSlug: string
+  sectorName?: string
+  onClose: () => void
+  onActivated: (sectorSlug: string) => void
 }
 
 export const ActiverSecteurModal: React.FC<ActiverSecteurModalProps> = ({
   isOpen,
-  sectorSlugOrCode,
+  sectorSlug,
   sectorName,
-  companyId,
   onClose,
   onActivated,
 }) => {
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const navigate = useNavigate()
 
-  if (!isOpen) return null;
+  if (!isOpen) return null
 
-  const cleanSlug = canonicalSectorSlug(sectorSlugOrCode);
-  const meta: SectorDefinition | undefined = ALL_SECTORS_CATALOG.find(
-    (s) => s.slug === cleanSlug || s.code === sectorSlugOrCode.toUpperCase()
-  );
-
-  const displayName = sectorName || meta?.name || meta?.label || 'Transport & Logistique';
-  const emoji = meta?.emoji || '🚀';
-  const badge = meta?.badge || 'Sous-logiciel métier';
-
-  const handleActiver = async () => {
-    if (!companyId) return;
-    setLoading(true);
-    setError(null);
-
-    const result = await activerEssaiIndividuelSecteur(companyId, cleanSlug, displayName);
-    setLoading(false);
-
-    if (result.success) {
-      onActivated(cleanSlug);
-    } else {
-      setError(result.error || "Impossible d'activer l'essai. Veuillez réessayer.");
-    }
-  };
+  const cleanSlug = (sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
+  const catalogMeta = ALL_SECTORS_CATALOG.find((s) => s.slug === cleanSlug)
+  const displayName = sectorName || catalogMeta?.name || cleanSlug.toUpperCase()
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-fadeIn">
-      <div className="relative w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl overflow-hidden">
-        {/* Header Coloré avec Motif */}
-        <div className="relative px-6 pt-7 pb-6 bg-gradient-to-br from-emerald-600 via-teal-700 to-slate-900 text-white">
-          <button
-            type="button"
-            onClick={onClose}
-            className="absolute top-4 right-4 p-2 rounded-full bg-black/20 hover:bg-black/40 text-white/80 hover:text-white transition"
-            aria-label="Fermer"
-          >
-            <X size={18} />
-          </button>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
+      <div className="relative w-full max-w-md bg-slate-900 border border-amber-500/40 rounded-2xl shadow-2xl overflow-hidden p-6">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 p-2 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+        >
+          <X className="w-5 h-5" />
+        </button>
 
-          <div className="flex items-center gap-3 mb-3">
-            <span className="w-12 h-12 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center text-2xl border border-white/20 shadow-inner">
-              {emoji}
-            </span>
-            <div>
-              <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-400 text-slate-950 shadow-sm">
-                Essai 30 Jours Gratuit
-              </span>
-              <h3 className="text-xl font-black tracking-tight text-white mt-1">
-                Activer {displayName} ?
-              </h3>
-            </div>
-          </div>
-
-          <p className="text-xs text-emerald-50/90 leading-relaxed">
-            Sous-logiciel d'exploitation autonome conforme au standard UEMOA / Bénin.
-          </p>
+        <div className="w-14 h-14 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mb-5">
+          <Lock className="w-7 h-7 text-amber-400" />
         </div>
 
-        {/* Corps Explicatif Conforme CDC Règle 3 */}
-        <div className="p-6 space-y-4">
-          <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800/60">
-            <p className="text-sm font-semibold text-slate-800 dark:text-emerald-100 leading-relaxed">
-              C'est votre <span className="font-black text-emerald-600 dark:text-emerald-400">1ère activation</span> pour ce secteur. Il bénéficie de{' '}
-              <span className="font-black text-emerald-600 dark:text-emerald-400">30 jours d'essai gratuit INDÉPENDANT</span>.
-            </p>
-            <p className="text-xs text-slate-600 dark:text-emerald-200/80 mt-2">
-              Après ces 30 jours, il rejoindra automatiquement votre abonnement global existant.
-            </p>
-          </div>
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold mb-3">
+          Abonnement requis • {displayName}
+        </span>
 
-          {/* Avantages & Conditions */}
-          <div className="space-y-2 text-xs">
-            <div className="flex items-center gap-2.5 text-slate-700 dark:text-slate-300">
-              <CheckCircle2 size={15} className="text-emerald-500 shrink-0" />
-              <span>Accès illimité à 100% des modules (Vente, Caisse, Stocks, Trésorerie)</span>
-            </div>
-            <div className="flex items-center gap-2.5 text-slate-700 dark:text-slate-300">
-              <Calendar size={15} className="text-emerald-500 shrink-0" />
-              <span>30 jours complets sans interruption, même si votre abonnement global expire avant</span>
-            </div>
-            <div className="flex items-center gap-2.5 text-slate-700 dark:text-slate-300">
-              <Shield size={15} className="text-emerald-500 shrink-0" />
-              <span>Cloisonnement strict des données commerciales et comptables</span>
-            </div>
-          </div>
+        <h3 className="text-xl font-bold text-white mb-2">
+          Activer l'abonnement du secteur {displayName} ?
+        </h3>
 
-          {error && (
-            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/50 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 text-xs font-semibold">
-              {error}
-            </div>
-          )}
-        </div>
+        <p className="text-sm text-slate-300 leading-relaxed mb-6">
+          Votre secteur <strong className="text-white">{displayName}</strong> a été ajouté avec succès.
+          Pour accéder à l'ensemble de ses fonctionnalités opérationnelles, veuillez activer votre abonnement.
+        </p>
 
-        {/* Actions */}
-        <div className="px-6 py-4 bg-slate-50 dark:bg-slate-900/80 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-3">
+        <div className="flex flex-col gap-2.5">
           <button
             type="button"
-            onClick={onClose}
-            disabled={loading}
-            className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            onClick={() => {
+              onClose()
+              navigate(`/app/${cleanSlug}/abonnement`)
+            }}
+            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-bold shadow-lg shadow-emerald-500/25 transition-all"
           >
-            Annuler
+            <CreditCard className="w-4 h-4" />
+            Activer mon abonnement
+            <ArrowRight className="w-4 h-4" />
           </button>
 
           <button
             type="button"
-            onClick={handleActiver}
-            disabled={loading}
-            className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-black uppercase tracking-wider flex items-center gap-2 shadow-lg shadow-emerald-600/25 transition active:scale-[0.98] disabled:opacity-50"
+            onClick={() => onActivated(cleanSlug)}
+            className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition-colors"
           >
-            {loading ? (
-              <>
-                <Loader2 size={14} className="animate-spin" />
-                <span>Activation en cours...</span>
-              </>
-            ) : (
-              <>
-                <Sparkles size={14} />
-                <span>Activer l'essai gratuit de 30 jours</span>
-                <ArrowRight size={14} />
-              </>
-            )}
+            <LayoutDashboard className="w-4 h-4 text-emerald-400" />
+            Ouvrir le Tableau de bord du secteur
           </button>
         </div>
       </div>
     </div>
-  );
-};
+  )
+}
+
+export default ActiverSecteurModal

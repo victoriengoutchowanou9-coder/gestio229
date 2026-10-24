@@ -393,11 +393,10 @@ export const SectorLoader = {
       }
     }
 
-    // Cas : compte suspendu, bloqué ou supprimé
+    // Cas : compte suspendu ou supprimé par le Super Admin
     if (
       company.subscription_status === 'suspended' ||
       company.subscription_status === 'deleted' ||
-      company.subscription_status === 'expired' ||
       company.is_active === false
     ) {
       return {
@@ -1086,12 +1085,11 @@ export const SectorLoader = {
       try {
         const planCheck = checkModuleAccess(moduleId, comp)
         if (!planCheck.allowed) {
-          // Si l'entreprise est globalement suspendue ou expirée, l'accès est bloqué
-          if (planCheck.reason === 'suspended' || planCheck.reason === 'expired') {
+          if (planCheck.reason === 'suspended' && moduleId !== 'abonnement') {
             return false
           }
-          // Pour les collaborateurs restreints sous un forfait starter spécifique
-          if (!isAdmin && planCheck.reason === 'starter_restriction') {
+          // Pour les collaborateurs non-admin lorsque l'abonnement est expiré ou restreint
+          if (!isAdmin && (planCheck.reason === 'expired' || planCheck.reason === 'starter_restriction')) {
             return false
           }
         }
@@ -1099,7 +1097,7 @@ export const SectorLoader = {
     }
 
     if (isAdmin) return true
-    if (moduleId === 'dashboard') return true
+    if (moduleId === 'dashboard' || moduleId === 'abonnement') return true
 
     // Accès spécifique au module Vendeur
     if (moduleId === 'vendeur' || moduleId === 'prise_commande' || moduleId === 'bons_commande') {

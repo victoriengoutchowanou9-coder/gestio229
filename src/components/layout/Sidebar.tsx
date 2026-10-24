@@ -15,7 +15,7 @@ import {
   Sparkles, RefreshCw, UserCheck, FileText, AlertTriangle, Fish,
   Scissors, Banknote, Sprout, Wine, Utensils, Printer, GitFork,
   FileCheck, FileSignature, AlertOctagon, Grid2X2, Hammer, Gauge, ShieldAlert,
-  ChefHat, UtensilsCrossed, Trash2, Bike
+  ChefHat, UtensilsCrossed, Trash2, Bike, Lock
 } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
@@ -24,6 +24,7 @@ import SectorLoader from '../../lib/SectorLoader'
 import { getActiveSectorMeta, getActiveSectorSlug } from '../../lib/sectorClient'
 import { ProfileModal } from '../auth/ProfileModal'
 import { useTenant } from '../../hooks/useTenant'
+import type { VerificationAccesSecteurResult } from '../../services/abonnementService'
 import clsx from 'clsx'
 
 // ─── Map icônes ─────────────────────────────────────────────────────────────
@@ -54,12 +55,13 @@ interface NavItemProps {
   label: string
   icon: string
   collapsed: boolean
+  isLocked?: boolean
 }
 
-const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }) => {
+const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed, isLocked }) => {
   // Préchargement au hover / focus pour navigation < 300ms
   const handleMouseEnter = () => {
-    // Si c'est une route connue, précharger le chunk
+    if (isLocked) return
     if (href.includes('vente')) import('../../pages/dashboard/vente-pos/POSPage').catch(() => {})
     else if (href.includes('caisse')) import('../../pages/dashboard/caisse/CaissePage').catch(() => {})
     else if (href.includes('stocks')) import('../../pages/dashboard/stocks/StocksPage').catch(() => {})
@@ -81,13 +83,14 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
           'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group',
           isActive
             ? 'bg-emerald-600 text-white shadow-sm'
-            : 'hover:bg-emerald-500/10 hover:text-emerald-500'
+            : 'hover:bg-emerald-500/10 hover:text-emerald-500',
+          isLocked && !isActive ? 'opacity-65' : ''
         )
       }
       style={({ isActive }) => ({
         color: isActive ? '#FFFFFF' : 'var(--text-secondary)'
       })}
-      title={collapsed ? label : undefined}
+      title={collapsed ? `${label}${isLocked ? ' (Verrouillé — Abonnement requis)' : ''}` : undefined}
     >
       {({ isActive }) => (
         <>
@@ -98,7 +101,10 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
             />
           </span>
           {!collapsed && (
-            <span className="truncate">{label}</span>
+            <span className="truncate flex-1">{label}</span>
+          )}
+          {!collapsed && isLocked && (
+            <Lock className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
           )}
         </>
       )}
@@ -108,7 +114,11 @@ const SidebarNavItem: React.FC<NavItemProps> = ({ href, label, icon, collapsed }
 
 // ─── Sidebar principale ──────────────────────────────────────────────────────
 
-const Sidebar: React.FC = () => {
+interface SidebarProps {
+  sectorAccess?: VerificationAccesSecteurResult | null
+}
+
+const Sidebar: React.FC<SidebarProps> = ({ sectorAccess }) => {
   const navigate = useNavigate()
   const params = useParams<{ sectorSlug?: string }>()
   const { company, user, logout } = useAuthStore()
@@ -118,6 +128,8 @@ const Sidebar: React.FC = () => {
   const { sectorSlug } = useTenant()
   const currentSectorSlug = sectorSlug || params.sectorSlug || getActiveSectorSlug()
   const sectorMeta = getActiveSectorMeta(currentSectorSlug)
+
+  const isSectorLocked = Boolean(sectorAccess && !sectorAccess.autorise)
 
   // Construire la nav dynamiquement pour le sous-logiciel actif (avec fallback securise)
   let grouped: Record<string, any[]> = {}
@@ -190,7 +202,12 @@ const Sidebar: React.FC = () => {
           {!sidebarCollapsed && sectorMeta && (
             <div className="mt-1 px-2.5 py-1.5 rounded-lg bg-emerald-50 dark:bg-slate-800 flex items-center gap-2 text-xs font-bold text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-slate-700">
               <span className="text-base">{sectorMeta.emoji || '🏢'}</span>
-              <span className="truncate">{sectorMeta.name}</span>
+              <span className="truncate flex-1">{sectorMeta.name}</span>
+              {isSectorLocked && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 font-bold">
+                  Verrouillé
+                </span>
+              )}
             </div>
           )}
         </div>
@@ -219,15 +236,20 @@ const Sidebar: React.FC = () => {
                   </p>
                 )}
                 <div className="space-y-0.5">
-                  {items.map((item) => (
-                    <SidebarNavItem
-                      key={item.id}
-                      href={item.href}
-                      label={item.label}
-                      icon={item.icon}
-                      collapsed={sidebarCollapsed}
-                    />
-                  ))}
+                  {items.map((item) => {
+                    const isAlwaysUnlocked = item.id === 'dashboard' || item.id === 'abonnement'
+                    const itemLocked = isSectorLocked && !isAlwaysUnlocked
+                    return (
+                      <SidebarNavItem
+                        key={item.id}
+                        href={item.href}
+                        label={item.label}
+                        icon={item.icon}
+                        collapsed={sidebarCollapsed}
+                        isLocked={itemLocked}
+                      />
+                    )
+                  })}
                 </div>
               </div>
             )

@@ -39,7 +39,7 @@ import {
   getAbonnementsSecteurs,
   calcDaysRemaining,
   matchesSectorCode,
-  activerEssaiIndividuelSecteur,
+  ajouterSecteurAuCompte,
   AbonnementGlobal,
   AbonnementSecteur,
 } from '../../services/abonnementService';
@@ -253,54 +253,119 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     return `Essai J-${globalDaysRemaining}`;
   }, [globalSub, globalDaysRemaining]);
 
-  // Badge sur chaque tuile secteur (Règle 6) :
-  // - Brasserie : Inclus dans global J-23
-  // - Transport & Logistique : Essai individuel J-30 (vert) puis après 30j : Inclus dans global
+  // Badge sur chaque tuile secteur (Section 12 du cahier des charges) :
+  // - « Essai gratuit » (pour les 3 premiers secteurs maximum couverts par l'essai gratuit du compte)
+  // - « Actif » (abonnement payant actif)
+  // - « En attente de paiement » (secteur ajouté au-delà des 3 secteurs d'essai ou non encore payé)
+  // - « Abonnement expiré » (essai ou abonnement arrivé à échéance)
   const getSectorBadgeInfo = useCallback((sectorSlug: string) => {
     const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, sectorSlug));
     const now = new Date();
 
-    if (!sub) {
+    // Compter l'index du secteur parmi ceux rattachés à l'essai gratuit global
+    const trialRattaches = sectorSubs.filter(
+      (s) => s.rattache_au_global && s.statut_specifique !== 'en_attente_paiement'
+    );
+    const indexInTrial = trialRattaches.findIndex((s) => matchesSectorCode(s.secteur_code, sectorSlug));
+
+    if (!sub || sub.statut_specifique === 'en_attente_paiement') {
       return {
-        label: 'Essai 30j disponible',
+        label: 'En attente de paiement',
+        statusText: 'En attente de paiement',
+        expirationText: 'Activation requise',
         isIndividuel: false,
         isRattache: false,
         isNonActive: true,
-        days: 30,
-        badgeClass: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30',
+        days: 0,
+        badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
       };
     }
 
-    // Essai individuel en cours (vert vif)
-    if (!sub.rattache_au_global && sub.date_fin_specifique) {
+    // Abonnement payant spécifique actif sur ce secteur
+    if (sub.statut_specifique === 'actif' && !sub.rattache_au_global && sub.date_fin_specifique) {
       const fin = new Date(sub.date_fin_specifique);
+      const expDateStr = fin.toLocaleDateString('fr-FR');
       if (now.getTime() <= fin.getTime()) {
         const days = calcDaysRemaining(sub.date_fin_specifique);
         return {
-          label: `Essai individuel J-${days}`,
+          label: `Actif • J-${days}`,
+          statusText: 'Actif',
+          expirationText: `Expire le ${expDateStr} (${days}j restants)`,
           isIndividuel: true,
           isRattache: false,
           isNonActive: false,
           days,
-          badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-black shadow-sm ring-1 ring-emerald-500/30',
+          badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-black shadow-sm',
+        };
+      } else {
+        return {
+          label: 'Abonnement expiré',
+          statusText: 'Abonnement expiré',
+          expirationText: `Expiré le ${expDateStr}`,
+          isIndividuel: false,
+          isRattache: false,
+          isNonActive: true,
+          days: 0,
+          badgeClass: 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold',
         };
       }
     }
 
-    // Rattaché au global (après 30j ou dès l'inscription)
-    const label = globalSub?.statut_global === 'essai'
-      ? `Inclus dans global J-${globalDaysRemaining}`
-      : 'Inclus dans global';
+    // Si l'abonnement global est en mode essai mais que ce secteur dépasse les 3 premiers secteurs gratuits
+    if (globalSub?.statut_global === 'essai' && indexInTrial >= 3) {
+      return {
+        label: 'En attente de paiement',
+        statusText: 'En attente de paiement',
+        expirationText: 'Au-delà des 3 secteurs gratuits',
+        isIndividuel: false,
+        isRattache: false,
+        isNonActive: true,
+        days: 0,
+        badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
+      };
+    }
+
+    const finGlobal = globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null;
+    const expGlobalStr = finGlobal ? finGlobal.toLocaleDateString('fr-FR') : '';
+    const isGlobalExpired = !globalSub || globalSub.statut_global === 'expire' || globalDaysRemaining <= 0;
+
+    if (isGlobalExpired) {
+      return {
+        label: 'Abonnement expiré',
+        statusText: 'Abonnement expiré',
+        expirationText: expGlobalStr ? `Expiré le ${expGlobalStr}` : 'Expiré',
+        isIndividuel: false,
+        isRattache: true,
+        isNonActive: true,
+        days: 0,
+        badgeClass: 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold',
+      };
+    }
+
+    if (globalSub?.statut_global === 'essai') {
+      return {
+        label: `Essai gratuit • J-${globalDaysRemaining}`,
+        statusText: 'Essai gratuit',
+        expirationText: expGlobalStr ? `Fin d'essai : ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
+        isIndividuel: false,
+        isRattache: true,
+        isNonActive: false,
+        days: globalDaysRemaining,
+        badgeClass: darkMode
+          ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 font-bold'
+          : 'bg-blue-50 text-blue-700 border-blue-200 font-bold',
+      };
+    }
 
     return {
-      label,
+      label: `Actif • J-${globalDaysRemaining}`,
+      statusText: 'Actif',
+      expirationText: expGlobalStr ? `Expire le ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
       isIndividuel: false,
       isRattache: true,
       isNonActive: false,
       days: globalDaysRemaining,
-      badgeClass: darkMode
-        ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 font-bold'
-        : 'bg-blue-50 text-blue-700 border-blue-200 font-bold',
+      badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-bold',
     };
   }, [sectorSubs, globalSub, globalDaysRemaining, darkMode]);
 
@@ -841,12 +906,12 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           console.warn('[Hub] Notice update selected_sectors:', cErr);
         }
 
-        // Règle 3 CDC : Activer l'essai individuel 30j pour ce nouveau secteur
+        // Section 3 & 4 CDC : Ajouter le secteur sans accorder de nouvel essai individuel de 30 jours
         try {
-          await activerEssaiIndividuelSecteur(companyId, meta.slug, form.name.trim().toUpperCase());
+          await ajouterSecteurAuCompte(companyId, meta.slug, form.name.trim().toUpperCase());
           await loadSubscriptions();
         } catch (subErr) {
-          console.warn('[Hub] Notice activation essai individuel:', subErr);
+          console.warn('[Hub] Notice ajout secteur:', subErr);
         }
       }
 
@@ -1031,21 +1096,12 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   };
 
-  // ── Action : Ouvrir l'application métier (PARTIE 8 & Règle 3 CDC) ───────────
+  // ── Action : Ouvrir l'application métier (Section 4 : Ouverture vers le Tableau de bord même si inactif) ──
   const handleOpenActivity = (act: ActivityEntry) => {
-    const badgeInfo = getSectorBadgeInfo(act.sectorSlug);
-    if (badgeInfo.isNonActive) {
-      setActivationModalData({
-        slug: act.sectorSlug,
-        name: act.name,
-      });
-      return;
-    }
-
     if (onSelectSector) {
       onSelectSector(act.sectorSlug, act.id, act.name, act.location);
     } else {
-      navigate(`/app/${act.sectorSlug}?activityId=${act.id}`);
+      navigate(`/app/${act.sectorSlug}/tableau-bord?activityId=${act.id}`);
     }
   };
 
@@ -1485,7 +1541,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
                         <div className={`text-[11px] mb-4 flex items-center justify-between ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
                           <span>{act.sectorLabel}</span>
-                          <span className="text-[10px] opacity-75 font-mono">{act.status}</span>
+                          <span className="text-[10px] opacity-85 font-semibold">{(badgeInfo as any).expirationText || act.status}</span>
                         </div>
                       </>
                     );

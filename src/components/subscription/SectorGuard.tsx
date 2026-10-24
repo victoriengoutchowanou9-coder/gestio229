@@ -1,306 +1,234 @@
 // =============================================================================
-// GESTIO 229 SaaS — SectorGuard : Isolation Stricte & Contrôle des Secteurs (CDC Section 2, 3, 5 & 8)
+// GESTIO 229 SaaS — GARDE D'ACCÈS SECTEUR (SectorGuard V4 — Section 4 & 11)
 // =============================================================================
-// RÈGLES DE SÉCURITÉ :
-// 1. Un utilisateur ne peut JAMAIS accéder à un secteur non autorisé simplement en modifiant l'URL.
-// 2. Si le secteur n'est pas autorisé pour l'entreprise :
-//    Message : « Vous souhaitez utiliser plusieurs secteurs d'activité sur GESTIO229 ? Veuillez contacter notre équipe pour étudier votre besoin et définir une formule adaptée. »
-// 3. Si l'essai gratuit ou l'abonnement est terminé :
-//    Message : « Votre période d'essai est arrivée à son terme. Pour continuer à utiliser les fonctionnalités payantes de GESTIO229, veuillez souscrire à un abonnement ou contacter notre équipe. »
-// 4. Aucune auto-activation gratuite pirate de secteurs supplémentaires.
+// Règles du cahier des charges :
+// 1. Tout secteur appartenant à l'entreprise (ou ajouté depuis le Hub) peut être ouvert :
+//    l'utilisateur arrive sur le Tableau de bord du secteur (/app/:sectorSlug/tableau-bord).
+// 2. Si l'abonnement du secteur est inactif ('en_attente_paiement' ou 'expire') :
+//    - Le Tableau de bord ('tableau-bord') et le module Abonnement ('abonnement') restent accessibles.
+//    - Tous les autres modules opérationnels du secteur sont verrouillés.
+// 3. Si le secteur n'a pas encore été ajouté au compte de l'entreprise, propose de l'ajouter
+//    ou de retourner au Hub.
 // =============================================================================
 
 import React, { useState, useEffect } from 'react'
-import { Link, useParams, useLocation, Navigate, useNavigate } from 'react-router-dom'
-import {
-  Lock, ArrowLeft, ShieldAlert, Sparkles, Clock, AlertTriangle,
-  CheckCircle2, Calendar, Shield, Loader2, ArrowRight, Phone, Mail, Send
-} from 'lucide-react'
+import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { Lock, CreditCard, ArrowLeft, PlusCircle, LayoutDashboard } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
-import { useUIStore } from '../../store/uiStore'
-import { getActiveSectorSlug, canonicalSectorSlug, isSectorSubscribed } from '../../lib/sectorClient'
+import { isSectorSubscribed } from '../../lib/sectorClient'
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry'
-import { normalizeSectorSlug } from '../../core/team/sectorRoles'
-import { checkSecteurAccess, SecteurAccessCheck } from '../../services/abonnementService'
-import { ModuleSkeleton } from '../ui/Skeleton'
+import {
+  evaluerAccesSecteur,
+  ajouterSecteurAuCompte,
+  VerificationAccesSecteurResult,
+  canonicalSectorSlug,
+} from '../../services/abonnementService'
 
 interface SectorGuardProps {
   children: React.ReactNode
 }
 
 export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
-  const location = useLocation()
+  const { sectorSlug } = useParams<{ sectorSlug: string }>()
   const navigate = useNavigate()
-  const params = useParams<{ sectorSlug?: string; sectorKey?: string }>()
-  const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
-  const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
-  const user = useAuthStore((s) => s.user)
+  const location = useLocation()
+  const { company, user } = useAuthStore()
 
-  const [accessCheck, setAccessCheck] = useState<SecteurAccessCheck | null>(null)
-  const [checking, setChecking] = useState(true)
+  const [accessState, setAccessState] = useState<VerificationAccesSecteurResult | null>(null)
+  const [checking, setChecking] = useState(false)
+  const [addingSector, setAddingSector] = useState(false)
 
-  // État formulaire demande d'extension multi-secteur
-  const [requestReason, setRequestReason] = useState('')
-  const [requestSending, setRequestSending] = useState(false)
-  const [requestSent, setRequestSent] = useState(false)
-  const [requestError, setRequestError] = useState<string | null>(null)
-
-  // 1. L'accès à la page d'abonnement est toujours autorisé
-  const isAbonnementRoute = location.pathname.includes('/abonnement') || location.pathname.includes('/subscription')
-  if (isAbonnementRoute) {
+  // Le Super Admin universel traverse librement
+  if (user?.role === 'super_admin' || user?.is_super_admin) {
     return <>{children}</>
   }
 
-  // 2. Attente initialisation store
-  if (!company && (status === 'idle' || status === 'loading')) {
-    return <ModuleSkeleton />
+  if (!sectorSlug || !company) {
+    return <>{children}</>
   }
 
-  const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
-  const targetSectorSlug = params.sectorKey || params.sectorSlug || getActiveSectorSlug() || 'boutique'
-  const targetClean = canonicalSectorSlug(targetSectorSlug)
+  const cleanSlug = canonicalSectorSlug(sectorSlug)
+  const isSubscribed = isSectorSubscribed(cleanSlug, company)
 
-  // Vérification de souscription directe
-  const isSubscribed = isSectorSubscribed(targetClean, company)
+  // Déterminer le sous-chemin courant dans /app/:sectorSlug/...
+  const pathParts = location.pathname.split('/').filter(Boolean)
+  // pathParts = ['app', ':sectorSlug', ':subPath?']
+  const currentSubPath = (pathParts[2] || 'tableau-bord').toLowerCase().trim()
+  const isAlwaysAccessibleRoute =
+    currentSubPath === 'tableau-bord' ||
+    currentSubPath === 'dashboard' ||
+    currentSubPath === 'abonnement'
 
-  // 3. Vérification dynamique de l'accès
   useEffect(() => {
-    let isMounted = true
-    if (!company?.id) {
-      setChecking(false)
-      return
-    }
+    let mounted = true
+    if (!company?.id || !cleanSlug) return
 
     setChecking(true)
-    checkSecteurAccess(company.id, targetClean, company)
+    evaluerAccesSecteur(company.id, cleanSlug, company.created_at, isSubscribed)
       .then((res) => {
-        if (isMounted) {
-          setAccessCheck(res)
+        if (mounted) {
+          setAccessState(res)
           setChecking(false)
         }
       })
-      .catch((err) => {
-        console.warn('[SectorGuard] Erreur checkSecteurAccess:', err)
-        if (isMounted) {
-          setChecking(false)
-        }
+      .catch(() => {
+        if (mounted) setChecking(false)
       })
 
     return () => {
-      isMounted = false
+      mounted = false
     }
-  }, [company?.id, targetClean])
+  }, [company?.id, cleanSlug, isSubscribed, location.pathname])
 
-  if (checking) {
-    return <ModuleSkeleton />
-  }
+  // Si le secteur est ajouté à l'entreprise (ou trouvé dans abonnements_secteurs) :
+  // - Si l'abonnement du secteur est actif (`accessState.autorise === true`), tous les modules sont autorisés.
+  // - Si l'abonnement du secteur est inactif (`en_attente_paiement` ou `expire`),
+  //   le Tableau de bord ('tableau-bord') et le module Abonnement ('abonnement') restent accessibles !
+  const sectorExistsInAccount =
+    isSubscribed || (accessState && accessState.statutEffectif !== 'non_active')
 
-  // 4. Utilisateurs internes (non-admin) : vérification de leur secteur assigné
-  if (!isAdmin && user) {
-    const perm = (typeof user.permissions === 'object' && user.permissions) ? user.permissions : {}
-    const userSector = normalizeSectorSlug(
-      perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || user.sector_id || user.sector_slug || ''
-    )
-
-    if (userSector && targetClean && userSector !== targetClean && canonicalSectorSlug(userSector) !== targetClean) {
-      let dest = 'tableau-bord'
-      if (user.role === 'caissier' || user.role === 'vendeur') dest = 'vente-pos'
-      else if (user.role === 'magasinier') dest = 'stocks'
-      else if (user.role === 'comptable') dest = 'syscohada'
-      return <Navigate to={`/app/${userSector}/${dest}`} replace />
+  if (sectorExistsInAccount) {
+    if (checking && !accessState) {
+      return <>{children}</>
     }
-  }
 
-  // 5. Si le secteur est explicitement autorisé pour l'entreprise ET abonnement valide : rendu normal
-  if (isSubscribed && accessCheck?.allowed) {
-    return <>{children}</>
-  }
-
-  const meta = ALL_SECTORS_CATALOG.find((s) => s.slug === targetClean)
-  const sectorName = meta?.name || meta?.label || targetSectorSlug
-  const sectorEmoji = meta?.emoji || '🏢'
-
-  // Soumission de la demande multi-secteur au Super Administrateur
-  const handleSubmitMultiSectorRequest = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!company?.id) return
-
-    setRequestSending(true)
-    setRequestError(null)
-
-    try {
-      const res = await fetch('/api/sector-request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          company_id: company.id,
-          company_name: company.name,
-          user_id: user?.id,
-          user_email: user?.email || company.email,
-          user_phone: user?.phone || company.phone,
-          requested_sectors: [targetClean],
-          reason: requestReason.trim() || `Demande d'accès au secteur ${sectorName}`,
-        })
-      })
-
-      const data = await res.json()
-      if (res.ok && data.success) {
-        setRequestSent(true)
-      } else {
-        setRequestError(data.error || 'Erreur lors de la soumission de la demande.')
-      }
-    } catch (err: any) {
-      setRequestError(err.message || 'Erreur de connexion avec le serveur.')
-    } finally {
-      setRequestSending(false)
-    }
-  }
-
-  // 6. CAS 1 : SECTEUR NON AUTORISÉ POUR CETTE ENTREPRISE (CDC Section 2, 3 & 8)
-  // Message exact requis :
-  // « Vous souhaitez utiliser plusieurs secteurs d'activité sur GESTIO229 ? Veuillez contacter notre équipe pour étudier votre besoin et définir une formule adaptée. »
-  if (!isSubscribed) {
-    return (
-      <div className="min-h-[80vh] flex items-center justify-center p-4">
-        <div className="max-w-xl w-full bg-white dark:bg-slate-900 rounded-3xl border border-indigo-200 dark:border-indigo-950 shadow-2xl overflow-hidden animate-fadeIn">
-          {/* Header */}
-          <div className="p-6 sm:p-8 bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 text-white">
-            <div className="flex items-center gap-3.5 mb-3">
-              <span className="w-14 h-14 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center text-3xl border border-white/20 shadow-inner">
-                {sectorEmoji}
-              </span>
-              <div>
-                <span className="inline-block px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-wider bg-indigo-500 text-white shadow-sm">
-                  Accès Multisecteur Requis
-                </span>
-                <h2 className="text-2xl font-black tracking-tight text-white mt-1">
-                  Activité « {sectorName} »
-                </h2>
-              </div>
+    // Compte suspendu par le Super Admin : seul le module abonnement est accessible
+    if (accessState?.statutEffectif === 'suspendu' && currentSubPath !== 'abonnement') {
+      return (
+        <div className="min-h-[75vh] flex items-center justify-center p-6">
+          <div className="max-w-lg w-full bg-slate-900/95 border border-rose-500/40 rounded-2xl p-8 text-center shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto mb-5">
+              <Lock className="w-8 h-8 text-rose-400" />
             </div>
-            <p className="text-xs text-indigo-200 leading-relaxed">
-              Votre compte actuel est rattaché à votre secteur d'activité principal.
+            <h2 className="text-xl font-bold text-white mb-2">Abonnement suspendu</h2>
+            <p className="text-sm text-slate-300 mb-6">
+              {accessState.messageVerrouillage ||
+                'L\'accès à ce secteur a été suspendu par l\'administration. Vos données restent intégralement conservées.'}
             </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button
+                onClick={() => navigate('/hub')}
+                className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                Retour au Hub
+              </button>
+              <button
+                onClick={() => navigate(`/app/${cleanSlug}/abonnement`)}
+                className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold"
+              >
+                <CreditCard className="w-4 h-4" />
+                Accéder à Mon Abonnement
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // Si l'abonnement est actif OU si l'utilisateur consulte le Tableau de bord ou le module Abonnement -> Autoriser !
+    if (!accessState || accessState.autorise || isAlwaysAccessibleRoute) {
+      return <>{children}</>
+    }
+
+    // Sinon : l'utilisateur tente d'ouvrir un module opérationnel verrouillé (Ventes, Caisse, Stocks, etc.)
+    // sur un secteur dont l'abonnement est en attente de paiement ou expiré (Section 4 Étape 3)
+    const sectorInfo = ALL_SECTORS_CATALOG.find((s) => s.slug === cleanSlug)
+    const sectorName = sectorInfo?.name || cleanSlug.toUpperCase()
+
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center p-6">
+        <div className="max-w-lg w-full bg-slate-900/95 border border-amber-500/40 rounded-2xl p-8 text-center shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto mb-5">
+            <Lock className="w-8 h-8 text-amber-400" />
           </div>
 
-          {/* Corps avec message obligatoire CDC */}
-          <div className="p-6 sm:p-8 space-y-5">
-            <div className="p-4 rounded-2xl bg-indigo-50 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 text-indigo-950 dark:text-indigo-200 text-sm font-semibold leading-relaxed">
-              « Vous souhaitez utiliser plusieurs secteurs d'activité sur GESTIO229 ? Veuillez contacter notre équipe pour étudier votre besoin et définir une formule adaptée. »
-            </div>
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold mb-3">
+            {accessState.badgeLabel} • {sectorName}
+          </span>
 
-            <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-              L'accès aux secteurs complémentaires fait l'objet d'une validation par le Super Administrateur de la plateforme afin de garantir le paramétrage optimal de vos flux comptables SYSCOHADA et factures e-MECeF.
-            </p>
+          <h2 className="text-xl font-bold text-white mb-2">
+            Module verrouillé — Activation d'abonnement requise
+          </h2>
 
-            {/* Formulaire de demande au Super Admin */}
-            {requestSent ? (
-              <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 text-xs font-semibold flex items-center gap-2">
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                <span>Votre demande d'extension pour <strong>{sectorName}</strong> a été transmise au Super Administrateur. Notre équipe vous contactera rapidement.</span>
-              </div>
-            ) : (
-              <form onSubmit={handleSubmitMultiSectorRequest} className="space-y-3 pt-1">
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
-                  Précisez votre besoin pour cette activité :
-                </label>
-                <textarea
-                  rows={2}
-                  value={requestReason}
-                  onChange={(e) => setRequestReason(e.target.value)}
-                  placeholder="Ex: Nous ouvrons un second établissement ou souhaitons gérer cette activité..."
-                  className="w-full p-3 text-xs rounded-xl border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
+          <p className="text-sm text-slate-300 leading-relaxed mb-6">
+            {accessState.statutEffectif === 'en_attente_paiement'
+              ? 'Votre secteur a été ajouté avec succès. Pour accéder à l\'ensemble de ses fonctionnalités, veuillez activer votre abonnement.'
+              : accessState.messageVerrouillage ||
+                'L\'abonnement de ce secteur est arrivé à expiration. Veuillez renouveler votre abonnement pour débloquer l\'ensemble de ses modules opérationnels.'}
+          </p>
 
-                {requestError && (
-                  <p className="text-xs text-rose-600 font-semibold">{requestError}</p>
-                )}
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => navigate(`/app/${cleanSlug}/tableau-bord`)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium transition-colors"
+            >
+              <LayoutDashboard className="w-4 h-4 text-emerald-400" />
+              Tableau de bord
+            </button>
 
-                <div className="flex flex-col sm:flex-row gap-3 pt-2">
-                  <button
-                    type="submit"
-                    disabled={requestSending}
-                    className="flex-1 py-3 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs shadow-md flex items-center justify-center gap-2 transition disabled:opacity-50"
-                  >
-                    {requestSending ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Send className="w-4 h-4" />
-                    )}
-                    <span>Envoyer la demande d'extension</span>
-                  </button>
-
-                  <Link
-                    to="/hub"
-                    className="py-3 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center justify-center gap-1.5 transition"
-                  >
-                    <ArrowLeft className="w-4 h-4" />
-                    <span>Retour au HUB</span>
-                  </Link>
-                </div>
-              </form>
-            )}
-
-            {/* Coordonnées directes */}
-            <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-500 dark:text-slate-400">
-              <span className="flex items-center gap-1.5">
-                <Phone className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Support &amp; Concepteur : +229 97 00 00 00</span>
-              </span>
-              <span className="flex items-center gap-1.5">
-                <Mail className="w-3.5 h-3.5 text-indigo-500" />
-                <span>contact@gestio229.bj</span>
-              </span>
-            </div>
+            <button
+              onClick={() => navigate(`/app/${cleanSlug}/abonnement`)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-semibold shadow-lg shadow-emerald-500/20 transition-all"
+            >
+              <CreditCard className="w-4 h-4" />
+              Activer mon abonnement
+            </button>
           </div>
         </div>
       </div>
     )
   }
 
-  // 7. CAS 2 : PÉRIODE D'ESSAI OU ABONNEMENT TERMINÉ (CDC Section 3 & 8)
-  // Message exact requis :
-  // « Votre période d'essai est arrivée à son terme. Pour continuer à utiliser les fonctionnalités payantes de GESTIO229, veuillez souscrire à un abonnement ou contacter notre équipe. »
+  // Cas où le secteur n'est pas encore ajouté au compte de l'entreprise
+  const sectorInfo = ALL_SECTORS_CATALOG.find((s) => s.slug === cleanSlug)
+  const sectorName = sectorInfo?.name || cleanSlug.toUpperCase()
+
+  const handleAddAndOpenSector = async () => {
+    if (!company?.id) return
+    setAddingSector(true)
+    await ajouterSecteurAuCompte(company.id, cleanSlug, company.name)
+    setAddingSector(false)
+    navigate(`/app/${cleanSlug}/tableau-bord`)
+  }
+
   return (
-    <div className="min-h-[75vh] flex items-center justify-center p-4">
-      <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl border border-amber-200 dark:border-amber-900/60 p-8 shadow-xl text-center">
-        <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-5 shadow-sm">
-          <Clock className="w-8 h-8" />
+    <div className="min-h-[80vh] flex items-center justify-center p-6">
+      <div className="max-w-lg w-full bg-slate-900/95 border border-slate-800 rounded-2xl p-8 text-center shadow-2xl">
+        <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto mb-5">
+          <Lock className="w-8 h-8 text-amber-400" />
         </div>
 
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 mb-3">
-          <AlertTriangle className="w-3.5 h-3.5" />
-          Période d'Essai Terminée
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs font-semibold mb-3">
+          Secteur non ajouté
         </span>
 
-        <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
-          Essai Gratuit Échu
+        <h2 className="text-xl font-bold text-white mb-2">
+          Secteur « {sectorName} »
         </h2>
 
-        <div className="p-4 my-4 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800/60 text-amber-950 dark:text-amber-200 text-xs sm:text-sm font-semibold leading-relaxed text-left">
-          « Votre période d'essai est arrivée à son terme. Pour continuer à utiliser les fonctionnalités payantes de GESTIO229, veuillez souscrire à un abonnement ou contacter notre équipe. »
-        </div>
-
-        <p className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">
-          Toutes vos données (ventes, achats, stocks, écritures comptables) sont intégralement conservées en toute sécurité.
+        <p className="text-sm text-slate-400 leading-relaxed mb-6">
+          Ce secteur d'activité n'est pas encore rattaché à votre entreprise{' '}
+          <strong className="text-slate-200">{company.name}</strong>. Vous pouvez l'ajouter à votre espace dès maintenant.
         </p>
 
-        <div className="mt-6 flex flex-col gap-3">
-          <Link
-            to="/dashboard/abonnement"
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm shadow-md shadow-emerald-600/20 transition"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>Souscrire à l'abonnement standard (5 000 FCFA/mois)</span>
-          </Link>
-
-          <Link
-            to="/hub"
-            className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-bold text-sm transition"
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+          <button
+            onClick={() => navigate('/hub')}
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium transition-colors"
           >
             <ArrowLeft className="w-4 h-4" />
-            <span>Retourner au HUB</span>
-          </Link>
+            Retour au Hub
+          </button>
+
+          <button
+            onClick={handleAddAndOpenSector}
+            disabled={addingSector}
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-semibold shadow-lg shadow-emerald-500/20 transition-all"
+          >
+            <PlusCircle className="w-4 h-4" />
+            {addingSector ? 'Ajout en cours...' : `Ajouter et ouvrir ${sectorName}`}
+          </button>
         </div>
       </div>
     </div>

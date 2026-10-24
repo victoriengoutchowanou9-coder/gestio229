@@ -95,6 +95,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     authorized_modules,
     commercial_terms,
     sectors_list,
+    authorized_sectors,
   } = req.body || {}
 
   if (!company_id) {
@@ -105,7 +106,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Récupérer l'entreprise concernée (vérification avant toute modification)
     const { data: company, error: compError } = await sb
       .from('companies')
-      .select('id, name, subscription_status')
+      .select('id, name, subscription_status, subscription_plan, plan, selected_sectors')
       .eq('id', company_id)
       .maybeSingle()
 
@@ -122,18 +123,85 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const oldStatus = company.subscription_status
       const newExpiresAt = new Date(expires_at).toISOString()
       const newStartedAt = started_at ? new Date(started_at).toISOString() : new Date().toISOString()
+      const targetSector = sector_slug && sector_slug !== 'all' ? String(sector_slug).replace(/^sec-/, '').toLowerCase().trim() : 'all'
 
       // 1. Mettre à jour UNIQUEMENT cette entreprise
       await sb.from('companies')
         .update({
           subscription_status: 'active',
+          is_active: true,
           subscription_plan: plan_slug || company.subscription_plan || 'entreprise',
           plan: plan_slug || company.plan || 'entreprise',
           updated_at: new Date().toISOString(),
         })
         .eq('id', company_id)
 
-      // 2. Créer ou mettre à jour l'entrée dans subscriptions
+      // 2. Synchroniser abonnements_global et abonnements_secteurs
+      if (targetSector === 'all') {
+        const { data: existingGlobal } = await sb
+          .from('abonnements_global')
+          .select('id')
+          .eq('entreprise_id', company_id)
+          .maybeSingle()
+
+        if (existingGlobal?.id) {
+          await sb.from('abonnements_global').update({
+            statut_global: 'actif',
+            date_debut_global: newStartedAt,
+            date_fin_global: newExpiresAt,
+            plan_code: plan_slug || 'entreprise',
+            montant_mensuel_fcfa: Number(price_monthly) || 10000,
+            updated_at: new Date().toISOString(),
+          }).eq('id', existingGlobal.id)
+        } else {
+          await sb.from('abonnements_global').insert({
+            entreprise_id: company_id,
+            statut_global: 'actif',
+            date_debut_global: newStartedAt,
+            date_fin_global: newExpiresAt,
+            plan_code: plan_slug || 'entreprise',
+            montant_mensuel_fcfa: Number(price_monthly) || 10000,
+          })
+        }
+
+        await sb.from('abonnements_secteurs').update({
+          statut_specifique: 'actif',
+          rattache_au_global: true,
+          date_debut_specifique: newStartedAt,
+          date_fin_specifique: newExpiresAt,
+          updated_at: new Date().toISOString(),
+        }).eq('entreprise_id', company_id)
+      } else {
+        const secCode = `sec-${targetSector}`
+        const { data: existingSec } = await sb
+          .from('abonnements_secteurs')
+          .select('id')
+          .eq('entreprise_id', company_id)
+          .in('secteur_code', [targetSector, secCode])
+          .maybeSingle()
+
+        if (existingSec?.id) {
+          await sb.from('abonnements_secteurs').update({
+            statut_specifique: 'actif',
+            rattache_au_global: false,
+            date_debut_specifique: newStartedAt,
+            date_fin_specifique: newExpiresAt,
+            updated_at: new Date().toISOString(),
+          }).eq('id', existingSec.id)
+        } else {
+          await sb.from('abonnements_secteurs').insert({
+            entreprise_id: company_id,
+            secteur_code: secCode,
+            statut_specifique: 'actif',
+            rattache_au_global: false,
+            is_premiere_activation: false,
+            date_debut_specifique: newStartedAt,
+            date_fin_specifique: newExpiresAt,
+          })
+        }
+      }
+
+      // 3. Créer ou mettre à jour l'entrée dans subscriptions
       const { data: existingSub } = await sb
         .from('subscriptions')
         .select('id, expires_at')
@@ -172,11 +240,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         })
       }
 
-      // 3. Enregistrer dans l'historique
+      // 4. Enregistrer dans l'historique
       await sb.from('subscription_history').insert({
         company_id,
         company_name: company.name,
-        sector_slug: sector_slug || 'all',
+        sector_slug: targetSector,
         action: 'reactivation_manuelle',
         plan_slug: plan_slug || 'entreprise',
         duration_months: Number(duration_months) || 1,
@@ -190,7 +258,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         performed_by: 'Super Admin',
       })
 
-      // 4. Journal d'audit
+      // 5. Journal d'audit
       await logAdminAction(sb, 'REACTIVATION_ABONNEMENT', company_id, company.name, 'success', {
         oldStatus,
         newStatus: 'active',
@@ -201,12 +269,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         paymentMethod: payment_method,
         paymentRef: payment_reference,
         reason,
-        sectorSlug: sector_slug,
+        sectorSlug: targetSector,
       }, clientIp)
 
       return res.status(200).json({
         success: true,
-        message: `Abonnement de ${company.name} réactivé jusqu'au ${new Date(newExpiresAt).toLocaleDateString('fr-BJ')}.`,
+        message: `Abonnement de ${company.name} (${targetSector === 'all' ? 'Tous les secteurs' : targetSector}) réactivé jusqu'au ${new Date(newExpiresAt).toLocaleDateString('fr-BJ')}.`,
       })
     }
 
@@ -214,7 +282,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'block' || action === 'suspend') {
       const blockReason = (reason || comment || 'Blocage d\'accès par Super Administrateur').trim()
 
-      // Suspension appliquée côté serveur : désactive l'entreprise et coupe l'accès
       await sb.from('companies').update({
         subscription_status: 'suspended',
         is_active: false,
@@ -228,6 +295,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updated_at: new Date().toISOString()
       }).eq('company_id', company_id)
 
+      await sb.from('abonnements_global').update({
+        statut_global: 'suspendu'
+      }).eq('entreprise_id', company_id)
+
+      await sb.from('abonnements_secteurs').update({
+        statut_specifique: 'suspendu'
+      }).eq('entreprise_id', company_id)
+
       await sb.from('subscription_history').insert({
         company_id,
         company_name: company.name,
@@ -237,7 +312,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         performed_by: 'Super Admin',
       })
 
-      // Inscription obligatoire dans le journal d'audit sécurisé
       await logAdminAction(sb, 'BLOCAGE_ACCES', company_id, company.name, 'success', {
         reason: blockReason,
         previous_status: company.subscription_status,
@@ -268,6 +342,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updated_at: new Date().toISOString()
       }).eq('company_id', company_id)
 
+      await sb.from('abonnements_global').update({
+        statut_global: 'actif'
+      }).eq('entreprise_id', company_id)
+
+      await sb.from('abonnements_secteurs').update({
+        statut_specifique: 'actif'
+      }).eq('entreprise_id', company_id)
+
       await sb.from('subscription_history').insert({
         company_id,
         company_name: company.name,
@@ -297,7 +379,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const delReason = reason.trim()
 
-      // L'entreprise passe au statut 'deleted', son accès est bloqué mais ses données comptables/historiques sont 100% conservées
       await sb.from('companies').update({
         subscription_status: 'deleted',
         is_active: false,
@@ -385,7 +466,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: 'Le motif légal/justificatif de suppression définitive est obligatoire.' })
       }
 
-      // Suppression strictement cantonnée à l'entreprise ciblée (aucune interférence avec d'autres entreprises)
       try {
         await sb.from('sales_order_items').delete().eq('company_id', company_id)
         await sb.from('sales_orders').delete().eq('company_id', company_id)
@@ -446,7 +526,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ success: false, error: 'Veuillez spécifier au moins un secteur à autoriser.' })
       }
 
-      // 1. Mettre à jour la demande
       if (request_id) {
         await sb.from('sector_access_requests').update({
           status: 'approved',
@@ -460,7 +539,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }).eq('id', request_id)
       }
 
-      // 2. Fusionner les secteurs autorisés de l'entreprise
       const { data: currentComp } = await sb.from('companies').select('authorized_sectors, selected_sectors, sectors').eq('id', company_id).single()
       const existingAuth = Array.isArray(currentComp?.authorized_sectors) ? currentComp.authorized_sectors : []
       const mergedSectors = Array.from(new Set([...existingAuth, ...sectorsToAuthorize]))
@@ -473,7 +551,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         updated_at: new Date().toISOString(),
       }).eq('id', company_id)
 
-      // 3. Insérer les company_sectors correspondants
       for (const s of sectorsToAuthorize) {
         const cleanSlug = String(s).replace(/^sec-/, '').toLowerCase().trim()
         await sb.from('company_sectors').upsert({
@@ -488,7 +565,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }, { onConflict: 'company_id,sector_slug' })
       }
 
-      // 4. Inscription dans l'historique et journal d'audit
       await sb.from('subscription_history').insert({
         company_id,
         company_name: company.name,
@@ -537,12 +613,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ── 9. GESTION DIRECTE DES SECTEURS AUTORISÉS ─────────────────────
     if (action === 'manage_sectors') {
-      const list = Array.isArray(sectors_list) ? sectors_list : []
-      if (list.length === 0) {
+      const rawList = Array.isArray(sectors_list) ? sectors_list : (Array.isArray(authorized_sectors) ? authorized_sectors : [])
+      if (rawList.length === 0) {
         return res.status(400).json({ success: false, error: 'Au moins 1 secteur requis.' })
       }
 
-      const cleanList = list.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim())
+      const cleanList = Array.from(new Set(rawList.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim())))
       const primary = cleanList[0]
 
       await sb.from('companies').update({

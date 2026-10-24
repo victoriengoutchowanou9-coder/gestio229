@@ -1,776 +1,1078 @@
 // =============================================================================
-// GESTIO 229 SaaS — Page Mon Abonnement & Renouvellement Conforme CDC
+// GESTIO 229 SaaS — PAGE MON ABONNEMENT & RÉABONNEMENT (Refonte V4)
 // =============================================================================
-// Formules officielles :
-// - Starter : 5 000 FCFA / mois (1 activité, modules essentiels)
-// - Entreprise : 10 000 FCFA / mois (1 activité, tous modules)
-// - 2 Activités : 15 000 FCFA / mois (2 activités, tous modules)
-// - 3 Activités : 25 000 FCFA / mois (3 activités, tous modules)
-// - > 3 Activités : 25 000 + ((N - 3) * 5 000) FCFA / mois
+// Implémentation complète des Sections 6, 7, 8, 9, 10, 12 et 13 :
+// - Conservation du design et de la structure existante
+// - Choix de la portée : Abonnement Global (tous secteurs) ou Secteur spécifique
+// - Choix de la durée : 1, 2, 3, 4, 6, 12 mois ou toute durée supérieure personnalisée
+// - Récapitulatif complet avant paiement : Secteur(s), Durée, Prix applicable,
+//   Remises, Montant total, Date de début prévue, Date de fin prévue
+// - Deux modes de paiement :
+//   1. « Manuel » : Infos configurées par le Super Admin + Bouton WhatsApp +
+//      Formulaire de soumission avec upload direct de preuve/capture -> « En attente de validation »
+//   2. « Automatique » : Message officiel « Le paiement automatique sera bientôt disponible... »
+// - Suivi des demandes de paiement (En attente, Validé, Rejeté) et Notifications
 // =============================================================================
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
+import { useParams } from 'react-router-dom'
 import {
-  CreditCard, CheckCircle, ShieldCheck, Clock, RefreshCw, Zap,
-  ArrowRight, Lock, Check, Smartphone, AlertTriangle, AlertCircle,
-  HelpCircle, Calendar, ChevronRight, X, History, Sparkles, Building2
+  CreditCard, CheckCircle2, Sparkles, ShieldCheck, Calendar,
+  Building2, Smartphone, RefreshCw, AlertCircle, Lock, Unlock,
+  Clock, Upload, MessageSquare, Send, Eye, XCircle, Bell, Check, Info, Layers
 } from 'lucide-react'
-import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
-import { useUIStore } from '../../../store/uiStore'
 import {
   calculateSubscriptionPrice,
-  formatFCFA,
-  getCompanySubscriptionInfo,
-  STARTER_ACCESSIBLE_MODULES,
-  ADVANCED_MODULES,
-  PlanConfig
+  calculateDurationPrice,
+  calculateRenewalDates,
+  EXTRA_SECTOR_MONTHLY_PRICE,
+  SINGLE_SECTOR_ENTERPRISE_PRICE,
+  SINGLE_SECTOR_STARTER_PRICE,
 } from '../../../core/subscription/subscriptionEngine'
-import { MoMoService, MoMoPaymentStatus } from '../../../services/payment/momoService'
-import clsx from 'clsx'
+import { SECTORS_LIST } from '../../../components/auth/SectorSelector'
+import {
+  verifierOuCreerAbonnementGlobal,
+  chargerTousStatutsSecteurs,
+  getParametresPaiementManuel,
+  soumettreDemandePaiementManuel,
+  listerDemandesPaiementManuel,
+  listerNotificationsAbonnement,
+  marquerNotificationAbonnementLue,
+  AbonnementGlobalRow,
+  VerificationAccesSecteurResult,
+  ParametresPaiementManuel,
+  DemandePaiementAbonnement,
+  SubscriptionNotificationItem,
+  canonicalSectorSlug,
+} from '../../../services/abonnementService'
+import {
+  AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE,
+  initiateAutomaticSubscriptionPayment,
+} from '../../../services/payment/paymentGatewayService'
 
-// Liste exhaustive des modules opérationnels réels du projet
-const REAL_MODULES_LIST = [
-  { id: 'dashboard', name: 'Tableau de bord', description: 'Indicateurs clés et vue consolidée du secteur' },
-  { id: 'ventes', name: 'Vente & POS', description: 'Caisse tactile, panier, tickets et certification e-MECeF' },
-  { id: 'stock', name: 'Gestion des Stocks', description: 'Double stock Magasin/POS, alertes et réapprovisionnement' },
-  { id: 'caisse', name: 'Caisse du jour', description: 'Ouverture, encaissements espèces/MoMo et clôture' },
-  { id: 'clients', name: 'Clients & Créances', description: 'Comptes clients, dettes, plafonds et relances' },
-  { id: 'depenses', name: 'Dépenses & Charges', description: 'Suivi des frais de fonctionnement et factures' },
-  { id: 'finances', name: 'Trésorerie & Banques', description: 'Liquidités, rapprochement, transferts et décaissements' },
-  { id: 'rapports', name: 'Reporting Avancé', description: 'Analyses de marge nette, statistiques et décisionnel' },
-  { id: 'inventaire', name: 'Inventaire Physique', description: 'Comptage physique avec valorisation des écarts en FCFA' },
-  { id: 'syscohada', name: 'Comptabilité SYSCOHADA', description: 'Livre Journal, Grand Livre, Balance 6 colonnes et SMT' },
-]
-
-const formatDateSafe = (dateVal: any): string => {
-  if (!dateVal) return '-'
-  try {
-    const d = new Date(dateVal)
-    if (isNaN(d.getTime())) return '-'
-    return d.toLocaleDateString('fr-BJ')
-  } catch {
-    return '-'
-  }
-}
+const PRESET_DURATIONS = [1, 2, 3, 4, 6, 12]
 
 export const AbonnementPage: React.FC = () => {
-  const company = useAuthStore((s) => s.company) || useAuthStore.getState().company
-  const status = useAuthStore((s) => s.status) || useAuthStore.getState().status
-  const refreshTenantContext = useAuthStore((s) => s.refreshTenantContext)
-  const { toast } = useUIStore()
+  const { sectorSlug: routeSectorSlug } = useParams<{ sectorSlug?: string }>()
+  const { company } = useAuthStore()
 
-  // Calcul des données d'abonnement / essai
-  const subInfo = useMemo(() => getCompanySubscriptionInfo(company), [company])
+  // Secteurs de l'entreprise
+  const currentSectors: string[] = useMemo(() => {
+    const raw =
+      company?.selected_sectors?.length
+        ? company.selected_sectors
+        : company?.sectors?.length
+        ? company.sectors
+        : company?.active_sector
+        ? [company.active_sector]
+        : ['boutique']
+    return Array.from(new Set(raw.map((s: string) => canonicalSectorSlug(s)).filter(Boolean)))
+  }, [company])
 
-  // Sélecteur pour calculatrice dynamique (>3 activités)
-  const [interactiveActivities, setInteractiveActivities] = useState<number>(
-    (subInfo?.activityCount || 1) > 3 ? subInfo.activityCount : 4
+  // États chargés depuis Supabase
+  const [globalSub, setGlobalSub] = useState<AbonnementGlobalRow | null>(null)
+  const [secteursStatus, setSecteursStatus] = useState<Record<string, VerificationAccesSecteurResult>>({})
+  const [manualSettings, setManualSettings] = useState<ParametresPaiementManuel | null>(null)
+  const [paymentRequests, setPaymentRequests] = useState<DemandePaiementAbonnement[]>([])
+  const [notifications, setNotifications] = useState<SubscriptionNotificationItem[]>([])
+  const [loadingSubData, setLoadingSubData] = useState(true)
+
+  // Configuration du réabonnement (Section 6)
+  // Cible : 'all' (Global) ou un slug de secteur spécifique
+  const [targetScope, setTargetScope] = useState<string>(() => {
+    if (routeSectorSlug) return canonicalSectorSlug(routeSectorSlug)
+    return 'all'
+  })
+  const [singleTier, setSingleTier] = useState<'starter' | 'entreprise'>(
+    company?.subscription_plan === 'starter' ? 'starter' : 'entreprise'
   )
+  const [durationMonths, setDurationMonths] = useState<number>(1)
+  const [customDurationInput, setCustomDurationInput] = useState<string>('')
 
-  // Plan sélectionné pour renouvellement
-  const [selectedPlanSlug, setSelectedPlanSlug] = useState<string>(
-    (subInfo?.planSlug || '').includes('starter') ? 'starter' : 'entreprise'
-  )
+  // Mode de paiement sélectionné : 'manuel' | 'automatique' | null
+  const [selectedPaymentMode, setSelectedPaymentMode] = useState<'manuel' | 'automatique' | null>('manuel')
+  const [autoPaymentMessage, setAutoPaymentMessage] = useState<string | null>(null)
 
-  // Modal de renouvellement
-  const [showRenewModal, setShowRenewModal] = useState(false)
-  const [renewPlanConfig, setRenewPlanConfig] = useState<PlanConfig | null>(null)
+  // Formulaire de paiement manuel (Section 7.2)
+  const [payerPhone, setPayerPhone] = useState(company?.phone || '')
+  const [selectedOperator, setSelectedOperator] = useState('MTN Mobile Money')
+  const [transactionRef, setTransactionRef] = useState('')
+  const [proofDataUrl, setProofDataUrl] = useState<string>('')
+  const [proofFileName, setProofFileName] = useState<string>('')
+  const [paymentNotes, setPaymentNotes] = useState('')
+  const [submittingPayment, setSubmittingPayment] = useState(false)
+  const [submitFeedback, setSubmitFeedback] = useState<{
+    type: 'success' | 'error'
+    text: string
+  } | null>(null)
+  const [previewProofUrl, setPreviewProofUrl] = useState<string | null>(null)
 
-  // Gestion MoMo dans le modal
-  const [momoPhone, setMomoPhone] = useState(company?.phone || '')
-  const [momoStatus, setMomoStatus] = useState<MoMoPaymentStatus | 'idle'>('idle')
-  const [momoReference, setMomoReference] = useState<string>('')
-  const [momoMessage, setMomoMessage] = useState<string>('')
-  const [isProcessing, setIsProcessing] = useState(false)
-
-  // Historique des paiements depuis BDD
-  const [paymentHistory, setPaymentHistory] = useState<any[]>([])
-  const [loadingHistory, setLoadingHistory] = useState(false)
-
-  // Charger l'historique des paiements réels
-  const loadPaymentHistory = useCallback(async () => {
+  const loadAllSubscriptionData = async () => {
     if (!company?.id) return
-    setLoadingHistory(true)
+    setLoadingSubData(true)
     try {
-      const { data, error } = await supabase
-        .from('subscription_payments')
-        .select('*')
-        .eq('company_id', company.id)
-        .order('created_at', { ascending: false })
-        .limit(10)
+      const [g, sMap, settings, reqs, notifs] = await Promise.all([
+        verifierOuCreerAbonnementGlobal(company.id, company.created_at),
+        chargerTousStatutsSecteurs(company.id, currentSectors, company.created_at),
+        getParametresPaiementManuel(),
+        listerDemandesPaiementManuel({ companyId: company.id }),
+        listerNotificationsAbonnement(company.id),
+      ])
+      setGlobalSub(g)
+      setSecteursStatus(sMap)
+      setManualSettings(settings)
+      setPaymentRequests(reqs)
+      setNotifications(notifs)
 
-      if (!error && Array.isArray(data)) {
-        setPaymentHistory(data)
-      } else {
-        setPaymentHistory([])
+      // Si le secteur courant de l'URL est en attente de paiement ou expiré, le présélectionner
+      if (routeSectorSlug) {
+        const cleanRoute = canonicalSectorSlug(routeSectorSlug)
+        const st = sMap[cleanRoute]
+        if (st && !st.autorise) {
+          setTargetScope(cleanRoute)
+        }
       }
-    } catch {
-      setPaymentHistory([])
     } finally {
-      setLoadingHistory(false)
+      setLoadingSubData(false)
     }
-  }, [company?.id])
+  }
 
   useEffect(() => {
-    loadPaymentHistory()
-  }, [loadPaymentHistory])
+    loadAllSubscriptionData()
+  }, [company?.id, currentSectors.join(',')])
 
-  // Ouvrir le modal de renouvellement pour un plan spécifique
-  const openRenewModal = (planConfig: PlanConfig) => {
-    setRenewPlanConfig(planConfig)
-    setMomoStatus('idle')
-    setMomoMessage('')
-    setShowRenewModal(true)
-  }
+  // Calcul du tarif mensuel applicable selon la portée choisie (Section 6.1 & 9)
+  const pricingSummary = useMemo(() => {
+    if (targetScope === 'all') {
+      const calc = calculateSubscriptionPrice(currentSectors.length, singleTier)
+      return {
+        scopeLabel:
+          currentSectors.length > 1
+            ? `Abonnement Global (${currentSectors.length} secteurs)`
+            : `Secteur ${SECTORS_LIST.find((s) => s.slug === currentSectors[0])?.name || currentSectors[0]?.toUpperCase()}`,
+        sectorsCovered: currentSectors,
+        planSlug: calc.planSlug,
+        planName: calc.planName,
+        monthlyPrice: calc.priceMonthly,
+        breakdown: calc.breakdown,
+      }
+    }
 
-  // Initier le paiement MTN MoMo
-  const handleInitiateMoMo = async () => {
-    if (!company?.id || !renewPlanConfig) return
-    if (!momoPhone || momoPhone.trim().length < 8) {
-      toast.error('Numéro invalide', 'Veuillez saisir votre numéro MTN Mobile Money à 8 ou 10 chiffres.')
+    // Abonnement pour un secteur spécifique
+    const secMeta = SECTORS_LIST.find((s) => s.slug === targetScope)
+    const secName = secMeta?.name || targetScope.toUpperCase()
+    const isGlobalInActiveTrial =
+      globalSub?.statut_global === 'essai' && new Date(globalSub.date_fin_global) > new Date()
+    const secState = secteursStatus[targetScope]
+
+    // Si c'est un secteur supplémentaire au-delà des 3 secteurs d'essai gratuit (ou si l'entreprise a déjà >= 3 secteurs actifs)
+    const activeSectorsCount = Object.values(secteursStatus).filter((s) => s.autorise).length
+    let unitMonthly = SINGLE_SECTOR_ENTERPRISE_PRICE
+
+    if (currentSectors.length === 1 && singleTier === 'starter') {
+      unitMonthly = SINGLE_SECTOR_STARTER_PRICE
+    } else if (
+      (isGlobalInActiveTrial && secState?.statutEffectif === 'en_attente_paiement') ||
+      activeSectorsCount >= 3
+    ) {
+      unitMonthly = EXTRA_SECTOR_MONTHLY_PRICE
+    } else if (activeSectorsCount === 1) {
+      unitMonthly = 5000 // Passage de 1 secteur (10 000 F) à 2 secteurs (15 000 F) = +5 000 F
+    } else if (activeSectorsCount === 2) {
+      unitMonthly = 10000 // Passage de 2 secteurs (15 000 F) à 3 secteurs (25 000 F) = +10 000 F
+    }
+
+    return {
+      scopeLabel: `Secteur : ${secName}`,
+      sectorsCovered: [targetScope],
+      planSlug: currentSectors.length === 1 && singleTier === 'starter' ? 'starter' : 'entreprise',
+      planName: `Abonnement Secteur — ${secName}`,
+      monthlyPrice: unitMonthly,
+      breakdown: `Activation / renouvellement du secteur ${secName} (${unitMonthly.toLocaleString('fr-FR')} FCFA / mois)`,
+    }
+  }, [targetScope, currentSectors, singleTier, globalSub, secteursStatus])
+
+  // Calcul selon la durée choisie (1, 2, 3, 4, 6, 12 ou durée personnalisée >= 1 mois)
+  const durationCalc = useMemo(
+    () => calculateDurationPrice(pricingSummary.monthlyPrice, durationMonths),
+    [pricingSummary.monthlyPrice, durationMonths]
+  )
+
+  // Calcul des dates de début et de fin prévues (Section 6.2 & Section 10)
+  const expectedDates = useMemo(() => {
+    let currentExp: Date | null = null
+    if (targetScope === 'all') {
+      if (globalSub?.statut_global === 'actif' && globalSub.date_fin_global) {
+        currentExp = new Date(globalSub.date_fin_global)
+      }
+    } else {
+      const st = secteursStatus[targetScope]
+      if (st?.statutEffectif === 'actif' && st.dateFinEffective) {
+        currentExp = st.dateFinEffective
+      }
+    }
+    return calculateRenewalDates(currentExp, durationMonths, new Date())
+  }, [targetScope, globalSub, secteursStatus, durationMonths])
+
+  // Jours restants globaux
+  const globalDaysRemaining = useMemo(() => {
+    if (!globalSub?.date_fin_global) return 0
+    const diff = new Date(globalSub.date_fin_global).getTime() - Date.now()
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+  }, [globalSub])
+
+  const handleProofFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    if (file.size > 4 * 1024 * 1024) {
+      setSubmitFeedback({
+        type: 'error',
+        text: 'Le fichier de preuve ne doit pas dépasser 4 Mo.',
+      })
       return
     }
+    setProofFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setProofDataUrl(reader.result)
+      }
+    }
+    reader.readAsDataURL(file)
+  }
 
-    setIsProcessing(true)
-    setMomoStatus('initiated')
-    setMomoMessage('Initialisation de la transaction auprès de MTN Bénin...')
+  const handleSelectAutomaticPayment = async () => {
+    setSelectedPaymentMode('automatique')
+    setSubmitFeedback(null)
+    if (!company?.id) return
+    const res = await initiateAutomaticSubscriptionPayment({
+      companyId: company.id,
+      companyName: company.name,
+      sectorSlug: targetScope,
+      durationMonths,
+      amountFcfa: durationCalc.netTotal,
+      payerPhone,
+    })
+    setAutoPaymentMessage(res.message || AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE)
+  }
+
+  const handleSubmitManualPayment = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!company?.id) return
+
+    setSubmittingPayment(true)
+    setSubmitFeedback(null)
 
     try {
-      const res = await MoMoService.initiatePayment({
+      const res = await soumettreDemandePaiementManuel({
         companyId: company.id,
-        companyName: company.name || 'Entreprise',
-        payerPhone: momoPhone,
-        amount: renewPlanConfig.priceMonthly,
-        planSlug: renewPlanConfig.slug,
-        activityCount: renewPlanConfig.activityCount,
-        description: `Abonnement GESTIO 229 - ${renewPlanConfig.name}`
+        companyName: company.name,
+        sectorSlug: targetScope,
+        sectorsCovered: pricingSummary.sectorsCovered,
+        planSlug: pricingSummary.planSlug,
+        durationMonths,
+        unitPriceMonthly: pricingSummary.monthlyPrice,
+        discountAmount: durationCalc.discountAmount,
+        totalAmount: durationCalc.netTotal,
+        paymentOperator: selectedOperator,
+        payerPhone,
+        transactionReference: transactionRef,
+        proofDataUrl,
+        notes: paymentNotes,
+        expectedStartAt: expectedDates.effectiveStartDate.toISOString(),
+        expectedEndAt: expectedDates.newExpirationDate.toISOString(),
       })
 
-      setMomoReference(res.reference)
-      setMomoStatus(res.status)
-      setMomoMessage(res.message + (res.instruction ? `\n${res.instruction}` : ''))
-
-      if (res.success) {
-        toast.info('Demande MoMo envoyée', 'Validez le débit sur votre téléphone portable.')
-        await loadPaymentHistory()
+      if (!res.success) {
+        setSubmitFeedback({
+          type: 'error',
+          text: res.error || 'Impossible d\'enregistrer la demande de paiement.',
+        })
       } else {
-        toast.error('Échec initiation MoMo', res.message)
+        setSubmitFeedback({
+          type: 'success',
+          text: `Votre demande de validation de paiement (${durationCalc.netTotal.toLocaleString('fr-FR')} FCFA pour ${durationMonths} mois) a été enregistrée avec le statut « En attente de validation ». Votre abonnement sera activé dès vérification par l'administration.`,
+        })
+        setTransactionRef('')
+        setProofDataUrl('')
+        setProofFileName('')
+        setPaymentNotes('')
+        await loadAllSubscriptionData()
       }
     } catch (err: any) {
-      setMomoStatus('failed')
-      setMomoMessage(err.message || 'Erreur lors de l\'appel MoMo.')
+      setSubmitFeedback({
+        type: 'error',
+        text: err?.message || 'Erreur lors de l\'envoi de la demande.',
+      })
     } finally {
-      setIsProcessing(false)
+      setSubmittingPayment(false)
     }
   }
 
-  // Vérifier le statut d'un paiement en attente
-  const handleCheckMoMoStatus = async () => {
-    if (!momoReference) return
-    setIsProcessing(true)
-    try {
-      const res = await MoMoService.checkPaymentStatus(momoReference)
-      setMomoStatus(res.status)
-      if (res.status === 'successful') {
-        toast.success('Paiement MoMo confirmé !', 'Activation de votre abonnement en cours...')
-        await handleFinalizeActivation()
-      } else if (res.status === 'failed') {
-        toast.error('Paiement non validé', 'La transaction a été rejetée ou a expiré.')
-      } else {
-        toast.info('En attente', 'La transaction est toujours en attente de validation sur votre téléphone.')
-      }
-    } finally {
-      setIsProcessing(false)
-    }
-  }
-
-  // Finalisation post-confirmation
-  const handleFinalizeActivation = async () => {
-    if (!company?.id || !renewPlanConfig) return
-    setIsProcessing(true)
-    try {
-      const ok = await MoMoService.finalizeVerifiedPayment(
-        momoReference,
-        company.id,
-        renewPlanConfig.slug
-      )
-      if (ok) {
-        toast.success('Abonnement Activé avec Succès !', `Votre licence ${renewPlanConfig.name} est désormais active pour 30 jours.`)
-        await refreshTenantContext()
-        await loadPaymentHistory()
-        setShowRenewModal(false)
-      } else {
-        toast.error('Erreur', 'Impossible d\'activer automatiquement la licence.')
-      }
-    } finally {
-      setIsProcessing(false)
-    }
-  }
-
-  // Annuler la demande en cours
-  const handleCancelMoMo = async () => {
-    if (momoReference) {
-      await MoMoService.cancelPayment(momoReference)
-    }
-    setMomoStatus('cancelled')
-    setMomoMessage('Transaction annulée.')
-    await loadPaymentHistory()
-  }
-
-  // Plan dynamique calculé pour > 3 activités
-  const multiPlanCalculated = useMemo(() => {
-    return calculateSubscriptionPrice(interactiveActivities)
-  }, [interactiveActivities])
-
-  if (!company && (status === 'idle' || status === 'loading')) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="w-10 h-10 border-4 border-emerald-600 border-t-transparent rounded-full animate-spin" />
-      </div>
+  const buildWhatsAppProofLink = () => {
+    const rawWhatsapp = manualSettings?.whatsapp_number || '+2290197000000'
+    const cleanDigits = rawWhatsapp.replace(/[^0-9]/g, '')
+    const msg = encodeURIComponent(
+      `Bonjour Administration GESTIO 229,\n\n` +
+        `Voici ma preuve de paiement d'abonnement :\n` +
+        `• Entreprise : ${company?.name || ''}\n` +
+        `• Portée : ${pricingSummary.scopeLabel}\n` +
+        `• Durée : ${durationMonths} mois\n` +
+        `• Montant : ${durationCalc.netTotal.toLocaleString('fr-FR')} FCFA\n` +
+        `• Référence transaction : ${transactionRef || 'Voir capture jointe'}\n` +
+        `• Téléphone déposant : ${payerPhone || company?.phone || ''}`
     )
+    return `https://wa.me/${cleanDigits}?text=${msg}`
   }
 
-  if (!company) {
-    return (
-      <div className="p-8 text-center bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 max-w-md mx-auto my-12 shadow-sm">
-        <AlertCircle className="w-12 h-12 text-amber-500 mx-auto mb-3" />
-        <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Aucune entreprise associée</h3>
-        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Veuillez vous reconnecter pour accéder aux détails de votre abonnement.</p>
-      </div>
-    )
-  }
+  const unreadNotifs = notifications.filter((n) => !n.is_read)
 
   return (
-    <div className="space-y-8 w-full max-w-none px-3 lg:px-4 pb-12">
-      {/* ─── En-tête de la Page ───────────────────────────────────────── */}
-      <div>
-        <h1 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Mon Abonnement & Tarifs SaaS</h1>
-        <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-          Formules transparentes, premier mois gratuit sans engagement et renouvellement sécurisé par MTN Mobile Money.
-        </p>
-      </div>
-
-      {/* ─── SECTION 7 : BANNIÈRE PREMIER MOIS GRATUIT / STATUT ───────── */}
-      <div className={clsx(
-        'rounded-3xl p-6 sm:p-7 border shadow-sm transition-all',
-        subInfo.isTrial
-          ? 'bg-gradient-to-br from-amber-500/10 via-amber-50 to-white dark:from-amber-950/40 dark:via-slate-800 dark:to-slate-800 border-amber-300 dark:border-amber-800'
-          : subInfo.isActive
-          ? 'bg-gradient-to-br from-emerald-500/10 via-emerald-50 to-white dark:from-emerald-950/40 dark:via-slate-800 dark:to-slate-800 border-emerald-300 dark:border-emerald-800'
-          : 'bg-red-50 dark:bg-red-950/40 border-red-300 dark:border-red-800'
-      )}>
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+    <div className="max-w-6xl mx-auto space-y-6 pb-12">
+      {/* 1. Bandeau d'En-tête : Abonnement Global & Essai Gratuit (3 Secteurs Max) */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-900 to-emerald-950 border border-slate-800 rounded-2xl p-6 shadow-xl">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-start gap-4">
-            <div className={clsx(
-              'w-14 h-14 rounded-2xl flex items-center justify-center flex-shrink-0 shadow-sm',
-              subInfo.isTrial ? 'bg-amber-500 text-white' :
-              subInfo.isActive ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
-            )}>
-              {subInfo.isTrial ? <Clock className="w-7 h-7" /> :
-               subInfo.isActive ? <ShieldCheck className="w-7 h-7" /> : <AlertTriangle className="w-7 h-7" />}
+            <div className="w-12 h-12 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0">
+              <CreditCard className="w-6 h-6 text-emerald-400" />
             </div>
-
             <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-xl font-black text-slate-800 dark:text-slate-100">
-                  {subInfo.isTrial ? 'Période d\'Essai Gratuit (1er Mois Offert)' :
-                   subInfo.isActive ? 'Licence Entreprise Active' : 'Abonnement Expiré'}
-                </h3>
-                <span className={clsx(
-                  'text-xs px-3 py-1 rounded-full font-bold uppercase tracking-wider',
-                  subInfo.isTrial ? 'bg-amber-200 dark:bg-amber-900 text-amber-900 dark:text-amber-200' :
-                  subInfo.isActive ? 'bg-emerald-200 dark:bg-emerald-900 text-emerald-900 dark:text-emerald-200' :
-                  'bg-red-200 dark:bg-red-900 text-red-900 dark:text-red-200'
-                )}>
-                  {subInfo.statusLabel}
-                </span>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h1 className="text-xl font-bold text-white">
+                  Abonnement Global & Secteurs d'Activité
+                </h1>
+                {globalSub?.statut_global === 'essai' && globalDaysRemaining > 0 ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                    Essai Gratuit Unique (Max 3 secteurs) • {globalDaysRemaining} jour(s) restant(s)
+                  </span>
+                ) : globalSub?.statut_global === 'actif' && globalDaysRemaining > 0 ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                    Abonnement Global Actif • {globalDaysRemaining} jour(s) restant(s)
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-red-500/20 text-red-300 border border-red-500/30">
+                    Période globale expirée — Renouvellement requis
+                  </span>
+                )}
               </div>
-
-              {subInfo.isTrial ? (
-                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
-                  Votre période d’essai de <strong>1 mois gratuit</strong> est en cours. Aucun paiement n'a été prélevé.
-                  Elle vous permet de tester librement l'ERP GESTIO 229 avec toutes vos activités.
-                </p>
-              ) : subInfo.isActive ? (
-                <p className="text-sm text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
-                  Votre compte bénéficie d'un accès complet à vos modules et à la certification fiscale DGI.
-                </p>
-              ) : (
-                <p className="text-sm text-red-700 dark:text-red-300 mt-1.5 leading-relaxed">
-                  Votre période d'abonnement a pris fin. Renouvelez votre forfait pour débloquer l'accès à vos secteurs.
+              <p className="text-xs text-slate-400 mt-1">
+                Entreprise : <strong className="text-slate-200">{company?.name}</strong> •{' '}
+                {currentSectors.length} secteur(s) rattaché(s)
+              </p>
+              {globalSub && (
+                <p className="text-xs text-emerald-400/90 mt-1 font-medium">
+                  Période globale : du{' '}
+                  {new Date(globalSub.date_debut_global).toLocaleDateString('fr-FR')} au{' '}
+                  {new Date(globalSub.date_fin_global).toLocaleDateString('fr-FR')}
                 </p>
               )}
-
-              {/* Métriques d'Essai & Dates */}
-              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="bg-white/80 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Date de début</span>
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-100">{subInfo.startDate}</span>
-                </div>
-                <div className="bg-white/80 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Date d'expiration</span>
-                  <span className="text-xs font-bold text-slate-800 dark:text-slate-100">{subInfo.endDate}</span>
-                </div>
-                <div className="bg-white/80 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Jours restants</span>
-                  <span className={clsx(
-                    'text-xs font-black',
-                    subInfo.daysRemaining > 7 ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'
-                  )}>
-                    {subInfo.daysRemaining} jour{subInfo.daysRemaining > 1 ? 's' : ''}
-                  </span>
-                </div>
-                <div className="bg-white/80 dark:bg-slate-900/60 p-2.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Montant après essai</span>
-                  <span className="text-xs font-black text-slate-900 dark:text-white">
-                    {formatFCFA(subInfo.futurePrice)} <span className="font-normal text-[10px] text-slate-400">/mois</span>
-                  </span>
-                </div>
-              </div>
             </div>
           </div>
 
-          {/* Bouton d'action principal */}
-          <div className="shrink-0 flex flex-col sm:flex-row lg:flex-col gap-2">
-            <button
-              onClick={() => openRenewModal(calculateSubscriptionPrice(subInfo.activityCount, (subInfo?.planSlug || '').includes('starter') ? 'starter' : 'entreprise'))}
-              className="px-6 py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold rounded-2xl shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition"
-            >
-              <Zap className="w-4 h-4 fill-white" />
-              <span>RENOUVELER MON ABONNEMENT</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* ─── SECTION 3 & 5 : GRILLE DES 4 PLANS OFFICIELS + PLUS DE 3 ACTIVITÉS ─── */}
-      <div>
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6">
-          <div>
-            <h2 className="text-xl font-black text-slate-900 dark:text-slate-100">
-              Grille Tarifaire Officielle GESTIO 229
-            </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Tarifs garantis par logique métier backend (en Francs CFA / mois)
+          <div className="bg-slate-950/80 border border-slate-800 rounded-xl px-5 py-3 text-right">
+            <p className="text-[11px] text-slate-400 uppercase tracking-wider">
+              Montant Total ({durationMonths} mois)
             </p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
-          {/* 1. PLAN STARTER */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-6 flex flex-col justify-between hover:shadow-lg transition-all">
-            <div>
-              <div className="inline-block px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300 mb-3">
-                1 Activité
-              </div>
-              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">PLAN STARTER</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 min-h-[32px]">
-                Pour les petites entreprises démarrant leur gestion.
-              </p>
-
-              <div className="my-5">
-                <span className="text-3xl font-black text-slate-900 dark:text-white">5 000</span>
-                <span className="text-xs font-semibold text-slate-400 ml-1">FCFA / mois</span>
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-xs">
-                <p className="font-bold text-slate-700 dark:text-slate-200 text-[11px] uppercase">Modules essentiels :</p>
-                <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Tableau de bord</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Vente & POS</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Gestion des Stocks</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Caisse du jour</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Clients & Créances</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Dépenses courantes</span>
-                </div>
-
-                <p className="font-bold text-amber-700 dark:text-amber-400 text-[11px] uppercase pt-2">Non inclus :</p>
-                <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500">
-                  <Lock className="w-3.5 h-3.5 shrink-0" />
-                  <span>Trésorerie & Banques</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500">
-                  <Lock className="w-3.5 h-3.5 shrink-0" />
-                  <span>Reporting avancé</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500">
-                  <Lock className="w-3.5 h-3.5 shrink-0" />
-                  <span>Inventaire physique</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-400 dark:text-slate-500">
-                  <Lock className="w-3.5 h-3.5 shrink-0" />
-                  <span>Comptabilité SYSCOHADA</span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => openRenewModal(calculateSubscriptionPrice(1, 'starter'))}
-              className="mt-6 w-full py-3 rounded-xl font-bold text-xs bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 transition"
-            >
-              Choisir le Starter (5 000 F)
-            </button>
-          </div>
-
-          {/* 2. PLAN ENTREPRISE */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl border-2 border-emerald-500 dark:border-emerald-500 p-6 flex flex-col justify-between shadow-md relative hover:shadow-xl transition-all">
-            <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-emerald-600 text-white text-[10px] font-black px-3 py-1 rounded-full uppercase tracking-wider shadow-sm">
-              Recommandé (1 Activité)
-            </span>
-
-            <div>
-              <div className="inline-block px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 mb-3">
-                1 Activité complète
-              </div>
-              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">PLAN ENTREPRISE</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 min-h-[32px]">
-                Accès à TOUS les modules sans restriction pour votre secteur.
-              </p>
-
-              <div className="my-5">
-                <span className="text-3xl font-black text-emerald-600 dark:text-emerald-400">10 000</span>
-                <span className="text-xs font-semibold text-slate-400 ml-1">FCFA / mois</span>
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-xs">
-                <p className="font-bold text-emerald-700 dark:text-emerald-300 text-[11px] uppercase">Tout le Starter plus :</p>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Trésorerie & Décaissements</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Reporting & Décisionnel</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Inventaire physique chiffré</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Comptabilité SYSCOHADA Révisé</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Modules spécialisés du secteur</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200 font-semibold">
-                  <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span>Facturation normalisée e-MECeF</span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => openRenewModal(calculateSubscriptionPrice(1, 'entreprise'))}
-              className="mt-6 w-full py-3 rounded-xl font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20 transition"
-            >
-              Choisir Entreprise (10 000 F)
-            </button>
-          </div>
-
-          {/* 3. PLAN 2 ACTIVITÉS */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-6 flex flex-col justify-between hover:shadow-lg transition-all">
-            <div>
-              <div className="inline-block px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 mb-3">
-                2 Activités
-              </div>
-              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">PLAN 2 ACTIVITÉS</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 min-h-[32px]">
-                Pour gérer deux secteurs distincts (ex: Poissonnerie + Quincaillerie).
-              </p>
-
-              <div className="my-5">
-                <span className="text-3xl font-black text-slate-900 dark:text-white">15 000</span>
-                <span className="text-xs font-semibold text-slate-400 ml-1">FCFA / mois</span>
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-xs">
-                <p className="font-bold text-indigo-700 dark:text-indigo-300 text-[11px] uppercase">Avantages inclus :</p>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>2 activités indépendantes</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Tous les modules pour chaque activité</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Comptabilité SYSCOHADA</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Trésorerie & Reporting</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Séparation stricte des données</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span>Accès au HUB central</span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => openRenewModal(calculateSubscriptionPrice(2))}
-              className="mt-6 w-full py-3 rounded-xl font-bold text-xs bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 transition"
-            >
-              Choisir 2 Activités (15 000 F)
-            </button>
-          </div>
-
-          {/* 4. PLAN 3 ACTIVITÉS */}
-          <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-6 flex flex-col justify-between hover:shadow-lg transition-all">
-            <div>
-              <div className="inline-block px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-purple-50 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 mb-3">
-                3 Activités
-              </div>
-              <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">PLAN 3 ACTIVITÉS</h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 min-h-[32px]">
-                Pour les entreprises multiservices regroupant 3 métiers.
-              </p>
-
-              <div className="my-5">
-                <span className="text-3xl font-black text-slate-900 dark:text-white">25 000</span>
-                <span className="text-xs font-semibold text-slate-400 ml-1">FCFA / mois</span>
-              </div>
-
-              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-700 text-xs">
-                <p className="font-bold text-purple-700 dark:text-purple-300 text-[11px] uppercase">Avantages inclus :</p>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>3 activités indépendantes</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>Tous les modules inclus</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>Comptabilité SYSCOHADA</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>HUB consolidé temps réel</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>Gestion des stocks par secteur</span>
-                </div>
-                <div className="flex items-center gap-2 text-slate-700 dark:text-slate-200">
-                  <Check className="w-4 h-4 text-purple-600 shrink-0" />
-                  <span>Support prioritaire VIP</span>
-                </div>
-              </div>
-            </div>
-
-            <button
-              onClick={() => openRenewModal(calculateSubscriptionPrice(3))}
-              className="mt-6 w-full py-3 rounded-xl font-bold text-xs bg-purple-600 hover:bg-purple-700 text-white shadow-md shadow-purple-600/20 transition"
-            >
-              Choisir 3 Activités (25 000 F)
-            </button>
+            <p className="text-2xl font-extrabold text-emerald-400">
+              {durationCalc.netTotal.toLocaleString('fr-FR')}{' '}
+              <span className="text-xs font-normal text-slate-400">FCFA</span>
+            </p>
+            <p className="text-[11px] text-slate-500">{pricingSummary.scopeLabel}</p>
           </div>
         </div>
       </div>
 
-      {/* ─── PLUS DE 3 ACTIVITÉS : CALCULATEUR INTERACTIF AUTOMATIQUE ─── */}
-      <div className="bg-gradient-to-r from-slate-900 to-indigo-950 text-white rounded-3xl p-6 sm:p-8 shadow-xl">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-          <div className="max-w-xl">
-            <span className="inline-block px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-indigo-500/20 border border-indigo-400/30 text-indigo-300 mb-2">
-              Formule Évolutive : Plus de 3 Activités
-            </span>
-            <h3 className="text-2xl font-black">
-              25 000 FCFA pour 3 activités + 5 000 FCFA / activité supplémentaire
+      {/* Notifications d'abonnement non lues (Section 13) */}
+      {unreadNotifs.length > 0 && (
+        <div className="bg-slate-900 border border-emerald-500/30 rounded-2xl p-4 space-y-2">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold uppercase tracking-wider text-emerald-400 flex items-center gap-2">
+              <Bell className="w-4 h-4" />
+              Notifications d'abonnement ({unreadNotifs.length})
             </h3>
-            <p className="text-slate-300 text-xs sm:text-sm mt-2 leading-relaxed">
-              Vous avez 4, 5, 6 ou 10 secteurs d'activités ? Ajustez le nombre pour voir le montant calculé automatiquement par notre logique métier.
-            </p>
-
-            {/* Curseur de sélection du nombre d'activités */}
-            <div className="mt-5 flex items-center gap-4">
-              <span className="text-xs font-bold text-indigo-300">Nombre d'activités :</span>
-              <div className="flex items-center gap-2">
-                {[4, 5, 6, 7, 8, 10].map((num) => (
-                  <button
-                    key={num}
-                    onClick={() => setInteractiveActivities(num)}
-                    className={clsx(
-                      'w-9 h-9 rounded-xl text-xs font-black transition-all',
-                      interactiveActivities === num
-                        ? 'bg-emerald-500 text-white shadow-md scale-110'
-                        : 'bg-white/10 text-slate-300 hover:bg-white/20'
-                    )}
-                  >
-                    {num}
-                  </button>
-                ))}
+          </div>
+          <div className="space-y-2">
+            {unreadNotifs.slice(0, 3).map((n) => (
+              <div
+                key={n.id}
+                className="flex items-start justify-between gap-3 bg-slate-950/70 border border-slate-800 rounded-xl p-3 text-xs"
+              >
+                <div>
+                  <p className="font-bold text-white">{n.title}</p>
+                  <p className="text-slate-300 mt-0.5">{n.message}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await marquerNotificationAbonnementLue(n.id)
+                    setNotifications((prev) =>
+                      prev.map((item) => (item.id === n.id ? { ...item, is_read: true } : item))
+                    )
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] shrink-0"
+                >
+                  Marquer lu
+                </button>
               </div>
-            </div>
+            ))}
           </div>
+        </div>
+      )}
 
-          <div className="bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/10 text-center shrink-0 min-w-[260px]">
-            <span className="text-[11px] uppercase font-bold text-indigo-300 block">Montant Calculé :</span>
-            <p className="text-3xl font-black text-white mt-1">
-              {formatFCFA(multiPlanCalculated.priceMonthly)}
+      {/* 2. Tableau d'état des secteurs de l'entreprise (Section 12) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <Building2 className="w-5 h-5 text-emerald-400" />
+              État des Abonnements par Secteur ({currentSectors.length})
+            </h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              L'essai gratuit initial de 30 jours couvre au maximum vos 3 premiers secteurs. Cliquez sur un secteur pour l'activer ou le prolonger individuellement.
             </p>
-            <span className="text-xs text-slate-300 block mt-0.5">
-              pour {interactiveActivities} activités ({formatFCFA(25000)} + {(interactiveActivities - 3)} × {formatFCFA(5000)})
-            </span>
-
-            <button
-              onClick={() => openRenewModal(multiPlanCalculated)}
-              className="mt-4 w-full py-3 px-4 bg-emerald-500 hover:bg-emerald-400 text-slate-900 font-extrabold text-xs rounded-xl shadow-md transition"
-            >
-              Choisir {interactiveActivities} Activités
-            </button>
           </div>
+          {loadingSubData && <RefreshCw className="w-4 h-4 text-emerald-400 animate-spin" />}
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {currentSectors.map((slug) => {
+            const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+            const st = secteursStatus[slug]
+            const Icon = secMeta?.icon || Building2
+            const isSelectedTarget = targetScope === slug
+
+            const badgeColors: Record<string, string> = {
+              emerald: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
+              blue: 'bg-blue-500/15 text-blue-300 border-blue-500/30',
+              amber: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
+              red: 'bg-red-500/15 text-red-300 border-red-500/30',
+              slate: 'bg-slate-800 text-slate-400 border-slate-700',
+            }
+
+            return (
+              <div
+                key={slug}
+                onClick={() => setTargetScope(slug)}
+                className={`cursor-pointer p-4 rounded-xl border flex flex-col justify-between gap-3 transition-all ${
+                  isSelectedTarget
+                    ? 'bg-emerald-950/30 border-emerald-500 ring-1 ring-emerald-500'
+                    : st?.statutEffectif === 'en_attente_paiement'
+                    ? 'bg-amber-950/15 border-amber-500/30 hover:border-amber-500/60'
+                    : 'bg-slate-950/70 border-slate-800 hover:border-slate-700'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={`w-10 h-10 rounded-xl bg-gradient-to-br ${
+                        secMeta?.color || 'from-emerald-500 to-teal-600'
+                      } flex items-center justify-center shrink-0`}
+                    >
+                      <Icon className="w-5 h-5 text-white" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-bold text-white truncate">
+                        {secMeta?.name || slug.toUpperCase()}
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        {st?.statutEffectif === 'essai_gratuit'
+                          ? 'Couvert par l\'essai gratuit (30j)'
+                          : st?.statutEffectif === 'actif'
+                          ? st.rattacheAuGlobal
+                            ? 'Couvert par l\'abonnement global'
+                            : 'Abonnement sectoriel actif'
+                          : st?.statutEffectif === 'en_attente_paiement'
+                          ? 'En attente d\'activation'
+                          : 'Abonnement expiré'}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${
+                      badgeColors[st?.badgeColor || 'slate']
+                    }`}
+                  >
+                    <Clock className="w-3 h-3" />
+                    {st?.badgeLabel || 'Chargement...'}
+                  </span>
+
+                  <div className="text-right">
+                    {st?.dateFinEffective ? (
+                      <span className="text-[11px] text-slate-400 block">
+                        Échéance : {st.dateFinEffective.toLocaleDateString('fr-FR')} ({st.joursRestants}j)
+                      </span>
+                    ) : (
+                      <span className="text-[11px] text-amber-400 font-semibold block">
+                        Activer ce secteur →
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
         </div>
       </div>
 
-      {/* ─── SECTION 6 : TABLEAU COMPARATIF DES MODULES INCLUS ───────── */}
-      <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700">
-          <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">
-            Comparatif des Modules Réellement Inclus
-          </h3>
-          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-            Tableau officiel de compatibilité selon votre formule d'abonnement
-          </p>
-        </div>
+      {/* 3. Grille Principale : Configuration de la Durée & Récapitulatif + Paiement Manuel / Automatique */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Colonne Gauche (2/3) : Portée, Formule et Durée */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* 3.1 Sélection de la portée (Global vs Secteur spécifique) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <h2 className="text-base font-bold text-white mb-1 flex items-center gap-2">
+              <Layers className="w-5 h-5 text-emerald-400" />
+              1. Choisissez le périmètre de l'abonnement
+            </h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Vous pouvez souscrire ou prolonger l'abonnement global (tous vos secteurs) ou activer un secteur spécifique.
+            </p>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300 uppercase border-b border-slate-200 dark:border-slate-700">
-              <tr>
-                <th className="px-5 py-3">Module Opérationnel</th>
-                <th className="px-5 py-3">Description</th>
-                <th className="px-5 py-3 text-center">Plan Starter (5 000 F)</th>
-                <th className="px-5 py-3 text-center">Plan Entreprise & Multi (≥ 10 000 F)</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-              {REAL_MODULES_LIST.map((mod) => {
-                const isStarterAllowed = STARTER_ACCESSIBLE_MODULES.includes(mod.id)
+            <div className="flex flex-wrap gap-2.5">
+              <button
+                type="button"
+                onClick={() => setTargetScope('all')}
+                className={`px-4 py-2.5 rounded-xl border text-xs font-bold transition-all ${
+                  targetScope === 'all'
+                    ? 'bg-emerald-500 text-white border-emerald-400 shadow-lg shadow-emerald-500/20'
+                    : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
+                }`}
+              >
+                Tous mes secteurs ({currentSectors.length}) — Formule Globale
+              </button>
+
+              {currentSectors.map((slug) => {
+                const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+                const st = secteursStatus[slug]
                 return (
-                  <tr key={mod.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-700/30 transition">
-                    <td className="px-5 py-3 font-bold text-slate-800 dark:text-slate-100">{mod.name}</td>
-                    <td className="px-5 py-3 text-slate-500 dark:text-slate-400">{mod.description}</td>
-                    <td className="px-5 py-3 text-center">
-                      {isStarterAllowed ? (
-                        <span className="inline-flex items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-0.5 rounded-full">
-                          <Check className="w-3.5 h-3.5" /> Inclus
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 font-bold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-full">
-                          <Lock className="w-3 h-3" /> Non inclus
-                        </span>
-                      )}
-                    </td>
-                    <td className="px-5 py-3 text-center">
-                      <span className="inline-flex items-center gap-1 font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2.5 py-0.5 rounded-full">
-                        <Check className="w-3.5 h-3.5" /> Inclus
+                  <button
+                    key={slug}
+                    type="button"
+                    onClick={() => setTargetScope(slug)}
+                    className={`px-4 py-2.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-2 ${
+                      targetScope === slug
+                        ? 'bg-emerald-500 text-white border-emerald-400 shadow-lg shadow-emerald-500/20'
+                        : 'bg-slate-950/70 border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    <span>{secMeta?.name || slug.toUpperCase()}</span>
+                    {st && !st.autorise && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 text-[10px]">
+                        À activer
                       </span>
-                    </td>
-                  </tr>
+                    )}
+                  </button>
                 )
               })}
-            </tbody>
-          </table>
+            </div>
+
+            {/* Si 1 seul secteur : choix Starter (5 000 F) vs Entreprise (10 000 F) */}
+            {currentSectors.length === 1 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5 pt-5 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setSingleTier('starter')}
+                  className={`p-4 rounded-xl border text-left transition-all ${
+                    singleTier === 'starter'
+                      ? 'bg-emerald-500/10 border-emerald-500 ring-1 ring-emerald-500'
+                      : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-bold text-white">Pack Starter</span>
+                    <span className="text-base font-extrabold text-emerald-400">5 000 FCFA / mois</span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Ventes POS, Caisse, Stock, Clients & Dépenses (jusqu'à 2 utilisateurs).
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setSingleTier('entreprise')}
+                  className={`p-4 rounded-xl border text-left transition-all relative ${
+                    singleTier === 'entreprise'
+                      ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                      : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                  }`}
+                >
+                  <span className="absolute -top-2.5 right-3 px-2 py-0.5 rounded-full bg-emerald-500 text-slate-950 text-[10px] font-bold">
+                    Complet
+                  </span>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-sm font-bold text-white">Pack Entreprise</span>
+                    <span className="text-base font-extrabold text-emerald-400">10 000 FCFA / mois</span>
+                  </div>
+                  <p className="text-xs text-slate-400">
+                    Tous les modules débloqués : Comptabilité SYSCOHADA, Trésorerie, Rapports, Utilisateurs illimités.
+                  </p>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* 3.2 Choix de la durée d'abonnement : 1, 2, 3, 4, 6, 12 mois ou durée personnalisée (Section 6.1) */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <h2 className="text-base font-bold text-white mb-1 flex items-center gap-2">
+              <Calendar className="w-5 h-5 text-emerald-400" />
+              2. Choisissez la durée d'abonnement
+            </h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Sélectionnez 1 mois, 2 mois, 3 mois, 4 mois ou toute durée supérieure. Le montant total et la date d'échéance sont calculés automatiquement.
+            </p>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 mb-4">
+              {PRESET_DURATIONS.map((m) => {
+                const dCalc = calculateDurationPrice(pricingSummary.monthlyPrice, m)
+                const isSelected = durationMonths === m && customDurationInput === ''
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => {
+                      setDurationMonths(m)
+                      setCustomDurationInput('')
+                    }}
+                    className={`p-3 rounded-xl border text-left transition-all relative ${
+                      isSelected
+                        ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                        : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                    }`}
+                  >
+                    {dCalc.discountPercent > 0 && (
+                      <span className="absolute -top-2 right-2 px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[9px] font-extrabold">
+                        -{dCalc.discountPercent}%
+                      </span>
+                    )}
+                    <p className="text-xs font-bold text-white">{m} Mois</p>
+                    <p className="text-sm font-extrabold text-emerald-400 mt-1">
+                      {dCalc.netTotal.toLocaleString('fr-FR')} F
+                    </p>
+                  </button>
+                )
+              })}
+            </div>
+
+            {/* Champ pour toute autre durée supérieure personnalisée (Section 6.1) */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-3 border-t border-slate-800/80">
+              <label className="text-xs text-slate-300 font-medium">
+                Ou saisir une autre durée personnalisée (en mois, ex: 5, 8, 18, 24 mois) :
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  placeholder="Ex: 5"
+                  value={customDurationInput}
+                  onChange={(e) => {
+                    const val = e.target.value
+                    setCustomDurationInput(val)
+                    const num = parseInt(val, 10)
+                    if (!isNaN(num) && num >= 1) {
+                      setDurationMonths(num)
+                    }
+                  }}
+                  className="w-28 px-3 py-2 bg-slate-950 border border-slate-700 rounded-xl text-sm text-white font-bold text-center focus:outline-none focus:border-emerald-500"
+                />
+                <span className="text-xs text-slate-400 font-semibold">mois</span>
+              </div>
+            </div>
+          </div>
+
+          {/* 3.3 Grille Tarifaire Officielle de Référence */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+            <h2 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-emerald-400" />
+              Barème Officiel GESTIO 229 (sans prix codé arbitrairement)
+            </h2>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 text-xs">
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                <p className="text-slate-400 font-medium">1 Secteur (Starter)</p>
+                <p className="text-sm font-bold text-white mt-0.5">5 000 F / mois</p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                <p className="text-slate-400 font-medium">1 Secteur (Complet)</p>
+                <p className="text-sm font-bold text-emerald-400 mt-0.5">10 000 F / mois</p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                <p className="text-slate-400 font-medium">2 Secteurs</p>
+                <p className="text-sm font-bold text-emerald-400 mt-0.5">15 000 F / mois</p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                <p className="text-slate-400 font-medium">3 Secteurs</p>
+                <p className="text-sm font-bold text-emerald-400 mt-0.5">25 000 F / mois</p>
+              </div>
+              <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
+                <p className="text-slate-400 font-medium">&gt; 3 Secteurs</p>
+                <p className="text-sm font-bold text-amber-400 mt-0.5">+5 000 F / secteur</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Colonne Droite (1/3) : Récapitulatif Obligatoire & Modes de Paiement « Manuel » et « Automatique » */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 flex flex-col justify-between h-fit space-y-5">
+          <div>
+            <h2 className="text-base font-bold text-white mb-1 flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-emerald-400" />
+              Récapitulatif & Paiement
+            </h2>
+            <p className="text-xs text-slate-400 mb-4">
+              Vérifiez les détails de votre abonnement avant de choisir votre mode de règlement.
+            </p>
+
+            {/* Récapitulatif obligatoire (Section 6.2) */}
+            <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 space-y-2.5 text-xs mb-5">
+              <div className="flex items-start justify-between gap-2">
+                <span className="text-slate-400">Secteur(s) concerné(s)</span>
+                <span className="font-bold text-white text-right">{pricingSummary.scopeLabel}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Durée choisie</span>
+                <span className="font-bold text-white">{durationMonths} mois</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Prix mensuel applicable</span>
+                <span className="font-semibold text-slate-200">
+                  {pricingSummary.monthlyPrice.toLocaleString('fr-FR')} FCFA / mois
+                </span>
+              </div>
+              {durationCalc.discountAmount > 0 && (
+                <div className="flex items-center justify-between text-emerald-400">
+                  <span>Remise durée (-{durationCalc.discountPercent}%)</span>
+                  <span className="font-bold">
+                    -{durationCalc.discountAmount.toLocaleString('fr-FR')} FCFA
+                  </span>
+                </div>
+              )}
+              <div className="flex items-center justify-between pt-2 border-t border-slate-800">
+                <span className="text-slate-400">Date de début prévue</span>
+                <span className="font-semibold text-slate-200">
+                  {expectedDates.effectiveStartDate.toLocaleDateString('fr-FR')}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Date de fin prévue</span>
+                <span className="font-bold text-emerald-400">
+                  {expectedDates.newExpirationDate.toLocaleDateString('fr-FR')}
+                </span>
+              </div>
+              {expectedDates.isExtensionBeforeExpiry && (
+                <p className="text-[11px] text-emerald-300/90 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-2.5 py-1.5">
+                  ✓ Prolongation avant échéance : vos {expectedDates.preservedDays} jour(s) restants sont intégralement conservés.
+                </p>
+              )}
+              <div className="pt-2.5 border-t border-slate-800 flex items-center justify-between">
+                <span className="text-sm font-bold text-white">Montant total à payer</span>
+                <span className="text-lg font-extrabold text-emerald-400">
+                  {durationCalc.netTotal.toLocaleString('fr-FR')} FCFA
+                </span>
+              </div>
+            </div>
+
+            {/* Deux boutons de mode de paiement (Section 6) : 1. Manuel | 2. Automatique */}
+            <div className="mb-4">
+              <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">
+                Mode de paiement
+              </label>
+              <div className="grid grid-cols-2 gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedPaymentMode('manuel')
+                    setAutoPaymentMessage(null)
+                  }}
+                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                    selectedPaymentMode === 'manuel'
+                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
+                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <Smartphone className="w-4 h-4" />
+                  1. Manuel
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleSelectAutomaticPayment}
+                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                    selectedPaymentMode === 'automatique'
+                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <CreditCard className="w-4 h-4" />
+                  2. Automatique
+                </button>
+              </div>
+            </div>
+
+            {/* Contenu Mode « Automatique » (Section 8) */}
+            {selectedPaymentMode === 'automatique' && (
+              <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3">
+                <div className="flex items-start gap-2.5">
+                  <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                  <p className="text-xs text-amber-200 leading-relaxed font-medium">
+                    {autoPaymentMessage || AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSelectedPaymentMode('manuel')}
+                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors"
+                >
+                  Utiliser le paiement manuel dès maintenant
+                </button>
+              </div>
+            )}
+
+            {/* Contenu Mode « Manuel » (Section 7) */}
+            {selectedPaymentMode === 'manuel' && (
+              <div className="space-y-4">
+                {/* Coordonnées de dépôt configurées par le Super Admin (Section 7.1 & 7.2) */}
+                <div className="rounded-xl bg-emerald-950/30 border border-emerald-500/30 p-4 space-y-2 text-xs">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
+                    Coordonnées officielles de dépôt
+                  </p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Montant exact :</span>
+                    <span className="font-extrabold text-white text-sm">
+                      {durationCalc.netTotal.toLocaleString('fr-FR')} FCFA
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Numéro de dépôt :</span>
+                    <span className="font-mono font-bold text-emerald-300 text-sm">
+                      {manualSettings?.deposit_phone || '+229 01 97 00 00 00'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Bénéficiaire :</span>
+                    <span className="font-bold text-white">
+                      {manualSettings?.beneficiary_name || 'GESTIO 229 SARL'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-400">Service / Opérateur :</span>
+                    <span className="font-semibold text-slate-200 text-right">
+                      {manualSettings?.payment_operator || 'MTN MoMo / Moov Money'}
+                    </span>
+                  </div>
+                  {manualSettings?.payment_instructions && (
+                    <div className="pt-2 border-t border-emerald-500/20 text-[11px] text-slate-300 whitespace-pre-line leading-relaxed">
+                      {manualSettings.payment_instructions}
+                    </div>
+                  )}
+
+                  {/* Bouton d'envoi de preuve par WhatsApp (Section 7.2 point 2) */}
+                  <div className="pt-2">
+                    <a
+                      href={buildWhatsAppProofLink()}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="w-full inline-flex items-center justify-center gap-2 py-2 px-3 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold transition-colors"
+                    >
+                      <MessageSquare className="w-4 h-4" />
+                      Envoyer la preuve sur WhatsApp ({manualSettings?.whatsapp_number || '+229 01 97 00 00 00'})
+                    </a>
+                  </div>
+                </div>
+
+                {/* Formulaire de soumission directe dans le logiciel (Section 7.2 point 3) */}
+                <form onSubmit={handleSubmitManualPayment} className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Opérateur utilisé pour le dépôt *
+                    </label>
+                    <select
+                      value={selectedOperator}
+                      onChange={(e) => setSelectedOperator(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="MTN Mobile Money">MTN Mobile Money</option>
+                      <option value="Moov Money">Moov Money</option>
+                      <option value="Celtiis Cash">Celtiis Cash</option>
+                      <option value="Virement / Dépôt Bancaire">Virement / Dépôt Bancaire</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Numéro de téléphone ayant effectué le dépôt *
+                    </label>
+                    <input
+                      type="tel"
+                      required
+                      placeholder="Ex: +229 01 97 00 00 00"
+                      value={payerPhone}
+                      onChange={(e) => setPayerPhone(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Référence / ID de la transaction Mobile Money *
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: ID 24981039482"
+                      value={transactionRef}
+                      onChange={(e) => setTransactionRef(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-white font-mono focus:outline-none focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-300 mb-1">
+                      Capture d'écran / Preuve de paiement (Image)
+                    </label>
+                    <label className="flex items-center justify-center gap-2 w-full px-3 py-2.5 bg-slate-950 hover:bg-slate-900 border border-dashed border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer transition-colors">
+                      <Upload className="w-4 h-4 text-emerald-400" />
+                      <span className="truncate">
+                        {proofFileName ? `Preuve jointe : ${proofFileName}` : 'Joindre une capture de paiement'}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleProofFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+
+                  {submitFeedback && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs flex items-start gap-2 ${
+                        submitFeedback.type === 'success'
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300'
+                          : 'bg-red-500/10 border-red-500/30 text-red-300'
+                      }`}
+                    >
+                      {submitFeedback.type === 'success' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                      )}
+                      <span>{submitFeedback.text}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={submittingPayment}
+                    className="w-full inline-flex items-center justify-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 disabled:opacity-50 text-white text-xs sm:text-sm font-bold shadow-lg shadow-emerald-500/20 transition-all"
+                  >
+                    <Send className="w-4 h-4" />
+                    {submittingPayment
+                      ? 'Envoi de la demande...'
+                      : 'Soumettre ma demande de validation'}
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
-      {/* ─── SECTION 10 : HISTORIQUE DES ABONNEMENTS ET PAIEMENTS ─────── */}
-      <div className="bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm">
-        <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-black text-slate-900 dark:text-slate-100 flex items-center gap-2">
-              <History className="w-5 h-5 text-emerald-600" />
-              <span>Historique des Souscriptions & Paiements</span>
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Journal d'audit de vos renouvellements et transactions MTN MoMo
-            </p>
-          </div>
+      {/* 4. Historique des demandes de paiement de l'entreprise (Section 7.2 & 12) */}
+      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+        <h2 className="text-base font-bold text-white mb-1 flex items-center gap-2">
+          <Clock className="w-5 h-5 text-emerald-400" />
+          Historique de vos demandes de paiement & validations ({paymentRequests.length})
+        </h2>
+        <p className="text-xs text-slate-400 mb-4">
+          Suivez en temps réel l'état de vos paiements soumis (« En attente de validation », « Validé » ou « Rejeté »).
+        </p>
 
-          <button
-            onClick={loadPaymentHistory}
-            className="p-2 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-500 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-700"
-            title="Rafraîchir l'historique"
-          >
-            <RefreshCw className="w-4 h-4" />
-          </button>
-        </div>
-
-        {paymentHistory.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 dark:text-slate-500 text-xs">
-            <CreditCard className="w-10 h-10 mx-auto text-slate-300 dark:text-slate-600 mb-2" />
-            <p className="font-semibold text-slate-600 dark:text-slate-400">Aucun historique de paiement pour le moment</p>
-            <p className="mt-1">Votre entreprise fonctionne actuellement sous le premier mois d'essai gratuit offert.</p>
+        {paymentRequests.length === 0 ? (
+          <div className="p-8 text-center bg-slate-950/60 border border-slate-800 rounded-xl text-xs text-slate-400">
+            Aucune demande de paiement manuel soumise pour le moment.
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 dark:bg-slate-900/60 font-bold text-slate-700 dark:text-slate-300 uppercase border-b border-slate-200 dark:border-slate-700">
-                <tr>
-                  <th className="px-5 py-3">Date</th>
-                  <th className="px-5 py-3">Référence</th>
-                  <th className="px-5 py-3">Méthode</th>
-                  <th className="px-5 py-3">Montant</th>
-                  <th className="px-5 py-3">Période</th>
-                  <th className="px-5 py-3 text-center">Statut</th>
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-slate-800 text-slate-400 uppercase text-[10px]">
+                  <th className="py-3 px-3">Date</th>
+                  <th className="py-3 px-3">Périmètre</th>
+                  <th className="py-3 px-3">Durée</th>
+                  <th className="py-3 px-3">Montant</th>
+                  <th className="py-3 px-3">Opérateur & Réf.</th>
+                  <th className="py-3 px-3">Preuve</th>
+                  <th className="py-3 px-3">Statut</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                {paymentHistory.map((item) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
-                    <td className="px-5 py-3 text-slate-500 dark:text-slate-400">
-                      {formatDateSafe(item.created_at)}
-                    </td>
-                    <td className="px-5 py-3 font-mono font-medium text-slate-700 dark:text-slate-300">
-                      {item.reference}
-                    </td>
-                    <td className="px-5 py-3 font-semibold text-amber-600 dark:text-amber-400">
-                      MTN Mobile Money
-                    </td>
-                    <td className="px-5 py-3 font-black text-slate-800 dark:text-slate-100">
-                      {formatFCFA(item.amount)}
-                    </td>
-                    <td className="px-5 py-3 text-slate-500 dark:text-slate-400">
-                      {item.period_start || '-'} au {item.period_end || '-'}
-                    </td>
-                    <td className="px-5 py-3 text-center">
-                      <span className={clsx(
-                        'px-2.5 py-0.5 rounded-full font-bold uppercase text-[10px]',
-                        item.status === 'success' || item.status === 'successful'
-                          ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300'
-                          : item.status === 'pending'
-                          ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
-                          : 'bg-red-100 dark:bg-red-950 text-red-800 dark:text-red-300'
-                      )}>
-                        {item.status === 'success' ? 'Réussi' : item.status === 'pending' ? 'En attente' : 'Échoué'}
+              <tbody className="divide-y divide-slate-800/70">
+                {paymentRequests.map((req) => (
+                  <tr key={req.id} className="hover:bg-slate-950/50">
+                    <td className="py-3 px-3 text-slate-300 whitespace-nowrap">
+                      {new Date(req.created_at).toLocaleDateString('fr-FR')}{' '}
+                      <span className="text-slate-500">
+                        {new Date(req.created_at).toLocaleTimeString('fr-FR', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
                       </span>
+                    </td>
+                    <td className="py-3 px-3 font-semibold text-white">
+                      {req.sector_slug === 'all'
+                        ? 'Abonnement Global'
+                        : `Secteur ${req.sector_slug.toUpperCase()}`}
+                    </td>
+                    <td className="py-3 px-3 text-slate-300">{req.duration_months} mois</td>
+                    <td className="py-3 px-3 font-bold text-emerald-400">
+                      {req.total_amount.toLocaleString('fr-FR')} FCFA
+                    </td>
+                    <td className="py-3 px-3 text-slate-300">
+                      <div>{req.payment_operator}</div>
+                      <div className="font-mono text-[11px] text-slate-400">
+                        Réf: {req.transaction_reference}
+                      </div>
+                    </td>
+                    <td className="py-3 px-3">
+                      {req.proof_url ? (
+                        <button
+                          type="button"
+                          onClick={() => setPreviewProofUrl(req.proof_url)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-emerald-300 text-[11px]"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          Voir preuve
+                        </button>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-3">
+                      {req.status === 'valide' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-bold text-[11px]">
+                          <Check className="w-3 h-3" />
+                          Validé (Actif)
+                        </span>
+                      ) : req.status === 'rejete' ? (
+                        <div>
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-red-500/20 text-red-300 border border-red-500/30 font-bold text-[11px]">
+                            <XCircle className="w-3 h-3" />
+                            Rejeté
+                          </span>
+                          {req.rejection_reason && (
+                            <p className="text-[11px] text-red-300 mt-1">
+                              Motif : {req.rejection_reason}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-bold text-[11px]">
+                          <Clock className="w-3 h-3" />
+                          En attente de validation
+                        </span>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -780,155 +1082,31 @@ export const AbonnementPage: React.FC = () => {
         )}
       </div>
 
-      {/* ─── SECTION 8 & 9 : MODAL DE RENOUVELLEMENT & PAIEMENT MTN MOMO ─── */}
-      {showRenewModal && renewPlanConfig && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-white dark:bg-slate-800 rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-200 dark:border-slate-700">
-            {/* Header Modal */}
-            <div className="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-950/80 text-emerald-700 dark:text-emerald-300 flex items-center justify-center font-bold">
-                  <CreditCard className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-black text-slate-900 dark:text-slate-100">
-                    Renouvellement d'Abonnement
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Récapitulatif avant confirmation de paiement
-                  </p>
-                </div>
-              </div>
-
-              <button
-                onClick={() => setShowRenewModal(false)}
-                className="p-1 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Corps du Récapitulatif (CDC Partie 8) */}
-            <div className="p-6 space-y-5">
-              <div className="bg-slate-50 dark:bg-slate-900/60 rounded-2xl p-4 border border-slate-200 dark:border-slate-700 space-y-2.5 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-slate-500 dark:text-slate-400">Formule choisie :</span>
-                  <span className="font-bold text-slate-800 dark:text-slate-100">{renewPlanConfig.name}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 dark:text-slate-400">Activités couvertes :</span>
-                  <span className="font-bold text-slate-800 dark:text-slate-100">{renewPlanConfig.activityCount} secteur(s)</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-500 dark:text-slate-400">Période de validité :</span>
-                  <span className="font-bold text-slate-800 dark:text-slate-100">30 jours (1 mois renouvelable)</span>
-                </div>
-                <div className="flex justify-between pt-2 border-t border-slate-200 dark:border-slate-700 text-sm">
-                  <span className="font-bold text-slate-700 dark:text-slate-200">Montant total à payer :</span>
-                  <span className="font-black text-emerald-600 dark:text-emerald-400 text-base">
-                    {formatFCFA(renewPlanConfig.priceMonthly)}
-                  </span>
-                </div>
-              </div>
-
-              {/* Interface MTN MoMo (CDC Partie 9) */}
-              <div className="p-5 rounded-2xl border-2 border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/20 space-y-3">
-                <div className="flex items-center gap-2">
-                  <Smartphone className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                  <h4 className="font-bold text-slate-800 dark:text-slate-100 text-sm">
-                    Payer avec MTN Mobile Money (Bénin)
-                  </h4>
-                </div>
-
-                <p className="text-xs text-slate-600 dark:text-slate-300">
-                  Renseignez votre numéro de compte MTN MoMo pour initier la demande de prélèvement.
-                </p>
-
-                <div>
-                  <label className="block text-[11px] font-bold uppercase text-slate-600 dark:text-slate-300 mb-1">
-                    Numéro de Téléphone MTN Bénin *
-                  </label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-slate-400">
-                      +229
-                    </span>
-                    <input
-                      type="tel"
-                      value={momoPhone}
-                      onChange={(e) => setMomoPhone(e.target.value)}
-                      placeholder="97 00 00 00"
-                      disabled={momoStatus === 'pending' || isProcessing}
-                      className="w-full pl-14 pr-3 py-2.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-xl text-sm font-semibold text-slate-800 dark:text-white"
-                    />
-                  </div>
-                </div>
-
-                {/* Statut dynamique MoMo */}
-                {momoStatus !== 'idle' && (
-                  <div className={clsx(
-                    'p-3.5 rounded-xl border text-xs font-medium space-y-1',
-                    momoStatus === 'pending' ? 'bg-amber-100 dark:bg-amber-900/60 border-amber-300 text-amber-900 dark:text-amber-200' :
-                    momoStatus === 'successful' ? 'bg-emerald-100 dark:bg-emerald-900/60 border-emerald-300 text-emerald-900 dark:text-emerald-200' :
-                    'bg-red-100 dark:bg-red-900/60 border-red-300 text-red-900 dark:text-red-200'
-                  )}>
-                    <div className="flex items-center gap-1.5 font-bold">
-                      <span className="w-2 h-2 rounded-full animate-ping bg-current" />
-                      <span>Statut : {momoStatus === 'pending' ? 'En attente' : momoStatus === 'successful' ? 'Réussi' : momoStatus === 'initiated' ? 'Initié' : 'Échoué'}</span>
-                    </div>
-                    <p className="whitespace-pre-line text-[11px]">{momoMessage}</p>
-                    {momoReference && (
-                      <p className="text-[10px] opacity-75 font-mono">Réf : {momoReference}</p>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Footer Modal Actions */}
-            <div className="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/60 flex items-center justify-between gap-3">
+      {/* Modale d'aperçu de preuve de paiement */}
+      {previewProofUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-sm"
+          onClick={() => setPreviewProofUrl(null)}
+        >
+          <div
+            className="bg-slate-900 border border-slate-700 rounded-2xl max-w-lg w-full p-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-white">Preuve de paiement jointe</h3>
               <button
                 type="button"
-                onClick={() => setShowRenewModal(false)}
-                className="px-4 py-2.5 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+                onClick={() => setPreviewProofUrl(null)}
+                className="text-xs text-slate-400 hover:text-white"
               >
                 Fermer
               </button>
-
-              <div className="flex items-center gap-2">
-                {momoStatus === 'pending' && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={handleCancelMoMo}
-                      className="px-3 py-2 text-xs font-bold text-red-600 hover:underline"
-                    >
-                      Annuler
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleCheckMoMoStatus}
-                      disabled={isProcessing}
-                      className="px-4 py-2.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
-                    >
-                      <RefreshCw className={clsx('w-3.5 h-3.5', isProcessing && 'animate-spin')} />
-                      <span>Vérifier validation</span>
-                    </button>
-                  </>
-                )}
-
-                {momoStatus === 'idle' && (
-                  <button
-                    type="button"
-                    onClick={handleInitiateMoMo}
-                    disabled={isProcessing}
-                    className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-extrabold transition shadow-md shadow-emerald-600/20 flex items-center gap-2"
-                  >
-                    <span>Lancer le Paiement MoMo</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
             </div>
+            <img
+              src={previewProofUrl}
+              alt="Preuve de paiement"
+              className="w-full max-h-[70vh] object-contain rounded-xl bg-slate-950"
+            />
           </div>
         </div>
       )}

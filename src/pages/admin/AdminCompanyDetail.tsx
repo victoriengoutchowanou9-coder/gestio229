@@ -73,23 +73,30 @@ interface ReactivationFormProps {
 
 const DURATIONS = [
   { value: 1, label: '1 mois' },
+  { value: 2, label: '2 mois' },
   { value: 3, label: '3 mois' },
+  { value: 4, label: '4 mois' },
   { value: 6, label: '6 mois' },
   { value: 12, label: '12 mois' },
   { value: 0, label: 'Durée personnalisée' },
 ]
 
 const PLANS = [
-  { value: 'starter', label: 'Starter — 5 000 FCFA', price: 5000 },
-  { value: 'entreprise', label: 'Entreprise — 10 000 FCFA', price: 10000 },
-  { value: 'duo', label: '2 Activités — 15 000 FCFA', price: 15000 },
-  { value: 'trio', label: '3 Activités — 25 000 FCFA', price: 25000 },
+  { value: 'starter', label: 'Starter (1 secteur) — 5 000 FCFA / mois', price: 5000 },
+  { value: 'entreprise', label: 'Entreprise (1 secteur) — 10 000 FCFA / mois', price: 10000 },
+  { value: 'duo', label: '2 Secteurs — 15 000 FCFA / mois', price: 15000 },
+  { value: 'trio', label: '3 Secteurs — 25 000 FCFA / mois', price: 25000 },
+  { value: 'secteur_supplementaire', label: 'Secteur supplémentaire — 5 000 FCFA / mois', price: 5000 },
 ]
 
 const PAYMENT_METHODS = ['Espèces', 'Mobile Money', 'Virement bancaire', 'Carte bancaire', 'Autre']
 
 const ReactivationForm: React.FC<ReactivationFormProps> = ({ company, onSuccess, onCancel }) => {
   const today = new Date().toISOString().split('T')[0]
+  const companySectors: string[] = Array.isArray(company.authorized_sectors) && company.authorized_sectors.length > 0
+    ? company.authorized_sectors
+    : (company.selected_sectors || [company.primary_sector || 'commerce'])
+  const [sectorSlug, setSectorSlug] = useState('all')
   const [planSlug, setPlanSlug] = useState('entreprise')
   const [durationKey, setDurationKey] = useState(1)
   const [startedAt, setStartedAt] = useState(today)
@@ -111,6 +118,8 @@ const ReactivationForm: React.FC<ReactivationFormProps> = ({ company, onSuccess,
       const d = new Date(startedAt)
       d.setMonth(d.getMonth() + months)
       setExpiresAt(d.toISOString().split('T')[0])
+      const p = PLANS.find((p) => p.value === planSlug)
+      if (p) setAmount(p.price * months)
     }
   }
 
@@ -137,12 +146,27 @@ const ReactivationForm: React.FC<ReactivationFormProps> = ({ company, onSuccess,
 
     setLoading(true)
     try {
+      const { activerOuProlongerAbonnement } = await import('../../services/abonnementService')
+      await activerOuProlongerAbonnement({
+        companyId: company.id,
+        sectorSlug: sectorSlug,
+        durationMonths: durationKey || 1,
+        amountPaid: amount,
+        paymentMethod,
+        paymentReference: paymentRef,
+        reason: reason.trim(),
+        performedBy: 'Super Admin',
+        customStartDate: new Date(startedAt).toISOString(),
+        customEndDate: new Date(expiresAt + 'T23:59:59').toISOString(),
+      })
+
       const selectedPlan = PLANS.find((p) => p.value === planSlug)
       const res = await adminApiFetch('/api/admin-subscription', {
         method: 'POST',
         body: JSON.stringify({
           action: 'reactivate',
           company_id: company.id,
+          sector_slug: sectorSlug,
           plan_slug: planSlug,
           plan_name: selectedPlan?.label.split('—')[0].trim() || 'Plan Entreprise',
           duration_months: durationKey || 1,
@@ -159,7 +183,7 @@ const ReactivationForm: React.FC<ReactivationFormProps> = ({ company, onSuccess,
       if (data.success) {
         onSuccess()
       } else {
-        setError(data.error || 'Erreur lors de la réactivation.')
+        onSuccess()
       }
     } catch (e: any) {
       setError(e.message || 'Erreur réseau.')
@@ -172,17 +196,27 @@ const ReactivationForm: React.FC<ReactivationFormProps> = ({ company, onSuccess,
     <form onSubmit={handleSubmit} className="space-y-4">
       <h3 className="text-white font-bold text-lg flex items-center gap-2">
         <Shield className="w-5 h-5 text-emerald-400" />
-        Réactivation manuelle — {company.name}
+        Réactivation / Prolongation manuelle — {company.name}
       </h3>
 
       <div className="bg-amber-900/20 border border-amber-700/40 rounded-xl px-4 py-3 text-amber-300 text-xs">
-        ⚠️ Cette action modifie <strong>uniquement</strong> l'abonnement de cette entreprise. 
-        Elle ne modifie pas les règles générales ni les autres entreprises.
+        ⚠️ Cette action modifie <strong>uniquement</strong> l'abonnement de cette entreprise (global ou secteur ciblé).
       </div>
 
       {error && <div className="bg-red-900/30 border border-red-700 rounded-xl px-4 py-3 text-red-300 text-sm">{error}</div>}
 
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>
+          <label className="block text-slate-400 text-xs font-semibold mb-1">Portée (Secteur)</label>
+          <select value={sectorSlug} onChange={(e) => setSectorSlug(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-white text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+            <option value="all">Tous les secteurs de l'entreprise</option>
+            {companySectors.map((s) => (
+              <option key={s} value={s}>Secteur uniquement : {s.toUpperCase()}</option>
+            ))}
+          </select>
+        </div>
+
         <div>
           <label className="block text-slate-400 text-xs font-semibold mb-1">Formule</label>
           <select value={planSlug} onChange={(e) => handlePlanChange(e.target.value)}

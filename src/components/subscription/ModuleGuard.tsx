@@ -1,161 +1,164 @@
 // =============================================================================
-// GESTIO 229 SaaS — ModuleGuard : Contrôle d'Accès Sécurisé par Abonnement
+// GESTIO 229 SaaS — GARDE D'ACCÈS AUX MODULES (ModuleGuard V4 — Section 4 & 11)
 // =============================================================================
-// Empêche un utilisateur avec un forfait restreint (ex: Plan Starter) d'accéder
-// directement aux routes réservées (Trésorerie, Reporting, SYSCOHADA...)
-// par saisie d'URL directe.
+// Bloque l'accès aux modules opérationnels lorsque :
+// 1. Le secteur courant est 'en_attente_paiement' ou 'expire' (seuls 'dashboard' et 'abonnement' sont accessibles).
+// 2. L'entreprise est en Pack Starter (5 000 FCFA) et tente d'accéder à un module avancé.
 // =============================================================================
 
-import React from 'react'
-import { Link } from 'react-router-dom'
-import { Lock, ShieldAlert, ArrowRight, ArrowLeft, Sparkles, CheckCircle2 } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import { Lock, Sparkles, ArrowRight, CheckCircle2, CreditCard, LayoutDashboard } from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
-import { checkModuleAccess } from '../../core/subscription/subscriptionEngine'
-import SectorLoader from '../../lib/SectorLoader'
-import { ModuleSkeleton } from '../ui/Skeleton'
+import { checkModuleAccess, ALWAYS_ACCESSIBLE_SECTOR_MODULES } from '../../core/subscription/subscriptionEngine'
+import { evaluerAccesSecteur, VerificationAccesSecteurResult, canonicalSectorSlug } from '../../services/abonnementService'
 
 interface ModuleGuardProps {
   moduleId: string
+  moduleTitle?: string
   children: React.ReactNode
 }
 
-export const ModuleGuard: React.FC<ModuleGuardProps> = ({ moduleId, children }) => {
-  const company = useAuthStore((s) => s.company)
-  const user = useAuthStore((s) => s.user)
-  const status = useAuthStore((s) => s.status)
+export const ModuleGuard: React.FC<ModuleGuardProps> = ({
+  moduleId,
+  moduleTitle = 'Fonctionnalité Avancée',
+  children,
+}) => {
+  const navigate = useNavigate()
+  const { sectorSlug } = useParams<{ sectorSlug?: string }>()
+  const { company, user } = useAuthStore()
+  const [sectorAccess, setSectorAccess] = useState<VerificationAccesSecteurResult | null>(null)
 
-  if (!company && (status === 'idle' || status === 'loading')) {
-    return <ModuleSkeleton />
-  }
+  const cleanSector = sectorSlug ? canonicalSectorSlug(sectorSlug) : ''
+  const normMod = (moduleId || '').toLowerCase().trim()
 
-  // 1. Contrôle abonnement entreprise
-  const access = checkModuleAccess(moduleId, company)
-
-  if (access.allowed) {
-    // 2. Contrôle droits & permissions de l'utilisateur interne (RBAC)
-    const hasUserAccess = SectorLoader.canAccess(user, moduleId, 'view', company)
-    if (!hasUserAccess) {
-      return (
-        <div className="min-h-[70vh] flex items-center justify-center p-4">
-          <div className="max-w-md w-full bg-white dark:bg-slate-800 rounded-3xl border border-red-200 dark:border-red-900/60 p-8 shadow-xl text-center animate-fadeIn">
-            <div className="w-16 h-16 rounded-2xl bg-red-100 dark:bg-red-950/80 text-red-600 dark:text-red-400 flex items-center justify-center mx-auto mb-5 shadow-sm">
-              <Lock className="w-8 h-8" />
-            </div>
-
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300 mb-3">
-              <ShieldAlert className="w-3.5 h-3.5" />
-              Accès Refusé
-            </span>
-
-            <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
-              Module Non Autorisé
-            </h2>
-
-            <p className="text-slate-600 dark:text-slate-300 text-sm mt-3 leading-relaxed">
-              Votre profil collaborateur ne dispose pas des droits d'accès nécessaires pour exploiter ce module.
-            </p>
-
-            <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
-              <Link
-                to="/hub"
-                className="w-full sm:w-auto px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center justify-center gap-2 transition"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span>Retourner au HUB</span>
-              </Link>
-            </div>
-          </div>
-        </div>
-      )
+  useEffect(() => {
+    let mounted = true
+    if (!company?.id || !cleanSector) return
+    evaluerAccesSecteur(company.id, cleanSector, company.created_at, true)
+      .then((res) => {
+        if (mounted) setSectorAccess(res)
+      })
+      .catch(() => {})
+    return () => {
+      mounted = false
     }
+  }, [company?.id, cleanSector, moduleId])
 
+  if (user?.role === 'super_admin' || user?.is_super_admin) {
     return <>{children}</>
   }
 
-  const isStarter = access.reason === 'starter_restriction'
+  // Le Tableau de bord et le module Abonnement restent toujours accessibles (Section 4)
+  if (ALWAYS_ACCESSIBLE_SECTOR_MODULES.has(normMod)) {
+    return <>{children}</>
+  }
+
+  const abonnementHref = cleanSector ? `/app/${cleanSector}/abonnement` : '/abonnement'
+  const dashboardHref = cleanSector ? `/app/${cleanSector}/tableau-bord` : '/dashboard'
+
+  // Si l'abonnement spécifique du secteur est en attente de paiement ou expiré
+  if (sectorAccess && !sectorAccess.autorise) {
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center p-6">
+        <div className="max-w-lg w-full bg-slate-900/95 border border-amber-500/40 rounded-2xl p-8 text-center shadow-2xl">
+          <div className="w-16 h-16 rounded-2xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center mx-auto mb-5">
+            <Lock className="w-8 h-8 text-amber-400" />
+          </div>
+
+          <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs font-semibold mb-3">
+            <Sparkles className="w-3.5 h-3.5" />
+            {sectorAccess.badgeLabel}
+          </span>
+
+          <h2 className="text-xl font-bold text-white mb-2">
+            {moduleTitle} — Module verrouillé
+          </h2>
+
+          <p className="text-sm text-slate-300 leading-relaxed mb-6">
+            {sectorAccess.statutEffectif === 'en_attente_paiement'
+              ? 'Votre secteur a été ajouté avec succès. Pour accéder à l\'ensemble de ses fonctionnalités, veuillez activer votre abonnement.'
+              : sectorAccess.messageVerrouillage ||
+                'L\'abonnement de ce secteur est arrivé à expiration. Veuillez activer ou renouveler votre abonnement pour débloquer ce module.'}
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button
+              onClick={() => navigate(dashboardHref)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-sm font-medium transition-colors"
+            >
+              <LayoutDashboard className="w-4 h-4 text-emerald-400" />
+              Tableau de bord
+            </button>
+            <button
+              onClick={() => navigate(abonnementHref)}
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-semibold shadow-lg shadow-emerald-500/20 transition-all"
+            >
+              <CreditCard className="w-4 h-4" />
+              Activer mon abonnement
+              <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const access = checkModuleAccess(moduleId, company)
+
+  if (access.allowed) {
+    return <>{children}</>
+  }
+
   const isExpired = access.reason === 'expired'
-  const isSuspended = access.reason === 'suspended'
-
-  const badgeText = isExpired
-    ? "Période d'Essai de 30 Jours Expirée"
-    : isSuspended
-    ? 'Compte Suspendu'
-    : isStarter
-    ? 'Module Non Inclus dans le Plan Starter'
-    : 'Abonnement Requis'
-
-  const titleText = isExpired
-    ? 'Essai Gratuit Terminé'
-    : isSuspended
-    ? 'Accès Suspendu'
-    : isStarter
-    ? 'Débloquez les fonctionnalités avancées'
-    : 'Accès Restreint'
 
   return (
-    <div className="min-h-[70vh] flex items-center justify-center p-4">
-      <div className="max-w-lg w-full bg-white dark:bg-slate-800 rounded-3xl border border-slate-200 dark:border-slate-700 p-8 shadow-xl text-center animate-fadeIn">
-        <div className="w-16 h-16 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-5 shadow-sm">
-          <Lock className="w-8 h-8" />
+    <div className="min-h-[75vh] flex items-center justify-center p-6">
+      <div className="max-w-lg w-full bg-slate-900/95 border border-slate-800 rounded-2xl p-8 text-center shadow-2xl">
+        <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto mb-5">
+          <Lock className="w-8 h-8 text-emerald-400" />
         </div>
 
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 mb-3">
-          <ShieldAlert className="w-3.5 h-3.5" />
-          {badgeText}
+        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 text-xs font-semibold mb-3">
+          <Sparkles className="w-3.5 h-3.5" />
+          {isExpired ? 'Période d\'essai terminée' : 'Forfait Supérieur Requis'}
         </span>
 
-        <h2 className="text-2xl font-black text-slate-800 dark:text-slate-100 tracking-tight">
-          {titleText}
+        <h2 className="text-xl font-bold text-white mb-2">
+          {isExpired ? 'Votre abonnement a expiré' : `Débloquez « ${moduleTitle} »`}
         </h2>
 
-        <p className="text-slate-600 dark:text-slate-300 text-sm mt-2 leading-relaxed">
-          {access.message || 'Ce module requiert un abonnement actif supérieur.'}
+        <p className="text-sm text-slate-400 leading-relaxed mb-6">
+          {isExpired
+            ? 'Votre période d\'essai gratuit de 30 jours est arrivée à échéance. Souscrivez à un abonnement pour retrouver immédiatement l\'accès à toutes vos données et fonctionnalités.'
+            : `Votre forfait actuel (Pack Starter — 5 000 FCFA/mois) couvre les opérations essentielles. Passez au Pack Entreprise (10 000 FCFA/mois) pour activer ce module avancé.`}
         </p>
 
-        {isStarter && (
-          <div className="mt-6 p-4 rounded-2xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200 dark:border-slate-700 text-left">
-            <p className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">
-              Le Plan Entreprise (10 000 FCFA/mois) débloque :
-            </p>
-            <ul className="space-y-1.5 text-xs text-slate-700 dark:text-slate-200 font-medium">
-              <li className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>Trésorerie complète, banques & multi-liquidités</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>Rapports & analyses décisionnelles avancées</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>Inventaire physique chiffré avec suivi des écarts</span>
-              </li>
-              <li className="flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-                <span>Comptabilité SYSCOHADA Révisé conforme DGI Bénin</span>
-              </li>
-            </ul>
+        <div className="bg-slate-950/80 border border-slate-800/80 rounded-xl p-4 text-left space-y-2 mb-6">
+          <p className="text-xs font-semibold text-slate-300 mb-2">
+            Inclus dans le Pack Entreprise (10 000 FCFA / mois) :
+          </p>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Comptabilité SYSCOHADA complète (Bilan, Grand Livre, Journaux)</span>
           </div>
-        )}
-
-        <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
-          <Link
-            to="/hub"
-            className="w-full sm:w-auto px-5 py-3 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold text-xs hover:bg-slate-50 dark:hover:bg-slate-700 flex items-center justify-center gap-2 transition"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            <span>Retourner au HUB</span>
-          </Link>
-
-          <Link
-            to="/dashboard/abonnement"
-            className="w-full sm:w-auto px-6 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 flex items-center justify-center gap-2 transition"
-          >
-            <Sparkles className="w-4 h-4" />
-            <span>{isExpired || isSuspended ? 'Consulter les formules & Activer' : 'Passer au Plan Supérieur'}</span>
-            <ArrowRight className="w-4 h-4" />
-          </Link>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Trésorerie multi-banques, Mobile Money & rapprochements</span>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>Rapports analytiques avancés, marges nettes & utilisateurs illimités</span>
+          </div>
         </div>
+
+        <button
+          onClick={() => navigate(abonnementHref)}
+          className="w-full inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-semibold shadow-lg shadow-emerald-500/20 transition-all"
+        >
+          {isExpired ? 'Renouveler mon abonnement' : 'Passer au Pack Entreprise (10 000 FCFA)'}
+          <ArrowRight className="w-4 h-4" />
+        </button>
       </div>
     </div>
   )

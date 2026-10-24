@@ -1,296 +1,341 @@
 // =============================================================================
-// GESTIO 229 SaaS — Inscription Multi-Secteurs & Multi-Tenants (Stepper 2 Étapes)
+// GESTIO 229 SaaS — RegisterPage : Inscription Multi-Secteurs (Refonte V4)
+// =============================================================================
+// Règles du cahier des charges (Sections 1 & 2) :
+// 1. Un seul essai gratuit de 30 jours par compte, couvrant au maximum 3 secteurs.
+// 2. L'utilisateur peut sélectionner 1, 2, 3 ou plus de 3 secteurs dès l'inscription.
+// 3. Si > 3 secteurs sont sélectionnés, affichage d'un récapitulatif détaillé avant confirmation
+//    (Total secteurs, Secteurs couverts par l'essai gratuit = 3, Secteurs supplémentaires payants = N-3,
+//     Prix unitaire = 5 000 FCFA/mois, Montant total à payer).
+// 4. Les secteurs au-delà des 3 premiers sont créés avec le statut 'en_attente_paiement'
+//    et ne sont jamais considérés comme payés tant que leur abonnement n'est pas validé.
 // =============================================================================
 
 import React, { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
-  Building2,
-  User,
-  Phone,
-  Mail,
-  Lock,
-  MapPin,
-  FileText,
-  ArrowRight,
-  CheckCircle2,
-  AlertCircle,
-  ShieldCheck,
-  Globe,
-  Sparkles
+  Building2, User, Phone, Mail, Lock, MapPin, Hash,
+  ArrowRight, ArrowLeft, CheckCircle2, AlertCircle,
+  Loader2, Sparkles, ShieldCheck, Eye, EyeOff, Gift, CreditCard
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { createConfirmedUser } from '../../lib/authAdminHelper'
-import SectorSelector, { ALL_SECTORS } from '../../components/auth/SectorSelector'
-import { calculateSubscriptionPrice, formatFCFA } from '../../core/subscription/subscriptionEngine'
-import { rateLimiter } from '../../lib/rateLimiter'
-import { initialiserAbonnementInscription } from '../../services/abonnementService'
-import { normalizeSectorSlug } from '../../lib/sectorClient'
+import { SectorSelector, SECTORS_LIST } from '../../components/auth/SectorSelector'
+import { useAuthStore } from '../../store/authStore'
+import {
+  MAX_FREE_TRIAL_SECTORS,
+  calculateRegistrationTrialSummary,
+} from '../../core/subscription/subscriptionEngine'
+import {
+  initialiserSecteursInscription,
+  canonicalSectorSlug,
+  toSecteurCode,
+} from '../../services/abonnementService'
+
+interface RegisterFormData {
+  company_name: string
+  ifu_number: string
+  responsible_name: string
+  phone: string
+  email: string
+  password: string
+  confirm_password: string
+  country: string
+  city: string
+  selected_sectors: string[]
+  website_hp: string // Honeypot anti-bot
+}
+
+const BENIN_CITIES = [
+  'Cotonou', 'Porto-Novo', 'Parakou', 'Abomey-Calavi', 'Djougou',
+  'Bohicon', 'Natitingou', 'Ouidah', 'Abomey', 'Lokossa', 'Kandi', 'Malanville', 'Autre'
+]
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
+  const { setUser, setCompany } = useAuthStore()
+
   const [step, setStep] = useState<1 | 2>(1)
   const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const [success, setSuccess] = useState(false)
-  const [trialDetails, setTrialDetails] = useState<{
-    planName: string
-    startDate: string
-    endDate: string
-    futurePrice: number
-    activityCount: number
-  } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [showPassword, setShowPassword] = useState(false)
+  const [showSummaryConfirmModal, setShowSummaryConfirmModal] = useState(false)
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<RegisterFormData>({
     company_name: '',
     ifu_number: '',
     responsible_name: '',
     phone: '',
     email: '',
     password: '',
+    confirm_password: '',
     country: 'Bénin',
     city: 'Cotonou',
-    selected_sectors: [] as string[]
+    selected_sectors: [],
+    website_hp: '',
   })
 
-  const update = (field: string, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }))
+  const updateField = <K extends keyof RegisterFormData>(key: K, value: RegisterFormData[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }))
+    setError(null)
   }
 
-  const toggleSector = (id: string) => {
-    // RÈGLE ABSOLUE CDC SECTION 2 : Un seul secteur d'activité principal à l'inscription
-    setForm((prev) => ({
-      ...prev,
-      selected_sectors: [id]
-    }))
+  const handleSectorChange = (sectors: string[]) => {
+    const clean = Array.from(new Set(sectors.map((s) => canonicalSectorSlug(s)).filter(Boolean)))
+    updateField('selected_sectors', clean)
   }
 
-  const handleStep1Submit = (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
+  const validateStep1 = (): boolean => {
     if (!form.company_name.trim()) {
-      setError("Veuillez saisir le nom de l'entreprise.")
-      return
+      setError('Veuillez saisir le nom de votre entreprise ou établissement.')
+      return false
     }
     if (!form.responsible_name.trim()) {
-      setError('Veuillez renseigner le nom du responsable.')
-      return
+      setError('Veuillez saisir le nom complet du responsable / gérant.')
+      return false
     }
     if (!form.phone.trim()) {
-      setError('Veuillez saisir un numéro de téléphone valide.')
-      return
+      setError('Veuillez saisir votre numéro de téléphone.')
+      return false
     }
     if (!form.email.trim() || !form.email.includes('@')) {
-      setError('Veuillez saisir une adresse email valide.')
-      return
+      setError('Veuillez saisir une adresse e-mail valide.')
+      return false
     }
     if (form.password.length < 6) {
       setError('Le mot de passe doit contenir au moins 6 caractères.')
-      return
+      return false
     }
-    setStep(2)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (form.password !== form.confirm_password) {
+      setError('Les mots de passe ne correspondent pas.')
+      return false
+    }
+    return true
   }
 
-  const handleFinalSubmit = async (chosenPlanSlug: string = 'starter') => {
-    if (form.selected_sectors.length === 0) {
-      setError('Pour créer votre compte GESTIO229, veuillez sélectionner un seul secteur d\'activité principal.')
-      return
+  const handleNextStep = (e: React.FormEvent) => {
+    e.preventDefault()
+    if (validateStep1()) {
+      setStep(2)
+    }
+  }
+
+  const createOrLinkCompanyDirectly = async (cleanEmail: string, chosenSectors: string[]) => {
+    const now = new Date()
+    const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    const primarySector = chosenSectors[0] || 'boutique'
+    const freeTrialSectors = chosenSectors.slice(0, MAX_FREE_TRIAL_SECTORS)
+
+    const { data: existingComp } = await supabase
+      .from('companies')
+      .select('*')
+      .ilike('email', cleanEmail)
+      .maybeSingle()
+
+    if (existingComp) {
+      const { data: updated, error: updErr } = await supabase
+        .from('companies')
+        .update({
+          name: form.company_name.trim(),
+          phone: form.phone.trim(),
+          city: form.city,
+          country: form.country,
+          active_sector: primarySector,
+          selected_sectors: chosenSectors,
+          sectors: chosenSectors,
+          onboarding_completed: true,
+          subscription_status: 'trial',
+          subscription_plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+          plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+          updated_at: now.toISOString(),
+        })
+        .eq('id', existingComp.id)
+        .select()
+        .single()
+
+      if (updErr) throw updErr
+      return { company: updated, trialEndsDate, freeTrialSectors }
     }
 
-    if (form.selected_sectors.length > 1) {
-      setError("Pour créer votre compte GESTIO229, veuillez sélectionner un seul secteur d'activité principal. Pour accéder à plusieurs secteurs ou bénéficier de fonctionnalités supplémentaires, veuillez contacter le concepteur.")
-      return
-    }
+    const { data: inserted, error: insErr } = await supabase
+      .from('companies')
+      .insert({
+        name: form.company_name.trim(),
+        ifu_number: form.ifu_number.trim() || '0000000000000',
+        phone: form.phone.trim(),
+        email: cleanEmail,
+        country: form.country,
+        city: form.city,
+        active_sector: primarySector,
+        selected_sectors: chosenSectors,
+        sectors: chosenSectors,
+        subscription_status: 'trial',
+        onboarding_completed: true,
+        currency: 'FCFA',
+        subscription_plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+        plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+      })
+      .select()
+      .single()
 
-    const regKey = `register:${form.email.trim().toLowerCase()}`
-    const check = rateLimiter.checkRateLimit(regKey, 5, 60000, 15 * 60 * 1000)
-    if (!check.allowed) {
-      setError(check.lockoutMessage || 'Trop de tentatives d’inscription. Veuillez réessayer plus tard.')
+    if (insErr) throw insErr
+    return { company: inserted, trialEndsDate, freeTrialSectors }
+  }
+
+  const executeRegistration = async () => {
+    const cleanSectors = Array.from(
+      new Set(form.selected_sectors.map((s) => canonicalSectorSlug(s)).filter(Boolean))
+    )
+    if (cleanSectors.length === 0) {
+      setError('Veuillez sélectionner au moins un secteur d\'activité.')
       return
     }
 
     setLoading(true)
-    setError('')
+    setError(null)
+    setShowSummaryConfirmModal(false)
+
+    const primarySector = cleanSectors[0]
+    const cleanEmail = form.email.trim().toLowerCase()
 
     try {
-      const cleanEmail = form.email.trim().toLowerCase()
-      const defaultSector = normalizeSectorSlug(form.selected_sectors[0] || 'boutique')
+      // 1. Appel de l'API serveur sécurisée /api/auth-register
+      let companyId: string | null = null
+      let companyData: any = null
 
-      // Calcul métier du forfait et de l'essai gratuit de 1 mois (30 jours) sur 1 secteur principal
-      const planCalc = calculateSubscriptionPrice(1, 'starter')
-      const now = new Date()
-      const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-
-      // Appel sécurisé au endpoint serveur /api/auth-register
       try {
-        const regRes = await fetch('/api/auth-register', {
+        const apiRes = await fetch('/api/auth-register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             company_name: form.company_name.trim(),
-            ifu_number: form.ifu_number.trim(),
+            ifu_number: form.ifu_number.trim() || '0000000000000',
             responsible_name: form.responsible_name.trim(),
             phone: form.phone.trim(),
             email: cleanEmail,
             password: form.password,
             country: form.country,
-            city: form.city.trim(),
-            selected_sectors: [defaultSector],
-          })
+            city: form.city,
+            selected_sectors: cleanSectors,
+            website_hp: form.website_hp,
+          }),
         })
-        const regJson = await regRes.json()
-        if (!regRes.ok && regJson.error) {
-          throw new Error(regJson.error)
+
+        const contentType = apiRes.headers.get('content-type') || ''
+        if (contentType.includes('application/json')) {
+          const json = await apiRes.json()
+          if (json.success && json.data?.companyId) {
+            companyId = json.data.companyId
+          }
         }
-      } catch (apiErr: any) {
-        if (apiErr.message && apiErr.message.includes('sélectionner un seul secteur')) {
-          throw apiErr
-        }
+      } catch (_) {
+        // Fallback direct Supabase en environnement Vite local
       }
 
-      // 1. Création du compte utilisateur Auth Supabase avec email_confirm: true forcé
-      const authResult = await createConfirmedUser({
+      // 2. Créer ou récupérer le compte Supabase Auth
+      let authUserId: string | null = null
+
+      const { data: authData, error: authError } = await supabase.auth.signUp({
         email: cleanEmail,
         password: form.password,
-        company_id: 'pending',
-        identifiant: cleanEmail,
-        role: 'administrateur',
-        full_name: form.responsible_name.trim(),
-        phone: form.phone.trim(),
-        extra_metadata: {
-          company_name: form.company_name.trim(),
-          responsible_name: form.responsible_name.trim(),
-          ifu_number: form.ifu_number.trim(),
-          city: form.city.trim(),
-          country: form.country,
-          selected_sectors: [defaultSector],
-          primary_sector: defaultSector,
-        }
-      })
-
-      if (!authResult.success && authResult.error) {
-        throw new Error(authResult.error)
-      }
-
-      let resolvedAuthUserId: string | null = authResult.userId || null
-      if (!resolvedAuthUserId) {
-        const { data: sessionData } = await supabase.auth.getSession()
-        resolvedAuthUserId = sessionData?.session?.user?.id || null
-      }
-
-      // 2. Création ou liaison de l'entreprise (Company) avec Essai Gratuit de 1 mois sur 1 seul secteur
-      let company: any = null
-      const { data: existingComp } = await supabase
-        .from('companies')
-        .select('*')
-        .ilike('email', cleanEmail)
-        .maybeSingle()
-
-      if (existingComp) {
-        company = existingComp
-        await supabase
-          .from('companies')
-          .update({
-            name: form.company_name.trim(),
+        options: {
+          data: {
+            full_name: form.responsible_name.trim(),
+            responsible_name: form.responsible_name.trim(),
+            company_name: form.company_name.trim(),
             phone: form.phone.trim(),
-            city: form.city.trim(),
-            primary_sector: defaultSector,
-            active_sector: defaultSector,
-            selected_sectors: [defaultSector],
-            sectors: [defaultSector],
-            authorized_sectors: [defaultSector],
-            onboarding_completed: true,
-            subscription_status: 'trial',
-            trial_ends_at: trialEndsDate.toISOString(),
-            subscription_plan: 'starter',
-            plan: 'starter',
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', existingComp.id)
-      } else {
-        const { data: newComp, error: companyError } = await supabase
-          .from('companies')
-          .insert({
-            name: form.company_name.trim(),
             ifu_number: form.ifu_number.trim() || '0000000000000',
-            phone: form.phone.trim(),
-            email: cleanEmail,
+            city: form.city,
             country: form.country,
-            city: form.city.trim(),
-            primary_sector: defaultSector,
-            active_sector: defaultSector,
-            selected_sectors: [defaultSector],
-            sectors: [defaultSector],
-            authorized_sectors: [defaultSector],
-            subscription_status: 'trial',
-            trial_ends_at: trialEndsDate.toISOString(),
-            onboarding_completed: true,
-            currency: 'FCFA',
-            subscription_plan: 'starter',
-            plan: 'starter'
-          })
-          .select()
-          .single()
-
-        if (companyError) throw new Error(companyError.message)
-        company = newComp
-      }
-
-      // Enregistrer dans la table subscriptions (historique)
-      try {
-        await supabase.from('subscriptions').insert({
-          company_id: company.id,
-          sector_slug: defaultSector,
-          status: 'trial',
-          started_at: now.toISOString(),
-          expires_at: trialEndsDate.toISOString(),
-          fin_essai: trialEndsDate.toISOString(),
-          price_monthly: 5000,
-          notes: `Période d'essai gratuit de 30 jours (0 FCFA) - Secteur principal ${defaultSector.toUpperCase()}`
-        })
-      } catch (e) {}
-
-      // Initialiser abonnements_global et abonnements_secteurs
-      try {
-        await initialiserAbonnementInscription(company.id, [defaultSector], 'starter')
-      } catch (e) {
-        console.warn('[Register] Notice init abonnements_global_et_secteurs:', e)
-      }
-
-      setTrialDetails({
-        planName: `Essai Gratuit (${defaultSector.toUpperCase()})`,
-        startDate: now.toLocaleDateString('fr-BJ'),
-        endDate: trialEndsDate.toLocaleDateString('fr-BJ'),
-        futurePrice: 5000,
-        activityCount: 1
+            primary_sector: primarySector,
+            selected_sectors: cleanSectors,
+            role: 'administrateur',
+          },
+        },
       })
 
-      // 3. Liaison Multi-Secteurs & Abonnements (tolérant aux tables optionnelles)
-      try {
-        for (const sectorKey of form.selected_sectors) {
-          const matchedSector = ALL_SECTORS.find(
-            (s) => s.id === sectorKey || s.slug === sectorKey
-          )
-          const slug = matchedSector ? matchedSector.slug : sectorKey
-
-          await supabase.from('company_sectors').insert({
-            company_id: company.id,
-            sector_slug: slug,
-            sector_name: matchedSector ? matchedSector.name : slug,
-            is_configured: true,
-            configuration: {
-              currency: 'FCFA',
-              billing_mode: 'direct',
-              point_of_sale_name: `${form.company_name} — ${matchedSector ? matchedSector.name : slug}`
-            }
+      if (authError) {
+        const msg = authError.message.toLowerCase()
+        if (msg.includes('already registered') || msg.includes('already been registered')) {
+          const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password: form.password,
           })
+          if (signInErr) {
+            throw new Error(
+              'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
+            )
+          }
+          authUserId = signInData.user?.id ?? null
+        } else {
+          throw authError
         }
-      } catch (e) {
-        // Table optionnelle selon les migrations exécutées
+      } else {
+        authUserId = authData.user?.id ?? null
+        if (authData.user && !authData.session) {
+          const { data: signInData } = await supabase.auth.signInWithPassword({
+            email: cleanEmail,
+            password: form.password,
+          })
+          if (signInData?.user) authUserId = signInData.user.id
+        }
       }
 
-      // 4. Profil Administrateur (Obligatoire, avec toutes les permissions NOT NULL)
+      if (!authUserId) {
+        throw new Error('Impossible d\'initialiser la session utilisateur. Veuillez réessayer.')
+      }
+
+      // 3. Créer ou récupérer l'entreprise dans `companies`
+      if (!companyId) {
+        const directRes = await createOrLinkCompanyDirectly(cleanEmail, cleanSectors)
+        companyData = directRes.company
+        companyId = companyData.id
+      } else {
+        const { data: fetchedComp } = await supabase
+          .from('companies')
+          .select('*')
+          .eq('id', companyId)
+          .single()
+        companyData = fetchedComp
+      }
+
+      if (!companyId || !companyData) {
+        throw new Error('Erreur lors de l\'enregistrement de l\'entreprise.')
+      }
+
+      // 4. Initialiser l'essai gratuit de 30 jours (max 3 secteurs) et les secteurs supplémentaires ('en_attente_paiement')
+      const now = new Date()
+      const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+      await initialiserSecteursInscription(companyId, cleanSectors, now, trialEnds)
+
+      // 5. Enregistrer les activités dans `company_activities` et `caisses`
+      for (let i = 0; i < cleanSectors.length; i++) {
+        const slug = cleanSectors[i]
+        const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
+        const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+        try {
+          const { data: existingAct } = await supabase
+            .from('company_activities')
+            .select('id')
+            .eq('company_id', companyId)
+            .eq('sector_slug', slug)
+            .maybeSingle()
+
+          if (!existingAct) {
+            await supabase.from('company_activities').insert({
+              company_id: companyId,
+              sector_slug: slug,
+              sector_code: toSecteurCode(slug),
+              activity_name: `${form.company_name.trim()} — ${secMeta?.name || slug.toUpperCase()}`,
+              pos_location: form.city || 'Siège',
+              manager_name: form.responsible_name.trim(),
+              status: isFreeTrial ? 'ACTIVE' : 'PENDING_PAYMENT',
+              is_active: true,
+            })
+          }
+        } catch (_) {}
+      }
+
+      // 6. Créer ou mettre à jour le profil utilisateur Administrateur
       const defaultAdminPermissions = {
         admin: true,
         commercial: true,
@@ -301,447 +346,476 @@ export const RegisterPage: React.FC = () => {
         accounting: true,
         hr: true,
         ventes: { view: true, create: true, edit: true, delete: true },
-        finances: { view: true, caisse: true, tresorerie: true }
+        finances: { view: true, caisse: true, tresorerie: true },
       }
 
       const { data: existingProfile } = await supabase
         .from('user_profiles')
-        .select('id')
-        .ilike('email', cleanEmail)
+        .select('*')
+        .or(`auth_user_id.eq.${authUserId},email.ilike.${cleanEmail}`)
         .maybeSingle()
 
+      let profileData: any
+
       if (existingProfile) {
-        await supabase
+        const { data: updatedProf, error: pUpdErr } = await supabase
           .from('user_profiles')
           .update({
-            company_id: company.id,
-            auth_user_id: resolvedAuthUserId,
+            company_id: companyId,
+            auth_user_id: authUserId,
             full_name: form.responsible_name.trim(),
             username: cleanEmail,
+            email: cleanEmail,
             phone: form.phone.trim(),
             role: 'administrateur',
-            pos_pin_code: form.password,
             is_active: true,
             permissions: defaultAdminPermissions,
-            updated_at: new Date().toISOString()
+            updated_at: new Date().toISOString(),
           })
           .eq('id', existingProfile.id)
+          .select()
+          .single()
+        if (pUpdErr) throw pUpdErr
+        profileData = updatedProf
       } else {
-        await supabase.from('user_profiles').insert({
-          company_id: company.id,
-          auth_user_id: resolvedAuthUserId,
-          full_name: form.responsible_name.trim(),
-          username: cleanEmail,
-          email: cleanEmail,
-          phone: form.phone.trim(),
-          role: 'administrateur',
-          pos_pin_code: form.password,
-          is_active: true,
-          permissions: defaultAdminPermissions
-        })
-      }
-
-      // 5. Initialiser les activités de l'entreprise dans Supabase (company_activities)
-      try {
-        for (const sId of form.selected_sectors) {
-          const matched = ALL_SECTORS.find((s) => s.id === sId || s.slug === sId)
-          const slug = matched ? matched.slug : sId.replace(/^sec-/, '')
-          const actName = `${form.company_name} — ${matched ? matched.name : slug}`.toUpperCase()
-          await supabase.from('company_activities').insert({
-            company_id: company.id,
-            sector_slug: slug,
-            sector_code: slug.toUpperCase(),
-            activity_name: actName,
-            pos_location: form.city || 'Bénin',
-            manager_name: form.responsible_name || '',
-            status: 'ACTIVE',
+        const { data: newProf, error: pInsErr } = await supabase
+          .from('user_profiles')
+          .insert({
+            company_id: companyId,
+            auth_user_id: authUserId,
+            full_name: form.responsible_name.trim(),
+            username: cleanEmail,
+            email: cleanEmail,
+            phone: form.phone.trim(),
+            role: 'administrateur',
             is_active: true,
-            color: matched?.color || '#059669'
+            permissions: defaultAdminPermissions,
           })
-        }
-      } catch (e) {
-        console.warn('[Register] Insertion company_activities:', e)
+          .select()
+          .single()
+        if (pInsErr) throw pInsErr
+        profileData = newProf
       }
 
-      // 6. Initialiser automatiquement les caisses opérationnelles (1 caisse par secteur avec UUID BDD réel)
-      try {
-        for (const sId of form.selected_sectors) {
-          const matched = ALL_SECTORS.find((s) => s.id === sId || s.slug === sId)
-          const slug = matched ? matched.slug : sId.replace(/^sec-/, '').toLowerCase().trim()
-          await supabase.from('caisses').insert({
-            company_id: company.id,
-            sector_slug: slug,
-            secteur_slug: slug,
-            nom: `Caisse Principale ${slug.toUpperCase()}`,
-            statut: 'fermee',
-            fond_ouverture_especes: 0,
-            fond_ouverture_momo: 0,
-            solde_especes_final: 0
-          })
+      // 7. Mettre à jour le store global et rediriger vers le Hub (si > 1 secteur) ou le secteur principal
+      setCompany(companyData as any)
+      setUser({
+        ...profileData,
+        company: companyData,
+      } as any)
 
-          try {
-            await supabase.from('company_sectors').insert({
-              company_id: company.id,
-              sector_key: slug,
-              sector_slug: slug,
-              is_active: true
-            })
-          } catch (_) {}
-        }
-      } catch (caisseErr) {
-        console.warn('[Register] Initialisation caisses BDD:', caisseErr)
+      if (cleanSectors.length > 1) {
+        navigate('/hub', { replace: true })
+      } else {
+        navigate(`/app/${primarySector}/tableau-bord`, { replace: true })
       }
-
-      // Déconnexion préventive de la session d'inscription
-      try {
-        await supabase.auth.signOut()
-      } catch (e) {}
-
-      setSuccess(true)
     } catch (err: any) {
-      console.error('[GESTIO 229] Erreur inscription:', err)
-      setError(err.message || "Une erreur est survenue lors de l'inscription.")
+      console.error('[RegisterPage] Erreur inscription :', err)
+      setError(err.message || 'Une erreur est survenue lors de la création de votre compte.')
     } finally {
       setLoading(false)
     }
   }
 
-  if (success) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-indigo-950 to-slate-900 flex items-center justify-center p-4">
-        <div className="max-w-lg w-full bg-white rounded-3xl p-8 text-center shadow-2xl animate-scaleUp">
-          <div className="w-16 h-16 bg-emerald-100 text-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <CheckCircle2 className="w-10 h-10" />
-          </div>
-          <h2 className="text-2xl font-black text-slate-900">Entreprise enregistrée avec succès !</h2>
-          <p className="text-slate-600 text-sm mt-2">
-            Bienvenue sur GESTIO 229, <strong>{form.company_name}</strong>.
-            Votre <strong>secteur d'activité principal</strong> a été initialisé avec succès.
-          </p>
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
 
-          {/* Bloc Essai Gratuit 1 Mois (CDC Section 7) */}
-          <div className="mt-5 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-left space-y-2">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 flex items-center gap-1.5">
-                <Sparkles className="w-4 h-4 text-emerald-600" />
-                <span>Période d'Essai Gratuit Activée</span>
-              </span>
-              <span className="text-[10px] font-black bg-emerald-200 text-emerald-900 px-2.5 py-0.5 rounded-full">
-                0 FCFA aujourd'hui
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
-              <div>
-                <span className="text-[10px] text-slate-500 block">Durée de l'essai :</span>
-                <span className="font-semibold">{trialDetails?.startDate} au {trialDetails?.endDate} (30 jours)</span>
-              </div>
-              <div>
-                <span className="text-[10px] text-slate-500 block">Formule choisie :</span>
-                <span className="font-semibold">{trialDetails?.planName} ({trialDetails?.activityCount} activité{trialDetails && trialDetails.activityCount > 1 ? 's' : ''})</span>
-              </div>
-              <div className="col-span-2 pt-1 border-t border-emerald-200/60 flex justify-between items-center">
-                <span className="text-[11px] text-slate-600">Montant après l'essai gratuit :</span>
-                <span className="font-black text-emerald-800 text-xs">
-                  {formatFCFA(trialDetails?.futurePrice || 0)} <span className="font-normal text-[10px] text-slate-500">/ mois</span>
-                </span>
-              </div>
-            </div>
-            <p className="text-[11px] text-emerald-700">
-              ✓ Aucun moyen de paiement n'a été demandé pour démarrer votre essai.
-            </p>
-          </div>
+    if (form.selected_sectors.length === 0) {
+      setError('Veuillez sélectionner au moins un secteur d\'activité.')
+      return
+    }
 
-          <div className="mt-4 p-4 rounded-2xl bg-emerald-50 border border-emerald-200 text-left">
-            <div className="flex items-center gap-2 text-emerald-800 font-bold text-sm mb-1">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-              <span>Compte activé immédiatement</span>
-            </div>
-            <p className="text-xs text-emerald-700 leading-relaxed">
-              Votre compte Administrateur pour <strong>{form.email}</strong> est prêt. Vous pouvez vous connecter tout de suite avec le mot de passe que vous venez de définir.
-            </p>
-          </div>
+    // Si plus de 3 secteurs sont sélectionnés, afficher la modale de confirmation du récapitulatif (Section 2.2)
+    if (form.selected_sectors.length > MAX_FREE_TRIAL_SECTORS) {
+      setShowSummaryConfirmModal(true)
+      return
+    }
 
-          <div className="mt-6 flex flex-col gap-3">
-            <Link
-              to={`/login?email=${encodeURIComponent(form.email.trim().toLowerCase())}`}
-              className="w-full py-3.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-lg shadow-emerald-600/30 flex items-center justify-center gap-2 transition"
-            >
-              <span>Se connecter maintenant</span>
-              <ArrowRight className="w-4 h-4" />
-            </Link>
-            <Link
-              to="/"
-              className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-medium text-xs flex items-center justify-center gap-1.5 transition"
-            >
-              <span>Retourner à l'accueil</span>
-            </Link>
-            <p className="text-[11px] text-slate-400">
-              Après confirmation du mail, saisissez votre mot de passe pour ouvrir le HUB.
-            </p>
-          </div>
-        </div>
-      </div>
-    )
+    await executeRegistration()
   }
 
+  const registrationSummary = calculateRegistrationTrialSummary(form.selected_sectors, 1)
+
   return (
-    <div className="min-h-screen bg-slate-100 flex flex-col justify-between">
-      {/* Barre de navigation simplifiée */}
-      <header className="bg-slate-900 border-b border-slate-800 text-white py-4 px-4 sm:px-8">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center space-x-3">
-            <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center font-black text-white text-base shadow-md">
-              G
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
+        {/* En-tête */}
+        <div className="px-6 py-5 bg-gradient-to-r from-emerald-600/20 via-teal-600/10 to-transparent border-b border-slate-800 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+              <Sparkles className="w-6 h-6 text-white" />
             </div>
             <div>
-              <span className="font-black text-lg tracking-tight">GESTIO 229</span>
-              <span className="ml-2 text-[10px] font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full">
-                SaaS Bénin 🇧🇯
-              </span>
+              <h1 className="text-xl font-bold text-white tracking-tight">
+                GESTIO 229 <span className="text-emerald-400">SaaS</span>
+              </h1>
+              <p className="text-xs text-slate-400">
+                Création de compte entreprise • Essai gratuit 30 jours (jusqu'à 3 secteurs)
+              </p>
             </div>
           </div>
 
-          <div className="text-xs text-slate-400">
-            Déjà inscrit ?{' '}
-            <Link to="/connexion" className="text-indigo-400 font-bold hover:underline">
-              Se connecter
-            </Link>
-          </div>
-        </div>
-      </header>
-
-      {/* Corps principal */}
-      <main className="flex-1 py-8 px-4 sm:px-6 max-w-5xl mx-auto w-full">
-        {/* Stepper visuel 1 -> 2 */}
-        <div className="mb-8 max-w-lg mx-auto">
-          <div className="flex items-center justify-between relative">
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-full h-1 bg-slate-200 -z-0" />
+          {/* Indicateur d'étapes */}
+          <div className="flex items-center gap-2">
             <div
-              className="absolute left-0 top-1/2 -translate-y-1/2 h-1 bg-indigo-600 transition-all duration-500 -z-0"
-              style={{ width: step === 1 ? '0%' : '100%' }}
-            />
-
-            <div className="flex flex-col items-center gap-1 z-10">
-              <div
-                className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all ${
-                  step >= 1 ? 'bg-indigo-600 text-white shadow-md ring-4 ring-white' : 'bg-slate-300 text-slate-600'
-                }`}
-              >
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
+                step === 1
+                  ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/25'
+                  : 'bg-emerald-500/20 text-emerald-400'
+              }`}
+            >
+              <span className="w-4 h-4 rounded-full bg-black/20 flex items-center justify-center text-[10px] font-bold">
                 1
-              </div>
-              <span className="text-[11px] font-bold text-slate-700">Entreprise &amp; Contact</span>
+              </span>
+              Informations
             </div>
-
-            <div className="flex flex-col items-center gap-1 z-10">
-              <div
-                className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-black transition-all ${
-                  step === 2 ? 'bg-indigo-600 text-white shadow-md ring-4 ring-white' : 'bg-slate-300 text-slate-600'
-                }`}
-              >
+            <div className="w-4 h-px bg-slate-700" />
+            <div
+              className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ${
+                step === 2
+                  ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/25'
+                  : 'bg-slate-800 text-slate-400'
+              }`}
+            >
+              <span className="w-4 h-4 rounded-full bg-black/20 flex items-center justify-center text-[10px] font-bold">
                 2
-              </div>
-              <span className="text-[11px] font-bold text-slate-700">Secteur Principal</span>
+              </span>
+              Secteurs d'Activité
             </div>
           </div>
         </div>
 
-        {/* Message d'erreur global */}
-        {error && (
-          <div className="mb-6 p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-700 text-xs sm:text-sm font-semibold flex items-center gap-3 animate-shake">
-            <AlertCircle className="w-5 h-5 shrink-0" />
-            <span>{error}</span>
-          </div>
-        )}
+        {/* Corps du formulaire */}
+        <div className="p-6">
+          {error && (
+            <div className="mb-5 p-3.5 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start gap-2.5 text-red-300 text-xs">
+              <AlertCircle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+              <span>{error}</span>
+            </div>
+          )}
 
-        {/* Contenu de l'étape */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-xl">
           {step === 1 ? (
-            <form onSubmit={handleStep1Submit} className="space-y-6 animate-fadeIn">
-              <div>
-                <h2 className="text-2xl font-black text-slate-900 tracking-tight">
-                  Informations sur votre Entreprise
-                </h2>
-                <p className="text-sm text-slate-500 mt-1">
-                  Renseignez les données légales et les coordonnées de contact de votre établissement.
-                </p>
-              </div>
+            <form onSubmit={handleNextStep} className="space-y-4">
+              {/* Champ Honeypot invisible anti-robots */}
+              <input
+                type="text"
+                name="website_hp"
+                value={form.website_hp}
+                onChange={(e) => updateField('website_hp', e.target.value)}
+                tabIndex={-1}
+                autoComplete="off"
+                className="hidden"
+                aria-hidden="true"
+              />
 
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
-                {/* Nom Entreprise */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Nom Commercial / Raison Sociale *
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Nom de l'Entreprise / Établissement *
                   </label>
                   <div className="relative">
-                    <Building2 className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Building2 className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       required
+                      placeholder="Ex: Quincaillerie Le Bâtisseur SARL"
                       value={form.company_name}
-                      onChange={(e) => update('company_name', e.target.value)}
-                      placeholder="Ex: ETS BIO BÉNIN, QUINCAILLERIE DU NORD..."
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      onChange={(e) => updateField('company_name', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
 
-                {/* Numéro IFU */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Numéro IFU (13 chiffres)
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Numéro IFU (Optionnel)
                   </label>
                   <div className="relative">
-                    <FileText className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Hash className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       maxLength={13}
+                      placeholder="Ex: 3202400000000"
                       value={form.ifu_number}
-                      onChange={(e) => update('ifu_number', e.target.value)}
-                      placeholder="Ex: 3202612345678"
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono"
+                      onChange={(e) => updateField('ifu_number', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
 
-                {/* Nom du Responsable */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Nom &amp; Prénom du Responsable *
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Nom complet du Responsable / Gérant *
                   </label>
                   <div className="relative">
-                    <User className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <User className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="text"
                       required
+                      placeholder="Ex: Koffi Mensah"
                       value={form.responsible_name}
-                      onChange={(e) => update('responsible_name', e.target.value)}
-                      placeholder="Ex: KODJO Jean-Baptiste"
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      onChange={(e) => updateField('responsible_name', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
 
-                {/* Téléphone / WhatsApp */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Téléphone / WhatsApp *
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Téléphone (WhatsApp / Mobile) *
                   </label>
                   <div className="relative">
-                    <Phone className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Phone className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="tel"
                       required
+                      placeholder="Ex: +229 01 97 00 00 00"
                       value={form.phone}
-                      onChange={(e) => update('phone', e.target.value)}
-                      placeholder="+229 97 00 00 00"
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none font-mono"
+                      onChange={(e) => updateField('phone', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
 
-                {/* Email professionnel */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Email de connexion *
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Adresse E-mail Professionnelle *
                   </label>
                   <div className="relative">
-                    <Mail className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Mail className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       type="email"
                       required
+                      placeholder="contact@entreprise.bj"
                       value={form.email}
-                      onChange={(e) => update('email', e.target.value)}
-                      placeholder="contact@monentreprise.bj"
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      onChange={(e) => updateField('email', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
 
-                {/* Mot de passe */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Mot de passe sécurisé *
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Ville d'implantation *
                   </label>
                   <div className="relative">
-                    <Lock className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                    <input
-                      type="password"
-                      required
-                      minLength={6}
-                      value={form.password}
-                      onChange={(e) => update('password', e.target.value)}
-                      placeholder="Minimum 6 caractères"
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
-                    />
-                  </div>
-                </div>
-
-                {/* Pays */}
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Pays
-                  </label>
-                  <div className="relative">
-                    <Globe className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <MapPin className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <select
-                      value={form.country}
-                      onChange={(e) => update('country', e.target.value)}
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      value={form.city}
+                      onChange={(e) => updateField('city', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white focus:outline-none focus:border-emerald-500"
                     >
-                      <option value="Bénin">Bénin 🇧🇯</option>
-                      <option value="Togo">Togo 🇹🇬</option>
-                      <option value="Côte d'Ivoire">Côte d'Ivoire 🇨🇮</option>
-                      <option value="Sénégal">Sénégal 🇸🇳</option>
-                      <option value="Burkina Faso">Burkina Faso 🇧🇫</option>
-                      <option value="Niger">Niger 🇳🇪</option>
+                      {BENIN_CITIES.map((city) => (
+                        <option key={city} value={city} className="bg-slate-900">
+                          {city} (Bénin)
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
 
-                {/* Ville */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
-                    Ville
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Mot de passe *
                   </label>
                   <div className="relative">
-                    <MapPin className="w-5 h-5 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
-                      type="text"
-                      value={form.city}
-                      onChange={(e) => update('city', e.target.value)}
-                      placeholder="Cotonou, Calavi, Porto-Novo, Parakou..."
-                      className="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-300 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      placeholder="Minimum 6 caractères"
+                      value={form.password}
+                      onChange={(e) => updateField('password', e.target.value)}
+                      className="w-full pl-10 pr-10 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                    >
+                      {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                    Confirmer le mot de passe *
+                  </label>
+                  <div className="relative">
+                    <Lock className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      required
+                      minLength={6}
+                      placeholder="Répétez le mot de passe"
+                      value={form.confirm_password}
+                      onChange={(e) => updateField('confirm_password', e.target.value)}
+                      className="w-full pl-10 pr-4 py-2.5 bg-slate-800/70 border border-slate-700 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-emerald-500"
                     />
                   </div>
                 </div>
               </div>
 
-              <div className="pt-4 flex justify-end">
+              <div className="pt-3 flex items-center justify-between border-t border-slate-800">
+                <p className="text-xs text-slate-400">
+                  Vous avez déjà un compte ?{' '}
+                  <Link to="/login" className="text-emerald-400 hover:underline font-medium">
+                    Se connecter
+                  </Link>
+                </p>
+
                 <button
                   type="submit"
-                  className="px-8 py-3.5 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white font-extrabold text-sm rounded-xl shadow-lg shadow-indigo-950/30 flex items-center space-x-2 transition-all"
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-sm font-semibold shadow-lg shadow-emerald-500/20 transition-all"
                 >
-                  <span>Continuer vers le Choix des Secteurs</span>
+                  Choisir mes secteurs d'activité
                   <ArrowRight className="w-4 h-4" />
                 </button>
               </div>
             </form>
           ) : (
-            <SectorSelector
-              selected={form.selected_sectors}
-              onToggle={toggleSector}
-              onBack={() => setStep(1)}
-              onContinue={handleFinalSubmit}
-              submitting={loading}
-            />
+            <form onSubmit={handleSubmit} className="space-y-5">
+              <div>
+                <h2 className="text-base font-semibold text-white">
+                  Sélectionnez vos secteurs d'activité
+                </h2>
+                <p className="text-xs text-slate-400 mt-1">
+                  Votre essai gratuit unique de <strong className="text-emerald-400">30 jours</strong> couvre jusqu'à{' '}
+                  <strong className="text-white">3 secteurs d'activité</strong>. Vous pouvez également sélectionner des secteurs supplémentaires dès maintenant.
+                </p>
+              </div>
+
+              <SectorSelector
+                selectedSectors={form.selected_sectors}
+                onChange={handleSectorChange}
+              />
+
+              <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setStep(1)}
+                  disabled={loading}
+                  className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition-colors"
+                >
+                  <ArrowLeft className="w-4 h-4" />
+                  Retour aux informations
+                </button>
+
+                <button
+                  type="submit"
+                  disabled={loading || form.selected_sectors.length === 0}
+                  className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 disabled:opacity-50 text-white text-sm font-semibold shadow-lg shadow-emerald-500/20 transition-all"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Création de votre espace...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle2 className="w-4 h-4" />
+                      {form.selected_sectors.length > MAX_FREE_TRIAL_SECTORS
+                        ? `Vérifier le récapitulatif (${form.selected_sectors.length} secteurs)`
+                        : `Démarrer mon essai gratuit (${form.selected_sectors.length} secteur${form.selected_sectors.length > 1 ? 's' : ''})`}
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
           )}
         </div>
-      </main>
+      </div>
 
-      {/* Pied de page */}
-      <footer className="py-4 text-center text-xs text-slate-500 border-t border-slate-200">
-        © 2026 GESTIO 229 ERP Bénin · Conforme SYSCOHADA &amp; DGI e-MECeF
-      </footer>
+      {/* Modale de confirmation du récapitulatif si > 3 secteurs sélectionnés (Section 2.2) */}
+      {showSummaryConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
+          <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-11 h-11 rounded-xl bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0">
+                <CreditCard className="w-6 h-6 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-white">
+                  Confirmation de votre sélection multi-secteurs
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Veuillez vérifier le récapitulatif de vos secteurs avant de créer votre compte
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3 mb-4 text-xs">
+              <div className="flex items-center justify-between py-1 border-b border-slate-800">
+                <span className="text-slate-400">Nombre total de secteurs sélectionnés</span>
+                <span className="font-bold text-white">{registrationSummary.totalSectorsSelected} secteurs</span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-800">
+                <span className="text-emerald-400 flex items-center gap-1.5">
+                  <Gift className="w-3.5 h-3.5" />
+                  Secteurs couverts par l'essai gratuit (30 jours)
+                </span>
+                <span className="font-bold text-emerald-400">
+                  {registrationSummary.freeTrialSectorsCount} secteurs (Gratuit)
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-800">
+                <span className="text-amber-300">Secteurs supplémentaires payants</span>
+                <span className="font-bold text-amber-300">
+                  {registrationSummary.paidExtraSectorsCount} secteur(s)
+                </span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-800">
+                <span className="text-slate-400">Prix unitaire par secteur supplémentaire</span>
+                <span className="font-semibold text-slate-200">
+                  {registrationSummary.unitPricePerExtraSector.toLocaleString('fr-FR')} FCFA / mois
+                </span>
+              </div>
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-sm font-bold text-white">Montant total à payer (secteurs suppl.)</span>
+                <span className="text-base font-extrabold text-amber-400">
+                  {registrationSummary.totalExtraAmountToPay.toLocaleString('fr-FR')} FCFA / mois
+                </span>
+              </div>
+            </div>
+
+            <div className="space-y-2 mb-5 text-xs">
+              <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-200">
+                <strong>Secteurs en essai gratuit (30 jours) :</strong>{' '}
+                {registrationSummary.freeTrialSectorSlugs
+                  .map((slug) => SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase())
+                  .join(', ')}
+              </div>
+              <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-200">
+                <strong>Secteurs supplémentaires (en attente de paiement) :</strong>{' '}
+                {registrationSummary.paidExtraSectorSlugs
+                  .map((slug) => SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase())
+                  .join(', ')}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setShowSummaryConfirmModal(false)}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
+              >
+                Modifier mes secteurs
+              </button>
+              <button
+                type="button"
+                onClick={executeRegistration}
+                disabled={loading}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-500/20"
+              >
+                <ShieldCheck className="w-4 h-4" />
+                Confirmer et créer mon compte
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
