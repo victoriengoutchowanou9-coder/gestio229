@@ -388,13 +388,13 @@ BEGIN
     CREATE INDEX IF NOT EXISTS idx_treasury_accounts_company_sector ON public.treasury_accounts(company_id, sector_slug);
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'sales_orders' AND table_type = 'BASE TABLE') THEN
-    CREATE INDEX IF NOT EXISTS idx_sales_orders_company_sector ON public.sales_orders(company_id, sector_slug, statut);
+    CREATE INDEX IF NOT EXISTS idx_sales_orders_company_sector ON public.sales_orders(company_id, sector_slug, status);
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'products' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_products_company_sector ON public.products(company_id, sector_slug, is_active);
   END IF;
   IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'stock_magasin' AND table_type = 'BASE TABLE') THEN
-    CREATE INDEX IF NOT EXISTS idx_stock_magasin_company ON public.stock_magasin(company_id, product_id);
+    CREATE INDEX IF NOT EXISTS idx_stock_magasin_company ON public.stock_magasin(company_id, produit_id);
   END IF;
 END $$;
 
