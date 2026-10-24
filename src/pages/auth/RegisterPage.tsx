@@ -59,6 +59,7 @@ export const RegisterPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [showSummaryConfirmModal, setShowSummaryConfirmModal] = useState(false)
+  const [singleSectorPlan, setSingleSectorPlan] = useState<'starter' | 'entreprise'>('entreprise')
 
   const [form, setForm] = useState<RegisterFormData>({
     company_name: '',
@@ -131,6 +132,8 @@ export const RegisterPage: React.FC = () => {
       .ilike('email', cleanEmail)
       .maybeSingle()
 
+    const chosenPlan = chosenSectors.length > 1 ? 'multisecteur_pro' : singleSectorPlan
+
     if (existingComp) {
       const { data: updated, error: updErr } = await supabase
         .from('companies')
@@ -144,8 +147,8 @@ export const RegisterPage: React.FC = () => {
           sectors: chosenSectors,
           onboarding_completed: true,
           subscription_status: 'trial',
-          subscription_plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
-          plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+          subscription_plan: chosenPlan,
+          plan: chosenPlan,
           updated_at: now.toISOString(),
         })
         .eq('id', existingComp.id)
@@ -171,8 +174,8 @@ export const RegisterPage: React.FC = () => {
         subscription_status: 'trial',
         onboarding_completed: true,
         currency: 'FCFA',
-        subscription_plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
-        plan: chosenSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+        subscription_plan: chosenPlan,
+        plan: chosenPlan,
       })
       .select()
       .single()
@@ -305,7 +308,8 @@ export const RegisterPage: React.FC = () => {
       // 4. Initialiser l'essai gratuit de 30 jours (max 3 secteurs) et les secteurs supplémentaires ('en_attente_paiement')
       const now = new Date()
       const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-      await initialiserSecteursInscription(companyId, cleanSectors, now, trialEnds)
+      const initialPlan = cleanSectors.length === 1 ? singleSectorPlan : 'entreprise'
+      await initialiserSecteursInscription(companyId, cleanSectors, now, trialEnds, initialPlan)
 
       // 5. Enregistrer les activités dans `company_activities` et `caisses`
       for (let i = 0; i < cleanSectors.length; i++) {
@@ -691,6 +695,56 @@ export const RegisterPage: React.FC = () => {
                 selectedSectors={form.selected_sectors}
                 onChange={handleSectorChange}
               />
+
+              {form.selected_sectors.length === 1 && (
+                <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-2.5">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
+                      Formule choisie pour ce secteur (après votre mois gratuit) :
+                    </label>
+                    <p className="text-[11px] text-slate-400">
+                      Ce plan sera retenu par défaut lors de vos futurs renouvellements dans « Mon Abonnement ».
+                    </p>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setSingleSectorPlan('starter')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        singleSectorPlan === 'starter'
+                          ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                          : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-white">Starter</span>
+                        <span className="text-xs font-extrabold text-emerald-400">5 000 FCFA / mois</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Modules essentiels : Ventes POS, Caisse, Stock, Clients.
+                      </p>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setSingleSectorPlan('entreprise')}
+                      className={`p-3 rounded-xl border text-left transition-all ${
+                        singleSectorPlan === 'entreprise'
+                          ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                          : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-white">1 Secteur (Complet)</span>
+                        <span className="text-xs font-extrabold text-emerald-400">10 000 FCFA / mois</span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-1">
+                        Tous les modules débloqués (Comptabilité SYSCOHADA, Trésorerie, Rapports).
+                      </p>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               <div className="pt-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-t border-slate-800">
                 <button

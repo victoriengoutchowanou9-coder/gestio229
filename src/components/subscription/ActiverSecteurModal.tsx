@@ -314,13 +314,7 @@ export const ActiverSecteurModal: React.FC<ActiverSecteurModalProps> = ({
                     <p className="text-sm font-extrabold text-emerald-400 mt-0.5">
                       {calc.netTotal.toLocaleString('fr-FR')} F
                     </p>
-                    {calc.discountPercent > 0 ? (
-                      <span className="inline-block mt-1 text-[10px] font-semibold text-emerald-300 bg-emerald-500/20 px-1.5 py-0.5 rounded">
-                        -{calc.discountPercent}%
-                      </span>
-                    ) : (
-                      <span className="inline-block mt-1 text-[10px] text-slate-500">Tarif standard</span>
-                    )}
+                    <span className="inline-block mt-1 text-[10px] text-slate-400 font-medium">Barème officiel</span>
                   </button>
                 )
               })}

@@ -27,6 +27,7 @@ import {
   calculateDurationPrice,
   calculateRenewalDates,
   getSectorFeatureInfo,
+  calculateDetailedRenewalPricing,
   EXTRA_SECTOR_MONTHLY_PRICE,
   SINGLE_SECTOR_ENTERPRISE_PRICE,
   SINGLE_SECTOR_STARTER_PRICE,
@@ -35,6 +36,9 @@ import { SECTORS_LIST } from '../../../components/auth/SectorSelector'
 import {
   verifierOuCreerAbonnementGlobal,
   chargerTousStatutsSecteurs,
+  getCompanySubscriptionMeta,
+  updateAddedSectorPlan,
+  CompanySubscriptionMeta,
   getParametresPaiementManuel,
   soumettreDemandePaiementManuel,
   listerDemandesPaiementManuel,
@@ -74,6 +78,7 @@ export const AbonnementPage: React.FC = () => {
   // États chargés depuis Supabase
   const [globalSub, setGlobalSub] = useState<AbonnementGlobalRow | null>(null)
   const [secteursStatus, setSecteursStatus] = useState<Record<string, VerificationAccesSecteurResult>>({})
+  const [companyMeta, setCompanyMeta] = useState<CompanySubscriptionMeta | null>(null)
   const [manualSettings, setManualSettings] = useState<ParametresPaiementManuel | null>(null)
   const [paymentRequests, setPaymentRequests] = useState<DemandePaiementAbonnement[]>([])
   const [notifications, setNotifications] = useState<SubscriptionNotificationItem[]>([])
@@ -113,18 +118,27 @@ export const AbonnementPage: React.FC = () => {
     if (!company?.id) return
     setLoadingSubData(true)
     try {
-      const [g, sMap, settings, reqs, notifs] = await Promise.all([
+      const [g, sMap, settings, reqs, notifs, meta] = await Promise.all([
         verifierOuCreerAbonnementGlobal(company.id, company.created_at),
         chargerTousStatutsSecteurs(company.id, currentSectors, company.created_at),
         getParametresPaiementManuel(),
         listerDemandesPaiementManuel({ companyId: company.id }),
         listerNotificationsAbonnement(company.id),
+        getCompanySubscriptionMeta(company.id, currentSectors, company.created_at, company.subscription_plan),
       ])
       setGlobalSub(g)
       setSecteursStatus(sMap)
       setManualSettings(settings)
       setPaymentRequests(reqs)
       setNotifications(notifs)
+      setCompanyMeta(meta)
+
+      // Règle 4 : Retrouver automatiquement le plan choisi lors de l'inscription initiale
+      if (meta?.initial_plan) {
+        setSingleTier(meta.initial_plan === 'starter' ? 'starter' : 'entreprise')
+      } else if (company?.subscription_plan === 'starter') {
+        setSingleTier('starter')
+      }
 
       // Si le secteur courant de l'URL est en attente de paiement ou expiré, le présélectionner
       if (routeSectorSlug) {
@@ -143,62 +157,90 @@ export const AbonnementPage: React.FC = () => {
     loadAllSubscriptionData()
   }, [company?.id, currentSectors.join(',')])
 
-  // Calcul du tarif mensuel applicable selon la portée choisie (Section 6.1 & 9)
-  const pricingSummary = useMemo(() => {
-    if (targetScope === 'all') {
-      const calc = calculateSubscriptionPrice(currentSectors.length, singleTier)
+  // Calcul détaillé selon les règles GESTIO 229 (Secteurs initiaux, ajoutés, gratuits, barème)
+  const detailedPricing = useMemo(() => {
+    const isGlobalTrial = globalSub?.statut_global === 'essai'
+    const isGlobalTrialActive =
+      Boolean(isGlobalTrial && globalSub?.date_fin_global && new Date(globalSub.date_fin_global) > new Date())
+
+    const initialSecs =
+      companyMeta?.initial_sectors && companyMeta.initial_sectors.length > 0
+        ? companyMeta.initial_sectors
+        : currentSectors.slice(0, 3)
+
+    const initialPl = companyMeta?.initial_plan || singleTier
+
+    const sectorsStateList = currentSectors.map((slug) => {
+      const isInitial = initialSecs.includes(slug)
+      const st = secteursStatus[slug]
+      const isPaidAndActive = Boolean(
+        st?.statutEffectif === 'actif' &&
+        !st.isGratuit &&
+        st.dateFinEffective &&
+        new Date(st.dateFinEffective) > new Date()
+      )
+      const isFreeActive = Boolean(
+        (st?.isGratuit || (isInitial && isGlobalTrialActive)) &&
+        st?.dateFinEffective &&
+        new Date(st.dateFinEffective) > new Date()
+      )
+      const addedPlan =
+        companyMeta?.added_sectors_plans?.[slug] ||
+        (singleTier === 'starter' ? 'starter' : 'entreprise')
+
       return {
-        scopeLabel:
-          currentSectors.length > 1
-            ? `Abonnement Global (${currentSectors.length} secteurs)`
-            : `Secteur ${SECTORS_LIST.find((s) => s.slug === currentSectors[0])?.name || currentSectors[0]?.toUpperCase()}`,
-        sectorsCovered: currentSectors,
-        planSlug: calc.planSlug,
-        planName: calc.planName,
-        monthlyPrice: calc.priceMonthly,
-        breakdown: calc.breakdown,
+        sectorSlug: slug,
+        isInitialSector: isInitial,
+        planTier: addedPlan,
+        isGratuit: isFreeActive,
+        isPaidAndActive,
       }
-    }
+    })
 
-    // Abonnement pour un secteur spécifique
-    const secMeta = SECTORS_LIST.find((s) => s.slug === targetScope)
-    const secName = secMeta?.name || targetScope.toUpperCase()
-    const isGlobalInActiveTrial =
-      globalSub?.statut_global === 'essai' && new Date(globalSub.date_fin_global) > new Date()
-    const secState = secteursStatus[targetScope]
+    return calculateDetailedRenewalPricing({
+      scope: targetScope,
+      allSectors: currentSectors,
+      initialSectors: initialSecs,
+      initialPlan: initialPl,
+      sectorsState: sectorsStateList,
+      durationMonths,
+    })
+  }, [targetScope, currentSectors, companyMeta, singleTier, durationMonths, globalSub, secteursStatus])
 
-    // Si c'est un secteur supplémentaire au-delà des 3 secteurs d'essai gratuit (ou si l'entreprise a déjà >= 3 secteurs actifs)
-    const activeSectorsCount = Object.values(secteursStatus).filter((s) => s.autorise).length
-    let unitMonthly = SINGLE_SECTOR_ENTERPRISE_PRICE
-
-    if (currentSectors.length === 1 && singleTier === 'starter') {
-      unitMonthly = SINGLE_SECTOR_STARTER_PRICE
-    } else if (
-      (isGlobalInActiveTrial && secState?.statutEffectif === 'en_attente_paiement') ||
-      activeSectorsCount >= 3
-    ) {
-      unitMonthly = EXTRA_SECTOR_MONTHLY_PRICE
-    } else if (activeSectorsCount === 1) {
-      unitMonthly = 5000 // Passage de 1 secteur (10 000 F) à 2 secteurs (15 000 F) = +5 000 F
-    } else if (activeSectorsCount === 2) {
-      unitMonthly = 10000 // Passage de 2 secteurs (15 000 F) à 3 secteurs (25 000 F) = +10 000 F
-    }
-
+  // Mapping de commodité pour l'interface
+  const pricingSummary = useMemo(() => {
     return {
-      scopeLabel: `Secteur : ${secName}`,
-      sectorsCovered: [targetScope],
-      planSlug: currentSectors.length === 1 && singleTier === 'starter' ? 'starter' : 'entreprise',
-      planName: `Abonnement Secteur — ${secName}`,
-      monthlyPrice: unitMonthly,
-      breakdown: `Activation / renouvellement du secteur ${secName} (${unitMonthly.toLocaleString('fr-FR')} FCFA / mois)`,
+      scopeLabel: detailedPricing.scopeLabel,
+      sectorsCovered: detailedPricing.sectorsCovered,
+      planSlug: detailedPricing.planAppliedSlug,
+      planName: detailedPricing.planAppliedName,
+      monthlyPrice: detailedPricing.netMonthlyPrice,
+      breakdown: detailedPricing.breakdown,
     }
-  }, [targetScope, currentSectors, singleTier, globalSub, secteursStatus])
+  }, [detailedPricing])
 
-  // Calcul selon la durée choisie (1, 2, 3, 4, 6, 12 ou durée personnalisée >= 1 mois)
-  const durationCalc = useMemo(
-    () => calculateDurationPrice(pricingSummary.monthlyPrice, durationMonths),
-    [pricingSummary.monthlyPrice, durationMonths]
-  )
+  // Règle 6 : La réduction est liée au nombre de secteurs, PAS à la durée (discountPercent = 0)
+  const durationCalc = useMemo(() => {
+    return {
+      durationMonths,
+      baseMonthlyPrice: detailedPricing.netMonthlyPrice,
+      grossTotal: detailedPricing.standardPriceMonthly * durationMonths,
+      discountPercent: 0,
+      discountAmount: detailedPricing.sectorDiscountMonthly * durationMonths,
+      netTotal: detailedPricing.netTotalPrice,
+    }
+  }, [detailedPricing, durationMonths])
+
+  // Mise à jour durable du plan choisi pour un secteur supplémentaire
+  const handleSelectAddedSectorPlan = async (sectorSlug: string, tier: 'starter' | 'entreprise') => {
+    if (!company?.id) return
+    try {
+      const updatedMeta = await updateAddedSectorPlan(company.id, sectorSlug, tier)
+      setCompanyMeta(updatedMeta)
+    } catch (err) {
+      console.error('Erreur enregistrement plan secteur supplémentaire:', err)
+    }
+  }
 
   // Calcul des dates de début et de fin prévues (Section 6.2 & Section 10)
   const expectedDates = useMemo(() => {
@@ -571,7 +613,7 @@ export const AbonnementPage: React.FC = () => {
               })}
             </div>
 
-            {/* Si 1 seul secteur : choix Starter (5 000 F) vs Entreprise (10 000 F) */}
+            {/* Si 1 seul secteur dans le compte : Choix du plan (Starter 5 000 F vs Entreprise 10 000 F) - Règle 4 */}
             {currentSectors.length === 1 && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-5 pt-5 border-t border-slate-800">
                 <button
@@ -584,11 +626,11 @@ export const AbonnementPage: React.FC = () => {
                   }`}
                 >
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-bold text-white">Pack Starter</span>
+                    <span className="text-sm font-bold text-white">1 Secteur — Starter</span>
                     <span className="text-base font-extrabold text-emerald-400">5 000 FCFA / mois</span>
                   </div>
                   <p className="text-xs text-slate-400">
-                    Ventes POS, Caisse, Stock, Clients & Dépenses (jusqu'à 2 utilisateurs).
+                    Formule Starter officielle. Ventes POS, Caisse, Stock, Clients & Dépenses.
                   </p>
                 </button>
 
@@ -605,13 +647,71 @@ export const AbonnementPage: React.FC = () => {
                     Complet
                   </span>
                   <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm font-bold text-white">Pack Entreprise</span>
+                    <span className="text-sm font-bold text-white">1 Secteur — Complet</span>
                     <span className="text-base font-extrabold text-emerald-400">10 000 FCFA / mois</span>
                   </div>
                   <p className="text-xs text-slate-400">
-                    Tous les modules débloqués : Comptabilité SYSCOHADA, Trésorerie, Rapports, Utilisateurs illimités.
+                    Formule Complète officielle. SYSCOHADA, Trésorerie, Rapports avancés, Utilisateurs illimités.
                   </p>
                 </button>
+              </div>
+            )}
+
+            {/* Règle 5 : Choix de plan pour un secteur ajouté après l'inscription (Starter 5 000 F vs Complet 10 000 F) */}
+            {targetScope !== 'all' && companyMeta?.added_sectors.includes(targetScope) && (
+              <div className="mt-5 pt-5 border-t border-slate-800">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                    Secteur supplémentaire ajouté : Choix de la formule
+                  </span>
+                  <span className="text-[11px] text-slate-400">
+                    Enregistré individuellement pour ce secteur
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  {(() => {
+                    const currentPlanForThisSector = companyMeta.added_sectors_plans?.[targetScope] || 'entreprise'
+                    return (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAddedSectorPlan(targetScope, 'starter')}
+                          className={`p-3.5 rounded-xl border text-left transition-all ${
+                            currentPlanForThisSector === 'starter'
+                              ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                              : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-white">Option A : Starter</span>
+                            <span className="text-sm font-extrabold text-emerald-400">5 000 FCFA / mois</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            Souscrire au plan Starter pour ce secteur supplémentaire.
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => handleSelectAddedSectorPlan(targetScope, 'entreprise')}
+                          className={`p-3.5 rounded-xl border text-left transition-all ${
+                            currentPlanForThisSector === 'entreprise'
+                              ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                              : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between mb-1">
+                            <span className="text-xs font-bold text-white">Option B : 1 Secteur (Complet)</span>
+                            <span className="text-sm font-extrabold text-emerald-400">10 000 FCFA / mois</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            Souscrire au plan Complet (tous modules) pour ce secteur supplémentaire.
+                          </p>
+                        </button>
+                      </>
+                    )
+                  })()}
+                </div>
               </div>
             )}
           </div>
@@ -623,12 +723,12 @@ export const AbonnementPage: React.FC = () => {
               2. Choisissez la durée d'abonnement
             </h2>
             <p className="text-xs text-slate-400 mb-4">
-              Sélectionnez 1 mois, 2 mois, 3 mois, 4 mois ou toute durée supérieure. Le montant total et la date d'échéance sont calculés automatiquement.
+              Sélectionnez 1 mois, 2 mois, 3 mois, 4 mois ou toute durée supérieure. La durée détermine uniquement la période de validité.
             </p>
 
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-2.5 mb-4">
               {PRESET_DURATIONS.map((m) => {
-                const dCalc = calculateDurationPrice(pricingSummary.monthlyPrice, m)
+                const totalPriceForM = detailedPricing.netMonthlyPrice * m
                 const isSelected = durationMonths === m && customDurationInput === ''
                 return (
                   <button
@@ -638,20 +738,15 @@ export const AbonnementPage: React.FC = () => {
                       setDurationMonths(m)
                       setCustomDurationInput('')
                     }}
-                    className={`p-3 rounded-xl border text-left transition-all relative ${
+                    className={`p-3 rounded-xl border text-left transition-all ${
                       isSelected
                         ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
                         : 'bg-slate-950/60 border-slate-800 hover:border-slate-700'
                     }`}
                   >
-                    {dCalc.discountPercent > 0 && (
-                      <span className="absolute -top-2 right-2 px-1.5 py-0.5 rounded-full bg-amber-500 text-slate-950 text-[9px] font-extrabold">
-                        -{dCalc.discountPercent}%
-                      </span>
-                    )}
                     <p className="text-xs font-bold text-white">{m} Mois</p>
                     <p className="text-sm font-extrabold text-emerald-400 mt-1">
-                      {dCalc.netTotal.toLocaleString('fr-FR')} F
+                      {totalPriceForM.toLocaleString('fr-FR')} F
                     </p>
                   </button>
                 )
@@ -764,30 +859,50 @@ export const AbonnementPage: React.FC = () => {
               Vérifiez les détails de votre abonnement avant de choisir votre mode de règlement.
             </p>
 
-            {/* Récapitulatif obligatoire (Section 6.2) */}
+            {/* Récapitulatif officiel obligatoire (Section 9) */}
             <div className="bg-slate-950/90 border border-slate-800 rounded-xl p-4 space-y-2.5 text-xs mb-5">
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Plan appliqué</span>
+                <span className="font-bold text-white text-right">{detailedPricing.planAppliedName}</span>
+              </div>
               <div className="flex items-start justify-between gap-2">
-                <span className="text-slate-400">Secteur(s) concerné(s)</span>
-                <span className="font-bold text-white text-right">{pricingSummary.scopeLabel}</span>
+                <span className="text-slate-400">Secteurs concernés</span>
+                <span className="font-semibold text-slate-200 text-right">
+                  {detailedPricing.sectorsCovered
+                    .map((s) => SECTORS_LIST.find((x) => x.slug === s)?.name || s.toUpperCase())
+                    .join(', ')}
+                </span>
               </div>
               <div className="flex items-center justify-between">
                 <span className="text-slate-400">Durée choisie</span>
                 <span className="font-bold text-white">{durationMonths} mois</span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Prix mensuel applicable</span>
-                <span className="font-semibold text-slate-200">
-                  {pricingSummary.monthlyPrice.toLocaleString('fr-FR')} FCFA / mois
+                <span className="text-slate-400">Nombre de secteurs gratuits</span>
+                <span className={`font-semibold ${detailedPricing.freeSectorsCount > 0 ? 'text-blue-400' : 'text-slate-300'}`}>
+                  {detailedPricing.freeSectorsCount} secteur{detailedPricing.freeSectorsCount > 1 ? 's' : ''}
                 </span>
               </div>
-              {durationCalc.discountAmount > 0 && (
-                <div className="flex items-center justify-between text-emerald-400">
-                  <span>Remise durée (-{durationCalc.discountPercent}%)</span>
-                  <span className="font-bold">
-                    -{durationCalc.discountAmount.toLocaleString('fr-FR')} FCFA
-                  </span>
-                </div>
-              )}
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Nombre de secteurs payants</span>
+                <span className="font-semibold text-emerald-400">
+                  {detailedPricing.paidSectorsCount} secteur{detailedPricing.paidSectorsCount > 1 ? 's' : ''}
+                </span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-slate-400">Prix unitaire / standard</span>
+                <span className="text-slate-300">
+                  {detailedPricing.standardPriceMonthly.toLocaleString('fr-FR')} FCFA / mois
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-emerald-400">
+                <span>Réduction multi-secteurs</span>
+                <span className="font-bold">
+                  {detailedPricing.sectorDiscountMonthly > 0
+                    ? `-${(detailedPricing.sectorDiscountMonthly * durationMonths).toLocaleString('fr-FR')} FCFA`
+                    : '0 FCFA'}
+                </span>
+              </div>
               <div className="flex items-center justify-between pt-2 border-t border-slate-800">
                 <span className="text-slate-400">Date de début prévue</span>
                 <span className="font-semibold text-slate-200">
@@ -795,7 +910,7 @@ export const AbonnementPage: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center justify-between">
-                <span className="text-slate-400">Date de fin prévue</span>
+                <span className="text-slate-400">Date d'expiration prévue</span>
                 <span className="font-bold text-emerald-400">
                   {expectedDates.newExpirationDate.toLocaleDateString('fr-FR')}
                 </span>
@@ -808,7 +923,7 @@ export const AbonnementPage: React.FC = () => {
               <div className="pt-2.5 border-t border-slate-800 flex items-center justify-between">
                 <span className="text-sm font-bold text-white">Montant total à payer</span>
                 <span className="text-lg font-extrabold text-emerald-400">
-                  {durationCalc.netTotal.toLocaleString('fr-FR')} FCFA
+                  {detailedPricing.netTotalPrice.toLocaleString('fr-FR')} FCFA
                 </span>
               </div>
             </div>

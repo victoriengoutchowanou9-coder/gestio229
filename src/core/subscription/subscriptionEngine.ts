@@ -26,6 +26,8 @@ export interface SubscriptionCalculation {
   planSlug: SubscriptionPlanSlug
   planName: string
   priceMonthly: number
+  standardPriceMonthly: number // Prix sans réduction de groupement multi-secteurs (ex: count * 10 000 F)
+  sectorDiscountMonthly: number // Réduction mensuelle liée au groupement de secteurs
   breakdown: string
   maxUsers: number // -1 = illimité
   maxProduits: number // -1 = illimité
@@ -66,6 +68,44 @@ export interface RenewalDatesCalculation {
   preservedDays: number
 }
 
+export interface AccountSectorState {
+  slug: string
+  name?: string
+  isInitial: boolean
+  planTier: 'starter' | 'entreprise'
+  isGratuit: boolean
+  freeTrialActive: boolean
+  freeTrialEndsAt: Date | null
+  paidActive: boolean
+  paidEndsAt: Date | null
+}
+
+export interface DetailedRenewalCalculation {
+  scope: string // 'all' | sector_slug
+  scopeLabel: string
+  planSlug: string
+  planName: string
+  planAppliedSlug: string
+  planAppliedName: string
+  durationMonths: number
+  sectorsCovered: string[]
+  freeSectorsList: string[]
+  paidSectorsList: string[]
+  totalSectorsCount: number
+  freeSectorsCount: number
+  paidSectorsCount: number
+  standardMonthlyPrice: number
+  standardPriceMonthly: number
+  monthlySectorDiscount: number
+  sectorDiscountMonthly: number
+  monthlyNetPrice: number
+  netMonthlyPrice: number
+  totalSectorDiscount: number
+  totalAmountToPay: number
+  netTotalPrice: number
+  breakdown: string
+}
+
 // Modules verrouillés uniquement en forfait Starter (5 000 FCFA)
 export const STARTER_LOCKED_MODULES = [
   'finances',       // Trésorerie & Banques avancée
@@ -99,6 +139,14 @@ export const ALWAYS_ACCESSIBLE_SECTOR_MODULES = new Set<string>([
 /**
  * Calcule le tarif mensuel officiel en fonction du nombre d'activités souscrites
  * et du choix du forfait de base (Starter vs Entreprise quand 1 seule activité).
+ * Conforme au barème officiel GESTIO 229 :
+ * - 1 secteur — Starter : 5 000 F CFA / mois
+ * - 1 secteur — Complet : 10 000 F CFA / mois
+ * - 2 secteurs : 15 000 F CFA / mois (réduction de 5 000 F / mois sur le groupement)
+ * - 3 secteurs : 25 000 F CFA / mois (réduction de 5 000 F / mois sur le groupement)
+ * - Chaque secteur au-delà de 3 : +5 000 F CFA par secteur
+ *
+ * La réduction est calculée en fonction du nombre de secteurs, et NON de la durée.
  */
 export function calculateSubscriptionPrice(
   sectorsCount: number,
@@ -113,7 +161,9 @@ export function calculateSubscriptionPrice(
         planSlug: 'starter',
         planName: 'Pack Starter (1 Secteur)',
         priceMonthly: SINGLE_SECTOR_STARTER_PRICE,
-        breakdown: '1 secteur d\'activité — Fonctionnalités essentielles (Ventes, Caisse, Stock de base, Clients, Dépenses)',
+        standardPriceMonthly: SINGLE_SECTOR_STARTER_PRICE,
+        sectorDiscountMonthly: 0,
+        breakdown: '1 secteur d\'activité — Formule Starter (5 000 F CFA / mois)',
         maxUsers: 2,
         maxProduits: 150,
         maxVentesMois: 300,
@@ -125,9 +175,11 @@ export function calculateSubscriptionPrice(
     return {
       sectorsCount: 1,
       planSlug: 'entreprise',
-      planName: 'Pack Entreprise (1 Secteur Complet)',
+      planName: 'Pack 1 Secteur (Complet)',
       priceMonthly: SINGLE_SECTOR_ENTERPRISE_PRICE,
-      breakdown: '1 secteur d\'activité — Toutes les fonctionnalités débloquées (SYSCOHADA, Trésorerie, Rapports, Multi-caisses)',
+      standardPriceMonthly: SINGLE_SECTOR_ENTERPRISE_PRICE,
+      sectorDiscountMonthly: 0,
+      breakdown: '1 secteur d\'activité — Formule Complète (10 000 F CFA / mois)',
       maxUsers: -1,
       maxProduits: -1,
       maxVentesMois: -1,
@@ -137,12 +189,17 @@ export function calculateSubscriptionPrice(
   }
 
   if (count === 2) {
+    const standard = 2 * SINGLE_SECTOR_ENTERPRISE_PRICE // 20 000 F
+    const price = 15000
+    const discount = standard - price // 5 000 F
     return {
       sectorsCount: 2,
       planSlug: 'multisecteur_2',
       planName: 'Pack Duo (2 Secteurs)',
-      priceMonthly: 15000,
-      breakdown: '2 secteurs d\'activité complets — 15 000 FCFA / mois (7 500 FCFA / secteur)',
+      priceMonthly: price,
+      standardPriceMonthly: standard,
+      sectorDiscountMonthly: discount,
+      breakdown: `2 secteurs d'activité — 15 000 F CFA / mois (Réduction multi-secteurs de ${discount.toLocaleString('fr-FR')} F CFA)`,
       maxUsers: -1,
       maxProduits: -1,
       maxVentesMois: -1,
@@ -152,12 +209,17 @@ export function calculateSubscriptionPrice(
   }
 
   if (count === 3) {
+    const standard = 3 * SINGLE_SECTOR_ENTERPRISE_PRICE // 30 000 F
+    const price = 25000
+    const discount = standard - price // 5 000 F
     return {
       sectorsCount: 3,
       planSlug: 'multisecteur_3',
       planName: 'Pack Trio (3 Secteurs)',
-      priceMonthly: 25000,
-      breakdown: '3 secteurs d\'activité complets — 25 000 FCFA / mois',
+      priceMonthly: price,
+      standardPriceMonthly: standard,
+      sectorDiscountMonthly: discount,
+      breakdown: `3 secteurs d'activité — 25 000 F CFA / mois (Réduction multi-secteurs de ${discount.toLocaleString('fr-FR')} F CFA)`,
       maxUsers: -1,
       maxProduits: -1,
       maxVentesMois: -1,
@@ -170,13 +232,17 @@ export function calculateSubscriptionPrice(
   const extraSectors = count - 3
   const extraCost = extraSectors * EXTRA_SECTOR_MONTHLY_PRICE
   const totalMonthly = 25000 + extraCost
+  const standard = count * SINGLE_SECTOR_ENTERPRISE_PRICE // count * 10 000 F
+  const discount = Math.max(0, standard - totalMonthly)
 
   return {
     sectorsCount: count,
     planSlug: 'multisecteur_pro',
     planName: `Pack Multi-Secteurs (${count} Secteurs)`,
     priceMonthly: totalMonthly,
-    breakdown: `3 secteurs (25 000 F) + ${extraSectors} secteur(s) supplémentaire(s) × 5 000 F = ${totalMonthly.toLocaleString('fr-FR')} FCFA / mois`,
+    standardPriceMonthly: standard,
+    sectorDiscountMonthly: discount,
+    breakdown: `3 secteurs (25 000 F) + ${extraSectors} secteur(s) supplémentaire(s) × 5 000 F = ${totalMonthly.toLocaleString('fr-FR')} F CFA / mois (Réduction multi-secteurs : ${discount.toLocaleString('fr-FR')} F CFA / mois)`,
     maxUsers: -1,
     maxProduits: -1,
     maxVentesMois: -1,
@@ -186,9 +252,18 @@ export function calculateSubscriptionPrice(
 }
 
 /**
- * Calcule le récapitulatif d'inscription multi-secteurs (Section 2 du cahier des charges) :
- * - Les 3 premiers secteurs sont couverts par l'essai gratuit unique de 30 jours.
- * - Tout secteur supplémentaire (à partir du 4e) est facturé (5 000 FCFA / mois / secteur)
+ * Calcule le tarif mensuel d'un secteur supplémentaire ajouté après l'inscription (Section 5).
+ * - Option A : Starter (5 000 F CFA / mois)
+ * - Option B : 1 Secteur (Complet) (10 000 F CFA / mois)
+ */
+export function calculateAddedSectorMonthlyPrice(tier: 'starter' | 'entreprise'): number {
+  return tier === 'starter' ? SINGLE_SECTOR_STARTER_PRICE : SINGLE_SECTOR_ENTERPRISE_PRICE
+}
+
+/**
+ * Calcule le récapitulatif d'inscription multi-secteurs (Sections 2 & 3 du cahier des charges) :
+ * - Les 3 premiers secteurs sélectionnés bénéficient chacun d'un mois gratuit.
+ * - Tout secteur supplémentaire (à partir du 4e) est facturé selon le barème officiel (+5 000 FCFA / mois / secteur)
  *   et reste en statut 'en_attente_paiement' tant que son paiement n'est pas validé.
  */
 export function calculateRegistrationTrialSummary(
@@ -226,48 +301,32 @@ export function calculateRegistrationTrialSummary(
 }
 
 /**
- * Calcule le tarif selon la durée choisie (1, 2, 3, 4, 6, 12 mois ou toute durée >= 1 mois)
+ * Calcule le tarif selon la durée choisie (1, 2, 3, 4, 6, 12 mois ou toute durée personnalisée >= 1 mois).
+ *
+ * RÈGLE STRICTE (Section 6 & Tests 9 & 10) :
+ * - La réduction doit être calculée en fonction du nombre de secteurs d'activité, et NON du nombre de mois.
+ * - La durée choisie détermine UNIQUEMENT la période de validité de l'abonnement.
+ * - Elle ne déclenche AUCUNE réduction tarifaire automatique liée au nombre de mois.
+ * - Montant total = (baseMonthlyPrice * durationMonths).
  */
 export function calculateDurationPrice(
   baseMonthlyPrice: number,
   durationMonths: BillingDurationMonths
 ): DurationPriceCalculation {
   const dur = Math.max(1, Math.floor(Number(durationMonths) || 1))
-  const discountMap: Record<number, { percent: number; label: string }> = {
-    1: { percent: 0, label: '1 Mois (Mensuel)' },
-    2: { percent: 0, label: '2 Mois' },
-    3: { percent: 5, label: '3 Mois (-5%)' },
-    4: { percent: 5, label: '4 Mois (-5%)' },
-    6: { percent: 10, label: '6 Mois (-10%)' },
-    12: { percent: 20, label: '12 Mois (-20%)' },
-  }
-
-  let percent = 0
-  let label = `${dur} Mois`
-  if (discountMap[dur]) {
-    percent = discountMap[dur].percent
-    label = discountMap[dur].label
-  } else if (dur >= 12) {
-    percent = 20
-    label = `${dur} Mois (-20%)`
-  } else if (dur >= 6) {
-    percent = 10
-    label = `${dur} Mois (-10%)`
-  } else if (dur >= 3) {
-    percent = 5
-    label = `${dur} Mois (-5%)`
-  }
-
   const grossTotal = baseMonthlyPrice * dur
-  const discountAmount = Math.round((grossTotal * percent) / 100)
-  const netTotal = grossTotal - discountAmount
-  const effectiveMonthlyPrice = Math.round(netTotal / dur)
+  // Zéro réduction liée à la durée : la réduction provient exclusivement du barème multi-secteurs
+  const discountPercent = 0
+  const discountAmount = 0
+  const netTotal = grossTotal
+  const effectiveMonthlyPrice = baseMonthlyPrice
+  const label = dur === 1 ? '1 Mois (Mensuel)' : `${dur} Mois`
 
   return {
     durationMonths: dur,
     baseMonthlyPrice,
     grossTotal,
-    discountPercent: percent,
+    discountPercent,
     discountAmount,
     netTotal,
     effectiveMonthlyPrice,
@@ -310,6 +369,325 @@ export function calculateRenewalDates(
     effectiveStartDate: isExtensionBeforeExpiry ? now : baseDate,
     newExpirationDate,
     preservedDays,
+  }
+}
+
+/**
+ * Moteur consolidé de calcul de réabonnement respectant l'ensemble des règles officielles :
+ * 1. Périmètre : Global ('all') ou Secteur spécifique
+ * 2. Distinction durable des secteurs initiaux vs secteurs ajoutés après inscription
+ * 3. Gratuité d'un mois pour les 3 premiers secteurs d'inscription
+ * 4. Conservation du plan initial pour les secteurs initiaux
+ * 5. Choix individuel Starter (5 000 F) ou Complet (10 000 F) pour chaque secteur ajouté
+ * 6. Application stricte du barème officiel et de ses réductions multi-secteurs
+ * 7. Aucune réduction liée à la durée (la durée est strictement un multiplicateur)
+ */
+export interface RenewalPricingInput {
+  scope: string
+  allSectors?: string[]
+  allCurrentSectors?: string[]
+  initialSectors?: string[]
+  initialPlan?: 'starter' | 'entreprise' | string
+  addedSectorsPlans?: Record<string, 'starter' | 'entreprise'>
+  durationMonths: number
+  isInitialFreeTrialActive?: boolean
+  sectorsState?: Array<{
+    sectorSlug: string
+    isInitialSector?: boolean
+    planTier?: 'starter' | 'entreprise'
+    isGratuit?: boolean
+    isPaidAndActive?: boolean
+  }>
+}
+
+/**
+ * Moteur consolidé de calcul de réabonnement respectant l'ensemble des règles officielles :
+ * 1. Périmètre : Global ('all') ou Secteur spécifique
+ * 2. Distinction durable des secteurs initiaux vs secteurs ajoutés après inscription
+ * 3. Gratuité d'un mois pour les 3 premiers secteurs d'inscription
+ * 4. Conservation du plan initial pour les secteurs initiaux
+ * 5. Choix individuel Starter (5 000 F) ou Complet (10 000 F) pour chaque secteur ajouté
+ * 6. Application stricte du barème officiel et de ses réductions multi-secteurs
+ * 7. Aucune réduction liée à la durée (la durée est strictement un multiplicateur)
+ */
+export function calculateDetailedRenewalPricing(params: RenewalPricingInput): DetailedRenewalCalculation {
+  const dur = Math.max(1, Math.floor(Number(params.durationMonths) || 1))
+  const cleanScope = (params.scope || 'all').toLowerCase().trim()
+
+  const allSectorsList = params.allSectors || params.allCurrentSectors || (params.sectorsState ? params.sectorsState.map(s => s.sectorSlug) : [])
+  const allSectors = Array.from(
+    new Set(allSectorsList.map((s) => String(s).toLowerCase().trim()).filter(Boolean))
+  )
+
+  const initialSectorsList = params.initialSectors && params.initialSectors.length > 0
+    ? params.initialSectors
+    : params.sectorsState
+    ? params.sectorsState.filter(s => s.isInitialSector).map(s => s.sectorSlug)
+    : allSectors.slice(0, 3)
+
+  const initialSectors = Array.from(
+    new Set(initialSectorsList.map((s) => String(s).toLowerCase().trim()).filter(Boolean))
+  )
+
+  const normalizedInitialPlan: 'starter' | 'entreprise' =
+    String(params.initialPlan || 'entreprise').toLowerCase().includes('starter') ? 'starter' : 'entreprise'
+
+  const addedSectorsPlans = params.addedSectorsPlans || {}
+
+  // Constuire l'état de chaque secteur
+  const sectorStatesMap = new Map<string, {
+    slug: string
+    isInitial: boolean
+    planTier: 'starter' | 'entreprise'
+    isGratuit: boolean
+    isPaidAndActive: boolean
+  }>()
+
+  for (const slug of allSectors) {
+    const fromState = params.sectorsState?.find(s => s.sectorSlug.toLowerCase() === slug)
+    const isInitial = fromState?.isInitialSector !== undefined ? fromState.isInitialSector : initialSectors.includes(slug)
+    
+    let planTier: 'starter' | 'entreprise' = 'entreprise'
+    if (fromState?.planTier) {
+      planTier = fromState.planTier
+    } else if (!isInitial && addedSectorsPlans[slug]) {
+      planTier = addedSectorsPlans[slug]
+    } else if (isInitial && allSectors.length === 1) {
+      planTier = normalizedInitialPlan
+    }
+
+    const isGratuit = Boolean(fromState?.isGratuit) || Boolean(params.isInitialFreeTrialActive && isInitial && initialSectors.indexOf(slug) < MAX_FREE_TRIAL_SECTORS)
+    const isPaidAndActive = Boolean(fromState?.isPaidAndActive)
+
+    sectorStatesMap.set(slug, {
+      slug,
+      isInitial,
+      planTier,
+      isGratuit,
+      isPaidAndActive,
+    })
+  }
+
+  // CAS 1 : Périmètre spécifique (1 seul secteur)
+  if (cleanScope !== 'all') {
+    const secState = sectorStatesMap.get(cleanScope) || {
+      slug: cleanScope,
+      isInitial: initialSectors.includes(cleanScope),
+      planTier: addedSectorsPlans[cleanScope] || (initialSectors.includes(cleanScope) && allSectors.length === 1 ? normalizedInitialPlan : 'entreprise'),
+      isGratuit: false,
+      isPaidAndActive: false,
+    }
+
+    const secName = cleanScope.toUpperCase()
+
+    if (secState.isGratuit) {
+      return {
+        scope: cleanScope,
+        scopeLabel: `Secteur : ${secName}`,
+        planSlug: secState.planTier,
+        planName: secState.planTier === 'starter' ? 'Pack Starter (1 Secteur)' : 'Pack 1 Secteur (Complet)',
+        planAppliedSlug: secState.planTier,
+        planAppliedName: secState.planTier === 'starter' ? 'Pack Starter (1 Secteur)' : 'Pack 1 Secteur (Complet)',
+        durationMonths: dur,
+        sectorsCovered: [cleanScope],
+        freeSectorsList: [cleanScope],
+        paidSectorsList: [],
+        totalSectorsCount: 1,
+        freeSectorsCount: 1,
+        paidSectorsCount: 0,
+        standardMonthlyPrice: 0,
+        standardPriceMonthly: 0,
+        monthlySectorDiscount: 0,
+        sectorDiscountMonthly: 0,
+        monthlyNetPrice: 0,
+        netMonthlyPrice: 0,
+        totalSectorDiscount: 0,
+        totalAmountToPay: 0,
+        netTotalPrice: 0,
+        breakdown: `Secteur ${secName} couvert par l'essai gratuit de 30 jours (0 F CFA)`,
+      }
+    }
+
+    if (secState.isPaidAndActive) {
+      return {
+        scope: cleanScope,
+        scopeLabel: `Secteur : ${secName}`,
+        planSlug: secState.planTier,
+        planName: secState.planTier === 'starter' ? 'Pack Starter (1 Secteur)' : 'Pack 1 Secteur (Complet)',
+        planAppliedSlug: secState.planTier,
+        planAppliedName: secState.planTier === 'starter' ? 'Pack Starter (1 Secteur)' : 'Pack 1 Secteur (Complet)',
+        durationMonths: dur,
+        sectorsCovered: [cleanScope],
+        freeSectorsList: [],
+        paidSectorsList: [],
+        totalSectorsCount: 1,
+        freeSectorsCount: 0,
+        paidSectorsCount: 0,
+        standardMonthlyPrice: 0,
+        standardPriceMonthly: 0,
+        monthlySectorDiscount: 0,
+        sectorDiscountMonthly: 0,
+        monthlyNetPrice: 0,
+        netMonthlyPrice: 0,
+        totalSectorDiscount: 0,
+        totalAmountToPay: 0,
+        netTotalPrice: 0,
+        breakdown: `Secteur ${secName} déjà payé et actif (période en cours, non refacturé)`,
+      }
+    }
+
+    const unitPrice = secState.planTier === 'starter' ? SINGLE_SECTOR_STARTER_PRICE : SINGLE_SECTOR_ENTERPRISE_PRICE
+    const totalAmount = unitPrice * dur
+
+    return {
+      scope: cleanScope,
+      scopeLabel: `Secteur : ${secName}`,
+      planSlug: secState.planTier,
+      planName: secState.planTier === 'starter' ? 'Pack Starter (1 Secteur)' : 'Pack 1 Secteur (Complet)',
+      planAppliedSlug: secState.planTier,
+      planAppliedName: secState.planTier === 'starter' ? 'Pack Starter (1 Secteur)' : 'Pack 1 Secteur (Complet)',
+      durationMonths: dur,
+      sectorsCovered: [cleanScope],
+      freeSectorsList: [],
+      paidSectorsList: [cleanScope],
+      totalSectorsCount: 1,
+      freeSectorsCount: 0,
+      paidSectorsCount: 1,
+      standardMonthlyPrice: unitPrice,
+      standardPriceMonthly: unitPrice,
+      monthlySectorDiscount: 0,
+      sectorDiscountMonthly: 0,
+      monthlyNetPrice: unitPrice,
+      netMonthlyPrice: unitPrice,
+      totalSectorDiscount: 0,
+      totalAmountToPay: totalAmount,
+      netTotalPrice: totalAmount,
+      breakdown: `Abonnement Secteur (${secState.planTier === 'starter' ? 'Starter' : 'Complet'}) : ${unitPrice.toLocaleString('fr-FR')} F CFA / mois × ${dur} mois`,
+    }
+  }
+
+  // CAS 2 : Périmètre Global ('all')
+  const freeSectorsList: string[] = []
+  const paidSectorsList: string[] = []
+
+  for (const [slug, st] of sectorStatesMap.entries()) {
+    if (st.isGratuit) {
+      freeSectorsList.push(slug)
+    } else if (!st.isPaidAndActive) {
+      paidSectorsList.push(slug)
+    }
+  }
+
+  const freeCount = freeSectorsList.length
+  const paidCount = paidSectorsList.length
+
+  if (paidCount === 0) {
+    const planName = freeCount > 0 ? 'Essai Gratuit Unique (30j)' : 'Abonnement Global Actif'
+    return {
+      scope: 'all',
+      scopeLabel: `Abonnement Global (${allSectors.length} secteurs)`,
+      planSlug: 'multisecteur_pro',
+      planName,
+      planAppliedSlug: 'multisecteur_pro',
+      planAppliedName: planName,
+      durationMonths: dur,
+      sectorsCovered: allSectors,
+      freeSectorsList,
+      paidSectorsList,
+      totalSectorsCount: allSectors.length,
+      freeSectorsCount: freeCount,
+      paidSectorsCount: 0,
+      standardMonthlyPrice: 0,
+      standardPriceMonthly: 0,
+      monthlySectorDiscount: 0,
+      sectorDiscountMonthly: 0,
+      monthlyNetPrice: 0,
+      netMonthlyPrice: 0,
+      totalSectorDiscount: 0,
+      totalAmountToPay: 0,
+      netTotalPrice: 0,
+      breakdown: `${freeCount} secteur(s) gratuit(s) en cours d'utilisation (0 F CFA)`,
+    }
+  }
+
+  // Séparer les secteurs payants entre initiaux et ajoutés
+  const payingInitial = paidSectorsList.filter(s => sectorStatesMap.get(s)?.isInitial)
+  const payingAdded = paidSectorsList.filter(s => !sectorStatesMap.get(s)?.isInitial)
+
+  let payingInitialMonthly = 0
+  let payingInitialStandard = 0
+
+  // Si 3 secteurs initiaux sont gratuits et que nous facturons les secteurs initiaux au-delà de 3
+  if (freeCount >= MAX_FREE_TRIAL_SECTORS && payingInitial.length > 0) {
+    payingInitialMonthly = payingInitial.length * EXTRA_SECTOR_MONTHLY_PRICE
+    payingInitialStandard = payingInitial.length * SINGLE_SECTOR_ENTERPRISE_PRICE
+  } else {
+    // Calcul officiel multi-secteurs pour les secteurs initiaux
+    if (payingInitial.length === 1) {
+      const tier = normalizedInitialPlan
+      const price = tier === 'starter' ? SINGLE_SECTOR_STARTER_PRICE : SINGLE_SECTOR_ENTERPRISE_PRICE
+      payingInitialMonthly = price
+      payingInitialStandard = price
+    } else if (payingInitial.length === 2) {
+      payingInitialMonthly = 15000
+      payingInitialStandard = 20000
+    } else if (payingInitial.length === 3) {
+      payingInitialMonthly = 25000
+      payingInitialStandard = 30000
+    } else if (payingInitial.length > 3) {
+      const extra = payingInitial.length - 3
+      payingInitialMonthly = 25000 + extra * EXTRA_SECTOR_MONTHLY_PRICE
+      payingInitialStandard = payingInitial.length * SINGLE_SECTOR_ENTERPRISE_PRICE
+    }
+  }
+
+  let payingAddedMonthly = 0
+  let payingAddedStandard = 0
+
+  for (const addedSlug of payingAdded) {
+    const tier = sectorStatesMap.get(addedSlug)?.planTier || 'entreprise'
+    const price = calculateAddedSectorMonthlyPrice(tier)
+    payingAddedMonthly += price
+    payingAddedStandard += SINGLE_SECTOR_ENTERPRISE_PRICE
+  }
+
+  const standardMonthly = payingInitialStandard + payingAddedStandard
+  const netMonthly = payingInitialMonthly + payingAddedMonthly
+  const monthlyDiscount = Math.max(0, standardMonthly - netMonthly)
+  const totalAmount = netMonthly * dur
+  const totalDiscount = monthlyDiscount * dur
+
+  const planAppliedName =
+    paidCount === 1 && payingInitial.length === 1 && normalizedInitialPlan === 'starter'
+      ? 'Pack Starter (1 Secteur)'
+      : paidCount === 1
+      ? 'Pack 1 Secteur (Complet)'
+      : `Pack Multi-Secteurs (${paidCount} payant${paidCount > 1 ? 's' : ''})`
+
+  return {
+    scope: 'all',
+    scopeLabel: `Abonnement Global (${allSectors.length} secteur${allSectors.length > 1 ? 's' : ''})`,
+    planSlug: paidCount === 1 ? normalizedInitialPlan : 'multisecteur_pro',
+    planName: planAppliedName,
+    planAppliedSlug: paidCount === 1 ? normalizedInitialPlan : 'multisecteur_pro',
+    planAppliedName,
+    durationMonths: dur,
+    sectorsCovered: allSectors,
+    freeSectorsList,
+    paidSectorsList,
+    totalSectorsCount: allSectors.length,
+    freeSectorsCount: freeCount,
+    paidSectorsCount: paidCount,
+    standardMonthlyPrice: standardMonthly,
+    standardPriceMonthly: standardMonthly,
+    monthlySectorDiscount: monthlyDiscount,
+    sectorDiscountMonthly: monthlyDiscount,
+    monthlyNetPrice: netMonthly,
+    netMonthlyPrice: netMonthly,
+    totalSectorDiscount: totalDiscount,
+    totalAmountToPay: totalAmount,
+    netTotalPrice: totalAmount,
+    breakdown: `${paidCount} secteur(s) facturé(s) = ${netMonthly.toLocaleString('fr-FR')} F CFA / mois × ${dur} mois (Réduction multi-secteurs : ${monthlyDiscount.toLocaleString('fr-FR')} F CFA / mois)`,
   }
 }
 
