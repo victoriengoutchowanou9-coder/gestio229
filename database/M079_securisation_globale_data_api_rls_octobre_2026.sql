@@ -238,11 +238,15 @@ DECLARE
   p RECORD;
 BEGIN
   FOR t IN
-    SELECT table_name
-    FROM information_schema.columns
-    WHERE table_schema = 'public'
-      AND column_name = 'company_id'
-      AND table_name NOT IN ('sectors', 'modules', 'sector_templates', 'syscohada_accounts')
+    SELECT c.table_name
+    FROM information_schema.columns c
+    JOIN information_schema.tables tbl
+      ON tbl.table_schema = c.table_schema
+     AND tbl.table_name = c.table_name
+    WHERE c.table_schema = 'public'
+      AND tbl.table_type = 'BASE TABLE'
+      AND c.column_name = 'company_id'
+      AND c.table_name NOT IN ('sectors', 'modules', 'sector_templates', 'syscohada_accounts')
   LOOP
     FOR p IN
       SELECT policyname
@@ -368,28 +372,28 @@ END $$;
 
 DO $$
 BEGIN
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'companies') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'companies' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_companies_active ON public.companies(id, is_active);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'user_profiles') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'user_profiles' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_user_profiles_company ON public.user_profiles(company_id);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'caisses') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'caisses' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_caisses_company_sector ON public.caisses(company_id, sector_slug);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'caisse_sessions') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'caisse_sessions' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_caisse_sessions_company_sector ON public.caisse_sessions(company_id, sector_slug, statut);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'treasury_accounts') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'treasury_accounts' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_treasury_accounts_company_sector ON public.treasury_accounts(company_id, sector_slug);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'sales_orders') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'sales_orders' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_sales_orders_company_sector ON public.sales_orders(company_id, sector_slug, statut);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'products') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'products' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_products_company_sector ON public.products(company_id, sector_slug, is_active);
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'stock_magasin') THEN
+  IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'stock_magasin' AND table_type = 'BASE TABLE') THEN
     CREATE INDEX IF NOT EXISTS idx_stock_magasin_company ON public.stock_magasin(company_id, product_id);
   END IF;
 END $$;
