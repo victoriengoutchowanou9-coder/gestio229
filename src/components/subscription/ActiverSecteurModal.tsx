@@ -329,15 +329,19 @@ export const ActiverSecteurModal: React.FC<ActiverSecteurModalProps> = ({
             </label>
             <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {(selectedPlanTier === 'starter'
-                  ? featureInfo.starterFeatures
-                  : [...featureInfo.starterFeatures, ...featureInfo.enterpriseFeatures.filter((f) => !f.includes('Toutes les fonctionnalités'))]
-                ).map((feat, i) => (
-                  <div key={i} className="flex items-start gap-2 text-xs text-slate-200">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                    <span>{feat}</span>
-                  </div>
-                ))}
+                {(() => {
+                  const starterFeats = Array.isArray(featureInfo?.starterFeatures) ? featureInfo.starterFeatures : []
+                  const enterpriseFeats = Array.isArray(featureInfo?.enterpriseFeatures)
+                    ? featureInfo.enterpriseFeatures.filter((f) => typeof f === 'string' && !f.includes('Toutes les fonctionnalités'))
+                    : []
+                  const list = selectedPlanTier === 'starter' ? starterFeats : [...starterFeats, ...enterpriseFeats]
+                  return list.map((feat, i) => (
+                    <div key={i} className="flex items-start gap-2 text-xs text-slate-200">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                      <span>{feat}</span>
+                    </div>
+                  ))
+                })()}
               </div>
             </div>
           </div>

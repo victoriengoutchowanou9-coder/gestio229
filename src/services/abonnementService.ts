@@ -55,6 +55,8 @@ export interface CompanySubscriptionMeta {
   initial_plan: 'starter' | 'entreprise' | 'multisecteur_2' | 'multisecteur_3' | 'multisecteur_pro'
   initial_sectors: string[]
   sectors_meta: Record<string, SectorSubscriptionMeta>
+  added_sectors?: string[]
+  added_sectors_plans?: Record<string, 'starter' | 'entreprise'>
 }
 
 export interface AbonnementGlobalRow {
@@ -275,24 +277,46 @@ export async function getCompanySubscriptionMeta(
 
   if (existingMeta && Array.isArray(existingMeta.initial_sectors) && existingMeta.initial_sectors.length > 0) {
     let modified = false
+    const initSectors = existingMeta.initial_sectors.map((s) => canonicalSectorSlug(s)).filter(Boolean)
+    const initSet = new Set(initSectors)
+
+    // Secteurs ajoutés existants ou consolidés depuis les secteurs actuellement rattachés
+    const existingAdded = Array.isArray(existingMeta.added_sectors)
+      ? existingMeta.added_sectors.map((s) => canonicalSectorSlug(s)).filter(Boolean)
+      : []
+    const derivedAdded = cleanCurrent.filter((s) => !initSet.has(s))
+    const consolidatedAdded = Array.from(new Set([...existingAdded, ...derivedAdded]))
+
+    const addedPlans: Record<string, 'starter' | 'entreprise'> = { ...(existingMeta.added_sectors_plans || {}) }
+    for (const slug of consolidatedAdded) {
+      if (!addedPlans[slug]) {
+        addedPlans[slug] = existingMeta.sectors_meta?.[slug]?.plan_tier || 'entreprise'
+      }
+    }
+
     const meta: CompanySubscriptionMeta = {
       initial_plan: existingMeta.initial_plan || (compRow?.subscription_plan === 'starter' ? 'starter' : 'entreprise'),
-      initial_sectors: existingMeta.initial_sectors.map((s) => canonicalSectorSlug(s)),
+      initial_sectors: initSectors,
       sectors_meta: { ...(existingMeta.sectors_meta || {}) },
+      added_sectors: consolidatedAdded,
+      added_sectors_plans: addedPlans,
     }
 
     for (const slug of cleanCurrent) {
       if (!meta.sectors_meta[slug]) {
-        const isInit = meta.initial_sectors.includes(slug)
-        const initIdx = meta.initial_sectors.indexOf(slug)
+        const isInit = initSet.has(slug)
+        const initIdx = initSectors.indexOf(slug)
         const isFree = isInit && initIdx >= 0 && initIdx < MAX_FREE_TRIAL_SECTORS
         const createdDate = companyCreatedAt || compRow?.created_at || now.toISOString()
         const trialEnd = new Date(new Date(createdDate).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        const sectorPlan = isInit
+          ? (String(meta.initial_plan).includes('starter') ? 'starter' : 'entreprise')
+          : (meta.added_sectors_plans[slug] || 'entreprise')
 
         meta.sectors_meta[slug] = {
           sector_slug: slug,
           is_initial_sector: isInit,
-          plan_tier: isInit && String(meta.initial_plan).includes('starter') ? 'starter' : 'entreprise',
+          plan_tier: sectorPlan,
           is_gratuit: isFree,
           date_debut_gratuit: isFree ? createdDate : null,
           date_fin_gratuit: isFree ? trialEnd : null,
@@ -302,6 +326,10 @@ export async function getCompanySubscriptionMeta(
         }
         modified = true
       }
+    }
+
+    if (!Array.isArray(existingMeta.added_sectors) || !existingMeta.added_sectors_plans) {
+      modified = true
     }
 
     if (modified) {
@@ -327,8 +355,10 @@ export async function getCompanySubscriptionMeta(
       ? 'multisecteur_pro'
       : 'entreprise'
 
-  const initialSectors = cleanCurrent.length > 0 ? cleanCurrent : ['boutique']
+  const initialSectors = cleanCurrent.length > 0 ? cleanCurrent.slice(0, 3) : ['boutique']
+  const addedSectors = cleanCurrent.length > 3 ? cleanCurrent.slice(3) : []
   const sectorsMeta: Record<string, SectorSubscriptionMeta> = {}
+  const addedPlans: Record<string, 'starter' | 'entreprise'> = {}
 
   initialSectors.forEach((slug, idx) => {
     const isFree = idx < MAX_FREE_TRIAL_SECTORS
@@ -345,10 +375,27 @@ export async function getCompanySubscriptionMeta(
     }
   })
 
+  addedSectors.forEach((slug) => {
+    sectorsMeta[slug] = {
+      sector_slug: slug,
+      is_initial_sector: false,
+      plan_tier: 'entreprise',
+      is_gratuit: false,
+      date_debut_gratuit: null,
+      date_fin_gratuit: null,
+      date_ajout: now.toISOString(),
+      date_debut_validite: null,
+      date_fin_validite: null,
+    }
+    addedPlans[slug] = 'entreprise'
+  })
+
   const newMeta: CompanySubscriptionMeta = {
     initial_plan: initialPlanSlug,
     initial_sectors: initialSectors,
     sectors_meta: sectorsMeta,
+    added_sectors: addedSectors,
+    added_sectors_plans: addedPlans,
   }
 
   await saveCompanySubscriptionMeta(companyId, newMeta)
@@ -396,13 +443,25 @@ export async function updateAddedSectorPlan(
   companyId: string,
   sectorSlug: string,
   planTier: 'starter' | 'entreprise'
-): Promise<{ success: boolean; error?: string }> {
+): Promise<{ success: boolean; meta?: CompanySubscriptionMeta; error?: string }> {
   if (!companyId || !sectorSlug) return { success: false, error: 'Paramètres manquants' }
   const cleanSlug = canonicalSectorSlug(sectorSlug)
 
   try {
     const meta = await getCompanySubscriptionMeta(companyId, [cleanSlug])
-    const isInitial = meta.initial_sectors.includes(cleanSlug)
+    const isInitial = Array.isArray(meta?.initial_sectors) && meta.initial_sectors.includes(cleanSlug)
+
+    if (!Array.isArray(meta.added_sectors)) {
+      meta.added_sectors = []
+    }
+    if (!meta.added_sectors_plans) {
+      meta.added_sectors_plans = {}
+    }
+
+    if (!isInitial && !meta.added_sectors.includes(cleanSlug)) {
+      meta.added_sectors.push(cleanSlug)
+    }
+    meta.added_sectors_plans[cleanSlug] = planTier
 
     if (meta.sectors_meta[cleanSlug]) {
       meta.sectors_meta[cleanSlug].plan_tier = planTier
@@ -421,7 +480,7 @@ export async function updateAddedSectorPlan(
     }
 
     await saveCompanySubscriptionMeta(companyId, meta)
-    return { success: true }
+    return { success: true, meta }
   } catch (err: any) {
     return { success: false, error: err?.message || 'Erreur lors de la mise à jour du plan.' }
   }
@@ -663,14 +722,16 @@ export async function evaluerAccesSecteur(
 
   // Charger les métadonnées durables consolidées
   const meta = await getCompanySubscriptionMeta(entrepriseId, [cleanSlug], companyCreatedAt)
-  const secMeta = meta.sectors_meta[cleanSlug]
-  const isInitial = secMeta ? secMeta.is_initial_sector : (isInitialSector || meta.initial_sectors.includes(cleanSlug))
+  const secMeta = meta.sectors_meta?.[cleanSlug]
+  const isInitial = secMeta
+    ? secMeta.is_initial_sector
+    : (isInitialSector || (Array.isArray(meta?.initial_sectors) && meta.initial_sectors.includes(cleanSlug)))
   const isFreeEligible = secMeta
     ? secMeta.is_gratuit
-    : isInitial && meta.initial_sectors.indexOf(cleanSlug) >= 0 && meta.initial_sectors.indexOf(cleanSlug) < MAX_FREE_TRIAL_SECTORS
+    : isInitial && Array.isArray(meta?.initial_sectors) && meta.initial_sectors.indexOf(cleanSlug) >= 0 && meta.initial_sectors.indexOf(cleanSlug) < MAX_FREE_TRIAL_SECTORS
   const currentPlanTier: 'starter' | 'entreprise' = secMeta
     ? secMeta.plan_tier
-    : isInitial && String(meta.initial_plan).includes('starter')
+    : isInitial && typeof meta?.initial_plan === 'string' && meta.initial_plan.includes('starter')
     ? 'starter'
     : 'entreprise'
 
@@ -970,7 +1031,7 @@ export async function ajouterSecteurAuCompte(
     const alreadyExists = allSecteurs.find((r) => toSecteurCode(r.secteur_code) === code)
 
     const meta = await getCompanySubscriptionMeta(entrepriseId, [cleanSlug])
-    const isInitial = meta.initial_sectors.includes(cleanSlug)
+    const isInitial = Array.isArray(meta?.initial_sectors) && meta.initial_sectors.includes(cleanSlug)
 
     let targetStatut: StatutSpecifique = 'en_attente_paiement'
     let rattacheGlobal = false

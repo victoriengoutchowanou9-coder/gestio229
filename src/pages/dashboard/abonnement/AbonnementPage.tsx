@@ -164,15 +164,17 @@ export const AbonnementPage: React.FC = () => {
       Boolean(isGlobalTrial && globalSub?.date_fin_global && new Date(globalSub.date_fin_global) > new Date())
 
     const initialSecs =
-      companyMeta?.initial_sectors && companyMeta.initial_sectors.length > 0
+      Array.isArray(companyMeta?.initial_sectors) && companyMeta.initial_sectors.length > 0
         ? companyMeta.initial_sectors
-        : currentSectors.slice(0, 3)
+        : Array.isArray(currentSectors)
+        ? currentSectors.slice(0, 3)
+        : []
 
     const initialPl = companyMeta?.initial_plan || singleTier
 
-    const sectorsStateList = currentSectors.map((slug) => {
-      const isInitial = initialSecs.includes(slug)
-      const st = secteursStatus[slug]
+    const sectorsStateList = (currentSectors || []).map((slug) => {
+      const isInitial = Array.isArray(initialSecs) && initialSecs.includes(slug)
+      const st = secteursStatus ? secteursStatus[slug] : undefined
       const isPaidAndActive = Boolean(
         st?.statutEffectif === 'actif' &&
         !st.isGratuit &&
@@ -186,6 +188,7 @@ export const AbonnementPage: React.FC = () => {
       )
       const addedPlan =
         companyMeta?.added_sectors_plans?.[slug] ||
+        companyMeta?.sectors_meta?.[slug]?.plan_tier ||
         (singleTier === 'starter' ? 'starter' : 'entreprise')
 
       return {
@@ -206,6 +209,25 @@ export const AbonnementPage: React.FC = () => {
       durationMonths,
     })
   }, [targetScope, currentSectors, companyMeta, singleTier, durationMonths, globalSub, secteursStatus])
+
+  // Identification robuste des secteurs supplémentaires ajoutés (Règle 5)
+  const isTargetAddedSector = useMemo(() => {
+    if (!targetScope || targetScope === 'all') return false
+    const initialSecs =
+      Array.isArray(companyMeta?.initial_sectors) && companyMeta.initial_sectors.length > 0
+        ? companyMeta.initial_sectors
+        : Array.isArray(currentSectors)
+        ? currentSectors.slice(0, 3)
+        : []
+
+    if (Array.isArray(companyMeta?.added_sectors) && companyMeta.added_sectors.includes(targetScope)) {
+      return true
+    }
+    if (Array.isArray(currentSectors) && currentSectors.includes(targetScope) && !initialSecs.includes(targetScope)) {
+      return true
+    }
+    return false
+  }, [targetScope, companyMeta, currentSectors])
 
   // Mapping de commodité pour l'interface
   const pricingSummary = useMemo(() => {
@@ -235,8 +257,13 @@ export const AbonnementPage: React.FC = () => {
   const handleSelectAddedSectorPlan = async (sectorSlug: string, tier: 'starter' | 'entreprise') => {
     if (!company?.id) return
     try {
-      const updatedMeta = await updateAddedSectorPlan(company.id, sectorSlug, tier)
-      setCompanyMeta(updatedMeta)
+      const res = await updateAddedSectorPlan(company.id, sectorSlug, tier)
+      if (res.success && res.meta) {
+        setCompanyMeta(res.meta)
+      } else {
+        const fresh = await getCompanySubscriptionMeta(company.id, currentSectors, company.created_at, company.subscription_plan)
+        setCompanyMeta(fresh)
+      }
     } catch (err) {
       console.error('Erreur enregistrement plan secteur supplémentaire:', err)
     }
@@ -658,7 +685,7 @@ export const AbonnementPage: React.FC = () => {
             )}
 
             {/* Règle 5 : Choix de plan pour un secteur ajouté après l'inscription (Starter 5 000 F vs Complet 10 000 F) */}
-            {targetScope !== 'all' && companyMeta?.added_sectors.includes(targetScope) && (
+            {isTargetAddedSector && (
               <div className="mt-5 pt-5 border-t border-slate-800">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
@@ -670,7 +697,10 @@ export const AbonnementPage: React.FC = () => {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   {(() => {
-                    const currentPlanForThisSector = companyMeta.added_sectors_plans?.[targetScope] || 'entreprise'
+                    const currentPlanForThisSector =
+                      companyMeta?.added_sectors_plans?.[targetScope] ||
+                      companyMeta?.sectors_meta?.[targetScope]?.plan_tier ||
+                      'entreprise'
                     return (
                       <>
                         <button
@@ -814,9 +844,13 @@ export const AbonnementPage: React.FC = () => {
           {(() => {
             const activeSectorSlug = targetScope === 'all' ? (currentSectors[0] || 'boutique') : targetScope
             const activeFeatureInfo = getSectorFeatureInfo(activeSectorSlug)
+            const starterFeats = Array.isArray(activeFeatureInfo?.starterFeatures) ? activeFeatureInfo.starterFeatures : []
+            const enterpriseFeats = Array.isArray(activeFeatureInfo?.enterpriseFeatures)
+              ? activeFeatureInfo.enterpriseFeatures.filter((f) => typeof f === 'string' && !f.includes('Toutes les fonctionnalités'))
+              : []
             const featureList = singleTier === 'starter' && currentSectors.length === 1
-              ? activeFeatureInfo.starterFeatures
-              : [...activeFeatureInfo.starterFeatures, ...activeFeatureInfo.enterpriseFeatures.filter((f) => !f.includes('Toutes les fonctionnalités'))]
+              ? starterFeats
+              : [...starterFeats, ...enterpriseFeats]
 
             return (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
@@ -868,7 +902,7 @@ export const AbonnementPage: React.FC = () => {
               <div className="flex items-start justify-between gap-2">
                 <span className="text-slate-400">Secteurs concernés</span>
                 <span className="font-semibold text-slate-200 text-right">
-                  {detailedPricing.sectorsCovered
+                  {(detailedPricing?.sectorsCovered || [])
                     .map((s) => SECTORS_LIST.find((x) => x.slug === s)?.name || s.toUpperCase())
                     .join(', ')}
                 </span>
