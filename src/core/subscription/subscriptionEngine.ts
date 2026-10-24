@@ -456,3 +456,323 @@ export function getCompanySubscriptionInfo(company?: Company | null): {
   }
 }
 
+// =============================================================================
+// CATALOGUE OFFICIEL DES FONCTIONNALITÉS INCLUSES PAR SECTEUR D'ACTIVITÉ
+// Présentation claire pour les clients (Mon Abonnement & Modale Activer Secteur)
+// =============================================================================
+
+export interface SectorFeatureInfo {
+  slug: string
+  name: string
+  tagline: string
+  description: string
+  starterFeatures: string[]
+  enterpriseFeatures: string[]
+  modules: string[]
+}
+
+export const SECTOR_FEATURES_CATALOG: Record<string, SectorFeatureInfo> = {
+  'station-service': {
+    slug: 'station-service',
+    name: 'Station-Service & Carburants',
+    tagline: 'Pilotage complet des cuves, des index de pompes et des équipes de pompistes',
+    description: 'Solution spécialisée pour stations-service : suivi en temps réel des jauges de cuves, relevés des compteurs début et fin de quart, clôture de caisse pompiste et rapprochement des écarts de litrage.',
+    starterFeatures: [
+      'Suivi des cuves (Essence, Gasoil, Pétrole)',
+      'Relevé des index de pompes et compteurs',
+      'Affectation des pompistes par quart de travail',
+      'Vente carburants et lubrifiants',
+      'Clôture de poste et calcul des écarts',
+      'Caisse espèces & Mobile Money'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Gestion des flottes d\'entreprises et cartes carburant',
+      'Synchronisation comptable automatique SYSCOHADA',
+      'Rapprochement bancaire & transferts coffre-fort',
+      'Rapports d\'activité et alertes de seuil de réapprovisionnement'
+    ],
+    modules: ['pompes-cuves', 'postes-pompistes', 'ventes', 'caisse', 'stocks', 'clients', 'finances', 'syscohada']
+  },
+  'pharmacie': {
+    slug: 'pharmacie',
+    name: 'Pharmacie & Parapharmacie',
+    tagline: 'Sécurisation des médicaments, traçabilité des lots et vente comptoir rapide',
+    description: 'Gestion rigoureuse d\'officine : suivi des numéros de lots et des dates de péremption, délivrance sur ordonnance, gestion des assurances/tiers payants et caisse sécurisée.',
+    starterFeatures: [
+      'Vente rapide au comptoir et tickets de caisse',
+      'Gestion des lots et dates de péremption',
+      'Alertes de stock minimum et produits périmés',
+      'Enregistrement des ordonnances et médecins',
+      'Caisse journalière et suivi des espèces/MoMo'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Gestion des tiers-payants et mutuelles/assurances',
+      'Inventaires tournants par rayon et zone de stockage',
+      'Intégration comptable SYSCOHADA complète',
+      'Historique pharmacovigilance et traçabilité réglementaire'
+    ],
+    modules: ['vente-comptoir', 'ordonnances', 'fournisseurs', 'caisse', 'stocks', 'finances', 'syscohada']
+  },
+  'quincaillerie': {
+    slug: 'quincaillerie',
+    name: 'Quincaillerie & Matériaux de Construction',
+    tagline: 'Gestion multi-unités (UCD/UV), ventes au détail/gros et suivi des chantiers',
+    description: 'Conçu pour la distribution de matériaux : gestion des unités de conditionnement (tonnes, barres, paquets, sacs), conversion automatique, devis de chantiers et créances clients.',
+    starterFeatures: [
+      'Double unité : Stock (UCD) et Vente (UV)',
+      'Conversion automatique lors des ventes et réceptions',
+      'Vente comptoir et facturation proforma/devis',
+      'Gestion du stock magasin et stock vente séparés',
+      'Suivi des créances et dettes clients/fournisseurs'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Bons de commande fournisseurs avec réceptions échelonnées',
+      'Multi-dépôts et transferts inter-magasins',
+      'Grand livre & balance générale SYSCOHADA',
+      'Suivi des marges brutes par famille d\'articles'
+    ],
+    modules: ['ventes', 'stocks', 'caisse', 'bons-commande', 'clients', 'fournisseurs', 'finances', 'syscohada']
+  },
+  'restaurant': {
+    slug: 'restaurant',
+    name: 'Restaurant, Bar & Maquis',
+    tagline: 'Plan de salle, fiches recettes, déstockage cuisine et encaissements rapides',
+    description: 'Adapté aux établissements de restauration : gestion des tables, transmission des commandes cuisine/bar, fiches techniques recettes avec déstockage automatique des ingrédients.',
+    starterFeatures: [
+      'Plan de salle interactif et gestion des tables',
+      'Prise de commande mobile serveurs / bar / cuisine',
+      'Fiches techniques recettes (ingrédients & dosages)',
+      'Déstockage automatique lors des préparations',
+      'Caisse de service et clôture par serveur'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Gestion des pertes, casses et gaspillages',
+      'Réservations de tables et gestion des événements',
+      'Comptabilité SYSCOHADA & analytique cuisine/bar',
+      'Rapports de rentabilité par plat et boisson'
+    ],
+    modules: ['plan-salle', 'commandes', 'recettes', 'caisse', 'stocks', 'finances', 'syscohada']
+  },
+  'microfinance': {
+    slug: 'microfinance',
+    name: 'Microfinance & Tontines',
+    tagline: 'Gestion des adhérents, plans d\'épargne, tontines et suivi des crédits',
+    description: 'Solution pour structures de microfinance et groupements : adhésions, comptes d\'épargne, cycles de tontine, tableaux d\'amortissement de crédits et collectes terrain.',
+    starterFeatures: [
+      'Fiches individuelles des adhérents / sociétaires',
+      'Gestion des comptes d\'épargne et dépôts/retraits',
+      'Suivi des cycles de tontine et des cotisations',
+      'Caisse d\'agence et reçus de collecte',
+      'Relevés de compte individuels'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Octroi de crédits avec échéanciers d\'amortissement',
+      'Application pour agents collecteurs mobiles sur le terrain',
+      'Calcul automatique des pénalités de retard',
+      'Rapports de conformité et écritures SYSCOHADA'
+    ],
+    modules: ['membres-epargne', 'tontines', 'credits', 'agents-collecteurs', 'caisse', 'finances', 'syscohada']
+  },
+  'ecole': {
+    slug: 'ecole',
+    name: 'École & Établissement Scolaire',
+    tagline: 'Gestion des inscriptions, des classes et recouvrement des frais scolaires',
+    description: 'Dédié aux écoles, collèges et centres de formation : dossiers élèves, répartition par classes, échéanciers de scolarité, attestations de paiement et caisse établissement.',
+    starterFeatures: [
+      'Inscriptions et fiches complètes des élèves',
+      'Gestion des promotions, filières et classes',
+      'Échéanciers de frais de scolarité et cantine',
+      'Émission instantanée des reçus et quittances',
+      'Caisse d\'établissement et état des impayés'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Gestion des enseignants et fiches de présence',
+      'Bulletins de notes et relevés périodiques',
+      'Alertes SMS/WhatsApp de relance aux parents',
+      'Plan comptable scolaire SYSCOHADA'
+    ],
+    modules: ['inscriptions', 'classes', 'paiements-scolaires', 'evaluations', 'caisse', 'finances', 'syscohada']
+  },
+  'imprimerie': {
+    slug: 'imprimerie',
+    name: 'Imprimerie & Travaux Graphiques',
+    tagline: 'Chiffrage des devis, gestion des papiers/bobines et ordres de production',
+    description: 'Pilotage d\'ateliers graphiques et sérigraphie : devis personnalisés selon formats et grammages, suivi des bobines/plaques, ordres de fabrication et caisse.',
+    starterFeatures: [
+      'Devis sur mesure selon supports et tirages',
+      'Gestion des machines et postes d\'impression',
+      'Suivi des stocks de papiers, bobines, encres et bâches',
+      'Ordres de fabrication (OF) et suivi d\'avancement',
+      'Facturation et encaissement des acomptes'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Planning de charge des machines de tirage',
+      'Calcul du coût de revient matière & façonnage',
+      'Facturation avec suivi des livraisons partielles',
+      'Intégration comptable SYSCOHADA'
+    ],
+    modules: ['devis-production', 'machines', 'papiers', 'prestations', 'caisse', 'finances', 'syscohada']
+  },
+  'garage': {
+    slug: 'garage',
+    name: 'Garage Automobile & Mécanique',
+    tagline: 'Ordres de réparation (OR), pièces de rechange et suivi des diagnostics',
+    description: 'Pour ateliers mécaniques et centres auto : fiches véhicules, réception client, ordres de réparation, affectation des mécaniciens, pièces détachées et facturation.',
+    starterFeatures: [
+      'Fiches véhicules (châssis, immatriculation, km)',
+      'Ordres de Réparation (OR) et diagnostics',
+      'Gestion du stock de pièces détachées et fluides',
+      'Facturation main d\'œuvre et fournitures',
+      'Caisse atelier et règlements clients'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Gestion des dossiers sinistres et assurances',
+      'Planning de travail des techniciens/mécaniciens',
+      'Historique d\'entretien complet par véhicule',
+      'Gestion financière et comptabilité SYSCOHADA'
+    ],
+    modules: ['reparations', 'vehicules', 'pieces', 'assurances', 'caisse', 'finances', 'syscohada']
+  },
+  'btp': {
+    slug: 'btp',
+    name: 'BTP, Chantier & Engins',
+    tagline: 'Suivi de chantier, affectation du matériel lourd et gestion des carburants',
+    description: 'Solution pour entreprises du bâtiment et travaux publics : fiches chantiers, consommation de carburant par engin, maintenance des équipements et caisse de régie.',
+    starterFeatures: [
+      'Gestion des chantiers et sites opérationnels',
+      'Inventaire du parc matériel et petits outillages',
+      'Suivi de la consommation carburant par engin',
+      'Affectation des chauffeurs et ouvriers',
+      'Dépenses de régie et caisse de chantier'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Planning de maintenance préventive des engins',
+      'Rapprochement des coûts de revient par chantier',
+      'Logistique et transferts inter-sites',
+      'Comptabilité analytique SYSCOHADA'
+    ],
+    modules: ['chantiers', 'materiel', 'carburant', 'maintenance', 'caisse', 'finances', 'syscohada']
+  },
+  'flotte': {
+    slug: 'flotte',
+    name: 'Transport & Flotte de Véhicules',
+    tagline: 'Missions, billetterie, consommation de carburant et conformité documents',
+    description: 'Pour sociétés de transport et gestionnaires de parcs : missions de transport, carnets de bord, suivi des assurances/visites techniques et caisse de billetterie.',
+    starterFeatures: [
+      'Fiches véhicules et conducteurs',
+      'Ordres de mission et feuilles de route',
+      'Suivi des pleins de carburant et kilométrages',
+      'Alertes d\'expiration des pièces (assurance, visite)',
+      'Caisse billetterie et frais de route'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Géolocalisation & suivi des zones géographiques',
+      'Rapports d\'entretien et calcul du coût au km',
+      'Gestion des incidents et déclarations de sinistres',
+      'Écritures comptables automatiques SYSCOHADA'
+    ],
+    modules: ['missions', 'vehicules', 'conducteurs', 'carburant', 'caisse', 'finances', 'syscohada']
+  },
+  'poissonnerie': {
+    slug: 'poissonnerie',
+    name: 'Poissonnerie & Entrepôt Frigorifique',
+    tagline: 'Pèse-colis, chambres froides, gestion des cartons/vrac et des avaries',
+    description: 'Pour grossistes et détaillants de produits congelés : pesée au kilogramme, gestion par carton et détail, surveillance des chambres froides et traçabilité des avaries.',
+    starterFeatures: [
+      'Vente au poids (kg) et au carton/cartouche',
+      'Gestion du stock chambres froides et comptoir',
+      'Saisie et traçabilité des avaries/décongélations',
+      'Tarification différenciée gros / demi-gros / détail',
+      'Caisse journalière espèces et Mobile Money'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Suivi des températures des chambres froides',
+      'Réception maritime/fournisseur avec pesée à quai',
+      'Comptabilité de gestion des stocks SYSCOHADA',
+      'Rapports de marge après déduction des pertes'
+    ],
+    modules: ['ventes', 'pesee', 'chambres-froides', 'avaries', 'caisse', 'stocks', 'finances', 'syscohada']
+  },
+  'immobilier': {
+    slug: 'immobilier',
+    name: 'Gestion Immobilière & Locative',
+    tagline: 'Baux, loyers, quittances, cautions et suivi des travaux locatifs',
+    description: 'Pour agences immobilières et propriétaires : contrats de bail, perception des loyers, quittances automatiques, gestion des états des lieux et cautions en dépôt.',
+    starterFeatures: [
+      'Fiches des biens (appartements, boutiques, villas)',
+      'Dossiers locataires et propriétaires bailleurs',
+      'Génération des contrats de bail et états des lieux',
+      'Émission des avis d\'échéance et quittances de loyer',
+      'Caisse des loyers et suivi des impayés'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Reversement des loyers aux propriétaires bailleurs',
+      'Gestion des travaux d\'entretien et retenues sur caution',
+      'Historique des baux et renouvellements',
+      'Plan comptable immobilier SYSCOHADA'
+    ],
+    modules: ['biens', 'locataires', 'contrats', 'quittances', 'caisse', 'finances', 'syscohada']
+  },
+  'boutique': {
+    slug: 'boutique',
+    name: 'Commerce Général & Boutique',
+    tagline: 'Encaissement rapide, multi-dépôts, gestion des codes-barres et créances',
+    description: 'Solution polyvalente pour magasins et commerces : catalogue articles, étiquettes codes-barres, vente comptoir rapide, gestion des stocks et suivi des créances clients.',
+    starterFeatures: [
+      'Vente rapide au comptoir et tickets de caisse',
+      'Gestion du catalogue articles et codes-barres',
+      'Stock magasin et stock boutique avec alertes',
+      'Suivi des créances clients et dettes fournisseurs',
+      'Caisse journalière espèces & Mobile Money'
+    ],
+    enterpriseFeatures: [
+      'Toutes les fonctionnalités Starter incluses',
+      'Multi-dépôts avec transferts sécurisés',
+      'Bons de commande fournisseurs et réceptions',
+      'Comptabilité générale SYSCOHADA Révisé',
+      'Rapports de ventes, marges et bilans comptables'
+    ],
+    modules: ['ventes', 'stocks', 'caisse', 'clients', 'fournisseurs', 'depenses', 'finances', 'syscohada']
+  }
+}
+
+/**
+ * Retourne les fonctionnalités d'un secteur par son slug ou un fallback propre
+ */
+export function getSectorFeatureInfo(sectorSlug?: string): SectorFeatureInfo {
+  if (!sectorSlug) return SECTOR_FEATURES_CATALOG['boutique']
+  const clean = String(sectorSlug).replace(/^sec-/, '').toLowerCase().trim()
+  return SECTOR_FEATURES_CATALOG[clean] || {
+    slug: clean,
+    name: clean.toUpperCase(),
+    tagline: 'Gestion opérationnelle, stocks, encaissements et finances',
+    description: 'Ensemble des modules métiers essentiels pour piloter et développer votre activité.',
+    starterFeatures: [
+      'Ventes et encaissements rapides',
+      'Gestion du stock et alertes de rupture',
+      'Caisse journalière multi-modes',
+      'Suivi des clients et des dépenses'
+    ],
+    enterpriseFeatures: [
+      'Comptabilité SYSCOHADA Révisé intégrée',
+      'Trésorerie avancée et rapprochement bancaire',
+      'Multi-utilisateurs et droits d\'accès stricts',
+      'Rapports d\'activité et analyses financières'
+    ],
+    modules: ['ventes', 'stocks', 'caisse', 'clients', 'depenses', 'finances', 'syscohada']
+  }
+}
+
+

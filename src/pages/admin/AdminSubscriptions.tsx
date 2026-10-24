@@ -627,36 +627,54 @@ export const AdminSubscriptions: React.FC = () => {
                               </span>
                             </div>
 
-                            <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-800/80">
+                            <div className="flex items-center justify-between gap-1.5 pt-2 border-t border-slate-800/80 flex-wrap">
                               <button
                                 type="button"
                                 onClick={() => openActivationModal(c, slug)}
                                 className="px-2.5 py-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 border border-emerald-500/30 text-[11px] font-bold transition"
+                                title="Activer, renouveler ou modifier les dates d'expiration"
                               >
-                                Activer / Prolonger
+                                Activer / Modifier
                               </button>
 
-                              {st.code === 'suspendu' ? (
-                                <button
-                                  type="button"
-                                  disabled={processingAction}
-                                  onClick={() => handleQuickStatusChange(c, slug, 'actif')}
-                                  className="px-2.5 py-1 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[11px] font-semibold flex items-center gap-1"
-                                >
-                                  <Unlock className="w-3 h-3" />
-                                  Réactiver
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  disabled={processingAction}
-                                  onClick={() => handleQuickStatusChange(c, slug, 'suspendu')}
-                                  className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-red-950/60 text-slate-400 hover:text-red-300 text-[11px] font-semibold flex items-center gap-1"
-                                >
-                                  <Lock className="w-3 h-3" />
-                                  Suspendre
-                                </button>
-                              )}
+                              <div className="flex items-center gap-1">
+                                {st.code === 'suspendu' ? (
+                                  <button
+                                    type="button"
+                                    disabled={processingAction}
+                                    onClick={() => handleQuickStatusChange(c, slug, 'actif')}
+                                    className="px-2 py-1 rounded-lg bg-blue-500/20 hover:bg-blue-500/30 text-blue-300 text-[10px] font-semibold flex items-center gap-1"
+                                    title="Réactiver ce secteur"
+                                  >
+                                    <Unlock className="w-3 h-3" />
+                                    Réactiver
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled={processingAction}
+                                    onClick={() => handleQuickStatusChange(c, slug, 'suspendu')}
+                                    className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-amber-950/60 text-slate-400 hover:text-amber-300 text-[10px] font-semibold flex items-center gap-1"
+                                    title="Suspendre l'accès à ce secteur"
+                                  >
+                                    <Lock className="w-3 h-3" />
+                                    Suspendre
+                                  </button>
+                                )}
+
+                                {st.code !== 'expire' && st.code !== 'en_attente' && (
+                                  <button
+                                    type="button"
+                                    disabled={processingAction}
+                                    onClick={() => handleQuickStatusChange(c, slug, 'expire')}
+                                    className="px-2 py-1 rounded-lg bg-slate-800 hover:bg-red-950/60 text-slate-400 hover:text-red-300 text-[10px] font-semibold flex items-center gap-1"
+                                    title="Désactiver / Marquer comme expiré"
+                                  >
+                                    <XCircle className="w-3 h-3" />
+                                    Désactiver
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         )

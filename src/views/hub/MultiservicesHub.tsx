@@ -1098,6 +1098,16 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // ── Action : Ouvrir l'application métier (Section 4 : Ouverture vers le Tableau de bord même si inactif) ──
   const handleOpenActivity = (act: ActivityEntry) => {
+    // Si l'abonnement du secteur est inactif ou expiré, ouvrir l'interface claire de présentation & abonnement
+    const badgeInfo = getSectorBadgeInfo(act.sectorSlug);
+    if ((badgeInfo as any)?.isNonActive) {
+      setActivationModalData({
+        slug: act.sectorSlug,
+        name: act.name,
+      });
+      return;
+    }
+
     if (onSelectSector) {
       onSelectSector(act.sectorSlug, act.id, act.name, act.location);
     } else {
@@ -1219,10 +1229,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                   <Settings size={14} /> Entreprise
                 </button>
                 <button
-                  onClick={onOpenSubscription || (() => setShowSubscriptionModal(true))}
+                  onClick={onOpenSubscription || (() => {
+                    const targetSector = (activities[0]?.sectorSlug || company?.active_sector || 'boutique').replace(/^sec-/, '').toLowerCase();
+                    navigate(`/app/${targetSector}/abonnement`);
+                  })}
                   className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition-colors shadow-sm shadow-indigo-600/20"
                 >
-                  <CreditCard size={14} /> Abonnement
+                  <CreditCard size={14} /> Mon Abonnement
                 </button>
                 <button
                   onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}

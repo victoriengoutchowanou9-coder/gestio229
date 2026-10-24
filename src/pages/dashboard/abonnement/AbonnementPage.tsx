@@ -26,6 +26,7 @@ import {
   calculateSubscriptionPrice,
   calculateDurationPrice,
   calculateRenewalDates,
+  getSectorFeatureInfo,
   EXTRA_SECTOR_MONTHLY_PRICE,
   SINGLE_SECTOR_ENTERPRISE_PRICE,
   SINGLE_SECTOR_STARTER_PRICE,
@@ -713,6 +714,43 @@ export const AbonnementPage: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* 3.4 Fonctionnalités incluses dans le secteur sélectionné */}
+          {(() => {
+            const activeSectorSlug = targetScope === 'all' ? (currentSectors[0] || 'boutique') : targetScope
+            const activeFeatureInfo = getSectorFeatureInfo(activeSectorSlug)
+            const featureList = singleTier === 'starter' && currentSectors.length === 1
+              ? activeFeatureInfo.starterFeatures
+              : [...activeFeatureInfo.starterFeatures, ...activeFeatureInfo.enterpriseFeatures.filter((f) => !f.includes('Toutes les fonctionnalités'))]
+
+            return (
+              <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="text-sm font-bold text-white flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                    Fonctionnalités incluses — {activeFeatureInfo.name}
+                  </h2>
+                  <span className="text-[11px] font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-0.5 rounded-full">
+                    {targetScope === 'all' ? 'Pack Global' : 'Secteur Spécifique'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mb-4 leading-relaxed">
+                  {activeFeatureInfo.description}
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  {featureList.map((feature, idx) => (
+                    <div
+                      key={idx}
+                      className="flex items-start gap-2.5 bg-slate-950/70 border border-slate-800/80 rounded-xl p-3 text-xs text-slate-200"
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                      <span>{feature}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
         </div>
 
         {/* Colonne Droite (1/3) : Récapitulatif Obligatoire & Modes de Paiement « Manuel » et « Automatique » */}
@@ -800,14 +838,14 @@ export const AbonnementPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={handleSelectAutomaticPayment}
-                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
+                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
                     selectedPaymentMode === 'automatique'
                       ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
-                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                      : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                   }`}
                 >
                   <CreditCard className="w-4 h-4" />
-                  2. Automatique
+                  2. Automatique <span className="text-[10px] opacity-75 font-normal">(Bientôt)</span>
                 </button>
               </div>
             </div>
