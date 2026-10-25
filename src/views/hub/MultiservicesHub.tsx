@@ -271,13 +271,25 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, sectorSlug));
     const now = new Date();
 
+    // 0. Déterminer si l'entreprise ou l'abonnement global est actif
+    const compExpiresAt = company?.subscription_expires_at ? new Date(company.subscription_expires_at) : null;
+    const isCompanyActive =
+      (company?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)) ||
+      (globalSub?.statut_global === 'actif' && globalDaysRemaining > 0);
+    const effectiveGlobalDays = compExpiresAt && compExpiresAt >= now
+      ? calcDaysRemaining(compExpiresAt)
+      : (globalDaysRemaining > 0 ? globalDaysRemaining : 30);
+    const effectiveGlobalDateStr = compExpiresAt && compExpiresAt >= now
+      ? compExpiresAt.toLocaleDateString('fr-FR')
+      : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global).toLocaleDateString('fr-FR') : '');
+
     // 1. Abonnement spécifique actif sur ce secteur
-    if (sub?.statut_specifique === 'actif') {
+    if (sub?.statut_specifique === 'actif' || (sub?.date_fin_specifique && new Date(sub.date_fin_specifique) >= now)) {
       const fin = sub.date_fin_specifique
         ? new Date(sub.date_fin_specifique)
-        : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null);
-      const days = fin ? calcDaysRemaining(fin) : (globalDaysRemaining > 0 ? globalDaysRemaining : 30);
-      const expDateStr = fin ? fin.toLocaleDateString('fr-FR') : '';
+        : (compExpiresAt || (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null));
+      const days = fin ? calcDaysRemaining(fin) : effectiveGlobalDays;
+      const expDateStr = fin ? fin.toLocaleDateString('fr-FR') : effectiveGlobalDateStr;
 
       if (!fin || fin.getTime() >= now.getTime()) {
         return {
@@ -290,7 +302,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           days,
           badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-black shadow-sm',
         };
-      } else {
+      } else if (!isCompanyActive) {
         return {
           label: 'Abonnement expiré',
           statusText: 'Abonnement expiré',
@@ -304,20 +316,20 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       }
     }
 
-    // 2. Abonnement global de l'entreprise actif
-    if (globalSub?.statut_global === 'actif' && globalDaysRemaining > 0) {
-      const finGlobal = globalSub.date_fin_global ? new Date(globalSub.date_fin_global) : null;
-      const expGlobalStr = finGlobal ? finGlobal.toLocaleDateString('fr-FR') : '';
-      return {
-        label: `Actif — J-${globalDaysRemaining}`,
-        statusText: 'Actif',
-        expirationText: expGlobalStr ? `Expire le ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
-        isIndividuel: false,
-        isRattache: true,
-        isNonActive: false,
-        days: globalDaysRemaining,
-        badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-bold',
-      };
+    // 2. Lien automatique et direct : Si l'abonnement entreprise ou global est actif, TOUTE activité est automatiquement couverte et active
+    if (isCompanyActive) {
+      if (sub?.statut_specifique !== 'en_attente_paiement') {
+        return {
+          label: `Actif — J-${effectiveGlobalDays}`,
+          statusText: 'Actif',
+          expirationText: effectiveGlobalDateStr ? `Expire le ${effectiveGlobalDateStr} (${effectiveGlobalDays}j restants)` : `${effectiveGlobalDays}j restants`,
+          isIndividuel: false,
+          isRattache: true,
+          isNonActive: false,
+          days: effectiveGlobalDays,
+          badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-black shadow-sm',
+        };
+      }
     }
 
     // 3. Statut en attente de paiement explicite
@@ -355,7 +367,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
     const finGlobal = globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null;
     const expGlobalStr = finGlobal ? finGlobal.toLocaleDateString('fr-FR') : '';
-    const isGlobalExpired = !globalSub || globalSub.statut_global === 'expire' || globalDaysRemaining <= 0;
+    const isGlobalExpired = !isCompanyActive && (!globalSub || globalSub.statut_global === 'expire' || globalDaysRemaining <= 0);
 
     if (isGlobalExpired) {
       return {
@@ -395,7 +407,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       days: 0,
       badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
     };
-  }, [sectorSubs, globalSub, globalDaysRemaining, darkMode]);
+  }, [sectorSubs, globalSub, globalDaysRemaining, company, darkMode]);
 
   // Date du jour formatée en heure locale Cotonou (Africa/Porto-Novo)
   const todayDateDisplay = useMemo(() => {

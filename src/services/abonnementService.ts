@@ -501,6 +501,21 @@ export async function verifierOuCreerAbonnementGlobal(
       await supabase.rpc('fn_sync_abonnements_secteurs_fin_essai')
     } catch (_) {}
 
+    // Vérifier l'état officiel de l'entreprise
+    let comp: any = null
+    try {
+      const { data } = await supabase
+        .from('companies')
+        .select('subscription_status, subscription_expires_at, is_active, created_at')
+        .eq('id', entrepriseId)
+        .maybeSingle()
+      comp = data
+    } catch (_) {}
+
+    const now = new Date()
+    const compExpiresAt = comp?.subscription_expires_at ? new Date(comp.subscription_expires_at) : null
+    const isCompanyActive = comp?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)
+
     const { data: existing, error } = await supabase
       .from('abonnements_global')
       .select('*')
@@ -508,8 +523,27 @@ export async function verifierOuCreerAbonnementGlobal(
       .maybeSingle()
 
     if (!error && existing) {
-      const now = new Date()
       const fin = new Date(existing.date_fin_global)
+
+      // Si l'entreprise a un abonnement actif, l'abonnement global DOIT être actif et refléter la durée réelle
+      if (isCompanyActive) {
+        const finalFin = compExpiresAt && compExpiresAt > fin ? compExpiresAt : (fin >= now ? fin : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000))
+        if (existing.statut_global !== 'actif' || existing.date_fin_global !== finalFin.toISOString()) {
+          const { data: updated } = await supabase
+            .from('abonnements_global')
+            .update({
+              statut_global: 'actif',
+              date_fin_global: finalFin.toISOString(),
+              updated_at: now.toISOString(),
+            })
+            .eq('id', existing.id)
+            .select()
+            .maybeSingle()
+          return (updated || { ...existing, statut_global: 'actif', date_fin_global: finalFin.toISOString() }) as AbonnementGlobalRow
+        }
+        return existing as AbonnementGlobalRow
+      }
+
       if (fin < now && (existing.statut_global === 'essai' || existing.statut_global === 'actif')) {
         const { data: updated } = await supabase
           .from('abonnements_global')
@@ -522,10 +556,12 @@ export async function verifierOuCreerAbonnementGlobal(
       return existing as AbonnementGlobalRow
     }
 
-    // Créer l'abonnement global d'essai initial (30 jours uniques rattachés au compte)
-    const debut = companyCreatedAt ? new Date(companyCreatedAt) : new Date()
-    const fin = new Date(debut.getTime() + 30 * 24 * 60 * 60 * 1000)
-    const statut: StatutGlobal = fin < new Date() ? 'expire' : 'essai'
+    // Créer l'abonnement global (essai ou actif selon l'état de l'entreprise)
+    const debut = comp?.created_at ? new Date(comp.created_at) : (companyCreatedAt ? new Date(companyCreatedAt) : now)
+    const fin = isCompanyActive
+      ? (compExpiresAt || new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000))
+      : new Date(debut.getTime() + 30 * 24 * 60 * 60 * 1000)
+    const statut: StatutGlobal = isCompanyActive ? 'actif' : (fin < now ? 'expire' : 'essai')
 
     const { data: inserted } = await supabase
       .from('abonnements_global')
@@ -954,7 +990,7 @@ export async function evaluerAccesSecteur(
   }
 
   // Si l'abonnement global est actif (payé) et non expiré
-  if (globalSub?.statut_global === 'actif' && !isGlobalExpired && secteurSub.rattache_au_global) {
+  if (globalSub?.statut_global === 'actif' && !isGlobalExpired) {
     return {
       autorise: true,
       ouvertureSecteurAutorisee: true,
@@ -964,7 +1000,7 @@ export async function evaluerAccesSecteur(
       joursRestants: joursGlobal,
       isPremiereActivationPossible: false,
       rattacheAuGlobal: true,
-      badgeLabel: 'Actif (Global)',
+      badgeLabel: `Actif — J-${joursGlobal}`,
       badgeColor: 'emerald',
       globalSub,
       secteurSub,
@@ -2496,6 +2532,40 @@ export async function getAbonnementsSecteurs(
         }
       }
     }
+    // Si l'entreprise possède un abonnement actif en cours de validité :
+    // Tout secteur appartenant à l'entreprise sans abonnement individuel actif
+    // est automatiquement lié et activé avec la durée de l'abonnement entreprise.
+    const compExpiresAt = company?.subscription_expires_at ? new Date(company.subscription_expires_at) : null
+    const isCompanyActive = company?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)
+
+    if (isCompanyActive && rawSectors.length > 0) {
+      const endIso = compExpiresAt && compExpiresAt >= now
+        ? compExpiresAt.toISOString()
+        : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+      const startIso = company?.created_at || now.toISOString()
+
+      for (const s of rawSectors) {
+        const code = toSecteurCode(s)
+        const existing = bySector.get(code)
+        if (!existing || existing.statut_specifique === 'expire' || existing.statut_specifique === 'rattache_global') {
+          bySector.set(code, {
+            id: existing?.id || `auto-${code}`,
+            entreprise_id: companyId,
+            secteur_code: code,
+            date_debut_specifique: existing?.date_debut_specifique || startIso,
+            date_fin_specifique: existing?.date_fin_specifique && new Date(existing.date_fin_specifique) >= now
+              ? existing.date_fin_specifique
+              : endIso,
+            statut_specifique: 'actif',
+            is_premiere_activation: false,
+            rattache_au_global: true,
+            created_at: existing?.created_at || startIso,
+            updated_at: now.toISOString(),
+          } as AbonnementSecteurRow)
+        }
+      }
+    }
+
     return Array.from(bySector.values())
   } catch (_) {
     return []

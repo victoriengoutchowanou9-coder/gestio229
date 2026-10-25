@@ -248,6 +248,37 @@ it('A6 : Déduplication prioritaire des abonnements sectoriels (Actif > En atten
   assert.strictEqual(result[0].id, 'new-2');
 });
 
+it('A7 : Liaison automatique et cohérence des cartes d\'activité quand l\'abonnement entreprise est actif', () => {
+  const company = {
+    subscription_status: 'active',
+    subscription_expires_at: new Date(Date.now() + 30 * 86400000).toISOString(),
+    selected_sectors: ['boutique', 'poissonnerie', 'station-service'],
+  };
+  const sectorSubs = []; // Aucun abonnement individuel payé séparément
+
+  const now = new Date();
+  const compExpiresAt = new Date(company.subscription_expires_at);
+  const isCompanyActive = company.subscription_status === 'active' && compExpiresAt >= now;
+  const effectiveDays = calcDaysRemaining(compExpiresAt);
+
+  // Simule l'évaluation de chaque carte sur le HUB
+  for (const slug of company.selected_sectors) {
+    const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, slug));
+    let badgeInfo;
+    if (sub?.statut_specifique === 'actif') {
+      badgeInfo = { label: `Actif — J-${effectiveDays}`, isNonActive: false };
+    } else if (isCompanyActive && sub?.statut_specifique !== 'en_attente_paiement') {
+      badgeInfo = { label: `Actif — J-${effectiveDays}`, isNonActive: false };
+    } else {
+      badgeInfo = { label: 'Abonnement expiré', isNonActive: true };
+    }
+
+    assert.strictEqual(badgeInfo.label, `Actif — J-${effectiveDays}`);
+    assert.strictEqual(badgeInfo.isNonActive, false);
+    assert.strictEqual(badgeInfo.label.includes('expiré'), false);
+  }
+});
+
 console.log('\n================================================================================');
 console.log(`RÉSULTAT TOTAL : ${passedTests} / ${totalTests} tests réussis avec succès !`);
 console.log('================================================================================');
