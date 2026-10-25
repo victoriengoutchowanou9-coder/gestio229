@@ -1140,7 +1140,37 @@ export async function encaisserBonDeCommande(
       }
     }
 
-    const { error: updateErr } = await supabase
+    // Vérification formelle d'existence de la session dans public.cash_sessions (contrainte sales_orders_cash_session_id_fkey)
+    let finalCashSessionId: string | null = null
+    if (validCashSessionId && isValidUUID(validCashSessionId)) {
+      const { data: vRow } = await supabase
+        .from('cash_sessions')
+        .select('id')
+        .eq('id', validCashSessionId)
+        .maybeSingle()
+      if (vRow?.id) {
+        finalCashSessionId = vRow.id
+      }
+    }
+
+    if (!finalCashSessionId) {
+      // Tentative de récupération d'une session active de l'entreprise dans cash_sessions
+      const { data: activeRow } = await supabase
+        .from('cash_sessions')
+        .select('id')
+        .eq('company_id', params.companyId)
+        .or('status.eq.ouverte,status.eq.open')
+        .order('opened_at', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      if (activeRow?.id) {
+        finalCashSessionId = activeRow.id
+      }
+    }
+
+    console.log('Session caisse utilisée pour encaissement:', finalCashSessionId)
+
+    let { error: updateErr } = await supabase
       .from('sales_orders')
       .update({
         paid_amount: newPaid,
@@ -1148,13 +1178,34 @@ export async function encaisserBonDeCommande(
         status: newStatus,
         payment_status: newPaymentStatus,
         payment_method: effectivePaymentMethod,
-        cash_session_id: validCashSessionId,
+        cash_session_id: finalCashSessionId,
         customer_id: effectiveCustomerId || currentOrder.customer_id || null,
         customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
         notes: JSON.stringify(updatedNotes)
       })
       .eq('id', params.orderId)
       .eq('company_id', params.companyId)
+
+    // Si violation de clé étrangère sur cash_session_id, repli automatique sur null (la colonne est nullable)
+    if (updateErr && updateErr.message && updateErr.message.includes('sales_orders_cash_session_id_fkey')) {
+      console.warn('[salesCircuitService] FK sales_orders_cash_session_id_fkey détectée, repli sécurisé sur cash_session_id: null')
+      const retry = await supabase
+        .from('sales_orders')
+        .update({
+          paid_amount: newPaid,
+          credit_amount: newCredit,
+          status: newStatus,
+          payment_status: newPaymentStatus,
+          payment_method: effectivePaymentMethod,
+          cash_session_id: null,
+          customer_id: effectiveCustomerId || currentOrder.customer_id || null,
+          customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
+          notes: JSON.stringify(updatedNotes)
+        })
+        .eq('id', params.orderId)
+        .eq('company_id', params.companyId)
+      updateErr = retry.error
+    }
 
     if (updateErr) {
       throw new Error(`Erreur mise à jour commande : ${updateErr.message}`)

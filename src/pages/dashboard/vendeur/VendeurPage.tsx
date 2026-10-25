@@ -32,6 +32,8 @@ interface ProductItem {
   code: string
   name: string
   selling_price: number
+  price_ucd?: number
+  wholesale_price?: number
   cost_price?: number
   unit?: string
   ucd?: string
@@ -116,11 +118,18 @@ export const VendeurPage: React.FC = () => {
           const realStockMagasin = Number(p.stock_magasin ?? meta.stock_magasin ?? 0)
           const { unitVente, unitMagasin } = resolveProductUnits(p)
 
+          const coef = Number(p.coef || meta.coef || 1)
+          const priceUV = Number(p.selling_price || meta.price_vente_uv_ttc || p.prix_vente || 0)
+          const rawWholesale = Number(p.wholesale_price ?? meta.price_vente_ucd_ttc ?? meta.prix_vente_ucd ?? meta.wholesale_price ?? 0)
+          const priceUCD = rawWholesale > 0 ? rawWholesale : (coef > 1 ? Math.round(priceUV * coef) : priceUV)
+
           return {
             id: p.id,
             code: p.code || meta.code || '',
             name: p.name || 'Article',
-            selling_price: Number(p.selling_price || 0),
+            selling_price: priceUV,
+            price_ucd: priceUCD,
+            wholesale_price: rawWholesale > 0 ? rawWholesale : undefined,
             cost_price: Number(p.cost_price || 0),
             unit: unitVente,
             ucd: unitMagasin,
@@ -129,7 +138,7 @@ export const VendeurPage: React.FC = () => {
             stock_vente: Math.max(0, Math.round(realStockVente * 1000) / 1000),
             stock_magasin: Math.max(0, Math.round(realStockMagasin * 1000) / 1000),
             is_active: p.is_active !== false,
-            coef: Number(p.coef || meta.coef || 1),
+            coef: coef,
             is_recipe: Boolean(p.is_recipe || meta.is_recipe)
           }
         })
@@ -653,13 +662,30 @@ export const VendeurPage: React.FC = () => {
                         </div>
                       </div>
 
-                      {/* Prix de vente applicable et bouton « Ajouter » */}
-                      <div className="mt-3.5 pt-3 border-t border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2">
-                        <div>
-                          <span className="text-[10px] uppercase font-bold text-slate-400 block">Prix de vente</span>
-                          <span className="text-base font-black font-mono text-emerald-600 dark:text-emerald-400">
-                            {formatFCFA(p.selling_price)}
-                          </span>
+                      {/* Tarification UV (Détail) & UCD (Gros) et bouton « Ajouter » */}
+                      <div className="mt-3.5 pt-3 border-t border-slate-200/80 dark:border-slate-800 space-y-2">
+                        <div className="space-y-1">
+                          {/* Prix UV (Détail) */}
+                          <div className="flex items-baseline justify-between text-[11px]">
+                            <span className="font-semibold text-slate-500 dark:text-slate-400">
+                              Prix UV ({p.unit || 'Détail'}) :
+                            </span>
+                            <span className="font-mono font-black text-sm text-emerald-600 dark:text-emerald-400">
+                              {formatFCFA(p.selling_price)} <span className="text-[10px] font-normal text-slate-400">/ {p.unit}</span>
+                            </span>
+                          </div>
+
+                          {/* Prix UCD (Gros) */}
+                          {Boolean(p.price_ucd && p.price_ucd > 0 && (p.price_ucd !== p.selling_price || p.ucd !== p.unit)) && (
+                            <div className="flex items-baseline justify-between text-[11px] bg-slate-50 dark:bg-slate-900/60 px-2 py-0.5 rounded-md border border-slate-200/60 dark:border-slate-800/60">
+                              <span className="font-semibold text-slate-500 dark:text-slate-400">
+                                Prix UCD ({p.ucd || 'Gros'}) :
+                              </span>
+                              <span className="font-mono font-bold text-xs text-indigo-600 dark:text-indigo-400">
+                                {formatFCFA(p.price_ucd)} <span className="text-[10px] font-normal text-slate-400">/ {p.ucd}</span>
+                              </span>
+                            </div>
+                          )}
                         </div>
 
                         <button
@@ -667,14 +693,14 @@ export const VendeurPage: React.FC = () => {
                           disabled={!isAvailable}
                           onClick={() => openQuantitySelector(p)}
                           className={clsx(
-                            'px-3.5 py-2 rounded-xl text-xs font-black transition flex items-center gap-1.5 shadow-xs',
+                            'w-full py-2 px-3 rounded-xl text-xs font-black transition flex items-center justify-center gap-1.5 shadow-xs',
                             isAvailable
-                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20 cursor-pointer'
+                              ? 'bg-amber-500 hover:bg-amber-400 text-slate-950 shadow-amber-500/20 cursor-pointer active:scale-[0.98]'
                               : 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
                           )}
                         >
                           <Plus className="w-3.5 h-3.5" />
-                          <span>Ajouter</span>
+                          <span>{isAvailable ? 'Ajouter à la commande' : 'Épuisé en stock vente'}</span>
                         </button>
                       </div>
                     </div>
@@ -757,11 +783,11 @@ export const VendeurPage: React.FC = () => {
                         {item.product.name}
                       </p>
                       <p className="text-[10px] text-slate-400 font-mono">
-                        {item.product.code ? `[${item.product.code}] ` : ''}{formatFCFA(item.unitPrice)} / u
+                        {item.product.code ? `[${item.product.code}] ` : ''}{formatFCFA(item.unitPrice)} / {item.product.unit || 'u'}
                       </p>
                       {!item.product.is_recipe && (
                         <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                          Dispo vente : {item.product.stock_vente}
+                          Dispo vente : {formatStockWithUnit(item.product.stock_vente, item.product.unit)}
                         </p>
                       )}
                     </div>
@@ -905,7 +931,12 @@ export const VendeurPage: React.FC = () => {
                   {addingProduct.name}
                 </h3>
                 <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 font-mono mt-0.5">
-                  Prix unitaire : {formatFCFA(addingProduct.selling_price)}
+                  Prix UV : {formatFCFA(addingProduct.selling_price)} / {addingProduct.unit}
+                  {Boolean(addingProduct.price_ucd && addingProduct.price_ucd > 0 && addingProduct.price_ucd !== addingProduct.selling_price) && (
+                    <span className="text-indigo-600 dark:text-indigo-400 ml-2">
+                      • Gros : {formatFCFA(addingProduct.price_ucd)} / {addingProduct.ucd}
+                    </span>
+                  )}
                 </p>
               </div>
               <button
