@@ -26,6 +26,7 @@ import { getActiveSectorSlug, filterItemsForSector, withSectorMeta } from '../..
 import { ModalPortal, TransfertStockModal } from '../../../components/modals'
 import { CreerAvoirModal } from '../../../components/factures/CreerAvoirModal'
 import { calculateTaxFromTTC, formatFCFA } from '../../../utils/tax'
+import { resolveProductUnits, formatStockWithUnit } from '../../../utils/formatters'
 import { decomposerTTC } from '../../../utils/calculPrix'
 import { FactureBrasserieTemplate, FactureBrasserieData } from '../../../components/factures/FactureBrasserieTemplate'
 import {
@@ -3248,8 +3249,7 @@ export const POSPage: React.FC = () => {
                   const stockVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
                   const stockMagasin = Number(p.stock_magasin ?? p.sector_meta?.stock_magasin ?? 0)
                   const wholesalePrice = Number(p.wholesale_price || p.sector_meta?.price_vente_ucd_ttc || 0)
-                  const unitVente = p.uv || p.unit || 'Pièce'
-                  const unitMagasin = p.ucd || 'Carton'
+                  const { unitVente, unitMagasin } = resolveProductUnits(p)
 
                   return (
                     <div
@@ -3282,9 +3282,9 @@ export const POSPage: React.FC = () => {
                                   ? 'bg-amber-100 text-amber-800 border border-amber-200'
                                   : 'bg-emerald-100 text-emerald-800'
                               )}
-                              title={`Stock disponible vente directe : ${stockVente} ${unitVente}`}
+                              title={`Stock disponible vente directe : ${formatStockWithUnit(stockVente, unitVente)}`}
                             >
-                              Stock vente : {stockVente} {unitVente}
+                              Stock vente : {formatStockWithUnit(stockVente, unitVente)}
                             </span>
                           )}
                         </div>
@@ -3312,7 +3312,7 @@ export const POSPage: React.FC = () => {
                             <span className="flex items-center gap-1">
                               <Package className="w-3 h-3 text-indigo-600" /> Stock magasin :
                             </span>
-                            <span className="font-bold text-indigo-700 font-mono">{stockMagasin} {unitMagasin}</span>
+                            <span className="font-bold text-indigo-700 font-mono">{formatStockWithUnit(stockMagasin, unitMagasin)}</span>
                           </div>
                         )}
                       </div>

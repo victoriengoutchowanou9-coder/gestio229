@@ -18,6 +18,7 @@ import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
 import { formatFCFA } from '../../../utils/tax'
 import { filterItemsForSector } from '../../../lib/sectorClient'
+import { formatNumber, formatFCFA, resolveProductUnits, formatStockWithUnit } from '../../../utils/formatters'
 import {
   creerEtTransmettreBon,
   fetchPendingBons,
@@ -113,8 +114,7 @@ export const VendeurPage: React.FC = () => {
           const realStockVente = Number(p.stock_vente ?? meta.stock_vente ?? p.current_stock ?? 0)
           // Stock réel disponible en magasin / réserve
           const realStockMagasin = Number(p.stock_magasin ?? meta.stock_magasin ?? 0)
-          const unitVente = p.unit || meta.uv || 'unités'
-          const unitMagasin = meta.ucd || p.unit || 'unités'
+          const { unitVente, unitMagasin } = resolveProductUnits(p)
 
           return {
             id: p.id,
@@ -252,7 +252,7 @@ export const VendeurPage: React.FC = () => {
     if (next < 1) next = 1
     if (!addingProduct.is_recipe && next > maxAddableForModal) {
       next = maxAddableForModal
-      setAddingQtyError(`Quantité limitée au stock vente disponible (${maxAddableForModal} unités).`)
+      setAddingQtyError(`Quantité limitée au stock vente disponible (${formatStockWithUnit(maxAddableForModal, addingProduct.unit)}).`)
     } else {
       setAddingQtyError('')
     }
@@ -266,7 +266,7 @@ export const VendeurPage: React.FC = () => {
     if (!raw.trim() || isNaN(num) || num <= 0) {
       setAddingQtyError('La quantité doit être strictement positive (> 0).')
     } else if (!addingProduct.is_recipe && num > maxAddableForModal) {
-      setAddingQtyError(`Stock vente insuffisant : maximum disponible à ajouter = ${maxAddableForModal}.`)
+      setAddingQtyError(`Stock vente insuffisant : maximum disponible à ajouter = ${formatStockWithUnit(maxAddableForModal, addingProduct.unit)}.`)
     } else {
       setAddingQtyError('')
     }
@@ -637,7 +637,7 @@ export const VendeurPage: React.FC = () => {
                               <span>Stock vente :</span>
                             </span>
                             <span className="font-mono font-black">
-                              {p.is_recipe ? 'Sur commande' : `${p.stock_vente} unités`}
+                              {p.is_recipe ? 'Sur commande' : formatStockWithUnit(p.stock_vente, p.unit)}
                             </span>
                           </div>
 
@@ -647,7 +647,7 @@ export const VendeurPage: React.FC = () => {
                               <span>Stock magasin :</span>
                             </span>
                             <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
-                              {p.is_recipe ? 'N/A' : `${p.stock_magasin} unités`}
+                              {p.is_recipe ? 'N/A' : formatStockWithUnit(p.stock_magasin, p.ucd)}
                             </span>
                           </div>
                         </div>
@@ -924,7 +924,7 @@ export const VendeurPage: React.FC = () => {
                   Stock vente disponible
                 </span>
                 <span className="font-mono font-black text-sm text-emerald-800 dark:text-emerald-300">
-                  {addingProduct.is_recipe ? 'Illimité' : `${maxAddableForModal} unités`}
+                  {addingProduct.is_recipe ? 'Illimité' : formatStockWithUnit(maxAddableForModal, addingProduct.unit)}
                 </span>
               </div>
               <div className="p-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700">
@@ -932,7 +932,7 @@ export const VendeurPage: React.FC = () => {
                   Stock magasin
                 </span>
                 <span className="font-mono font-black text-sm text-slate-800 dark:text-slate-200">
-                  {addingProduct.is_recipe ? 'N/A' : `${addingProduct.stock_magasin} unités`}
+                  {addingProduct.is_recipe ? 'N/A' : formatStockWithUnit(addingProduct.stock_magasin, addingProduct.ucd)}
                 </span>
               </div>
             </div>

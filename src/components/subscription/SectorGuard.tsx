@@ -112,7 +112,7 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
   // - Si l'abonnement du secteur est inactif (`en_attente_paiement` ou `expire`),
   //   le Tableau de bord ('tableau-bord') et le module Abonnement ('abonnement') restent accessibles !
   const sectorExistsInAccount =
-    isSubscribed || (accessState && accessState.statutEffectif !== 'non_active')
+    isSubscribed || (accessState && accessState.statutEffectif !== 'non_active') || Boolean(accessState?.autorise)
 
   if (sectorExistsInAccount) {
     if (checking && !accessState) {

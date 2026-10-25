@@ -747,7 +747,12 @@ export async function evaluerAccesSecteur(
 
     if (rows && rows.length > 0) {
       allCompanySecteurs = rows as AbonnementSecteurRow[]
-      secteurSub = allCompanySecteurs.find((r) => toSecteurCode(r.secteur_code) === code) || null
+      const matching = allCompanySecteurs.filter((r) => matchesSectorCode(r.secteur_code, cleanSlug))
+      secteurSub = matching.find((r) => r.statut_specifique === 'actif' && (!r.date_fin_specifique || new Date(r.date_fin_specifique) >= now))
+        || matching.find((r) => r.statut_specifique === 'actif')
+        || matching.find((r) => r.statut_specifique === 'rattache_global')
+        || matching[0]
+        || null
     }
   } catch (_) {}
 
@@ -849,12 +854,16 @@ export async function evaluerAccesSecteur(
   }
 
   // CAS 3 : Le secteur possède un abonnement payant spécifique ('actif')
-  if (secteurSub.statut_specifique === 'actif' && secteurSub.date_fin_specifique) {
-    const debutSpec = secteurSub.date_debut_specifique ? new Date(secteurSub.date_debut_specifique) : now
-    const finSpec = new Date(secteurSub.date_fin_specifique)
-    const jours = computeDaysRemaining(finSpec, now)
+  if (secteurSub.statut_specifique === 'actif') {
+    const finSpec = secteurSub.date_fin_specifique
+      ? new Date(secteurSub.date_fin_specifique)
+      : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null)
+    const debutSpec = secteurSub.date_debut_specifique
+      ? new Date(secteurSub.date_debut_specifique)
+      : (globalSub?.date_debut_global ? new Date(globalSub.date_debut_global) : now)
+    const jours = finSpec ? computeDaysRemaining(finSpec, now) : (globalSub?.date_fin_global ? computeDaysRemaining(new Date(globalSub.date_fin_global), now) : 30)
 
-    if (finSpec >= now) {
+    if (!finSpec || finSpec >= now) {
       return {
         autorise: true,
         ouvertureSecteurAutorisee: true,
@@ -864,7 +873,7 @@ export async function evaluerAccesSecteur(
         joursRestants: jours,
         isPremiereActivationPossible: false,
         rattacheAuGlobal: secteurSub.rattache_au_global,
-        badgeLabel: 'Actif',
+        badgeLabel: `Actif — J-${jours}`,
         badgeColor: 'emerald',
         globalSub,
         secteurSub,
@@ -1376,6 +1385,23 @@ export async function activerOuProlongerAbonnement(params: {
       const cleanSlug = canonicalSectorSlug(sectorSlug)
       const code = toSecteurCode(cleanSlug)
 
+      // Purge de tout doublon historique ou divergence de casse/tiret pour ce secteur
+      try {
+        const { data: allSecs } = await supabase
+          .from('abonnements_secteurs')
+          .select('id, secteur_code')
+          .eq('entreprise_id', entrepriseId)
+        if (allSecs && allSecs.length > 0) {
+          const conflicting = allSecs.filter(
+            (s) => matchesSectorCode(s.secteur_code, cleanSlug) && s.secteur_code !== code
+          )
+          for (const c of conflicting) {
+            await supabase.from('abonnements_secteurs').delete().eq('id', c.id)
+          }
+        }
+      } catch (_) {}
+
+      // Enregistrement garanti dans abonnements_secteurs
       await supabase.from('abonnements_secteurs').upsert(
         {
           entreprise_id: entrepriseId,
@@ -1390,21 +1416,75 @@ export async function activerOuProlongerAbonnement(params: {
         { onConflict: 'entreprise_id,secteur_code' }
       )
 
-      // Mettre à jour company_activities
-      await supabase
-        .from('company_activities')
-        .update({ status: 'ACTIVE', is_active: true, updated_at: now.toISOString() })
-        .eq('company_id', entrepriseId)
-        .eq('sector_slug', cleanSlug)
+      // Garantir l'activité dans company_activities (upsert)
+      try {
+        const { data: existingAct } = await supabase
+          .from('company_activities')
+          .select('id')
+          .eq('company_id', entrepriseId)
+          .eq('sector_slug', cleanSlug)
+          .maybeSingle()
 
-      // S'assurer que l'entreprise n'est pas marquée 'expired' si au moins un secteur est actif
-      await supabase
-        .from('companies')
-        .update({
-          is_active: true,
-          updated_at: now.toISOString(),
-        })
-        .eq('id', entrepriseId)
+        if (!existingAct) {
+          await supabase.from('company_activities').insert({
+            company_id: entrepriseId,
+            sector_slug: cleanSlug,
+            sector_code: code,
+            activity_name: `${companyName || 'Mon Établissement'} — ${cleanSlug.toUpperCase()}`,
+            status: 'ACTIVE',
+            is_active: true,
+            updated_at: now.toISOString(),
+          })
+        } else {
+          await supabase
+            .from('company_activities')
+            .update({ status: 'ACTIVE', is_active: true, updated_at: now.toISOString() })
+            .eq('id', existingAct.id)
+        }
+      } catch (_) {}
+
+      // Synchroniser selected_sectors, metadata et subscription_status dans companies
+      try {
+        const { data: comp } = await supabase
+          .from('companies')
+          .select('id, selected_sectors, sectors, subscription_status, activity_sectors')
+          .eq('id', entrepriseId)
+          .maybeSingle()
+
+        if (comp) {
+          const rawSelected = Array.isArray(comp.selected_sectors) ? comp.selected_sectors : []
+          const merged = Array.from(new Set([...rawSelected.map((s) => canonicalSectorSlug(s)), cleanSlug]))
+          const currentMeta = (comp.activity_sectors && typeof comp.activity_sectors === 'object') ? comp.activity_sectors : {}
+          const sMeta = currentMeta.sectors_meta?.[cleanSlug] || {}
+          const updatedMeta = {
+            ...currentMeta,
+            sectors_meta: {
+              ...(currentMeta.sectors_meta || {}),
+              [cleanSlug]: {
+                ...sMeta,
+                sector_slug: cleanSlug,
+                is_gratuit: false,
+                date_debut_validite: finalStart.toISOString(),
+                date_fin_validite: finalEnd.toISOString(),
+                duree_mois: dur,
+                montant_paye: montantFcfa,
+              }
+            }
+          }
+
+          await supabase
+            .from('companies')
+            .update({
+              is_active: true,
+              subscription_status: 'active',
+              selected_sectors: merged,
+              sectors: merged,
+              activity_sectors: updatedMeta,
+              updated_at: now.toISOString(),
+            })
+            .eq('id', entrepriseId)
+        }
+      } catch (_) {}
     }
 
     // 4. Enregistrer dans subscriptions
@@ -2394,7 +2474,29 @@ export async function getAbonnementsSecteurs(
       .select('*')
       .eq('entreprise_id', companyId)
       .order('created_at', { ascending: true })
-    return (data || []) as AbonnementSecteurRow[]
+
+    const rows = (data || []) as AbonnementSecteurRow[]
+    const now = new Date()
+    const bySector = new Map<string, AbonnementSecteurRow>()
+
+    for (const r of rows) {
+      const code = toSecteurCode(r.secteur_code)
+      const existing = bySector.get(code)
+      if (!existing) {
+        bySector.set(code, r)
+      } else {
+        const isRActive = r.statut_specifique === 'actif' && (!r.date_fin_specifique || new Date(r.date_fin_specifique) >= now)
+        const isExistingActive = existing.statut_specifique === 'actif' && (!existing.date_fin_specifique || new Date(existing.date_fin_specifique) >= now)
+        if (isRActive && !isExistingActive) {
+          bySector.set(code, r)
+        } else if (r.statut_specifique === 'actif' && existing.statut_specifique !== 'actif') {
+          bySector.set(code, r)
+        } else if (r.statut_specifique === 'rattache_global' && existing.statut_specifique === 'en_attente_paiement') {
+          bySector.set(code, r)
+        }
+      }
+    }
+    return Array.from(bySector.values())
   } catch (_) {
     return []
   }

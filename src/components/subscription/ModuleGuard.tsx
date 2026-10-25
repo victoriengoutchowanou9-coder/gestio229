@@ -104,6 +104,11 @@ export const ModuleGuard: React.FC<ModuleGuardProps> = ({
     )
   }
 
+  // 1. Si le secteur a un abonnement spécifique vérifié et actif, autoriser l'accès sans blocage d'ancien essai
+  if (sectorAccess?.autorise) {
+    return <>{children}</>
+  }
+
   const access = checkModuleAccess(moduleId, company)
 
   if (access.allowed) {

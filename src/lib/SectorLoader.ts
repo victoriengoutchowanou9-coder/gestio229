@@ -141,14 +141,20 @@ export const SectorLoader = {
         }
       }
 
-      // Si le profil n'a pas encore l'objet company chargé
-      if (profile && !company && profile.company_id) {
-        const { data: c } = await supabase
+      // Toujours synchroniser l'entreprise en direct depuis la base de données
+      // pour garantir que toute validation Super Admin ou mise à jour d'abonnement/secteur
+      // soit immédiatement prise en compte après actualisation F5 (sans dépendre d'un cache local obsolète).
+      const compId = profile?.company_id || company?.id
+      if (compId) {
+        const { data: freshComp } = await supabase
           .from('companies')
           .select('*')
-          .eq('id', profile.company_id)
+          .eq('id', compId)
           .maybeSingle()
-        if (c) company = c as Company
+        if (freshComp) {
+          company = freshComp as Company
+          if (profile) profile.company = freshComp
+        }
       }
 
       // ── Auto-provisioning & Auto-healing résilient si profile ou company est manquant ──

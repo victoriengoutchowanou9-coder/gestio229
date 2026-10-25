@@ -245,13 +245,22 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     return calcDaysRemaining(globalSub?.date_fin_global);
   }, [globalSub]);
 
-  // Badge Global en haut du HUB (Règle 6) : Essai J-23 (ou Actif / Expiré)
+  // Badge Global en haut du HUB : Abonnement actif (ou Essai J-XX / Expiré)
+  const isAnySectorActive = useMemo(() => {
+    const now = new Date();
+    return (
+      globalSub?.statut_global === 'actif' ||
+      company?.subscription_status === 'active' ||
+      (company?.is_active === true && sectorSubs.some((s) => s.statut_specifique === 'actif' && (!s.date_fin_specifique || new Date(s.date_fin_specifique) >= now)))
+    );
+  }, [globalSub, company, sectorSubs]);
+
   const globalBadgeText = useMemo(() => {
+    if (isAnySectorActive) return 'Abonnement actif';
     if (!globalSub) return 'Essai J-30';
-    if (globalSub.statut_global === 'actif') return 'Abonnement Actif';
     if (globalSub.statut_global === 'expire' || globalDaysRemaining <= 0) return 'Abonnement Expiré';
     return `Essai J-${globalDaysRemaining}`;
-  }, [globalSub, globalDaysRemaining]);
+  }, [isAnySectorActive, globalSub, globalDaysRemaining]);
 
   // Badge sur chaque tuile secteur (Section 12 du cahier des charges) :
   // - « Essai gratuit » (pour les 3 premiers secteurs maximum couverts par l'essai gratuit du compte)
@@ -262,35 +271,19 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, sectorSlug));
     const now = new Date();
 
-    // Compter l'index du secteur parmi ceux rattachés à l'essai gratuit global
-    const trialRattaches = sectorSubs.filter(
-      (s) => s.rattache_au_global && s.statut_specifique !== 'en_attente_paiement'
-    );
-    const indexInTrial = trialRattaches.findIndex((s) => matchesSectorCode(s.secteur_code, sectorSlug));
+    // 1. Abonnement spécifique actif sur ce secteur
+    if (sub?.statut_specifique === 'actif') {
+      const fin = sub.date_fin_specifique
+        ? new Date(sub.date_fin_specifique)
+        : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null);
+      const days = fin ? calcDaysRemaining(fin) : (globalDaysRemaining > 0 ? globalDaysRemaining : 30);
+      const expDateStr = fin ? fin.toLocaleDateString('fr-FR') : '';
 
-    if (!sub || sub.statut_specifique === 'en_attente_paiement') {
-      return {
-        label: 'En attente de paiement',
-        statusText: 'En attente de paiement',
-        expirationText: 'Activation requise',
-        isIndividuel: false,
-        isRattache: false,
-        isNonActive: true,
-        days: 0,
-        badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
-      };
-    }
-
-    // Abonnement payant spécifique actif sur ce secteur
-    if (sub.statut_specifique === 'actif' && !sub.rattache_au_global && sub.date_fin_specifique) {
-      const fin = new Date(sub.date_fin_specifique);
-      const expDateStr = fin.toLocaleDateString('fr-FR');
-      if (now.getTime() <= fin.getTime()) {
-        const days = calcDaysRemaining(sub.date_fin_specifique);
+      if (!fin || fin.getTime() >= now.getTime()) {
         return {
-          label: `Actif • J-${days}`,
+          label: `Actif — J-${days}`,
           statusText: 'Actif',
-          expirationText: `Expire le ${expDateStr} (${days}j restants)`,
+          expirationText: expDateStr ? `Expire le ${expDateStr} (${days}j restants)` : `${days}j restants`,
           isIndividuel: true,
           isRattache: false,
           isNonActive: false,
@@ -311,7 +304,42 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       }
     }
 
-    // Si l'abonnement global est en mode essai mais que ce secteur dépasse les 3 premiers secteurs gratuits
+    // 2. Abonnement global de l'entreprise actif
+    if (globalSub?.statut_global === 'actif' && globalDaysRemaining > 0) {
+      const finGlobal = globalSub.date_fin_global ? new Date(globalSub.date_fin_global) : null;
+      const expGlobalStr = finGlobal ? finGlobal.toLocaleDateString('fr-FR') : '';
+      return {
+        label: `Actif — J-${globalDaysRemaining}`,
+        statusText: 'Actif',
+        expirationText: expGlobalStr ? `Expire le ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
+        isIndividuel: false,
+        isRattache: true,
+        isNonActive: false,
+        days: globalDaysRemaining,
+        badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-bold',
+      };
+    }
+
+    // 3. Statut en attente de paiement explicite
+    if (sub?.statut_specifique === 'en_attente_paiement') {
+      return {
+        label: 'En attente de paiement',
+        statusText: 'En attente de paiement',
+        expirationText: 'Activation requise',
+        isIndividuel: false,
+        isRattache: false,
+        isNonActive: true,
+        days: 0,
+        badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
+      };
+    }
+
+    // 4. Période d'essai initiale
+    const trialRattaches = sectorSubs.filter(
+      (s) => s.rattache_au_global && s.statut_specifique !== 'en_attente_paiement'
+    );
+    const indexInTrial = trialRattaches.findIndex((s) => matchesSectorCode(s.secteur_code, sectorSlug));
+
     if (globalSub?.statut_global === 'essai' && indexInTrial >= 3) {
       return {
         label: 'En attente de paiement',
@@ -344,7 +372,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
     if (globalSub?.statut_global === 'essai') {
       return {
-        label: `Essai gratuit • J-${globalDaysRemaining}`,
+        label: `Essai gratuit — J-${globalDaysRemaining}`,
         statusText: 'Essai gratuit',
         expirationText: expGlobalStr ? `Fin d'essai : ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
         isIndividuel: false,
@@ -358,14 +386,14 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
 
     return {
-      label: `Actif • J-${globalDaysRemaining}`,
-      statusText: 'Actif',
-      expirationText: expGlobalStr ? `Expire le ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
+      label: 'En attente de paiement',
+      statusText: 'En attente de paiement',
+      expirationText: 'Activation requise',
       isIndividuel: false,
-      isRattache: true,
-      isNonActive: false,
-      days: globalDaysRemaining,
-      badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-bold',
+      isRattache: false,
+      isNonActive: true,
+      days: 0,
+      badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
     };
   }, [sectorSubs, globalSub, globalDaysRemaining, darkMode]);
 

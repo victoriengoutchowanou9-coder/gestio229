@@ -34,8 +34,7 @@ export const TransfertStockModal: React.FC<TransfertStockModalProps> = ({
   const stockMagasin = Number(product?.stock_magasin ?? product?.sector_meta?.stock_magasin ?? 0)
   const stockVente = Number(product?.stock_vente ?? product?.sector_meta?.stock_vente ?? 0)
   const coef = Math.max(1, Number(product?.coef || product?.sector_meta?.coef || 1))
-  const unitMagasin = product?.ucd || product?.sector_meta?.ucd || 'Carton'
-  const unitVente = product?.uv || product?.sector_meta?.uv || product?.unit || 'Pièce'
+  const { unitVente, unitMagasin } = resolveProductUnits(product)
 
   useEffect(() => {
     if (isOpen) {
