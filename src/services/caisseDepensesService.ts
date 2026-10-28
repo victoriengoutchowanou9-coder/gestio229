@@ -299,34 +299,7 @@ export async function enregistrerEntreeCaisse(params: {
   const numMontant = Number(montant) || 0
   const lKey = getLocalKey(company_id, secteur_id, caisse_id, mode_paiement)
 
-  // 1. Tenter via la RPC officielle Supabase
-  try {
-    const { data, error } = await supabase.rpc('fn_creer_entree_caisse', {
-      p_company_id: company_id,
-      p_secteur_id: secteur_id,
-      p_caisse_id: caisse_id || null,
-      p_montant: numMontant,
-      p_mode_paiement: mode_paiement,
-      p_source: source,
-      p_reference_id: reference_id || null,
-    })
-
-    if (!error && data && data.success) {
-      setLocalFond(lKey, Number(data.apres))
-      return {
-        success: true,
-        avant: Number(data.avant),
-        apres: Number(data.apres),
-      }
-    }
-    if (error) {
-      console.warn('[caisseDepensesService] RPC fn_creer_entree_caisse non disponible, fallback direct:', error.message)
-    }
-  } catch (rpcErr) {
-    console.warn('[caisseDepensesService] RPC exception, fallback direct:', rpcErr)
-  }
-
-  // 2. Fallback SQL direct / synchrone
+  // Enregistrement SQL direct & synchrone ultra-rapide (fonds_actuels + mouvements_tresorerie)
   try {
     const soldeAvant = await getSoldeFondActuel(company_id, secteur_id, caisse_id, mode_paiement)
     const soldeApres = soldeAvant + numMontant // RÉAJUSTEMENT AUTOMATIQUE (ex: -15 000 + 30 000 = +15 000)

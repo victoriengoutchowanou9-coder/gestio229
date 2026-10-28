@@ -206,7 +206,7 @@ export function createResilientFetch(supabaseUrl: string, supabaseAnonKey: strin
 
   async function loadCompanyVault(companyId: string, forceRefresh = false): Promise<{ vault: VaultStore; rawMeta: Record<string, any> }> {
     const cached = vaultMemoryCache.get(companyId)
-    if (!forceRefresh && cached && Date.now() - cached.ts < 1500) {
+    if (!forceRefresh && cached && Date.now() - cached.ts < 30000) {
       return { vault: cached.data, rawMeta: cached.rawMeta }
     }
     try {

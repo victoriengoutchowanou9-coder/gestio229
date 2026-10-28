@@ -261,72 +261,50 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [closingNotes, setClosingNotes] = useState<string>('')
   const [ecartReason, setEcartReason] = useState<string>('')
 
+  // Réf stable pour briser les boucles de re-render entre loadCaisseData et loadSessions
+  const caisseStateRef = React.useRef({ caisseStatus, openedAt, activeSessionId, cashRegisterId })
+  useEffect(() => {
+    caisseStateRef.current = { caisseStatus, openedAt, activeSessionId, cashRegisterId }
+  }, [caisseStatus, openedAt, activeSessionId, cashRegisterId])
+
   // Chargement strict des sessions (détection session antérieure et session du jour)
   const loadSessions = useCallback(async () => {
     const compId = currentCompanyId || company?.id
     if (!compId) return
 
     const todayStr = new Date().toISOString().split('T')[0]
-    const targetCaisseId = cashRegisterId || caisseActive?.id
-    const targetSecteurId = secteurActif?.id
+    const targetCaisseId = caisseStateRef.current.cashRegisterId || caisseActive?.id
 
     let anterieure: any = null
 
-    // 1. Chercher session antérieure OUVERTE (date_ouverture < aujourd'hui) dans sessions_caisse
+    // 1. Chercher session antérieure OUVERTE (date_ouverture < aujourd'hui) dans caisse_sessions
     try {
-      let q1 = supabase
-        .from('sessions_caisse')
+      let q2 = supabase
+        .from('caisse_sessions')
         .select('*')
         .eq('company_id', compId)
-        .eq('statut', 'ouverte')
-        .lt('date_ouverture', todayStr)
+        .in('statut', ['ouverte', 'open'])
+        .is('date_fermeture', null)
         .order('date_ouverture', { ascending: false })
-        .limit(1)
+        .limit(10)
 
       if (targetCaisseId) {
-        q1 = q1.eq('caisse_id', targetCaisseId)
-      } else if (targetSecteurId) {
-        q1 = q1.eq('secteur_id', targetSecteurId)
-      } else {
-        q1 = q1.eq('caisse_id', '00000000-0000-0000-0000-000000000000') // prevent unscoped query
+        q2 = q2.eq('caisse_id', targetCaisseId)
+      } else if (currentSectorSlug) {
+        q2 = q2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
       }
 
-      const { data: ant1 } = await q1.maybeSingle()
-      if (ant1) {
-        anterieure = ant1
+      const { data: csList } = await q2
+      if (csList && csList.length > 0) {
+        const found = csList.find((s: any) => {
+          const sDate = (s.date_ouverture || '').split('T')[0]
+          return sDate && sDate < todayStr
+        })
+        if (found) {
+          anterieure = found
+        }
       }
     } catch (_) {}
-
-    // Fallback dans caisse_sessions (recherche session < aujourd'hui encore ouverte)
-    if (!anterieure) {
-      try {
-        let q2 = supabase
-          .from('caisse_sessions')
-          .select('*')
-          .eq('company_id', compId)
-          .in('statut', ['ouverte', 'open'])
-          .is('date_fermeture', null)
-          .order('date_ouverture', { ascending: false })
-          .limit(10)
-
-        if (targetCaisseId) {
-          q2 = q2.eq('caisse_id', targetCaisseId)
-        } else {
-          q2 = q2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
-        }
-
-        const { data: csList } = await q2
-        if (csList && csList.length > 0) {
-          const found = csList.find((s: any) => {
-            const sDate = (s.date_ouverture || '').split('T')[0]
-            return sDate && sDate < todayStr
-          })
-          if (found) {
-            anterieure = found
-          }
-        }
-      } catch (_) {}
-    }
 
     // Fallback dans caisses (si statut encore 'ouverte' avec date_ouverture antérieure)
     if (!anterieure && targetCaisseId) {
@@ -358,54 +336,35 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     // 2. Chercher session du jour (date_ouverture = aujourd'hui)
     let duJour: any = null
     try {
-      let qJ1 = supabase
-        .from('sessions_caisse')
+      let qJ2 = supabase
+        .from('caisse_sessions')
         .select('*')
         .eq('company_id', compId)
-        .eq('date_ouverture', todayStr)
+        .gte('date_ouverture', todayStr + 'T00:00:00')
+        .order('date_ouverture', { ascending: false })
+        .limit(1)
 
       if (targetCaisseId) {
-        qJ1 = qJ1.eq('caisse_id', targetCaisseId)
-      } else if (targetSecteurId) {
-        qJ1 = qJ1.eq('secteur_id', targetSecteurId)
-      } else {
-        qJ1 = qJ1.eq('caisse_id', '00000000-0000-0000-0000-000000000000') // prevent unscoped query
+        qJ2 = qJ2.eq('caisse_id', targetCaisseId)
+      } else if (currentSectorSlug) {
+        qJ2 = qJ2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
       }
 
-      const { data: j1 } = await qJ1.maybeSingle()
-      if (j1) {
-        duJour = j1
+      const { data: j2 } = await qJ2.maybeSingle()
+      if (j2) {
+        duJour = j2
       }
     } catch (_) {}
 
-    if (!duJour) {
-      try {
-        let qJ2 = supabase
-          .from('caisse_sessions')
-          .select('*')
-          .eq('company_id', compId)
-          .gte('date_ouverture', todayStr + 'T00:00:00')
-          .order('date_ouverture', { ascending: false })
-          .limit(1)
+    const curStatus = caisseStateRef.current.caisseStatus
+    const curOpenedAt = caisseStateRef.current.openedAt
+    const curActiveId = caisseStateRef.current.activeSessionId
 
-        if (targetCaisseId) {
-          qJ2 = qJ2.eq('caisse_id', targetCaisseId)
-        } else {
-          qJ2 = qJ2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
-        }
-
-        const { data: j2 } = await qJ2.maybeSingle()
-        if (j2) {
-          duJour = j2
-        }
-      } catch (_) {}
-    }
-
-    if (!duJour && caisseStatus === 'OUVERTE' && openedAt && activeSessionId) {
-      const opDateStr = openedAt.split('T')[0]
-      if (opDateStr === todayStr && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(activeSessionId)) {
+    if (!duJour && curStatus === 'OUVERTE' && curOpenedAt && curActiveId) {
+      const opDateStr = curOpenedAt.split('T')[0]
+      if (opDateStr === todayStr && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(curActiveId)) {
         duJour = {
-          id: activeSessionId,
+          id: curActiveId,
           statut: 'ouverte',
           date_ouverture: todayStr
         }
@@ -413,11 +372,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     }
 
     setSessionDuJour(duJour || null)
-  }, [currentCompanyId, company?.id, cashRegisterId, caisseActive?.id, secteurActif?.id, caisseStatus, openedAt, activeSessionId])
+  }, [currentCompanyId, company?.id, caisseActive?.id, secteurActif?.id, currentSectorSlug])
 
   useEffect(() => {
     loadSessions()
-  }, [secteurActif, caisseActive, currentSectorSlug, loadSessions])
+  }, [secteurActif?.id, caisseActive?.id, currentSectorSlug, loadSessions])
 
   // Vérifier si la session a été ouverte un jour précédent et jamais clôturée
   const isPreviousDaySession = useMemo(() => {
@@ -629,7 +588,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       })
 
       setBonAEncaisser(null)
-      await Promise.all([loadBonsEnAttente(), loadCaisseData(), loadSessions()])
+      setIsProcessingEncaissementBon(false)
+      loadBonsEnAttente().catch(() => {})
+      loadCaisseData().catch(() => {})
+      loadSessions().catch(() => {})
     } catch (err: any) {
       toast.error('Erreur', err?.message || 'Une anomalie est survenue.')
     } finally {
@@ -646,25 +608,28 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString()
 
       // 0. Synchronisation persistante Supabase : Caisse active isolée par couple (company_id, sector_slug)
+      let resolvedCaisseId: string | null = null
       try {
         const sectorCaisse = await getOrCreateSectorCaisse(currentCompanyId, currentSectorSlug)
-        if (sectorCaisse) {
-          setCashRegisterId(sectorCaisse.id)
+        if (sectorCaisse?.id) {
+          resolvedCaisseId = sectorCaisse.id
+          setCashRegisterId(prev => (prev === sectorCaisse.id ? prev : sectorCaisse.id))
         }
 
         // Vérifier si une session/caisse est ouverte pour ce secteur
         const activeCaisse = await getActiveCaisse(currentCompanyId, currentSectorSlug)
         if (activeCaisse) {
-          setActiveSessionId(activeCaisse.id)
-          setCaisseStatus('OUVERTE')
-          setOpenedAt(activeCaisse.date_ouverture || activeCaisse.opened_at)
+          setActiveSessionId(prev => (prev === activeCaisse.id ? prev : activeCaisse.id))
+          setCaisseStatus(prev => (prev === 'OUVERTE' ? prev : 'OUVERTE'))
+          const newOpAt = activeCaisse.date_ouverture || activeCaisse.opened_at
+          setOpenedAt(prev => (prev === newOpAt ? prev : newOpAt))
           setOpenedBy(activeCaisse.ouvert_par || user?.full_name || 'Caissier')
           setInitialCash(Number(activeCaisse.fond_ouverture_especes ?? (activeCaisse as any).opening_cash) || 0)
           setInitialMomo(Number(activeCaisse.fond_ouverture_momo ?? (activeCaisse as any).opening_momo) || 0)
         } else {
-          setActiveSessionId(null)
-          setCaisseStatus('FERMEE')
-          setOpenedAt(null)
+          setActiveSessionId(prev => (prev === null ? prev : null))
+          setCaisseStatus(prev => (prev === 'FERMEE' ? prev : 'FERMEE'))
+          setOpenedAt(prev => (prev === null ? prev : null))
         }
 
         // Charger l'historique des clôtures archivées STRICTEMENT pour la caisse de ce secteur (ZÉRO contamination)
@@ -847,7 +812,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
       // 5. Charger les fonds actuels officiels & compteurs journaliers (Isolation Stricte Secteur M048)
       const secId = secteurActif?.id
-      const cId = cashRegisterId || caisseActive?.id
+      const cId = resolvedCaisseId || caisseStateRef.current.cashRegisterId || caisseActive?.id
       const todayDate = new Date().toISOString().split('T')[0]
       if (currentCompanyId && secId) {
         try {
@@ -879,23 +844,17 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             setAllCloturesTotals({ especes: totClEsp, momo: totClMo })
           }
 
-          // Dépenses globales du secteur pour le sous-texte
-          const { data: depAll } = await supabase
-            .from('depenses')
-            .select('montant, mode_paiement')
-            .eq('company_id', currentCompanyId)
-            .eq('secteur_id', secId)
-          if (depAll && depAll.length > 0) {
-            let dEsp = 0
-            let dMo = 0
-            depAll.forEach((d: any) => {
-              const m = (d.mode_paiement || '').toLowerCase()
-              const amt = Number(d.montant) || 0
-              if (['espece', 'especes', 'cash'].includes(m)) dEsp += amt
-              else dMo += amt
-            })
-            setAllDepensesTotals({ especes: dEsp, momo: dMo })
-          }
+          // Dépenses globales du secteur calculées à partir des mouvements réels
+          let dEsp = 0
+          let dMo = 0
+          allDbMovements.forEach((m: any) => {
+            if (m.type === 'RETRAIT' || (m.motif && m.motif.toLowerCase().includes('dépense'))) {
+              if (m.payment_channel === 'Espèces') dEsp += m.amount
+              else if (m.payment_channel === 'MoMo') dMo += m.amount
+              else { dEsp += m.amount }
+            }
+          })
+          setAllDepensesTotals({ especes: dEsp, momo: dMo })
 
           // Charger toutes les demandes de retrait de caisse du secteur actif (en attente & validées)
           let loadedRequests: any[] = []
@@ -909,7 +868,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               .neq('statut', 'REJECTED')
               .order('created_at', { ascending: false })
 
-            const activeRegId = cashRegisterId || caisseActive?.id
+            const activeRegId = resolvedCaisseId || caisseStateRef.current.cashRegisterId || caisseActive?.id
             if (activeRegId) {
               retQuery = retQuery.eq('caisse_id', activeRegId)
             }
@@ -1014,7 +973,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     } finally {
       setLoading(false)
     }
-  }, [currentCompanyId, currentSectorSlug, user?.full_name, secteurActif?.id, cashRegisterId, caisseActive?.id])
+  }, [currentCompanyId, currentSectorSlug, user?.full_name, secteurActif?.id, caisseActive?.id])
 
   useEffect(() => {
     loadCaisseData()
