@@ -1,6 +1,11 @@
 // =============================================================================
 // GESTIO 229 SaaS — SectorSelector : Sélection Multi-Secteurs à l'Inscription
 // =============================================================================
+// Note de compatibilité Vite / ESM :
+// Ne pas importer 'lodash' par défaut (ex: import _ from 'lodash') pour éviter
+// l'erreur '_ is not a function' en production Vite. Utilisation exclusive de
+// méthodes ES6 natives (Array.from, Set, filter, includes) ou d'imports nommés.
+// =============================================================================
 // Section 1 & 2 du cahier des charges :
 // - L'utilisateur peut sélectionner 1, 2, 3 ou plus de 3 secteurs dès l'inscription.
 // - Les 3 premiers secteurs sélectionnés sont couverts par l'essai gratuit unique de 30 jours.

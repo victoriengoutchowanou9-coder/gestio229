@@ -1,6 +1,10 @@
 // =============================================================================
 // GESTIO 229 SaaS — RegisterPage : Inscription Multi-Secteurs (Refonte V4)
 // =============================================================================
+// Note de compatibilité Vite / ESM :
+// Étape 2 Secteurs d'activité utilise des structures ES6 natives (Set, Array.from)
+// sans import Lodash par défaut pour prévenir toute exception '_ is not a function'.
+// =============================================================================
 // Règles du cahier des charges (Sections 1 & 2) :
 // 1. Un seul essai gratuit de 30 jours par compte, couvrant au maximum 3 secteurs.
 // 2. L'utilisateur peut sélectionner 1, 2, 3 ou plus de 3 secteurs dès l'inscription.
