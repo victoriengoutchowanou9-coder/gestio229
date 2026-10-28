@@ -15,7 +15,7 @@ import {
   FlaskConical,
   RotateCcw,
   Building2,
-  CheckCircle2,
+  CheckCircle,
   ChevronDown,
   Calendar,
   MapPin,
@@ -2034,7 +2034,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         <Modal title="Abonnement & Licence" onClose={() => setShowSubscriptionModal(false)} wide>
           <div className="space-y-4">
             <div className="flex items-center gap-3 p-4 bg-emerald-900/20 border border-emerald-700/40 rounded-xl">
-              <CheckCircle2 size={24} className="text-emerald-400 flex-shrink-0" />
+              <CheckCircle size={24} className="text-emerald-400 flex-shrink-0" />
               <div>
                 <p className="text-sm font-bold text-emerald-300">Licence Active — HUB MULTISERVICES</p>
                 <p className="text-xs text-slate-400 mt-0.5">Accès à l'ensemble des 15 secteurs métiers. Multi-établissements illimité.</p>

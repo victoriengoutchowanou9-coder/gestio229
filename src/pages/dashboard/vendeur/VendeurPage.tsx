@@ -11,12 +11,11 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   ClipboardList, Search, Plus, Minus, Trash2, ShoppingCart, Send,
   RefreshCw, AlertTriangle, User, Clock, ArrowRightLeft, X, Printer,
-  CheckCircle2, Package, Check, ArrowRight, Eye, Warehouse, Store
+  CheckCircle, Package, Check, ArrowRight, Eye, Warehouse, Store
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
-import { formatFCFA } from '../../../utils/tax'
 import { filterItemsForSector } from '../../../lib/sectorClient'
 import { formatNumber, formatFCFA, resolveProductUnits, formatStockWithUnit } from '../../../utils/formatters'
 import {
@@ -1095,7 +1094,7 @@ export const VendeurPage: React.FC = () => {
 
             <div className="text-center space-y-1">
               <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
-                <CheckCircle2 className="w-6 h-6" />
+                <CheckCircle className="w-6 h-6" />
               </div>
               <h3 className="font-black text-slate-900 dark:text-white text-base">
                 Commande Validée & Transmise !

@@ -11,7 +11,7 @@ import { useParams } from 'react-router-dom'
 import {
   Landmark, Plus, TrendingUp, TrendingDown, ArrowUpRight, ArrowDownRight,
   Wallet, Building2, RefreshCw, Smartphone, Check, X, ShieldAlert,
-  Printer, ArrowRightLeft, CheckCircle2, AlertCircle, Trash2, Eye
+  Printer, ArrowRightLeft, CheckCircle, AlertCircle, Trash2, Eye
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -883,7 +883,7 @@ export const TresoreriePage: React.FC = () => {
                     <td className="p-3 text-center font-sans">
                       {transfer.status === 'APPROVED' ? (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 flex items-center gap-1 justify-center">
-                          <CheckCircle2 className="w-3 h-3" /> Validé
+                          <CheckCircle className="w-3 h-3" /> Validé
                         </span>
                       ) : transfer.status === 'REJECTED' ? (
                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">

@@ -15,7 +15,7 @@ import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
   Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail,
-  Receipt, Trash2, Eye, CreditCard, Users, CheckCircle2
+  Receipt, Trash2, Eye, CreditCard, Users
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -3107,7 +3107,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 space-y-4 my-8 text-xs animate-scaleUp">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
               <div className="flex items-center gap-2 text-emerald-600 font-bold">
-                <CheckCircle2 className="w-5 h-5" />
+                <CheckCircle className="w-5 h-5" />
                 <span>Encaissement Réussi</span>
               </div>
               <button
@@ -3397,7 +3397,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                   disabled={isProcessingPrestationCaisse || Number(montantSaisiPrestation) <= 0}
                   className="px-5 py-2.5 bg-pink-600 hover:bg-pink-700 text-white font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 disabled:opacity-50"
                 >
-                  <CheckCircle2 className="w-4 h-4" />
+                  <CheckCircle className="w-4 h-4" />
                   <span>{isProcessingPrestationCaisse ? 'Enregistrement...' : 'Confirmer encaissement'}</span>
                 </button>
               </div>

@@ -8,7 +8,7 @@ import {
   Mail,
   UserPlus,
   Trash2,
-  CheckCircle2,
+  CheckCircle,
   XCircle,
   Clock,
   ShieldCheck,
@@ -205,7 +205,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
         )}
         {successMessage && (
           <div className="mb-3 p-2.5 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-xs flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 shrink-0" />
+            <CheckCircle className="w-4 h-4 shrink-0" />
             <span>{successMessage}</span>
           </div>
         )}
@@ -311,7 +311,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
                       </>
                     ) : (
                       <>
-                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                        <CheckCircle className="w-3.5 h-3.5 text-emerald-600" />
                         <span className="hidden sm:inline">Activer</span>
                       </>
                     )}

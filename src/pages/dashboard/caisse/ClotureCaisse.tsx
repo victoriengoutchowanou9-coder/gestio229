@@ -8,7 +8,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
-  Lock, RefreshCw, CheckCircle2, AlertTriangle, AlertCircle, ShieldAlert,
+  Lock, RefreshCw, CheckCircle, AlertTriangle, AlertCircle, ShieldAlert,
   Calendar, Building2, Wallet, ArrowDownRight, ArrowUpRight, Check, Printer, Clock,
   FileText, Download, Mail, Send
 } from 'lucide-react'
@@ -716,7 +716,7 @@ export const ClotureCaisse: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 className="w-4 h-4" />
+                    <CheckCircle className="w-4 h-4" />
                     Valider la Clôture
                   </>
                 )}

@@ -10,7 +10,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   LayoutDashboard, TrendingUp, DollarSign, Wallet, CreditCard,
   Package, ShoppingCart, ArrowUpRight, Clock, Store, RefreshCw,
-  Users, ChevronRight, CheckCircle2, AlertCircle, ArrowRight
+  Users, ChevronRight, CheckCircle, AlertCircle, ArrowRight
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
@@ -612,7 +612,7 @@ export const DashboardPage: React.FC = () => {
                     </td>
                     <td className="p-4 text-center">
                       <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        <CheckCircle className="w-3 h-3 text-emerald-600" />
                         Validé
                       </span>
                     </td>

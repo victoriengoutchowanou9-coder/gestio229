@@ -8,7 +8,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Barcode, Search, ShoppingCart, Trash2, Plus, Minus, CreditCard,
-  Printer, PauseCircle, PlayCircle, RefreshCw, AlertCircle, CheckCircle2,
+  Printer, PauseCircle, PlayCircle, RefreshCw, AlertCircle, CheckCircle,
   DollarSign, Smartphone, ArrowRight, User, X, Tag, FileText, Check, Lock,
   Clock, RotateCcw, AlertTriangle, ShieldCheck, Download
 } from 'lucide-react'
@@ -1067,7 +1067,7 @@ export const SupermarcheCaissePage: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 className="w-4 h-4" />
+                    <CheckCircle className="w-4 h-4" />
                     Confirmer l'Encaissement
                   </>
                 )}

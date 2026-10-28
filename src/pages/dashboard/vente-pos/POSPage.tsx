@@ -11,7 +11,7 @@ import {
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
   ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft, Tag,
-  CheckCircle2, Wine, ChefHat, Edit3, XCircle, Fuel
+  CheckCircle, Wine, ChefHat, Edit3, XCircle, Fuel
 } from 'lucide-react'
 import { isFuelProduct } from '../../../utils/stationFuelHelper'
 import jsPDF from 'jspdf'
@@ -4545,7 +4545,7 @@ export const POSPage: React.FC = () => {
                   </>
                 ) : (
                   <>
-                    <CheckCircle2 className="w-4 h-4" /> Confirmer & Finaliser maintenant (Déstockage & KDS)
+                    <CheckCircle className="w-4 h-4" /> Confirmer & Finaliser maintenant (Déstockage & KDS)
                   </>
                 )}
               </button>
