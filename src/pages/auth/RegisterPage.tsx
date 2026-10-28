@@ -245,6 +245,7 @@ export const RegisterPage: React.FC = () => {
         email: cleanEmail,
         password: form.password,
         options: {
+          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
           data: {
             full_name: form.responsible_name.trim(),
             responsible_name: form.responsible_name.trim(),
@@ -263,32 +264,18 @@ export const RegisterPage: React.FC = () => {
       if (authError) {
         const msg = authError.message.toLowerCase()
         if (msg.includes('already registered') || msg.includes('already been registered')) {
-          const { data: signInData, error: signInErr } = await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password: form.password,
-          })
-          if (signInErr) {
-            throw new Error(
-              'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
-            )
-          }
-          authUserId = signInData.user?.id ?? null
+          throw new Error(
+            'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
+          )
         } else {
           throw authError
         }
-      } else {
-        authUserId = authData.user?.id ?? null
-        if (authData.user && !authData.session) {
-          const { data: signInData } = await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password: form.password,
-          })
-          if (signInData?.user) authUserId = signInData.user.id
-        }
       }
 
+      authUserId = authData?.user?.id ?? null
+
       if (!authUserId) {
-        throw new Error('Impossible d\'initialiser la session utilisateur. Veuillez réessayer.')
+        throw new Error('Impossible d\'initialiser la session utilisateur. Veuillez vérifier vos informations.')
       }
 
       // 3. Créer ou récupérer l'entreprise dans `companies`
@@ -405,18 +392,13 @@ export const RegisterPage: React.FC = () => {
         profileData = newProf
       }
 
-      // 7. Mettre à jour le store global et rediriger vers le Hub (si > 1 secteur) ou le secteur principal
-      setCompany(companyData as any)
-      setUser({
-        ...profileData,
-        company: companyData,
-      } as any)
-
-      if (cleanSectors.length > 1) {
-        navigate('/hub', { replace: true })
-      } else {
-        navigate(`/app/${primarySector}/tableau-bord`, { replace: true })
+      // 7. Règle métier : l'utilisateur doit obligatoirement confirmer son email avant de se connecter
+      if (authData?.session) {
+        await supabase.auth.signOut().catch(() => {})
       }
+
+      // Redirection vers la page de connexion avec la notification explicite de confirmation d'email
+      navigate(`/login?registered=1&email=${encodeURIComponent(cleanEmail)}`, { replace: true })
     } catch (err: any) {
       console.error('[RegisterPage] Erreur inscription :', err)
       setError(err.message || 'Une erreur est survenue lors de la création de votre compte.')
