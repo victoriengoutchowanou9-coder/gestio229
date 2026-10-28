@@ -1,6 +1,6 @@
 // =============================================================================
 // GESTIO 229 SAAS — API Endpoint : POST /api/auth-register
-// Inscription Sécurisée d'Entreprise & Gestion Multi-Secteurs (Refonte V4)
+// Inscription Sécurisée d'Entreprise & Gestion Multi-Secteurs (Refonte V5)
 //
 // RÈGLES MÉTIER & SÉCURITÉ (Sections 1 & 2) :
 // 1. Essai gratuit unique de 30 jours rattaché au compte, couvrant jusqu'à 3 secteurs maximum.
@@ -8,6 +8,11 @@
 // 3. Les 3 premiers secteurs sont couverts par l'essai gratuit ('rattache_global').
 // 4. Les secteurs supplémentaires (à partir du 4e) sont créés avec le statut
 //    'en_attente_paiement' (rattache_au_global = false) et ne sont jamais actifs sans validation.
+//
+// AUTO-CONFIRMATION :
+// Si SUPABASE_SERVICE_ROLE_KEY est défini dans les variables d'environnement Vercel,
+// le compte est créé avec email_confirm: true → l'utilisateur peut se connecter immédiatement
+// sans attendre un email de confirmation (résout le problème de non-réception d'emails).
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
@@ -97,16 +102,25 @@ function checkRateLimit(key: string, limit: number): { allowed: boolean; remaini
   return { allowed: true, remaining: limit - entry.count }
 }
 
-function getSupabaseAdmin() {
+/**
+ * Retourne un client Supabase admin.
+ * hasAdminKey = true si SUPABASE_SERVICE_ROLE_KEY est défini → auto-confirmation possible.
+ */
+function getSupabaseAdmin(): { client: ReturnType<typeof createClient>; hasAdminKey: boolean } {
   const url = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
-  return createClient(url, key, {
-    auth: { persistSession: false, autoRefreshToken: false },
-  })
+  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const anonKey = process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
+  const key = serviceKey || anonKey
+  return {
+    client: createClient(url, key, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    }),
+    hasAdminKey: !!serviceKey,
+  }
 }
 
 async function logSecurityEvent(
-  sb: any,
+  sb: ReturnType<typeof createClient>,
   eventType: string,
   severity: 'info' | 'warning' | 'danger',
   details: any,
@@ -132,21 +146,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('X-Content-Type-Options', 'nosniff')
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST.' })
+    return res.status(405).json({ success: false, error: 'Methode non autorisee. Utilisez POST.' })
   }
 
   const clientIp = String(
     req.headers['x-forwarded-for'] || req.headers['x-real-ip'] || req.socket?.remoteAddress || 'unknown'
   ).split(',')[0].trim()
 
-  const sb = getSupabaseAdmin()
+  const { client: sb, hasAdminKey } = getSupabaseAdmin()
 
   const rateCheck = checkRateLimit(`ip:${clientIp}`, MAX_SIGNUPS_PER_IP)
   if (!rateCheck.allowed) {
     await logSecurityEvent(sb, 'RATE_LIMIT_TRIGGERED', 'warning', { ip: clientIp }, clientIp)
     return res.status(429).json({
       success: false,
-      error: 'Trop de tentatives d’inscription depuis cette connexion. Veuillez patienter 15 minutes.',
+      error: 'Trop de tentatives inscription depuis cette connexion. Veuillez patienter 15 minutes.',
     })
   }
 
@@ -165,7 +179,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (website_hp) {
     await logSecurityEvent(sb, 'BOT_DETECTED_HONEYPOT', 'danger', { ip: clientIp, body: req.body }, clientIp)
-    return res.status(400).json({ success: false, error: 'Requête non autorisée.' })
+    return res.status(400).json({ success: false, error: 'Requete non autorisee.' })
   }
 
   if (!company_name || !company_name.trim()) {
@@ -175,13 +189,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ success: false, error: 'Le nom du responsable est obligatoire.' })
   }
   if (!phone || !phone.trim()) {
-    return res.status(400).json({ success: false, error: 'Le numéro de téléphone est obligatoire.' })
+    return res.status(400).json({ success: false, error: 'Le numero de telephone est obligatoire.' })
   }
   if (!email || !email.trim() || !email.includes('@')) {
     return res.status(400).json({ success: false, error: 'Une adresse e-mail valide est obligatoire.' })
   }
   if (!password || password.length < 6) {
-    return res.status(400).json({ success: false, error: 'Le mot de passe doit comporter au moins 6 caractères.' })
+    return res.status(400).json({ success: false, error: 'Le mot de passe doit comporter au moins 6 caracteres.' })
   }
 
   const cleanEmail = String(email).trim().toLowerCase()
@@ -191,7 +205,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let suspiciousReason: string | null = null
   if (DISPOSABLE_EMAIL_DOMAINS.has(emailDomain)) {
     isSuspicious = true
-    suspiciousReason = `Adresse email temporaire détectée (${emailDomain})`
+    suspiciousReason = `Adresse email temporaire detectee (${emailDomain})`
   }
 
   const rawSectorsArray: string[] = Array.isArray(selected_sectors)
@@ -207,7 +221,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cleanSectors.length === 0) {
     return res.status(400).json({
       success: false,
-      error: 'Veuillez sélectionner au moins un secteur d\'activité.',
+      error: 'Veuillez selectionner au moins un secteur d\'activite.',
     })
   }
 
@@ -215,7 +229,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!VALID_SECTOR_SLUGS.has(slug)) {
       return res.status(400).json({
         success: false,
-        error: `Le secteur « ${slug} » n'est pas un secteur valide dans GESTIO 229.`,
+        error: `Le secteur << ${slug} >> n'est pas un secteur valide dans GESTIO 229.`,
       })
     }
   }
@@ -228,6 +242,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const now = new Date()
     const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
+    // =========================================================================
+    // ETAPE 1 : Créer le compte Auth Supabase avec auto-confirmation si possible
+    // =========================================================================
+    let authUserId: string | null = null
+    let autoConfirmed = false
+
+    if (hasAdminKey) {
+      // Mode admin : création avec email_confirm: true → connexion immédiate
+      const { data: adminAuthData, error: adminAuthError } = await (sb.auth as any).admin.createUser({
+        email: cleanEmail,
+        password: password,
+        email_confirm: true,  // Confirmation automatique — pas besoin d'email
+        user_metadata: {
+          full_name: responsible_name.trim(),
+          responsible_name: responsible_name.trim(),
+          company_name: company_name.trim(),
+          phone: phone.trim(),
+          ifu_number: (ifu_number || '').trim() || '0000000000000',
+          city: city || 'Cotonou',
+          country: country || 'Benin',
+          primary_sector: primarySector,
+          selected_sectors: cleanSectors,
+          role: 'administrateur',
+        },
+      })
+
+      if (adminAuthError) {
+        // Si le compte existe déjà, on récupère l'ID via la liste admin
+        if (adminAuthError.message?.toLowerCase().includes('already registered') ||
+            adminAuthError.message?.toLowerCase().includes('already been registered') ||
+            adminAuthError.message?.toLowerCase().includes('already exists')) {
+          // Compte existant : on continue sans créer (l'utilisateur se reconnectera)
+          console.warn('[AuthRegister] Compte auth existant:', cleanEmail)
+        } else {
+          throw new Error(adminAuthError.message || 'Erreur lors de la creation du compte.')
+        }
+      } else {
+        authUserId = adminAuthData?.user?.id || null
+        autoConfirmed = true
+      }
+    } else {
+      // Mode fallback : signUp standard (email de confirmation envoyé)
+      // Note: sans SUPABASE_SERVICE_ROLE_KEY, l'auto-confirmation n'est pas disponible
+      console.warn('[AuthRegister] SUPABASE_SERVICE_ROLE_KEY non defini — signUp standard utilise (email confirmation requis)')
+    }
+
+    // =========================================================================
+    // ETAPE 2 : Créer ou mettre à jour l'entreprise dans `companies`
+    // =========================================================================
     let companyId: string
 
     const { data: existingComp } = await sb
@@ -238,11 +301,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (existingComp) {
       companyId = existingComp.id
-      let updatePayload: any = {
+      const updatePayload: any = {
         name: company_name.trim(),
         phone: phone.trim(),
         city: city?.trim() || 'Cotonou',
-        country: country || 'Bénin',
+        country: country || 'Benin',
         active_sector: primarySector,
         selected_sectors: cleanSectors,
         sectors: cleanSectors,
@@ -262,12 +325,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       if (updateRes.error) throw updateRes.error
     } else {
-      let insertPayload: any = {
+      const insertPayload: any = {
         name: company_name.trim(),
-        ifu_number: ifu_number?.trim() || '0000000000000',
+        ifu_number: (ifu_number || '').trim() || '0000000000000',
         phone: phone.trim(),
         email: cleanEmail,
-        country: country || 'Bénin',
+        country: country || 'Benin',
         city: city?.trim() || 'Cotonou',
         active_sector: primarySector,
         selected_sectors: cleanSectors,
@@ -289,7 +352,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       companyId = insertRes.data.id
     }
 
-    // Initialiser abonnements_global (Essai unique de 30 jours)
+    // =========================================================================
+    // ETAPE 3 : Créer le profil utilisateur dans `user_profiles` si authUserId connu
+    // =========================================================================
+    if (authUserId) {
+      const defaultAdminPermissions = {
+        admin: true,
+        commercial: true,
+        stock: true,
+        treasury: true,
+        purchases: true,
+        reporting: true,
+        accounting: true,
+        hr: true,
+        ventes: { view: true, create: true, edit: true, delete: true },
+        finances: { view: true, caisse: true, tresorerie: true },
+      }
+
+      try {
+        const { data: existingProfile } = await sb
+          .from('user_profiles')
+          .select('id')
+          .or(`auth_user_id.eq.${authUserId},email.ilike.${cleanEmail}`)
+          .maybeSingle()
+
+        if (existingProfile) {
+          await sb
+            .from('user_profiles')
+            .update({
+              company_id: companyId,
+              auth_user_id: authUserId,
+              full_name: responsible_name.trim(),
+              username: cleanEmail,
+              email: cleanEmail,
+              phone: phone.trim(),
+              role: 'administrateur',
+              is_active: true,
+              permissions: defaultAdminPermissions,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', existingProfile.id)
+        } else {
+          await sb
+            .from('user_profiles')
+            .insert({
+              company_id: companyId,
+              auth_user_id: authUserId,
+              full_name: responsible_name.trim(),
+              username: cleanEmail,
+              email: cleanEmail,
+              phone: phone.trim(),
+              role: 'administrateur',
+              is_active: true,
+              permissions: defaultAdminPermissions,
+            })
+        }
+      } catch (profileErr: any) {
+        console.warn('[AuthRegister] Erreur profil (non bloquante):', profileErr.message)
+      }
+    }
+
+    // =========================================================================
+    // ETAPE 4 : Initialiser abonnements_global (Essai unique de 30 jours)
+    // =========================================================================
     try {
       await sb.from('abonnements_global').upsert(
         {
@@ -304,7 +429,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       )
     } catch (_) {}
 
-    // Initialiser les secteurs couverts par l'essai gratuit (<= 3)
+    // =========================================================================
+    // ETAPE 5 : Initialiser les secteurs (essai gratuit <= 3, en_attente_paiement > 3)
+    // =========================================================================
     for (const slug of freeTrialSectors) {
       try {
         await sb.from('abonnements_secteurs').upsert(
@@ -322,7 +449,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (_) {}
     }
 
-    // Initialiser les secteurs supplémentaires (> 3) en attente de paiement
     for (const slug of pendingPaidSectors) {
       try {
         await sb.from('abonnements_secteurs').upsert(
@@ -340,10 +466,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (_) {}
     }
 
-    // Journal d'audit Super Admin
+    // =========================================================================
+    // ETAPE 6 : Journal d'audit Super Admin
+    // =========================================================================
     try {
       await sb.from('admin_audit_logs').insert({
-        admin_username: 'Système Inscription',
+        admin_username: 'Systeme Inscription',
         action: 'CREATION_COMPTE_ENTREPRISE',
         company_id: companyId,
         company_name: company_name.trim(),
@@ -358,6 +486,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           trial_until: trialEndsDate.toISOString(),
           is_suspicious: isSuspicious,
           suspicious_reason: suspiciousReason,
+          auto_confirmed: autoConfirmed,
+          has_admin_key: hasAdminKey,
         },
         ip_address: clientIp,
       })
@@ -365,7 +495,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     return res.status(200).json({
       success: true,
-      message: 'Entreprise enregistrée avec succès.',
+      message: 'Entreprise enregistree avec succes.',
       data: {
         companyId,
         companyName: company_name.trim(),
@@ -377,13 +507,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         subscriptionStatus: 'trial',
         trialEndsAt: trialEndsDate.toISOString(),
         isSuspicious,
+        autoConfirmed,        // true si le compte est confirmé automatiquement
+        requiresEmailVerification: !autoConfirmed,  // true si email de confirmation requis
       },
     })
   } catch (err: any) {
     console.error('[AuthRegister] Erreur serveur:', err.message)
     return res.status(500).json({
       success: false,
-      error: 'Une erreur est survenue lors de l\'enregistrement. Veuillez réessayer.',
+      error: 'Une erreur est survenue lors de l\'enregistrement. Veuillez reessayer.',
     })
   }
 }

@@ -206,8 +206,10 @@ export const RegisterPage: React.FC = () => {
 
     try {
       // 1. Appel de l'API serveur sécurisée /api/auth-register
+      //    L'API crée l'entreprise ET le compte Auth avec auto-confirmation si SUPABASE_SERVICE_ROLE_KEY est défini
       let companyId: string | null = null
       let companyData: any = null
+      let autoConfirmed = false
 
       try {
         const apiRes = await fetch('/api/auth-register', {
@@ -230,55 +232,69 @@ export const RegisterPage: React.FC = () => {
         const contentType = apiRes.headers.get('content-type') || ''
         if (contentType.includes('application/json')) {
           const json = await apiRes.json()
+          if (!apiRes.ok) {
+            throw new Error(json.error || 'Erreur lors de la création du compte.')
+          }
           if (json.success && json.data?.companyId) {
             companyId = json.data.companyId
+            autoConfirmed = json.data.autoConfirmed === true
           }
+        } else if (!apiRes.ok) {
+          throw new Error('Erreur serveur lors de la création du compte.')
         }
-      } catch (_) {
-        // Fallback direct Supabase en environnement Vite local
+      } catch (apiErr: any) {
+        // Si l'API retourne une erreur métier (ex: email déjà utilisé), on la remonte
+        if (apiErr.message && !apiErr.message.includes('fetch')) {
+          throw apiErr
+        }
+        // Sinon (pas d'API en local Vite), fallback silencieux
       }
 
-      // 2. Créer ou récupérer le compte Supabase Auth
+      // 2. Créer ou récupérer le compte Supabase Auth côté client (si l'API ne l'a pas fait)
       let authUserId: string | null = null
 
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password: form.password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
-          data: {
-            full_name: form.responsible_name.trim(),
-            responsible_name: form.responsible_name.trim(),
-            company_name: form.company_name.trim(),
-            phone: form.phone.trim(),
-            ifu_number: form.ifu_number.trim() || '0000000000000',
-            city: form.city,
-            country: form.country,
-            primary_sector: primarySector,
-            selected_sectors: cleanSectors,
-            role: 'administrateur',
+      if (!autoConfirmed) {
+        // L'API n'a pas pu auto-confirmer (pas de service role key) → signUp côté client
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password: form.password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
+            data: {
+              full_name: form.responsible_name.trim(),
+              responsible_name: form.responsible_name.trim(),
+              company_name: form.company_name.trim(),
+              phone: form.phone.trim(),
+              ifu_number: form.ifu_number.trim() || '0000000000000',
+              city: form.city,
+              country: form.country,
+              primary_sector: primarySector,
+              selected_sectors: cleanSectors,
+              role: 'administrateur',
+            },
           },
-        },
-      })
+        })
 
-      if (authError) {
-        const msg = authError.message.toLowerCase()
-        if (msg.includes('already registered') || msg.includes('already been registered')) {
-          throw new Error(
-            'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
-          )
-        } else {
-          throw authError
+        if (authError) {
+          const msg = authError.message.toLowerCase()
+          if (msg.includes('already registered') || msg.includes('already been registered')) {
+            throw new Error(
+              'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
+            )
+          } else {
+            throw authError
+          }
+        }
+
+        authUserId = authData?.user?.id ?? null
+
+        // Déconnecter la session si elle a été créée (l'utilisateur doit confirmer son email)
+        if (authData?.session) {
+          await supabase.auth.signOut().catch(() => {})
         }
       }
 
-      authUserId = authData?.user?.id ?? null
-
-      if (!authUserId) {
-        throw new Error('Impossible d\'initialiser la session utilisateur. Veuillez vérifier vos informations.')
-      }
-
-      // 3. Créer ou récupérer l'entreprise dans `companies`
+      // 3. Créer ou récupérer l'entreprise dans `companies` (fallback si l'API n'a pas pu le faire)
       if (!companyId) {
         const directRes = await createOrLinkCompanyDirectly(cleanEmail, cleanSectors)
         companyData = directRes.company
@@ -300,9 +316,11 @@ export const RegisterPage: React.FC = () => {
       const now = new Date()
       const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
       const initialPlan = cleanSectors.length === 1 ? singleSectorPlan : 'entreprise'
-      await initialiserSecteursInscription(companyId, cleanSectors, now, trialEnds, initialPlan)
+      try {
+        await initialiserSecteursInscription(companyId, cleanSectors, now, trialEnds, initialPlan)
+      } catch (_) {} // Non bloquant si déjà initialisé par l'API
 
-      // 5. Enregistrer les activités dans `company_activities` et `caisses`
+      // 5. Enregistrer les activités dans `company_activities`
       for (let i = 0; i < cleanSectors.length; i++) {
         const slug = cleanSectors[i]
         const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
@@ -330,75 +348,14 @@ export const RegisterPage: React.FC = () => {
         } catch (_) {}
       }
 
-      // 6. Créer ou mettre à jour le profil utilisateur Administrateur
-      const defaultAdminPermissions = {
-        admin: true,
-        commercial: true,
-        stock: true,
-        treasury: true,
-        purchases: true,
-        reporting: true,
-        accounting: true,
-        hr: true,
-        ventes: { view: true, create: true, edit: true, delete: true },
-        finances: { view: true, caisse: true, tresorerie: true },
-      }
-
-      const { data: existingProfile } = await supabase
-        .from('user_profiles')
-        .select('*')
-        .or(`auth_user_id.eq.${authUserId},email.ilike.${cleanEmail}`)
-        .maybeSingle()
-
-      let profileData: any
-
-      if (existingProfile) {
-        const { data: updatedProf, error: pUpdErr } = await supabase
-          .from('user_profiles')
-          .update({
-            company_id: companyId,
-            auth_user_id: authUserId,
-            full_name: form.responsible_name.trim(),
-            username: cleanEmail,
-            email: cleanEmail,
-            phone: form.phone.trim(),
-            role: 'administrateur',
-            is_active: true,
-            permissions: defaultAdminPermissions,
-            updated_at: new Date().toISOString(),
-          })
-          .eq('id', existingProfile.id)
-          .select()
-          .single()
-        if (pUpdErr) throw pUpdErr
-        profileData = updatedProf
+      // 6. Redirection selon le mode de confirmation
+      if (autoConfirmed) {
+        // Compte confirmé automatiquement → redirection vers login avec message de succès direct
+        navigate(`/login?registered=1&confirmed=1&email=${encodeURIComponent(cleanEmail)}`, { replace: true })
       } else {
-        const { data: newProf, error: pInsErr } = await supabase
-          .from('user_profiles')
-          .insert({
-            company_id: companyId,
-            auth_user_id: authUserId,
-            full_name: form.responsible_name.trim(),
-            username: cleanEmail,
-            email: cleanEmail,
-            phone: form.phone.trim(),
-            role: 'administrateur',
-            is_active: true,
-            permissions: defaultAdminPermissions,
-          })
-          .select()
-          .single()
-        if (pInsErr) throw pInsErr
-        profileData = newProf
+        // Confirmation par email requise → message d'attente
+        navigate(`/login?registered=1&email=${encodeURIComponent(cleanEmail)}`, { replace: true })
       }
-
-      // 7. Règle métier : l'utilisateur doit obligatoirement confirmer son email avant de se connecter
-      if (authData?.session) {
-        await supabase.auth.signOut().catch(() => {})
-      }
-
-      // Redirection vers la page de connexion avec la notification explicite de confirmation d'email
-      navigate(`/login?registered=1&email=${encodeURIComponent(cleanEmail)}`, { replace: true })
     } catch (err: any) {
       console.error('[RegisterPage] Erreur inscription :', err)
       setError(err.message || 'Une erreur est survenue lors de la création de votre compte.')
