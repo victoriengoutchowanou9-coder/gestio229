@@ -47,6 +47,35 @@ const LoginPage: React.FC = () => {
   const [resetPwdError, setResetPwdError] = useState('')
   const [resetPwdSuccess, setResetPwdSuccess] = useState(false)
 
+  // Renvoi email confirmation
+  const [resendLoading, setResendLoading] = useState(false)
+  const [resendMessage, setResendMessage] = useState<string | null>(null)
+
+  const handleResendConfirmation = async () => {
+    const targetEmail = (urlEmail || identifier).trim()
+    if (!targetEmail || !targetEmail.includes('@')) {
+      setResendMessage('Veuillez saisir votre adresse e-mail dans le champ ci-dessous.')
+      return
+    }
+    setResendLoading(true)
+    setResendMessage(null)
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: targetEmail.toLowerCase(),
+        options: {
+          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(targetEmail.toLowerCase())}`,
+        },
+      })
+      if (error) throw error
+      setResendMessage('✅ Email renvoyé ! Vérifiez aussi vos spams.')
+    } catch (err: any) {
+      setResendMessage(err.message || "Erreur lors du renvoi de l'email.")
+    } finally {
+      setResendLoading(false)
+    }
+  }
+
   // Horloge temps réel (Mardi 29 septembre 2026 — 14:35)
   const [currentTime, setCurrentTime] = useState<Date>(new Date())
 
@@ -659,6 +688,24 @@ const LoginPage: React.FC = () => {
                 <div className="text-xs text-amber-900 dark:text-amber-200">
                   <p className="font-bold">Compte enregistré !</p>
                   <p className="mt-0.5">Vérifiez vos emails et cliquez sur le lien d'activation avant de vous connecter.</p>
+                  <p className="mt-1 text-[11px] text-amber-800/90 dark:text-amber-300/90">
+                    💡 Pensez à vérifier votre dossier <strong>Spams / Courriers indésirables</strong>.
+                  </p>
+                  <div className="mt-2.5 pt-2 border-t border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResendConfirmation}
+                      disabled={resendLoading}
+                      className="font-bold underline text-amber-950 dark:text-amber-100 hover:opacity-80 disabled:opacity-50 text-[11px]"
+                    >
+                      {resendLoading ? 'Envoi en cours...' : "→ Vous n'avez pas reçu le mail ? Renvoyer le lien"}
+                    </button>
+                    {resendMessage && (
+                      <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        {resendMessage}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
