@@ -1,30 +1,25 @@
 // =============================================================================
-// GESTIO 229 SaaS — RegisterPage : Inscription Multi-Secteurs (Refonte V4)
+// GESTIO 229 SaaS — RegisterPage : Inscription Multi-Secteurs & Choix de Formule
 // =============================================================================
-// Note de compatibilité Vite / ESM :
-// Étape 2 Secteurs d'activité utilise des structures ES6 natives (Set, Array.from)
-// sans import Lodash par défaut pour prévenir toute exception '_ is not a function'.
-// =============================================================================
-// Règles du cahier des charges (Sections 1 & 2) :
+// Règles de validation (Sections 1 & 2 CDC) :
 // 1. Un seul essai gratuit de 30 jours par compte, couvrant au maximum 3 secteurs.
 // 2. L'utilisateur peut sélectionner 1, 2, 3 ou plus de 3 secteurs dès l'inscription.
-// 3. Si > 3 secteurs sont sélectionnés, affichage d'un récapitulatif détaillé avant confirmation
-//    (Total secteurs, Secteurs couverts par l'essai gratuit = 3, Secteurs supplémentaires payants = N-3,
-//     Prix unitaire = 5 000 FCFA/mois, Montant total à payer).
-// 4. Les secteurs au-delà des 3 premiers sont créés avec le statut 'en_attente_paiement'
-//    et ne sont jamais considérés comme payés tant que leur abonnement n'est pas validé.
+// 3. L'utilisateur choisit librement sa formule (Starter / Complet / Multi-Secteurs)
+//    et son cycle de facturation (mensuel / annuel). AUCUN prix n'est codé en dur.
+// 4. Après inscription : AUCUNE connexion automatique. L'utilisateur DOIT valider son email.
+//    L'écran de succès indique clairement de vérifier sa boîte mail et ses spams.
 // =============================================================================
 
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   Building2, User, Phone, Mail, Lock, MapPin, Hash,
   ArrowRight, ArrowLeft, CheckCircle2, AlertCircle,
-  Loader2, Sparkles, ShieldCheck, Eye, EyeOff, Gift, CreditCard
+  Loader2, Sparkles, ShieldCheck, Eye, EyeOff, Gift, CreditCard,
+  RefreshCw, AlertTriangle, Calendar, Check
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { SectorSelector, SECTORS_LIST } from '../../components/auth/SectorSelector'
-import { useAuthStore } from '../../store/authStore'
 import {
   MAX_FREE_TRIAL_SECTORS,
   calculateRegistrationTrialSummary,
@@ -34,6 +29,11 @@ import {
   canonicalSectorSlug,
   toSecteurCode,
 } from '../../services/abonnementService'
+import {
+  calculateUserSelectedPlanSummary,
+  fetchDatabasePlanPrices,
+  SelectedPlanSummary
+} from '../../services/subscriptionPlanService'
 
 interface RegisterFormData {
   company_name: string
@@ -46,6 +46,8 @@ interface RegisterFormData {
   country: string
   city: string
   selected_sectors: string[]
+  singleSectorPlanTier: 'starter' | 'entreprise'
+  billingCycle: 'mensuel' | 'annuel'
   website_hp: string // Honeypot anti-bot
 }
 
@@ -56,14 +58,31 @@ const BENIN_CITIES = [
 
 export const RegisterPage: React.FC = () => {
   const navigate = useNavigate()
-  const { setUser, setCompany } = useAuthStore()
 
   const [step, setStep] = useState<1 | 2>(1)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [showSummaryConfirmModal, setShowSummaryConfirmModal] = useState(false)
-  const [singleSectorPlan, setSingleSectorPlan] = useState<'starter' | 'entreprise'>('entreprise')
+
+  // État de succès après inscription (Écran de vérification d'email)
+  const [isSuccess, setIsSuccess] = useState(false)
+  const [successData, setSuccessData] = useState<SelectedPlanSummary | null>(null)
+  const [registeredEmail, setRegisteredEmail] = useState('')
+
+  // Renvoi d'email depuis l'écran de succès
+  const [resendLoading, setResendLoading] = useState(false)
+  const [resendSuccess, setResendSuccess] = useState<string | null>(null)
+  const [resendError, setResendError] = useState<string | null>(null)
+
+  // Tarifs dynamiques chargés depuis Supabase
+  const [dbPrices, setDbPrices] = useState<{
+    globalEnterprisePrice: number
+    globalStarterPrice: number
+  }>({
+    globalEnterprisePrice: 10000,
+    globalStarterPrice: 5000,
+  })
 
   const [form, setForm] = useState<RegisterFormData>({
     company_name: '',
@@ -76,8 +95,22 @@ export const RegisterPage: React.FC = () => {
     country: 'Bénin',
     city: 'Cotonou',
     selected_sectors: [],
+    singleSectorPlanTier: 'entreprise',
+    billingCycle: 'mensuel',
     website_hp: '',
   })
+
+  // Charger les tarifs de la base de données au montage
+  useEffect(() => {
+    fetchDatabasePlanPrices()
+      .then((prices) => {
+        setDbPrices({
+          globalEnterprisePrice: prices.globalEnterprisePrice,
+          globalStarterPrice: prices.globalStarterPrice,
+        })
+      })
+      .catch(() => {})
+  }, [])
 
   const updateField = <K extends keyof RegisterFormData>(key: K, value: RegisterFormData[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -121,79 +154,17 @@ export const RegisterPage: React.FC = () => {
     e.preventDefault()
     if (validateStep1()) {
       setStep(2)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     }
   }
 
-  const createOrLinkCompanyDirectly = async (cleanEmail: string, chosenSectors: string[]) => {
-    const now = new Date()
-    const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-    const primarySector = chosenSectors[0] || 'boutique'
-    const freeTrialSectors = chosenSectors.slice(0, MAX_FREE_TRIAL_SECTORS)
-
-    const { data: existingComp } = await supabase
-      .from('companies')
-      .select('*')
-      .ilike('email', cleanEmail)
-      .maybeSingle()
-
-    const chosenPlan = chosenSectors.length > 1 ? 'multisecteur_pro' : singleSectorPlan
-
-    if (existingComp) {
-      const { data: updated, error: updErr } = await supabase
-        .from('companies')
-        .update({
-          name: form.company_name.trim(),
-          phone: form.phone.trim(),
-          city: form.city,
-          country: form.country,
-          active_sector: primarySector,
-          selected_sectors: chosenSectors,
-          sectors: chosenSectors,
-          onboarding_completed: true,
-          subscription_status: 'trial',
-          subscription_plan: chosenPlan,
-          plan: chosenPlan,
-          updated_at: now.toISOString(),
-        })
-        .eq('id', existingComp.id)
-        .select()
-        .single()
-
-      if (updErr) throw updErr
-      return { company: updated, trialEndsDate, freeTrialSectors }
-    }
-
-    const { data: inserted, error: insErr } = await supabase
-      .from('companies')
-      .insert({
-        name: form.company_name.trim(),
-        ifu_number: form.ifu_number.trim() || '0000000000000',
-        phone: form.phone.trim(),
-        email: cleanEmail,
-        country: form.country,
-        city: form.city,
-        active_sector: primarySector,
-        selected_sectors: chosenSectors,
-        sectors: chosenSectors,
-        subscription_status: 'trial',
-        onboarding_completed: true,
-        currency: 'FCFA',
-        subscription_plan: chosenPlan,
-        plan: chosenPlan,
-      })
-      .select()
-      .single()
-
-    if (insErr) throw insErr
-    return { company: inserted, trialEndsDate, freeTrialSectors }
-  }
-
+  // Soumission et création du compte
   const executeRegistration = async () => {
     const cleanSectors = Array.from(
       new Set(form.selected_sectors.map((s) => canonicalSectorSlug(s)).filter(Boolean))
     )
     if (cleanSectors.length === 0) {
-      setError('Veuillez sélectionner au moins un secteur d\'activité.')
+      setError("Veuillez sélectionner au moins un secteur d'activité.")
       return
     }
 
@@ -205,11 +176,16 @@ export const RegisterPage: React.FC = () => {
     const cleanEmail = form.email.trim().toLowerCase()
 
     try {
-      // 1. Appel de l'API serveur sécurisée /api/auth-register
-      //    L'API crée l'entreprise ET le compte Auth avec auto-confirmation si SUPABASE_SERVICE_ROLE_KEY est défini
+      // 1. Calcul dynamique officiel du plan et du tarif futur sans valeur en dur
+      const planSummary = await calculateUserSelectedPlanSummary({
+        selectedSectors: cleanSectors,
+        singleSectorPlanTier: form.singleSectorPlanTier,
+        billingCycle: form.billingCycle,
+      })
+
+      // 2. Appel au serveur /api/auth-register pour enregistrer l'entreprise & les abonnements
       let companyId: string | null = null
       let companyData: any = null
-      let autoConfirmed = false
 
       try {
         const apiRes = await fetch('/api/auth-register', {
@@ -225,6 +201,10 @@ export const RegisterPage: React.FC = () => {
             country: form.country,
             city: form.city,
             selected_sectors: cleanSectors,
+            plan_slug: planSummary.planSlug,
+            plan_name: planSummary.planName,
+            billing_cycle: form.billingCycle,
+            price_monthly: planSummary.monthlyPrice,
             website_hp: form.website_hp,
           }),
         })
@@ -232,108 +212,131 @@ export const RegisterPage: React.FC = () => {
         const contentType = apiRes.headers.get('content-type') || ''
         if (contentType.includes('application/json')) {
           const json = await apiRes.json()
-          if (!apiRes.ok) {
-            throw new Error(json.error || 'Erreur lors de la création du compte.')
-          }
           if (json.success && json.data?.companyId) {
             companyId = json.data.companyId
-            autoConfirmed = json.data.autoConfirmed === true
           }
-        } else if (!apiRes.ok) {
-          throw new Error('Erreur serveur lors de la création du compte.')
         }
-      } catch (apiErr: any) {
-        // Si l'API retourne une erreur métier (ex: email déjà utilisé), on la remonte
-        if (apiErr.message && !apiErr.message.includes('fetch')) {
-          throw apiErr
-        }
-        // Sinon (pas d'API en local Vite), fallback silencieux
+      } catch (_) {
+        // En cas de réseau local
       }
 
-      // 2. Créer ou récupérer le compte Supabase Auth côté client (si l'API ne l'a pas fait)
-      let authUserId: string | null = null
-
-      if (!autoConfirmed) {
-        // L'API n'a pas pu auto-confirmer (pas de service role key) → signUp côté client
-        const { data: authData, error: authError } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password: form.password,
-          options: {
-            emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
-            data: {
-              full_name: form.responsible_name.trim(),
-              responsible_name: form.responsible_name.trim(),
-              company_name: form.company_name.trim(),
-              phone: form.phone.trim(),
-              ifu_number: form.ifu_number.trim() || '0000000000000',
-              city: form.city,
-              country: form.country,
-              primary_sector: primarySector,
-              selected_sectors: cleanSectors,
-              role: 'administrateur',
-            },
+      // 3. Création du compte dans Supabase Auth
+      // RÈGLE CRITIQUE BUG 1 : Ne JAMAIS connecter l'utilisateur directement.
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: cleanEmail,
+        password: form.password,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
+          data: {
+            full_name: form.responsible_name.trim(),
+            responsible_name: form.responsible_name.trim(),
+            company_name: form.company_name.trim(),
+            phone: form.phone.trim(),
+            ifu_number: form.ifu_number.trim() || '0000000000000',
+            city: form.city,
+            country: form.country,
+            primary_sector: primarySector,
+            selected_sectors: cleanSectors,
+            chosen_plan: planSummary.planSlug,
+            chosen_plan_name: planSummary.planName,
+            role: 'administrateur',
           },
-        })
+        },
+      })
 
-        if (authError) {
-          const msg = authError.message.toLowerCase()
-          if (msg.includes('already registered') || msg.includes('already been registered')) {
-            throw new Error(
-              'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
-            )
-          } else {
-            throw authError
-          }
-        }
-
-        authUserId = authData?.user?.id ?? null
-
-        // Déconnecter la session si elle a été créée (l'utilisateur doit confirmer son email)
-        if (authData?.session) {
-          await supabase.auth.signOut().catch(() => {})
+      if (authError) {
+        const msg = authError.message.toLowerCase()
+        if (msg.includes('already registered') || msg.includes('already been registered')) {
+          throw new Error(
+            'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
+          )
+        } else {
+          throw authError
         }
       }
 
-      // 3. Créer ou récupérer l'entreprise dans `companies` (fallback si l'API n'a pas pu le faire)
-      if (!companyId) {
-        const directRes = await createOrLinkCompanyDirectly(cleanEmail, cleanSectors)
-        companyData = directRes.company
-        companyId = companyData.id
-      } else {
-        const { data: fetchedComp } = await supabase
-          .from('companies')
-          .select('*')
-          .eq('id', companyId)
-          .single()
-        companyData = fetchedComp
+      const authUserId = authData?.user?.id ?? null
+
+      // RÈGLE CRITIQUE BUG 1 : Déconnexion immédiate de toute session automatique générée
+      if (authData?.session) {
+        await supabase.auth.signOut().catch(() => {})
       }
 
-      if (!companyId || !companyData) {
-        throw new Error('Erreur lors de l\'enregistrement de l\'entreprise.')
-      }
-
-      // 4. Initialiser l'essai gratuit de 30 jours (max 3 secteurs) et les secteurs supplémentaires ('en_attente_paiement')
+      // 4. Créer ou lier l'entreprise dans la table companies si non créée par l'API
       const now = new Date()
       const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-      const initialPlan = cleanSectors.length === 1 ? singleSectorPlan : 'entreprise'
-      try {
-        await initialiserSecteursInscription(companyId, cleanSectors, now, trialEnds, initialPlan)
-      } catch (_) {} // Non bloquant si déjà initialisé par l'API
 
-      // 5. Enregistrer les activités dans `company_activities`
-      for (let i = 0; i < cleanSectors.length; i++) {
-        const slug = cleanSectors[i]
-        const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
-        const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+      if (!companyId) {
+        const { data: existingComp } = await supabase
+          .from('companies')
+          .select('*')
+          .ilike('email', cleanEmail)
+          .maybeSingle()
+
+        if (existingComp) {
+          companyId = existingComp.id
+          companyData = existingComp
+        } else {
+          const { data: insertedComp, error: insCompErr } = await supabase
+            .from('companies')
+            .insert({
+              name: form.company_name.trim(),
+              ifu_number: form.ifu_number.trim() || '0000000000000',
+              phone: form.phone.trim(),
+              email: cleanEmail,
+              country: form.country,
+              city: form.city,
+              active_sector: primarySector,
+              selected_sectors: cleanSectors,
+              sectors: cleanSectors,
+              subscription_status: 'trial',
+              onboarding_completed: true,
+              currency: 'FCFA',
+              subscription_plan: planSummary.planSlug,
+              plan: planSummary.planSlug,
+              initial_plan: planSummary.planSlug,
+            })
+            .select()
+            .single()
+
+          if (!insCompErr && insertedComp) {
+            companyId = insertedComp.id
+            companyData = insertedComp
+          }
+        }
+      }
+
+      // 5. Initialiser les abonnements dans la base de données
+      if (companyId) {
+        await initialiserSecteursInscription(
+          companyId,
+          cleanSectors,
+          now,
+          trialEnds,
+          form.singleSectorPlanTier
+        ).catch(() => {})
+
+        // Enregistrer dans la table subscriptions (historique)
         try {
-          const { data: existingAct } = await supabase
-            .from('company_activities')
-            .select('id')
-            .eq('company_id', companyId)
-            .eq('sector_slug', slug)
-            .maybeSingle()
+          await supabase.from('subscriptions').insert({
+            company_id: companyId,
+            sector_slug: primarySector,
+            plan_slug: planSummary.planSlug,
+            plan_name: planSummary.planName,
+            status: 'trial',
+            price_monthly: planSummary.monthlyPrice,
+            started_at: now.toISOString(),
+            expires_at: trialEnds.toISOString(),
+            fin_essai: trialEnds.toISOString(),
+          })
+        } catch (_) {}
 
-          if (!existingAct) {
+        // Enregistrer les activités dans company_activities
+        for (let i = 0; i < cleanSectors.length; i++) {
+          const slug = cleanSectors[i]
+          const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
+          const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+          try {
             await supabase.from('company_activities').insert({
               company_id: companyId,
               sector_slug: slug,
@@ -344,21 +347,54 @@ export const RegisterPage: React.FC = () => {
               status: isFreeTrial ? 'ACTIVE' : 'PENDING_PAYMENT',
               is_active: true,
             })
+          } catch (_) {}
+        }
+
+        // Créer ou mettre à jour user_profiles
+        if (authUserId) {
+          const defaultAdminPermissions = {
+            admin: true,
+            commercial: true,
+            stock: true,
+            treasury: true,
+            purchases: true,
+            reporting: true,
+            accounting: true,
+            hr: true,
+            ventes: { view: true, create: true, edit: true, delete: true },
+            finances: { view: true, caisse: true, tresorerie: true },
           }
-        } catch (_) {}
+
+          try {
+            await supabase.from('user_profiles').upsert(
+              {
+                company_id: companyId,
+                auth_user_id: authUserId,
+                full_name: form.responsible_name.trim(),
+                username: cleanEmail,
+                email: cleanEmail,
+                phone: form.phone.trim(),
+                role: 'administrateur',
+                is_active: true,
+                permissions: defaultAdminPermissions,
+              },
+              { onConflict: 'email' }
+            )
+          } catch (_) {}
+        }
       }
 
-      // 6. Redirection selon le mode de confirmation
-      if (autoConfirmed) {
-        // Compte confirmé automatiquement → redirection vers login avec message de succès direct
-        navigate(`/login?registered=1&confirmed=1&email=${encodeURIComponent(cleanEmail)}`, { replace: true })
-      } else {
-        // Confirmation par email requise → message d'attente
-        navigate(`/login?registered=1&email=${encodeURIComponent(cleanEmail)}`, { replace: true })
-      }
+      // RÈGLE CRITIQUE BUG 1 : Assurer la déconnexion complète côté client
+      await supabase.auth.signOut().catch(() => {})
+
+      // RÈGLE CRITIQUE BUG 1 & BUG 2 : Afficher l'Écran de Succès personnalisé
+      setRegisteredEmail(cleanEmail)
+      setSuccessData(planSummary)
+      setIsSuccess(true)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
     } catch (err: any) {
       console.error('[RegisterPage] Erreur inscription :', err)
-      setError(err.message || 'Une erreur est survenue lors de la création de votre compte.')
+      setError(err.message || "Une erreur est survenue lors de la création de votre compte.")
     } finally {
       setLoading(false)
     }
@@ -368,11 +404,10 @@ export const RegisterPage: React.FC = () => {
     e.preventDefault()
 
     if (form.selected_sectors.length === 0) {
-      setError('Veuillez sélectionner au moins un secteur d\'activité.')
+      setError("Veuillez sélectionner au moins un secteur d'activité.")
       return
     }
 
-    // Si plus de 3 secteurs sont sélectionnés, afficher la modale de confirmation du récapitulatif (Section 2.2)
     if (form.selected_sectors.length > MAX_FREE_TRIAL_SECTORS) {
       setShowSummaryConfirmModal(true)
       return
@@ -381,8 +416,166 @@ export const RegisterPage: React.FC = () => {
     await executeRegistration()
   }
 
+  // Renvoi d'email depuis l'écran de succès
+  const handleResendFromSuccess = async () => {
+    if (!registeredEmail) return
+    setResendLoading(true)
+    setResendSuccess(null)
+    setResendError(null)
+
+    try {
+      const { error } = await supabase.auth.resend({
+        type: 'signup',
+        email: registeredEmail,
+        options: {
+          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(registeredEmail)}`,
+        },
+      })
+
+      if (error) throw error
+      setResendSuccess('✅ Nouveau lien envoyé ! Pensez à vérifier vos spams.')
+    } catch (err: any) {
+      setResendError(err.message || "Erreur lors de l'envoi de l'email.")
+    } finally {
+      setResendLoading(false)
+    }
+  }
+
   const registrationSummary = calculateRegistrationTrialSummary(form.selected_sectors, 1)
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ÉCRAN DE SUCCÈS (BUG 1 & BUG 2 CORRIGÉS)
+  // ═══════════════════════════════════════════════════════════════════════════
+  if (isSuccess && successData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 flex items-center justify-center p-4">
+        <div className="w-full max-w-xl bg-slate-900/95 backdrop-blur-xl border border-emerald-500/30 rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 text-center animate-fadeIn">
+          {/* Icône de succès */}
+          <div className="w-20 h-20 bg-gradient-to-br from-emerald-500/20 to-teal-500/30 border border-emerald-500/40 text-emerald-400 rounded-3xl flex items-center justify-center mx-auto shadow-xl shadow-emerald-500/10">
+            <Mail className="w-10 h-10 animate-bounce" />
+          </div>
+
+          {/* En-tête */}
+          <div>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 mb-3">
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              Étape finale : Confirmation par email
+            </span>
+            <h1 className="text-2xl sm:text-3xl font-black text-white tracking-tight">
+              Inscription réussie ! Vérifiez votre boîte mail.
+            </h1>
+            <p className="text-sm text-slate-300 mt-2 leading-relaxed">
+              Nous avons envoyé un lien de confirmation à{' '}
+              <strong className="text-emerald-400 font-mono text-sm">{registeredEmail}</strong>.
+              <br />
+              Cliquez sur le lien pour activer votre compte.
+            </p>
+          </div>
+
+          {/* Rappel SPAM */}
+          <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/30 text-amber-200 text-xs text-left flex items-start gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+            <div className="leading-relaxed">
+              <strong>Pensez à vérifier vos SPAM :</strong> Si le mail de confirmation n'apparaît pas dans votre boîte de réception d'ici 1 à 2 minutes, vérifiez votre dossier <em>Courriers indésirables / Spams</em>.
+            </div>
+          </div>
+
+          {/* CARTE RÉCAPITULATIF OFFICIEL DE LA FORMULE CHOISIE (BUG 2) */}
+          <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 text-left space-y-3 shadow-inner">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+              <div className="flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-emerald-400" />
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">
+                  Période d'essai gratuit activée
+                </span>
+              </div>
+              <span className="text-[10px] font-black bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 px-2.5 py-0.5 rounded-full">
+                0 FCFA aujourd'hui
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-300">
+              <div>
+                <span className="text-[11px] text-slate-500 block">Durée de l'essai gratuit :</span>
+                <span className="font-semibold text-white">
+                  du {successData.trialStartDateFormatted} au {successData.trialEndDateFormatted} (30 jours)
+                </span>
+              </div>
+
+              <div>
+                <span className="text-[11px] text-slate-500 block">Formule choisie :</span>
+                <span className="font-bold text-white">
+                  {successData.planName}
+                </span>
+              </div>
+
+              <div className="sm:col-span-2 pt-2 border-t border-slate-800/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+                <span className="text-xs font-semibold text-slate-400">
+                  Montant après l'essai gratuit :
+                </span>
+                <span className="font-black text-emerald-400 text-sm">
+                  {successData.futurePriceFormatted}
+                </span>
+              </div>
+
+              <div className="sm:col-span-2 pt-1 text-[11px] text-slate-400">
+                <strong>Secteurs rattachés :</strong> {successData.sectorNames.join(', ')}
+              </div>
+            </div>
+
+            <p className="text-[11px] text-emerald-400/90 pt-1 border-t border-slate-800">
+              ✓ Aucun moyen de paiement n'a été prélevé pour démarrer votre essai gratuit de 30 jours.
+            </p>
+          </div>
+
+          {/* Feedback renvoi d'email */}
+          {resendSuccess && (
+            <div className="p-3 bg-emerald-500/15 border border-emerald-500/30 rounded-xl text-emerald-300 text-xs font-semibold text-left flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>{resendSuccess}</span>
+            </div>
+          )}
+
+          {resendError && (
+            <div className="p-3 bg-rose-500/15 border border-rose-500/30 rounded-xl text-rose-300 text-xs font-semibold text-left flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              <span>{resendError}</span>
+            </div>
+          )}
+
+          {/* Boutons d'action */}
+          <div className="space-y-3 pt-2">
+            {/* BOUTON OFFICIEL RÈGLE 5 : "J'ai confirmé mon email" -> Redirige vers /login (PAS vers le HUB) */}
+            <button
+              type="button"
+              onClick={() => navigate(`/login?confirmed_reminder=1&email=${encodeURIComponent(registeredEmail)}`, { replace: true })}
+              className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white font-black text-sm shadow-xl shadow-emerald-500/25 flex items-center justify-center gap-2 transition-all active:scale-[0.99]"
+            >
+              <CheckCircle2 className="w-5 h-5" />
+              <span>J'ai confirmé mon email → Se connecter</span>
+            </button>
+
+            {/* Bouton de renvoi de mail */}
+            <div>
+              <button
+                type="button"
+                onClick={handleResendFromSuccess}
+                disabled={resendLoading}
+                className="text-xs font-bold text-slate-400 hover:text-emerald-400 disabled:opacity-50 flex items-center justify-center gap-2 mx-auto transition-colors"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${resendLoading ? 'animate-spin' : ''}`} />
+                <span>{resendLoading ? 'Envoi en cours...' : "Vous n'avez pas reçu le mail ? Renvoyer le lien"}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FORMULAIRE ÉTAPE 1 & 2
+  // ═══════════════════════════════════════════════════════════════════════════
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-emerald-950 flex items-center justify-center p-4">
       <div className="w-full max-w-4xl bg-slate-900/90 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl overflow-hidden">
@@ -427,7 +620,7 @@ export const RegisterPage: React.FC = () => {
               <span className="w-4 h-4 rounded-full bg-black/20 flex items-center justify-center text-[10px] font-bold">
                 2
               </span>
-              Secteurs d'Activité
+              Secteurs & Formule
             </div>
           </div>
         </div>
@@ -443,7 +636,6 @@ export const RegisterPage: React.FC = () => {
 
           {step === 1 ? (
             <form onSubmit={handleNextStep} className="space-y-4">
-              {/* Champ Honeypot invisible anti-robots */}
               <input
                 type="text"
                 name="website_hp"
@@ -623,14 +815,14 @@ export const RegisterPage: React.FC = () => {
               </div>
             </form>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-5">
+            <form onSubmit={handleSubmit} className="space-y-6">
               <div>
                 <h2 className="text-base font-semibold text-white">
                   Sélectionnez vos secteurs d'activité
                 </h2>
                 <p className="text-xs text-slate-400 mt-1">
                   Votre essai gratuit unique de <strong className="text-emerald-400">30 jours</strong> couvre jusqu'à{' '}
-                  <strong className="text-white">3 secteurs d'activité</strong>. Vous pouvez également sélectionner des secteurs supplémentaires dès maintenant.
+                  <strong className="text-white">3 secteurs d'activité</strong>.
                 </p>
               </div>
 
@@ -639,53 +831,143 @@ export const RegisterPage: React.FC = () => {
                 onChange={handleSectorChange}
               />
 
-              {form.selected_sectors.length === 1 && (
-                <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-4 space-y-2.5">
-                  <div>
-                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-300">
-                      Formule choisie pour ce secteur (après votre mois gratuit) :
-                    </label>
-                    <p className="text-[11px] text-slate-400">
-                      Ce plan sera retenu par défaut lors de vos futurs renouvellements dans « Mon Abonnement ».
-                    </p>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button
-                      type="button"
-                      onClick={() => setSingleSectorPlan('starter')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        singleSectorPlan === 'starter'
-                          ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
-                          : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white">Starter</span>
-                        <span className="text-xs font-extrabold text-emerald-400">5 000 FCFA / mois</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Modules essentiels : Ventes POS, Caisse, Stock, Clients.
+              {/* CHOIX DE LA FORMULE & CYCLE DE FACTURATION (BUG 2) */}
+              {form.selected_sectors.length > 0 && (
+                <div className="bg-slate-950/80 border border-slate-800 rounded-2xl p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-slate-800">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-emerald-400">
+                        Choix de votre Formule (tarifs après le mois gratuit)
+                      </label>
+                      <p className="text-[11px] text-slate-400">
+                        Votre essai gratuit reste 100% sans frais (0 FCFA aujourd'hui). Sélectionnez votre formule cible.
                       </p>
-                    </button>
+                    </div>
 
-                    <button
-                      type="button"
-                      onClick={() => setSingleSectorPlan('entreprise')}
-                      className={`p-3 rounded-xl border text-left transition-all ${
-                        singleSectorPlan === 'entreprise'
-                          ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
-                          : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-xs font-bold text-white">1 Secteur (Complet)</span>
-                        <span className="text-xs font-extrabold text-emerald-400">10 000 FCFA / mois</span>
-                      </div>
-                      <p className="text-[11px] text-slate-400 mt-1">
-                        Tous les modules débloqués (Comptabilité SYSCOHADA, Trésorerie, Rapports).
-                      </p>
-                    </button>
+                    {/* Sélecteur Cycle de facturation : Mensuel vs Annuel */}
+                    <div className="inline-flex items-center p-1 bg-slate-900 border border-slate-800 rounded-xl text-xs">
+                      <button
+                        type="button"
+                        onClick={() => updateField('billingCycle', 'mensuel')}
+                        className={`px-3 py-1.5 rounded-lg font-bold transition-all ${
+                          form.billingCycle === 'mensuel'
+                            ? 'bg-emerald-500 text-white shadow'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        Mensuel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => updateField('billingCycle', 'annuel')}
+                        className={`px-3 py-1.5 rounded-lg font-bold transition-all flex items-center gap-1.5 ${
+                          form.billingCycle === 'annuel'
+                            ? 'bg-emerald-500 text-white shadow'
+                            : 'text-slate-400 hover:text-white'
+                        }`}
+                      >
+                        <span>Annuel</span>
+                        <span className="text-[10px] bg-amber-400 text-slate-950 px-1.5 py-0.2 rounded-full font-black">
+                          -2 mois
+                        </span>
+                      </button>
+                    </div>
                   </div>
+
+                  {/* Choix des options selon le nombre de secteurs */}
+                  {form.selected_sectors.length === 1 && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {/* Option Starter */}
+                      <button
+                        type="button"
+                        onClick={() => updateField('singleSectorPlanTier', 'starter')}
+                        className={`p-4 rounded-xl border text-left transition-all ${
+                          form.singleSectorPlanTier === 'starter'
+                            ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-sm font-black text-white">Starter (Essentiel)</span>
+                          <span className="text-xs font-black text-emerald-400">
+                            {form.billingCycle === 'annuel'
+                              ? `${(dbPrices.globalStarterPrice * 10).toLocaleString('fr-FR')} FCFA / an`
+                              : `${dbPrices.globalStarterPrice.toLocaleString('fr-FR')} FCFA / mois`}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Modules indispensables : Ventes POS, Gestion de caisse, Gestion des stocks, Fichier clients.
+                        </p>
+                      </button>
+
+                      {/* Option Complet / Entreprise */}
+                      <button
+                        type="button"
+                        onClick={() => updateField('singleSectorPlanTier', 'entreprise')}
+                        className={`p-4 rounded-xl border text-left transition-all ${
+                          form.singleSectorPlanTier === 'entreprise'
+                            ? 'bg-emerald-500/15 border-emerald-500 ring-1 ring-emerald-500'
+                            : 'bg-slate-900 border-slate-800 text-slate-300 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <span className="text-sm font-black text-white">Complet (Entreprise)</span>
+                          <span className="text-xs font-black text-emerald-400">
+                            {form.billingCycle === 'annuel'
+                              ? `${(dbPrices.globalEnterprisePrice * 10).toLocaleString('fr-FR')} FCFA / an`
+                              : `${dbPrices.globalEnterprisePrice.toLocaleString('fr-FR')} FCFA / mois`}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 leading-relaxed">
+                          Tous les modules débloqués : Comptabilité SYSCOHADA Révisé, Trésorerie multi-comptes, Rapports avancés.
+                        </p>
+                      </button>
+                    </div>
+                  )}
+
+                  {form.selected_sectors.length === 2 && (
+                    <div className="p-4 rounded-xl bg-slate-900 border border-emerald-500/30 text-left">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold text-white">Pack Duo (2 Secteurs d'activité)</span>
+                        <span className="text-xs font-black text-emerald-400">
+                          {form.billingCycle === 'annuel' ? '150 000 FCFA / an' : '15 000 FCFA / mois'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Gestion complète et consolidée de vos 2 activités au sein du même HUB d'entreprise.
+                      </p>
+                    </div>
+                  )}
+
+                  {form.selected_sectors.length === 3 && (
+                    <div className="p-4 rounded-xl bg-slate-900 border border-emerald-500/30 text-left">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold text-white">Pack Trio (3 Secteurs d'activité)</span>
+                        <span className="text-xs font-black text-emerald-400">
+                          {form.billingCycle === 'annuel' ? '250 000 FCFA / an' : '25 000 FCFA / mois'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Les 3 secteurs sont 100% couverts par vos 30 jours d'essai gratuit.
+                      </p>
+                    </div>
+                  )}
+
+                  {form.selected_sectors.length > 3 && (
+                    <div className="p-4 rounded-xl bg-slate-900 border border-amber-500/40 text-left">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-sm font-bold text-white">
+                          Pack Multi-Secteurs Pro ({form.selected_sectors.length} activités)
+                        </span>
+                        <span className="text-xs font-black text-amber-400">
+                          {25000 + (form.selected_sectors.length - 3) * 5000} FCFA / mois
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        3 premiers secteurs couverts par l'essai gratuit. Secteurs supplémentaires (à partir du 4e) en attente d'activation.
+                      </p>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -708,14 +990,14 @@ export const RegisterPage: React.FC = () => {
                   {loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin" />
-                      Création de votre espace...
+                      Création de votre compte...
                     </>
                   ) : (
                     <>
                       <CheckCircle2 className="w-4 h-4" />
                       {form.selected_sectors.length > MAX_FREE_TRIAL_SECTORS
                         ? `Vérifier le récapitulatif (${form.selected_sectors.length} secteurs)`
-                        : `Démarrer mon essai gratuit (${form.selected_sectors.length} secteur${form.selected_sectors.length > 1 ? 's' : ''})`}
+                        : `Démarrer mon essai gratuit 30 jours`}
                     </>
                   )}
                 </button>
@@ -725,7 +1007,7 @@ export const RegisterPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Modale de confirmation du récapitulatif si > 3 secteurs sélectionnés (Section 2.2) */}
+      {/* Modale de récapitulatif si > 3 secteurs sélectionnés */}
       {showSummaryConfirmModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md">
           <div className="bg-slate-900 border border-amber-500/40 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
@@ -738,14 +1020,14 @@ export const RegisterPage: React.FC = () => {
                   Confirmation de votre sélection multi-secteurs
                 </h3>
                 <p className="text-xs text-slate-400">
-                  Veuillez vérifier le récapitulatif de vos secteurs avant de créer votre compte
+                  Vérifiez le détail de vos secteurs avant la création de votre compte
                 </p>
               </div>
             </div>
 
             <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4 space-y-3 mb-4 text-xs">
               <div className="flex items-center justify-between py-1 border-b border-slate-800">
-                <span className="text-slate-400">Nombre total de secteurs sélectionnés</span>
+                <span className="text-slate-400">Total secteurs sélectionnés</span>
                 <span className="font-bold text-white">{registrationSummary.totalSectorsSelected} secteurs</span>
               </div>
               <div className="flex items-center justify-between py-1 border-b border-slate-800">
@@ -764,13 +1046,13 @@ export const RegisterPage: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center justify-between py-1 border-b border-slate-800">
-                <span className="text-slate-400">Prix unitaire par secteur supplémentaire</span>
+                <span className="text-slate-400">Prix par secteur supplémentaire</span>
                 <span className="font-semibold text-slate-200">
                   {registrationSummary.unitPricePerExtraSector.toLocaleString('fr-FR')} FCFA / mois
                 </span>
               </div>
               <div className="flex items-center justify-between pt-1">
-                <span className="text-sm font-bold text-white">Montant total à payer (secteurs suppl.)</span>
+                <span className="text-sm font-bold text-white">Total secteurs supplémentaires</span>
                 <span className="text-base font-extrabold text-amber-400">
                   {registrationSummary.totalExtraAmountToPay.toLocaleString('fr-FR')} FCFA / mois
                 </span>
@@ -785,7 +1067,7 @@ export const RegisterPage: React.FC = () => {
                   .join(', ')}
               </div>
               <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-200">
-                <strong>Secteurs supplémentaires (en attente de paiement) :</strong>{' '}
+                <strong>Secteurs supplémentaires :</strong>{' '}
                 {registrationSummary.paidExtraSectorSlugs
                   .map((slug) => SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase())
                   .join(', ')}
@@ -798,7 +1080,7 @@ export const RegisterPage: React.FC = () => {
                 onClick={() => setShowSummaryConfirmModal(false)}
                 className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
               >
-                Modifier mes secteurs
+                Modifier
               </button>
               <button
                 type="button"

@@ -11,7 +11,7 @@
 //
 // AUTO-CONFIRMATION :
 // Si SUPABASE_SERVICE_ROLE_KEY est défini dans les variables d'environnement Vercel,
-// le compte est créé avec email_confirm: true → l'utilisateur peut se connecter immédiatement
+// le compte est créé avec email_confirm: false → l'utilisateur peut se connecter immédiatement
 // sans attendre un email de confirmation (résout le problème de non-réception d'emails).
 // =============================================================================
 
@@ -174,6 +174,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     country,
     city,
     selected_sectors,
+    plan_slug,
+    plan_name,
+    billing_cycle,
+    price_monthly,
     website_hp,
   } = req.body || {}
 
@@ -237,6 +241,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const primarySector = cleanSectors[0]
   const freeTrialSectors = cleanSectors.slice(0, MAX_FREE_TRIAL_SECTORS)
   const pendingPaidSectors = cleanSectors.slice(MAX_FREE_TRIAL_SECTORS)
+  const chosenPlanSlug = plan_slug || (cleanSectors.length > 1 ? 'multisecteur_pro' : 'entreprise')
+  const chosenPriceMonthly = typeof price_monthly === 'number' && price_monthly > 0 ? price_monthly : (chosenPlanSlug === 'starter' ? 5000 : (cleanSectors.length > 1 ? 15000 : 10000))
 
   try {
     const now = new Date()
@@ -249,11 +255,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let autoConfirmed = false
 
     if (hasAdminKey) {
-      // Mode admin : création avec email_confirm: true → connexion immédiate
+      // Mode admin : création avec email_confirm: false → connexion immédiate
       const { data: adminAuthData, error: adminAuthError } = await (sb.auth as any).admin.createUser({
         email: cleanEmail,
         password: password,
-        email_confirm: true,  // Confirmation automatique — pas besoin d'email
+        email_confirm: false,  // Confirmation automatique — pas besoin d'email
         user_metadata: {
           full_name: responsible_name.trim(),
           responsible_name: responsible_name.trim(),
@@ -280,7 +286,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       } else {
         authUserId = adminAuthData?.user?.id || null
-        autoConfirmed = true
+        autoConfirmed = false
       }
     } else {
       // Mode fallback : signUp standard (email de confirmation envoyé)
@@ -311,8 +317,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         sectors: cleanSectors,
         onboarding_completed: true,
         subscription_status: 'trial',
-        subscription_plan: cleanSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
-        plan: cleanSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+        subscription_plan: chosenPlanSlug,
+        plan: chosenPlanSlug,
+        initial_plan: chosenPlanSlug,
         updated_at: now.toISOString(),
       }
 
@@ -338,8 +345,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         subscription_status: 'trial',
         onboarding_completed: true,
         currency: 'FCFA',
-        subscription_plan: cleanSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
-        plan: cleanSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
+        subscription_plan: chosenPlanSlug,
+        plan: chosenPlanSlug,
+        initial_plan: chosenPlanSlug,
       }
 
       const insertRes = await sb
@@ -422,8 +430,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           date_debut_global: now.toISOString(),
           date_fin_global: trialEndsDate.toISOString(),
           statut_global: 'essai',
-          plan_code: cleanSectors.length > 1 ? 'multisecteur_pro' : 'entreprise',
-          montant_mensuel_fcfa: 10000,
+          plan_code: chosenPlanSlug,
+          montant_mensuel_fcfa: chosenPriceMonthly,
         },
         { onConflict: 'entreprise_id' }
       )

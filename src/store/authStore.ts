@@ -244,11 +244,19 @@ export const useAuthStore = create<AuthState>()(
               password: rawPassword,
             })
 
+            // BUG 1 RÈGLE 2 : Vérification stricte de confirmation d'email
+            if (authData?.user && !authData.user.email_confirmed_at) {
+              await supabase.auth.signOut().catch(() => {})
+              const confMsg = "Votre adresse email n'a pas encore été confirmée. Veuillez cliquer sur le lien reçu dans votre boîte mail pour activer votre compte. Pensez à vérifier vos SPAM."
+              set({ status: 'unauthenticated', errorMessage: confMsg })
+              return { success: false, error: confMsg }
+            }
+
             if (authError || !authData?.user) {
               const errMsg = authError?.message || ''
               
               if (errMsg.toLowerCase().includes('email not confirmed')) {
-                const confMsg = "Votre adresse email n'a pas encore été confirmée. Veuillez cliquer sur le lien reçu dans votre boîte mail pour activer votre compte."
+                const confMsg = "Votre adresse email n'a pas encore été confirmée. Veuillez cliquer sur le lien reçu dans votre boîte mail pour activer votre compte. Pensez à vérifier vos SPAM."
                 set({ status: 'unauthenticated', errorMessage: confMsg })
                 return { success: false, error: confMsg }
               }

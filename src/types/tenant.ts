@@ -15,6 +15,7 @@ export interface Sector {
   modules: string[]           // IDs des modules communs activés
   specific_modules: string[]  // IDs des modules métier spécifiques
   is_active: boolean
+  email_confirmed_at?: string | null
   sort_order: number
   // Enrichi lors du chargement du tenant
   is_configured?: boolean

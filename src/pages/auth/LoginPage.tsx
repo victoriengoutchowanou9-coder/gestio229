@@ -1,4 +1,4 @@
-﻿// =============================================================================
+// =============================================================================
 // GESTIO 229 SaaS — Page Login Unifiée (Administrateur & Utilisateurs Internes)
 // =============================================================================
 
@@ -20,9 +20,7 @@ const LoginPage: React.FC = () => {
 
   const urlEmail = searchParams.get('email') || ''
   const isConfirmed = searchParams.get('confirmed') === 'true' || searchParams.get('confirmed') === '1'
-  const isRegistered = searchParams.get('registered') === '1' || searchParams.get('success') === 'compte_cree'
-  // isAutoConfirmed = compte confirme automatiquement par le serveur (no email requis)
-  const isAutoConfirmed = isRegistered && isConfirmed
+  const isRegistered = searchParams.get('registered') === '1' || searchParams.get('success') === 'compte_cree' || searchParams.get('confirmed_reminder') === '1'
 
   const [identifier, setIdentifier] = useState(urlEmail || '')
   const [password, setPassword] = useState('')
@@ -683,47 +681,31 @@ const LoginPage: React.FC = () => {
               </div>
             )}
 
-            {/* Notification après inscription */}
+            {/* Notification après inscription (attente confirmation email) */}
             {isRegistered && !confirmedSuccess && (
-              <div className={`flex items-start gap-3 rounded-2xl p-4 mb-6 border ${
-                isAutoConfirmed
-                  ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-700'
-                  : 'bg-amber-50 dark:bg-amber-950/40 border-amber-300 dark:border-amber-700'
-              }`}>
-                {isAutoConfirmed
-                  ? <CheckCircle2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0 mt-0.5" />
-                  : <Mail className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
-                }
-                <div className={`text-xs ${isAutoConfirmed ? 'text-emerald-900 dark:text-emerald-200' : 'text-amber-900 dark:text-amber-200'}`}>
-                  {isAutoConfirmed ? (
-                    <>
-                      <p className="font-bold">Compte cree et active avec succes !</p>
-                      <p className="mt-0.5">Votre compte est pret. Connectez-vous directement ci-dessous avec votre email et mot de passe.</p>
-                    </>
-                  ) : (
-                    <>
-                      <p className="font-bold">Compte enregistre !</p>
-                      <p className="mt-0.5">Verifiez vos emails et cliquez sur le lien d'activation avant de vous connecter.</p>
-                      <p className="mt-1 text-[11px] text-amber-800/90 dark:text-amber-300/90">
-                        Pensez a verifier votre dossier <strong>Spams / Courriers indesirables</strong>.
-                      </p>
-                      <div className="mt-2.5 pt-2 border-t border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-2">
-                        <button
-                          type="button"
-                          onClick={handleResendConfirmation}
-                          disabled={resendLoading}
-                          className="font-bold underline text-amber-950 dark:text-amber-100 hover:opacity-80 disabled:opacity-50 text-[11px]"
-                        >
-                          {resendLoading ? 'Envoi en cours...' : "Vous n'avez pas recu le mail ? Renvoyer le lien"}
-                        </button>
-                        {resendMessage && (
-                          <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
-                            {resendMessage}
-                          </span>
-                        )}
-                      </div>
-                    </>
-                  )}
+              <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700 rounded-2xl p-4 mb-6">
+                <Mail className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="text-xs text-amber-900 dark:text-amber-200">
+                  <p className="font-bold">Compte enregistré !</p>
+                  <p className="mt-0.5">Vérifiez vos emails et cliquez sur le lien d'activation avant de vous connecter.</p>
+                  <p className="mt-1 text-[11px] text-amber-800/90 dark:text-amber-300/90">
+                    💡 Pensez à vérifier votre dossier <strong>Spams / Courriers indésirables</strong>.
+                  </p>
+                  <div className="mt-2.5 pt-2 border-t border-amber-200 dark:border-amber-800 flex flex-wrap items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={handleResendConfirmation}
+                      disabled={resendLoading}
+                      className="font-bold underline text-amber-950 dark:text-amber-100 hover:opacity-80 disabled:opacity-50 text-[11px]"
+                    >
+                      {resendLoading ? 'Envoi en cours...' : "→ Vous n'avez pas reçu le mail ? Renvoyer le lien"}
+                    </button>
+                    {resendMessage && (
+                      <span className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                        {resendMessage}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

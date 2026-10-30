@@ -42,6 +42,7 @@ import AdminSettings from './pages/admin/AdminSettings'
 // Auth
 const LoginPage     = safeLazy(() => import('./pages/auth/LoginPage'))
 const RegisterPage  = safeLazy(() => import('./pages/auth/RegisterPage'))
+const ConfirmEmailPage = safeLazy(() => import('./pages/auth/ConfirmEmailPage'))
 
 // Dashboard
 const DashboardPage   = safeLazy(() => import('./pages/dashboard/DashboardPage'))
@@ -290,6 +291,11 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
   }
   if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
 
+  // BUG 1 RÈGLE 6 : Bloque l'accès tant que l'email n'a pas été confirmé
+  if (user?.email && user.email_confirmed_at === null) {
+    return <Navigate to="/confirm-email" replace state={{ email: user.email }} />
+  }
+
   // Règle de sécurité absolue : si l'entreprise est bloquée, suspendue ou supprimée, interdire l'accès immédiat
   if (
     company?.subscription_status === 'suspended' ||
@@ -311,6 +317,11 @@ export const PrivateRoute = ProtectedRoute
 const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, status } = useAuthStore()
   if (status === 'idle' || status === 'loading') return <HubSkeleton />
+
+  // BUG 1 RÈGLE 6 : Bloque l'accès au HUB tant que user.email_confirmed_at est null
+  if (user?.email && user.email_confirmed_at === null) {
+    return <Navigate to="/confirm-email" replace state={{ email: user.email }} />
+  }
   const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
   if (!isAdmin) {
     const perm = (typeof user?.permissions === 'object' && user.permissions) ? user.permissions : {}
@@ -677,6 +688,8 @@ const AppRoutes: React.FC = () => {
       <Route path="/connexion" element={<PublicRoute><LoginPage /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><RegisterPage /></PublicRoute>} />
       <Route path="/inscription" element={<PublicRoute><RegisterPage /></PublicRoute>} />
+      <Route path="/confirm-email" element={<ConfirmEmailPage />} />
+      <Route path="/confirmer-email" element={<Navigate to="/confirm-email" replace />} />
 
       {/* Compte suspendu / Essai Expiré */}
       <Route path="/suspended" element={<SuspendedPage />} />
