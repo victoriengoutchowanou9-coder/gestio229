@@ -25,7 +25,7 @@ function assert(condition, message) {
 
 // ─── TEST 1 : Système d'envoi et de traçabilité des emails ───────────────────
 console.log('[SCÉNARIO 1] Système d\'envoi et journalisation des emails...')
-const emailHelperContent = fs.readFileSync(path.resolve('api/emailHelper.ts'), 'utf8')
+const emailHelperContent = fs.readFileSync(path.resolve('api/_lib/emailHelper.ts'), 'utf8')
 assert(emailHelperContent.includes('sendTrackedEmail'), 'Fonction sendTrackedEmail déclarée avec traçabilité')
 assert(emailHelperContent.includes('email_delivery_logs'), 'Table email_delivery_logs utilisée pour l\'audit')
 assert(emailHelperContent.includes('status: \'demande\''), 'Statut initial "demande" enregistré')

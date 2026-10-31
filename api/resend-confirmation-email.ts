@@ -5,7 +5,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
-import { sendTrackedEmail, buildRegistrationEmailHtml } from './emailHelper'
+import { sendTrackedEmail, buildRegistrationEmailHtml } from './_lib/emailHelper'
 
 function getSupabaseAdmin() {
   const url = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
