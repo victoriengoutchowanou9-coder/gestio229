@@ -8,7 +8,7 @@ import { installGlobalPrintHelper } from './utils/printHelper'
 import { supabase } from './lib/supabase'
 
 // =============================================================================
-// GESTIO 229 — Initialisation globale (thème, PWA, version check, chunk guard, modales pro)
+// GESTIO 229 — Initialisation globale (thème, PWA, auto-update transparent, chunk guard)
 // =============================================================================
 
 // Élimination définitive des popups natives browser (gestio229.com indique)
@@ -33,42 +33,66 @@ if (typeof window !== 'undefined') {
     document.documentElement.classList.add('dark')
   }
 
-  // ── 2. Gestion de version & mise à jour PWA transparente ─────────────────
+  // ── 2. Gestion de version & Déclenchement automatique des mises à jour ─────
+  // Règle absolue : Chaque déploiement doit être appliqué automatiquement à tous les utilisateurs
+  // sans nécessiter de désinstaller l'ancienne version ni de vider le cache manuellement.
+  const PWA_VERSION_KEY = 'pwa-version'
+
+  const purgeCacheAndReload = async (newVer?: string) => {
+    const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
+    const now = Date.now()
+    if (lastReloadStr && now - parseInt(lastReloadStr, 10) < 15 * 1000) {
+      return
+    }
+    sessionStorage.setItem('pwa-reloaded-at', String(now))
+    if (newVer) {
+      localStorage.setItem(PWA_VERSION_KEY, newVer)
+    }
+
+    try {
+      if ('caches' in window) {
+        const keys = await caches.keys()
+        await Promise.all(keys.map((k) => caches.delete(k)))
+      }
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.getRegistration()
+        if (reg) await reg.update().catch(() => {})
+      }
+    } catch (_) {}
+
+    window.location.reload()
+  }
+
+  // Contrôle au démarrage
   try {
-    const PWA_VERSION_KEY = 'pwa-version'
     const storedVersion = localStorage.getItem(PWA_VERSION_KEY)
     const currentVersion = __APP_VERSION__
 
     if (storedVersion && storedVersion !== currentVersion) {
-      localStorage.setItem(PWA_VERSION_KEY, currentVersion)
-      sessionStorage.removeItem('gestio229_chunk_reload_done')
-
-      // Garde anti-boucle : vérifier si rechargé dans les 5 dernières minutes
-      const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
-      const now = Date.now()
-      const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 15 * 1000)
-
-      if (!alreadyReloadedRecently) {
-        sessionStorage.setItem('pwa-reloaded-at', String(now))
-        // Rechargement UNE SEULE FOIS en purgeant proprement
-        ;(async () => {
-          try {
-            if ('caches' in window) {
-              const keys = await caches.keys()
-              await Promise.all(keys.map((k) => caches.delete(k)))
-            }
-            if ('serviceWorker' in navigator) {
-              const reg = await navigator.serviceWorker.getRegistration()
-              if (reg) await reg.update().catch(() => {})
-            }
-          } catch (_) {}
-          window.location.reload()
-        })()
-      }
+      purgeCacheAndReload(currentVersion)
     } else {
       localStorage.setItem(PWA_VERSION_KEY, currentVersion)
     }
   } catch (_) {}
+
+  // Vérificateur en arrière-plan de nouvelle version déployée (polling intelligent)
+  const checkForNewVersion = async () => {
+    try {
+      const res = await fetch(`/version.json?t=${Date.now()}`, {
+        cache: 'no-store',
+        headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
+      })
+      if (!res.ok) return
+      const data = await res.json()
+      const serverVersion = String(data?.version || '').trim()
+      const localVersion = String(localStorage.getItem(PWA_VERSION_KEY) || __APP_VERSION__).trim()
+
+      if (serverVersion && localVersion && serverVersion !== localVersion) {
+        console.log(`[GESTIO 229] Nouvelle mise à jour détectée (${serverVersion} vs ${localVersion}). Actualisation transparente...`)
+        purgeCacheAndReload(serverVersion)
+      }
+    } catch (_) {}
+  }
 
   // ── 3. Filet de sécurité global : chunk error + TDZ error ────────────────
   const isAutoReloadableError = (msg: string) =>
@@ -82,26 +106,8 @@ if (typeof window !== 'undefined') {
     (msg.includes('Cannot access') && msg.includes('before initialization'))
 
   const handleSafeAutoReload = async (reason: string) => {
-    const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
-    const now = Date.now()
-    if (lastReloadStr && (now - parseInt(lastReloadStr, 10) < 15 * 1000)) {
-      console.warn('[GESTIO 229] Déjà actualisé récemment. Pas de boucle :', reason)
-      return
-    }
-    sessionStorage.setItem('pwa-reloaded-at', String(now))
-    sessionStorage.setItem('gestio229_chunk_reload_done', '1')
-
-    try {
-      if ('caches' in window) {
-        const keys = await caches.keys()
-        await Promise.all(keys.map((k) => caches.delete(k)))
-      }
-      if ('serviceWorker' in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations()
-        await Promise.all(regs.map((r) => r.unregister()))
-      }
-    } catch (_) {}
-    window.location.reload()
+    console.warn('[GESTIO 229] Auto-récupération déclenchée :', reason)
+    purgeCacheAndReload()
   }
 
   window.addEventListener('unhandledrejection', (event) => {
@@ -126,14 +132,25 @@ if (typeof window !== 'undefined') {
     }
   })
 
-  // ── 4. Service Worker PWA avec détection Workbox transparente ────────────
+  // ── 4. Service Worker PWA : Déclenchement automatique de mise à jour ───────
   if ('serviceWorker' in navigator) {
+    let refreshing = false
+
+    // Dès qu'un nouveau Service Worker prend le contrôle (via skipWaiting), rafraîchir immédiatement !
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (refreshing) return
+      refreshing = true
+      console.log('[GESTIO 229] Nouveau Service Worker actif : actualisation automatique.')
+      window.location.reload()
+    })
+
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
-          // Si un nouveau SW attend déjà
+          // Si un worker est déjà en attente
           if (reg.waiting) {
+            reg.waiting.postMessage({ type: 'SKIP_WAITING' })
             window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
           }
 
@@ -141,14 +158,37 @@ if (typeof window !== 'undefined') {
             const newWorker = reg.installing
             if (newWorker) {
               newWorker.addEventListener('statechange', () => {
-                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+                if (newWorker.state === 'installed') {
+                  if (navigator.serviceWorker.controller) {
+                    newWorker.postMessage({ type: 'SKIP_WAITING' })
+                    window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+                  }
                 }
               })
             }
           })
 
+          // Vérification immédiate au démarrage
           reg.update().catch(() => {})
+
+          // Vérification automatique périodique toutes les 45 secondes
+          setInterval(() => {
+            reg.update().catch(() => {})
+            checkForNewVersion()
+          }, 45000)
+
+          // Vérification immédiate dès que l'utilisateur revient sur l'application / déverrouille l'écran
+          document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+              reg.update().catch(() => {})
+              checkForNewVersion()
+            }
+          })
+
+          window.addEventListener('focus', () => {
+            reg.update().catch(() => {})
+            checkForNewVersion()
+          })
         })
         .catch(() => {})
     })
@@ -160,4 +200,3 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     <App />
   </React.StrictMode>
 )
-

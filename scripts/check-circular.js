@@ -30,5 +30,27 @@ if (fs.existsSync(dashboardFile)) {
   console.warn('⚠️ Fichier DashboardPage.tsx introuvable pour vérification');
 }
 
+// ─── Génération dynamique du fichier public/version.json ─────────────────────
+// Permet à tous les clients connectés de détecter instantanément une nouvelle version
+// et de déclencher la mise à jour automatique sans réinstallation ni purge manuelle.
+const currentTimestamp = Date.now();
+const versionData = {
+  version: `${currentTimestamp}`,
+  builtAt: new Date().toISOString(),
+  app: 'GESTIO 229 ERP'
+};
+
+const publicDir = path.resolve('public');
+if (!fs.existsSync(publicDir)) {
+  fs.mkdirSync(publicDir, { recursive: true });
+}
+
+fs.writeFileSync(
+  path.resolve(publicDir, 'version.json'),
+  JSON.stringify(versionData, null, 2),
+  'utf8'
+);
+console.log(`✅ [GESTIO 229] Version générée dans public/version.json : ${currentTimestamp}`);
+
 console.log('✅ Aucun risque d\'initialisation circulaire détecté.');
 process.exit(0);
