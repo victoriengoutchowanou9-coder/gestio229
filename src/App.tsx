@@ -241,7 +241,8 @@ const FullPageLoader = () => (
 
 // ─── Guards ─────────────────────────────────────────────────────────────────
 
-export { ProtectedRoute, PrivateRoute } from './components/ProtectedRoute'
+import ProtectedRoute, { PrivateRoute } from './components/ProtectedRoute'
+export { ProtectedRoute, PrivateRoute }
 
 /**
  * AdminHubGuard : Bloque l'accès au HUB aux utilisateurs internes non-admin

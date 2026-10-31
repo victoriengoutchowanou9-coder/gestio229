@@ -111,8 +111,9 @@ export class SectorErrorBoundary extends Component<Props, State> {
     if (error.message.includes('Failed to fetch dynamically imported module') || isChunkErr) {
       // Supprime le cache et force le rechargement vers la nouvelle version
       try {
-        localStorage.clear()
-        sessionStorage.clear()
+        localStorage.removeItem('pwa-version')
+        localStorage.removeItem('gestio229_app_version')
+        sessionStorage.removeItem('gestio229_chunk_reload_done')
       } catch (_) {}
       if ('caches' in window) {
         caches.keys().then((names) => names.forEach((name) => caches.delete(name)))

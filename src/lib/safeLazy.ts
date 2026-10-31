@@ -50,7 +50,7 @@ export function safeLazy<T extends React.ComponentType<any>>(
       if (isChunkError(err)) {
         const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
         const now = Date.now()
-        const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 5 * 60 * 1000)
+        const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 20 * 1000)
 
         if (!alreadyReloadedRecently) {
           console.warn('[safeLazy] Chunk manquant post-déploiement — purge du cache et rechargement unique…', err)
