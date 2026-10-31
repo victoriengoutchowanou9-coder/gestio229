@@ -143,7 +143,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // Si toujours aucun destinataire, utiliser SMTP_FROM_EMAIL comme secours
     if (targetEmails.length === 0) {
-      const fallbackEmail = process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou9@gmail.com'
+      const fallbackEmail = process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou2024@gmail.com'
       targetEmails.push(fallbackEmail)
     }
 

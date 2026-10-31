@@ -32,7 +32,7 @@ export interface AppCacheState {
   getCached: <T>(key: 'products' | 'clients' | 'fournisseurs') => T[]
 }
 
-const STALE_TIME = 60 * 1000 // 1 minute avant refresh silencieux
+const STALE_TIME = 120 * 1000 // 2 minutes avant refresh silencieux
 
 export const useAppCacheStore = create<AppCacheState>((set, get) => ({
   products: [],
@@ -77,17 +77,17 @@ export const useAppCacheStore = create<AppCacheState>((set, get) => ({
           .from('products')
           .select('id, name, reference, sale_price, purchase_price, current_stock, category, unit, barcode')
           .eq('company_id', companyId)
-          .limit(500),
+          .limit(1000),
         supabase
           .from('clients')
           .select('id, nom, telephone, adresse, solde_du, plafond_credit')
           .eq('company_id', companyId)
-          .limit(300),
+          .limit(500),
         supabase
           .from('fournisseurs')
           .select('id, nom, telephone, email, adresse')
           .eq('company_id', companyId)
-          .limit(200),
+          .limit(500),
       ])
 
       const updates: Partial<AppCacheState> = {
@@ -139,7 +139,7 @@ export const useAppCacheStore = create<AppCacheState>((set, get) => ({
           .from('products')
           .select('id, name, reference, sale_price, purchase_price, current_stock, category, unit, barcode')
           .eq('company_id', companyId)
-          .limit(500)
+          .limit(1000)
         if (data) {
           set({ products: data, loadedAt: { ...get().loadedAt, products: Date.now() } })
           try { localStorage.setItem(`gestio_fast_products_${companyId}`, JSON.stringify(data)) } catch (_) {}
@@ -149,7 +149,7 @@ export const useAppCacheStore = create<AppCacheState>((set, get) => ({
           .from('clients')
           .select('id, nom, telephone, adresse, solde_du, plafond_credit')
           .eq('company_id', companyId)
-          .limit(300)
+          .limit(500)
         if (data) {
           set({ clients: data, loadedAt: { ...get().loadedAt, clients: Date.now() } })
           try { localStorage.setItem(`gestio_fast_clients_${companyId}`, JSON.stringify(data)) } catch (_) {}
@@ -159,7 +159,7 @@ export const useAppCacheStore = create<AppCacheState>((set, get) => ({
           .from('fournisseurs')
           .select('id, nom, telephone, email, adresse')
           .eq('company_id', companyId)
-          .limit(200)
+          .limit(500)
         if (data) {
           set({ fournisseurs: data, loadedAt: { ...get().loadedAt, fournisseurs: Date.now() } })
           try { localStorage.setItem(`gestio_fast_fournisseurs_${companyId}`, JSON.stringify(data)) } catch (_) {}

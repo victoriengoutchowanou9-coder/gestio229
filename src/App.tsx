@@ -247,16 +247,23 @@ const FullPageLoader = () => (
  * Si pas de session => redirige vers /login.
  */
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { status, company, setCompany } = useAuthStore()
+  const { user, status, company, setCompany } = useAuthStore()
   const location = useLocation()
   const isLoading = status === 'idle' || status === 'loading'
 
   // Vérification dynamique en arrière-plan du statut de l'entreprise côté serveur
+  // Optimisation : vérifie uniquement toutes les 60s, pas à chaque changement de route
   useEffect(() => {
     if (company?.id && status === 'authenticated') {
+      const cacheKey = `__gestio_company_check_${company.id}`
+      const lastCheck = parseInt(sessionStorage.getItem(cacheKey) || '0', 10)
+      const now = Date.now()
+      if (now - lastCheck < 60000) return // Pas plus d'une vérification par minute
+
       try {
         const client = typeof supabase !== 'undefined' ? supabase : (typeof window !== 'undefined' ? (window as any).supabase : null)
         if (client && typeof client.from === 'function') {
+          sessionStorage.setItem(cacheKey, String(now))
           client
             .from('companies')
             .select('subscription_status, is_active, suspension_reason')
@@ -284,16 +291,19 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('[ProtectedRoute] Company status check skipped:', err)
       }
     }
-  }, [location.pathname, company?.id, status])
+  }, [company?.id, status])
 
   if (isLoading) {
     return location.pathname.includes('/hub') ? <HubSkeleton /> : <ModuleSkeleton />
   }
   if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
 
-  // BUG 1 RÈGLE 6 : Bloque l'accès tant que l'email n'a pas été confirmé
-  if (user?.email && user.email_confirmed_at === null) {
-    return <Navigate to="/confirm-email" replace state={{ email: user.email }} />
+  // RÈGLE GESTIO 229 : Les utilisateurs internes (caissiers, magasiniers, vendeurs, comptables)
+  // n'ont AUCUNE confirmation email requise.
+  // Seul l'administrateur avec un compte explicitement non confirmé peut être invité à valider son compte.
+  const isAdmin = user?.role === 'administrateur' || user?.role === 'super_admin'
+  if (isAdmin && (user as any)?.email_confirmed_at === null) {
+    return <Navigate to="/confirm-email" replace state={{ email: user?.email }} />
   }
 
   // Règle de sécurité absolue : si l'entreprise est bloquée, suspendue ou supprimée, interdire l'accès immédiat
@@ -312,17 +322,15 @@ export const PrivateRoute = ProtectedRoute
 
 /**
  * AdminHubGuard : Bloque l'accès au HUB aux utilisateurs internes non-admin
- * Redirige directement vers leur espace d'activité assigné
+ * Redirige directement vers leur espace d'activité assigné (sans confirmation email requise)
  */
 const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, status } = useAuthStore()
   if (status === 'idle' || status === 'loading') return <HubSkeleton />
 
-  // BUG 1 RÈGLE 6 : Bloque l'accès au HUB tant que user.email_confirmed_at est null
-  if (user?.email && user.email_confirmed_at === null) {
-    return <Navigate to="/confirm-email" replace state={{ email: user.email }} />
-  }
-  const isAdmin = !user || user.role === 'administrateur' || user.role === 'super_admin'
+  const isAdmin = user?.role === 'administrateur' || user?.role === 'super_admin'
+
+  // Si c'est un utilisateur interne : redirection directe et stricte vers son module autorisé (pas de HUB, pas d'email requis)
   if (!isAdmin) {
     const perm = (typeof user?.permissions === 'object' && user.permissions) ? user.permissions : {}
     const assignedSector = (perm.sector_slug || perm.sector_id || user?.sector_id || localStorage.getItem('gestio229_active_sector') || 'boutique').toLowerCase().replace(/^sec-/, '')
@@ -333,6 +341,12 @@ const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     else if (role === 'comptable') targetModule = 'syscohada'
     return <Navigate to={`/app/${assignedSector}/${targetModule}`} replace />
   }
+
+  // Pour l'administrateur uniquement : si email non confirmé
+  if ((user as any)?.email_confirmed_at === null) {
+    return <Navigate to="/confirm-email" replace state={{ email: user?.email }} />
+  }
+
   return <>{children}</>
 }
 

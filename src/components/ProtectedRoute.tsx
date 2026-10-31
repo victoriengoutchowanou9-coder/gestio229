@@ -15,7 +15,7 @@ import { ModuleSkeleton } from './ui/Skeleton'
  * Si pas de session => redirige vers /login.
  */
 export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { status, company, setCompany } = useAuthStore()
+  const { user, status, company, setCompany } = useAuthStore()
   const location = useLocation()
   const isLoading = status === 'idle' || status === 'loading'
 
@@ -58,6 +58,13 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
     return location.pathname.includes('/hub') ? <HubSkeleton /> : <ModuleSkeleton />
   }
   if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
+
+  // RÈGLE GESTIO 229 : Les utilisateurs internes (caissiers, magasiniers, vendeurs, etc.)
+  // n'ont AUCUNE confirmation email requise.
+  const isAdmin = user?.role === 'administrateur' || user?.role === 'super_admin'
+  if (isAdmin && (user as any)?.email_confirmed_at === null) {
+    return <Navigate to="/confirm-email" replace state={{ email: user?.email }} />
+  }
 
   // Règle de sécurité absolue : si l'entreprise est bloquée, suspendue ou supprimée, interdire l'accès immédiat
   if (

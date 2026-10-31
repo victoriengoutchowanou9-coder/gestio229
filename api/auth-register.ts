@@ -259,7 +259,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const { data: adminAuthData, error: adminAuthError } = await (sb.auth as any).admin.createUser({
         email: cleanEmail,
         password: password,
-        email_confirm: false,  // Confirmation automatique — pas besoin d'email
+        email_confirm: true,  // Confirmation automatique dans Supabase Auth
+
         user_metadata: {
           full_name: responsible_name.trim(),
           responsible_name: responsible_name.trim(),
@@ -286,7 +287,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
       } else {
         authUserId = adminAuthData?.user?.id || null
-        autoConfirmed = false
+        autoConfirmed = true
       }
     } else {
       // Mode fallback : signUp standard (email de confirmation envoyé)

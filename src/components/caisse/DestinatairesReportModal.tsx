@@ -51,7 +51,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   // États pour le Test Gmail SMTP
-  const [testEmailInput, setTestEmailInput] = useState('victoriengoutchowanou9@gmail.com')
+  const [testEmailInput, setTestEmailInput] = useState('victoriengoutchowanou2024@gmail.com')
   const [testingSmtp, setTestingSmtp] = useState(false)
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
 

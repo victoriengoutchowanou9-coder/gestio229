@@ -145,6 +145,7 @@ export default defineConfig({
           vendor: ['react', 'react-dom'],
           supabase: ['@supabase/supabase-js'],
           router: ['react-router-dom'],
+          pdf: ['jspdf', 'jspdf-autotable'],
         },
       },
     },

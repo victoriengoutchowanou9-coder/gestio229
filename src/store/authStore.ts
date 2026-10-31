@@ -839,6 +839,12 @@ export const useAuthStore = create<AuthState>()(
 
 supabase.auth.onAuthStateChange(async (event, session) => {
   if (event === 'SIGNED_OUT') {
+    const currentState = useAuthStore.getState()
+    // Si l'utilisateur connecté est un utilisateur interne (sans auth_user_id Supabase),
+    // ne pas le déconnecter lors d'un événement SIGNED_OUT externe de Supabase Auth
+    if (currentState.user && !currentState.user.auth_user_id) {
+      return
+    }
     useAuthStore.setState({
       status: 'unauthenticated',
       user: null,

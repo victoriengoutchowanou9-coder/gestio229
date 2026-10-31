@@ -15,7 +15,7 @@ import { comptabiliserSalaireAuto } from '../../../services/compta_auto'
 import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
-  BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock, RefreshCw
+  Trash2, BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock, RefreshCw
 } from 'lucide-react'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
@@ -763,6 +763,7 @@ const UtilisateursPage: React.FC = () => {
         username: cleanIdent,
         email: safeSyntheticEmail,
         pos_pin_code: form.password,
+        password_hash: form.password,
         phone: form.phone.trim() || null,
         role: form.role,
         sector_id: assignedSectorSlug,
@@ -809,6 +810,7 @@ const UtilisateursPage: React.FC = () => {
         .from('user_profiles')
         .update({
           pos_pin_code: resetNewPassword,
+          password_hash: resetNewPassword,
           updated_at: new Date().toISOString()
         })
         .eq('id', resetPasswordUser.id)
@@ -824,6 +826,34 @@ const UtilisateursPage: React.FC = () => {
       setError('Erreur mise à jour mot de passe : ' + err.message)
     } finally {
       setResetLoading(false)
+    }
+  }
+
+  const handleDeleteUser = async (userToDelete: any) => {
+    if (userToDelete.role === 'administrateur' || userToDelete.role === 'super_admin') {
+      setError("Impossible de supprimer le compte d'un administrateur principal.")
+      return
+    }
+    const confirmed = window.confirm(`Voulez-vous vraiment supprimer définitivement le compte interne "${userToDelete.full_name}" (Identifiant : ${userToDelete.username || userToDelete.login_identifier}) ?`)
+    if (!confirmed) return
+
+    setLoading(true)
+    setError('')
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .delete()
+        .eq('id', userToDelete.id)
+        .eq('company_id', company?.id)
+
+      if (error) throw error
+
+      setSuccess(`Utilisateur interne "${userToDelete.full_name}" supprimé avec succès.`)
+      loadUsers()
+    } catch (err: any) {
+      setError("Erreur lors de la suppression de l'utilisateur : " + err.message)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -1626,6 +1656,17 @@ const UtilisateursPage: React.FC = () => {
                       >
                         {u.is_active ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                       </button>
+
+                      {u.role !== 'administrateur' && u.role !== 'super_admin' && (
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteUser(u)}
+                          className="p-2 text-rose-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-all"
+                          title="Supprimer ce compte interne"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}
