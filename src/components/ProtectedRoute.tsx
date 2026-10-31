@@ -4,28 +4,31 @@
 
 import React, { useEffect } from 'react'
 import { useLocation, Navigate } from 'react-router-dom'
-import { useAuthStore } from '../store/authStore'
+import { useAuth } from '@/hooks/useAuth'
 import { supabase } from '@/lib/supabase'
 import HubSkeleton from './ui/HubSkeleton'
 import { ModuleSkeleton } from './ui/Skeleton'
 
 /**
  * ProtectedRoute / PrivateRoute :
- * Affiche immédiatement un squelette léger (HubSkeleton ou ModuleSkeleton) sans spinner plein écran.
- * Si pas de session => redirige vers /login.
+ * Vérifie l'authentification et autorise l'accès aux sous-logiciels et au HUB.
  */
-export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, status, company, setCompany } = useAuthStore()
+export default function ProtectedRoute({ children }: { children: React.ReactNode }) {
+  const { user, loading, status, company, setCompany } = useAuth()
   const location = useLocation()
-  const isLoading = status === 'idle' || status === 'loading'
 
-  // Vérification dynamique en arrière-plan du statut de l'entreprise côté serveur
+  // Vérification dynamique en arrière-plan du statut de l'entreprise côté serveur (debounce 60s)
   useEffect(() => {
     if (company?.id && status === 'authenticated') {
+      const cacheKey = `__gestio_company_check_${company.id}`
+      const lastCheck = parseInt(sessionStorage.getItem(cacheKey) || '0', 10)
+      const now = Date.now()
+      if (now - lastCheck < 60000) return
+
       try {
-        const client = typeof supabase !== 'undefined' ? supabase : (typeof window !== 'undefined' ? (window as any).supabase : null)
-        if (client && typeof client.from === 'function') {
-          client
+        if (supabase && typeof supabase.from === 'function') {
+          sessionStorage.setItem(cacheKey, String(now))
+          supabase
             .from('companies')
             .select('subscription_status, is_active, suspension_reason')
             .eq('id', company.id)
@@ -52,21 +55,24 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
         console.warn('[ProtectedRoute] Company status check skipped:', err)
       }
     }
-  }, [location.pathname, company?.id, status])
+  }, [company?.id, status])
 
-  if (isLoading) {
+  if (loading) {
     return location.pathname.includes('/hub') ? <HubSkeleton /> : <ModuleSkeleton />
   }
-  if (status === 'unauthenticated' || status === 'error') return <Navigate to="/login" replace />
 
-  // RÈGLE GESTIO 229 : Les utilisateurs internes (caissiers, magasiniers, vendeurs, etc.)
+  if (status === 'unauthenticated' || status === 'error' || !user) {
+    return <Navigate to="/login" replace />
+  }
+
+  // RÈGLE GESTIO 229 : Les utilisateurs internes (caissiers, magasiniers, vendeurs, comptables)
   // n'ont AUCUNE confirmation email requise.
   const isAdmin = user?.role === 'administrateur' || user?.role === 'super_admin'
   if (isAdmin && (user as any)?.email_confirmed_at === null) {
     return <Navigate to="/confirm-email" replace state={{ email: user?.email }} />
   }
 
-  // Règle de sécurité absolue : si l'entreprise est bloquée, suspendue ou supprimée, interdire l'accès immédiat
+  // Règle de sécurité absolue : si l'entreprise est bloquée, suspendue ou supprimée
   if (
     company?.subscription_status === 'suspended' ||
     company?.subscription_status === 'deleted' ||
@@ -78,5 +84,5 @@ export const ProtectedRoute: React.FC<{ children: React.ReactNode }> = ({ childr
   return <>{children}</>
 }
 
+export { ProtectedRoute }
 export const PrivateRoute = ProtectedRoute
-export default ProtectedRoute
