@@ -46,7 +46,7 @@ if (typeof window !== 'undefined') {
       // Garde anti-boucle : vérifier si rechargé dans les 5 dernières minutes
       const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
       const now = Date.now()
-      const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 5 * 60 * 1000)
+      const alreadyReloadedRecently = lastReloadStr && (now - parseInt(lastReloadStr, 10) < 15 * 1000)
 
       if (!alreadyReloadedRecently) {
         sessionStorage.setItem('pwa-reloaded-at', String(now))
@@ -84,7 +84,7 @@ if (typeof window !== 'undefined') {
   const handleSafeAutoReload = async (reason: string) => {
     const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
     const now = Date.now()
-    if (lastReloadStr && (now - parseInt(lastReloadStr, 10) < 5 * 60 * 1000)) {
+    if (lastReloadStr && (now - parseInt(lastReloadStr, 10) < 15 * 1000)) {
       console.warn('[GESTIO 229] Déjà actualisé récemment. Pas de boucle :', reason)
       return
     }

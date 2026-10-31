@@ -12,7 +12,7 @@ export const PwaUpdateToast: React.FC = () => {
         const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
         if (lastReloadStr) {
           const lastReload = parseInt(lastReloadStr, 10)
-          if (!isNaN(lastReload) && Date.now() - lastReload < 5 * 60 * 1000) {
+          if (!isNaN(lastReload) && Date.now() - lastReload < 15 * 1000) {
             return
           }
         }
