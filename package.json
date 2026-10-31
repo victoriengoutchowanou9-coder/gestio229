@@ -6,14 +6,14 @@
   "description": "GESTIO 229 ERP & SaaS - Logiciel de gestion intégrée multi-activités (Bénin & UEMOA)",
   "scripts": {
     "dev": "vite",
-    "prebuild": "node scripts/test-all-sectors.cjs && node scripts/pre-deploy-check.cjs",
+    "prebuild": "node scripts/test-registration-subscription-suite.cjs && node scripts/test-all-sectors.cjs && node scripts/pre-deploy-check.cjs",
     "build": "vite build",
     "postbuild": "node scripts/verify-chunks.js",
     "vercel-build": "npm run prebuild && npm run build && npm run postbuild",
     "postinstall": "echo ok",
     "preview": "vite preview",
     "sync-modules": "node scripts/sync-modules.cjs",
-    "test": "node scripts/test-all-sectors.cjs"
+    "test": "node scripts/test-registration-subscription-suite.cjs && node scripts/test-all-sectors.cjs"
   },
   "dependencies": {
     "@prisma/client": "^6.3.0",

@@ -150,12 +150,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // ── State ──────────────────────────────────────────────────────────────────
   const [activities, setActivities] = useState<ActivityEntry[]>(() => {
+    const rawTarget = Array.isArray(company?.selected_sectors) && company.selected_sectors.length > 0
+      ? company.selected_sectors
+      : Array.isArray(company?.sectors) && company.sectors.length > 0
+      ? company.sectors
+      : company?.active_sector ? [company.active_sector] : [];
+    const validSlugs = new Set(rawTarget.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim()).filter(Boolean));
+
     if (companyId) {
       try {
         const cached = localStorage.getItem(`gestio229_activities_${companyId}`);
         if (cached) {
           const parsed = JSON.parse(cached);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            const filtered = validSlugs.size > 0
+              ? parsed.filter((p: any) => validSlugs.has((p.sectorSlug || '').replace(/^sec-/, '').toLowerCase().trim()))
+              : parsed;
+            if (filtered.length > 0) return filtered;
+          }
         }
       } catch (_) {}
     }
@@ -256,11 +268,18 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   }, [globalSub, company, sectorSubs]);
 
   const globalBadgeText = useMemo(() => {
-    if (isAnySectorActive) return 'Abonnement actif';
-    if (!globalSub) return 'Essai J-30';
-    if (globalSub.statut_global === 'expire' || globalDaysRemaining <= 0) return 'Abonnement Expiré';
-    return `Essai J-${globalDaysRemaining}`;
-  }, [isAnySectorActive, globalSub, globalDaysRemaining]);
+    const now = new Date();
+    const compExpiresAt = company?.subscription_expires_at ? new Date(company.subscription_expires_at) : null;
+    if (isAnySectorActive) {
+      const activeDays = compExpiresAt && compExpiresAt >= now
+        ? calcDaysRemaining(compExpiresAt)
+        : globalDaysRemaining;
+      return activeDays > 0 ? `Abonnement actif – ${activeDays} jours restants` : 'Abonnement actif';
+    }
+    if (!globalSub) return 'Abonnement expiré';
+    if (globalSub.statut_global === 'expire' || globalDaysRemaining <= 0) return 'Abonnement expiré';
+    return `Essai gratuit – ${globalDaysRemaining} jours restants`;
+  }, [isAnySectorActive, globalSub, globalDaysRemaining, company]);
 
   // Badge sur chaque tuile secteur (Section 12 du cahier des charges) :
   // - « Essai gratuit » (pour les 3 premiers secteurs maximum couverts par l'essai gratuit du compte)
@@ -278,7 +297,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       (globalSub?.statut_global === 'actif' && globalDaysRemaining > 0);
     const effectiveGlobalDays = compExpiresAt && compExpiresAt >= now
       ? calcDaysRemaining(compExpiresAt)
-      : (globalDaysRemaining > 0 ? globalDaysRemaining : 30);
+      : Math.max(0, globalDaysRemaining);
     const effectiveGlobalDateStr = compExpiresAt && compExpiresAt >= now
       ? compExpiresAt.toLocaleDateString('fr-FR')
       : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global).toLocaleDateString('fr-FR') : '');
@@ -293,7 +312,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
       if (!fin || fin.getTime() >= now.getTime()) {
         return {
-          label: `Actif — J-${days}`,
+          label: `Abonnement actif – ${days} jours restants`,
           statusText: 'Actif',
           expirationText: expDateStr ? `Expire le ${expDateStr} (${days}j restants)` : `${days}j restants`,
           isIndividuel: true,
@@ -320,7 +339,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     if (isCompanyActive) {
       if (sub?.statut_specifique !== 'en_attente_paiement') {
         return {
-          label: `Actif — J-${effectiveGlobalDays}`,
+          label: `Abonnement actif – ${effectiveGlobalDays} jours restants`,
           statusText: 'Actif',
           expirationText: effectiveGlobalDateStr ? `Expire le ${effectiveGlobalDateStr} (${effectiveGlobalDays}j restants)` : `${effectiveGlobalDays}j restants`,
           isIndividuel: false,
@@ -384,7 +403,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
     if (globalSub?.statut_global === 'essai') {
       return {
-        label: `Essai gratuit — J-${globalDaysRemaining}`,
+        label: `Essai gratuit – ${globalDaysRemaining} jours restants`,
         statusText: 'Essai gratuit',
         expirationText: expGlobalStr ? `Fin d'essai : ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
         isIndividuel: false,
@@ -458,15 +477,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         }
       }
 
-      // 2. Extraire tous les secteurs choisis / configurés à l'inscription
+      // 2. Extraire strictement les secteurs choisis / configurés à l'inscription
       const rawSectorList: string[] = [];
       if (Array.isArray(comp?.selected_sectors) && comp.selected_sectors.length > 0) {
         rawSectorList.push(...comp.selected_sectors);
-      }
-      if (Array.isArray(comp?.sectors) && comp.sectors.length > 0) {
+      } else if (Array.isArray(comp?.sectors) && comp.sectors.length > 0) {
         rawSectorList.push(...comp.sectors);
-      }
-      if (comp?.active_sector) {
+      } else if (comp?.active_sector) {
         rawSectorList.push(comp.active_sector);
       }
 
@@ -497,9 +514,14 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       const existingEntries: ActivityEntry[] = [];
       const coveredSlugs = new Set<string>();
 
+      const targetSet = new Set(targetSlugs);
       if (dbActivities && dbActivities.length > 0) {
         for (const row of dbActivities) {
           const rawSlug = (row.sector_slug || '').replace(/^sec-/, '').toLowerCase().trim();
+          // RÈGLE CRITIQUE SECTION C : Ne jamais afficher un secteur qui ne fait pas partie des secteurs sélectionnés par l'entreprise !
+          if (!targetSet.has(rawSlug)) {
+            continue;
+          }
           coveredSlugs.add(rawSlug);
           const meta = getSectorMeta(rawSlug) || getSectorMeta(row.sector_slug) || getSectorMeta(row.sector_code?.toLowerCase());
           existingEntries.push({

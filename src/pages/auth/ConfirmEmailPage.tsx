@@ -31,6 +31,19 @@ export const ConfirmEmailPage: React.FC = () => {
     setResendError(null)
 
     try {
+      // 1. Tenter le renvoi par notre endpoint serveur avec traçabilité et journalisation
+      const res = await fetch('/api/resend-confirmation-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: target }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.success) {
+        setResendSuccess(data.message || '✅ Nouveau lien envoyé ! Pensez à vérifier vos spams ou courriers indésirables.')
+        return
+      }
+
+      // 2. Repli Supabase Auth
       const { error } = await supabase.auth.resend({
         type: 'signup',
         email: target,

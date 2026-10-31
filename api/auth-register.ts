@@ -1,22 +1,11 @@
 // =============================================================================
 // GESTIO 229 SAAS — API Endpoint : POST /api/auth-register
-// Inscription Sécurisée d'Entreprise & Gestion Multi-Secteurs (Refonte V5)
-//
-// RÈGLES MÉTIER & SÉCURITÉ (Sections 1 & 2) :
-// 1. Essai gratuit unique de 30 jours rattaché au compte, couvrant jusqu'à 3 secteurs maximum.
-// 2. Possibilité de sélectionner 1, 2, 3 ou plus de 3 secteurs dès l'inscription.
-// 3. Les 3 premiers secteurs sont couverts par l'essai gratuit ('rattache_global').
-// 4. Les secteurs supplémentaires (à partir du 4e) sont créés avec le statut
-//    'en_attente_paiement' (rattache_au_global = false) et ne sont jamais actifs sans validation.
-//
-// AUTO-CONFIRMATION :
-// Si SUPABASE_SERVICE_ROLE_KEY est défini dans les variables d'environnement Vercel,
-// le compte est créé avec email_confirm: false → l'utilisateur peut se connecter immédiatement
-// sans attendre un email de confirmation (résout le problème de non-réception d'emails).
+// Inscription Sécurisée d'Entreprise, Unicité Email Stricte & Envoi d'Email
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
+import { sendTrackedEmail, buildRegistrationEmailHtml } from './emailHelper'
 
 const MAX_FREE_TRIAL_SECTORS = 3
 
@@ -86,7 +75,7 @@ const DISPOSABLE_EMAIL_DOMAINS = new Set([
 
 const signupAttempts: Map<string, { count: number; resetAt: number }> = new Map()
 const RATE_LIMIT_WINDOW = 15 * 60 * 1000
-const MAX_SIGNUPS_PER_IP = 6
+const MAX_SIGNUPS_PER_IP = 10
 
 function checkRateLimit(key: string, limit: number): { allowed: boolean; remaining: number } {
   const now = Date.now()
@@ -102,10 +91,6 @@ function checkRateLimit(key: string, limit: number): { allowed: boolean; remaini
   return { allowed: true, remaining: limit - entry.count }
 }
 
-/**
- * Retourne un client Supabase admin.
- * hasAdminKey = true si SUPABASE_SERVICE_ROLE_KEY est défini → auto-confirmation possible.
- */
 function getSupabaseAdmin(): { client: ReturnType<typeof createClient>; hasAdminKey: boolean } {
   const url = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -119,34 +104,12 @@ function getSupabaseAdmin(): { client: ReturnType<typeof createClient>; hasAdmin
   }
 }
 
-async function logSecurityEvent(
-  sb: ReturnType<typeof createClient>,
-  eventType: string,
-  severity: 'info' | 'warning' | 'danger',
-  details: any,
-  ip: string
-) {
-  try {
-    await sb.from('security_audit_logs').insert({
-      event_type: eventType,
-      severity,
-      company_id: details.company_id || null,
-      company_name: details.company_name || null,
-      user_id: details.user_id || null,
-      user_email: details.email || null,
-      target_sector: details.target_sector || null,
-      ip_address: ip,
-      details: { ...details, timestamp: new Date().toISOString() },
-    })
-  } catch (_) {}
-}
-
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   res.setHeader('Content-Type', 'application/json')
   res.setHeader('X-Content-Type-Options', 'nosniff')
 
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Methode non autorisee. Utilisez POST.' })
+    return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST.' })
   }
 
   const clientIp = String(
@@ -157,10 +120,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const rateCheck = checkRateLimit(`ip:${clientIp}`, MAX_SIGNUPS_PER_IP)
   if (!rateCheck.allowed) {
-    await logSecurityEvent(sb, 'RATE_LIMIT_TRIGGERED', 'warning', { ip: clientIp }, clientIp)
     return res.status(429).json({
       success: false,
-      error: 'Trop de tentatives inscription depuis cette connexion. Veuillez patienter 15 minutes.',
+      error: 'Trop de tentatives d\'inscription depuis cette connexion. Veuillez patienter 15 minutes.',
     })
   }
 
@@ -182,8 +144,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } = req.body || {}
 
   if (website_hp) {
-    await logSecurityEvent(sb, 'BOT_DETECTED_HONEYPOT', 'danger', { ip: clientIp, body: req.body }, clientIp)
-    return res.status(400).json({ success: false, error: 'Requete non autorisee.' })
+    return res.status(400).json({ success: false, error: 'Requête non autorisée.' })
   }
 
   if (!company_name || !company_name.trim()) {
@@ -193,25 +154,62 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ success: false, error: 'Le nom du responsable est obligatoire.' })
   }
   if (!phone || !phone.trim()) {
-    return res.status(400).json({ success: false, error: 'Le numero de telephone est obligatoire.' })
+    return res.status(400).json({ success: false, error: 'Le numéro de téléphone est obligatoire.' })
   }
   if (!email || !email.trim() || !email.includes('@')) {
     return res.status(400).json({ success: false, error: 'Une adresse e-mail valide est obligatoire.' })
   }
   if (!password || password.length < 6) {
-    return res.status(400).json({ success: false, error: 'Le mot de passe doit comporter au moins 6 caracteres.' })
+    return res.status(400).json({ success: false, error: 'Le mot de passe doit comporter au moins 6 caractères.' })
   }
 
+  // Normalisation stricte de l'adresse email
   const cleanEmail = String(email).trim().toLowerCase()
   const emailDomain = cleanEmail.split('@')[1] || ''
 
-  let isSuspicious = false
-  let suspiciousReason: string | null = null
   if (DISPOSABLE_EMAIL_DOMAINS.has(emailDomain)) {
-    isSuspicious = true
-    suspiciousReason = `Adresse email temporaire detectee (${emailDomain})`
+    return res.status(400).json({
+      success: false,
+      error: 'Les adresses e-mails temporaires ne sont pas autorisées sur GESTIO 229.',
+    })
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RÈGLE CRITIQUE SECTION B : INTERDICTION ABSOLUE D'EMAIL EN DOUBLE
+  // Vérification directe dans la base de données avant toute création
+  // ═══════════════════════════════════════════════════════════════════════════
+  const DUPLICATE_EMAIL_ERROR =
+    'Cette adresse email est déjà associée à un compte GESTIO229. Veuillez vous connecter ou utiliser une autre adresse email.'
+
+  // 1. Vérifier si l'email existe dans `companies`
+  const { data: existingComp } = await sb
+    .from('companies')
+    .select('id, name')
+    .ilike('email', cleanEmail)
+    .maybeSingle()
+
+  if (existingComp) {
+    return res.status(409).json({
+      success: false,
+      error: DUPLICATE_EMAIL_ERROR,
+    })
+  }
+
+  // 2. Vérifier si l'email existe dans `user_profiles` pour un compte administrateur
+  const { data: existingProfile } = await sb
+    .from('user_profiles')
+    .select('id, role')
+    .ilike('email', cleanEmail)
+    .maybeSingle()
+
+  if (existingProfile && (existingProfile.role === 'administrateur' || existingProfile.role === 'super_admin')) {
+    return res.status(409).json({
+      success: false,
+      error: DUPLICATE_EMAIL_ERROR,
+    })
+  }
+
+  // 3. Normaliser la liste des secteurs d'activité sélectionnés
   const rawSectorsArray: string[] = Array.isArray(selected_sectors)
     ? selected_sectors
     : typeof selected_sectors === 'string' && selected_sectors.trim()
@@ -225,7 +223,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (cleanSectors.length === 0) {
     return res.status(400).json({
       success: false,
-      error: 'Veuillez selectionner au moins un secteur d\'activite.',
+      error: 'Veuillez sélectionner au moins un secteur d\'activité.',
     })
   }
 
@@ -233,7 +231,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!VALID_SECTOR_SLUGS.has(slug)) {
       return res.status(400).json({
         success: false,
-        error: `Le secteur << ${slug} >> n'est pas un secteur valide dans GESTIO 229.`,
+        error: `Le secteur « ${slug} » n'est pas un secteur valide dans GESTIO 229.`,
       })
     }
   }
@@ -246,21 +244,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const now = new Date()
+    // Mois gratuit de 30 jours à compter de la création
     const trialEndsDate = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
 
     // =========================================================================
-    // ETAPE 1 : Créer le compte Auth Supabase avec auto-confirmation si possible
+    // ÉTAPE 1 : Créer le compte Auth Supabase
     // =========================================================================
     let authUserId: string | null = null
-    let autoConfirmed = false
 
     if (hasAdminKey) {
-      // Mode admin : création avec email_confirm: false → connexion immédiate
       const { data: adminAuthData, error: adminAuthError } = await (sb.auth as any).admin.createUser({
         email: cleanEmail,
         password: password,
-        email_confirm: true,  // Confirmation automatique dans Supabase Auth
-
+        email_confirm: false, // L'administrateur principal DOIT confirmer son email
         user_metadata: {
           full_name: responsible_name.trim(),
           responsible_name: responsible_name.trim(),
@@ -268,7 +264,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           phone: phone.trim(),
           ifu_number: (ifu_number || '').trim() || '0000000000000',
           city: city || 'Cotonou',
-          country: country || 'Benin',
+          country: country || 'Bénin',
           primary_sector: primarySector,
           selected_sectors: cleanSectors,
           role: 'administrateur',
@@ -276,235 +272,206 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
 
       if (adminAuthError) {
-        // Si le compte existe déjà, on récupère l'ID via la liste admin
-        if (adminAuthError.message?.toLowerCase().includes('already registered') ||
-            adminAuthError.message?.toLowerCase().includes('already been registered') ||
-            adminAuthError.message?.toLowerCase().includes('already exists')) {
-          // Compte existant : on continue sans créer (l'utilisateur se reconnectera)
-          console.warn('[AuthRegister] Compte auth existant:', cleanEmail)
-        } else {
-          throw new Error(adminAuthError.message || 'Erreur lors de la creation du compte.')
+        if (
+          adminAuthError.message?.toLowerCase().includes('already registered') ||
+          adminAuthError.message?.toLowerCase().includes('already been registered') ||
+          adminAuthError.message?.toLowerCase().includes('already exists')
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: DUPLICATE_EMAIL_ERROR,
+          })
         }
-      } else {
-        authUserId = adminAuthData?.user?.id || null
-        autoConfirmed = true
+        throw new Error(adminAuthError.message || 'Erreur lors de la création du compte.')
       }
-    } else {
-      // Mode fallback : signUp standard (email de confirmation envoyé)
-      // Note: sans SUPABASE_SERVICE_ROLE_KEY, l'auto-confirmation n'est pas disponible
-      console.warn('[AuthRegister] SUPABASE_SERVICE_ROLE_KEY non defini — signUp standard utilise (email confirmation requis)')
+
+      authUserId = adminAuthData?.user?.id || null
     }
 
     // =========================================================================
-    // ETAPE 2 : Créer ou mettre à jour l'entreprise dans `companies`
+    // ÉTAPE 2 : Créer l'entreprise dans `companies` (EXACTEMENT les secteurs choisis)
     // =========================================================================
-    let companyId: string
+    const insertCompPayload: any = {
+      name: company_name.trim(),
+      ifu_number: (ifu_number || '').trim() || '0000000000000',
+      phone: phone.trim(),
+      email: cleanEmail,
+      country: country || 'Bénin',
+      city: city?.trim() || 'Cotonou',
+      active_sector: primarySector,
+      selected_sectors: cleanSectors, // STRICTEMENT les secteurs choisis
+      sectors: cleanSectors,          // STRICTEMENT les secteurs choisis
+      subscription_status: 'trial',
+      onboarding_completed: true,
+      currency: 'FCFA',
+      subscription_plan: chosenPlanSlug,
+      plan: chosenPlanSlug,
+      initial_plan: chosenPlanSlug,
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+    }
 
-    const { data: existingComp } = await sb
+    const { data: newComp, error: insCompErr } = await sb
       .from('companies')
-      .select('*')
-      .ilike('email', cleanEmail)
-      .maybeSingle()
+      .insert(insertCompPayload)
+      .select()
+      .single()
 
-    if (existingComp) {
-      companyId = existingComp.id
-      const updatePayload: any = {
-        name: company_name.trim(),
-        phone: phone.trim(),
-        city: city?.trim() || 'Cotonou',
-        country: country || 'Benin',
-        active_sector: primarySector,
-        selected_sectors: cleanSectors,
-        sectors: cleanSectors,
-        onboarding_completed: true,
-        subscription_status: 'trial',
-        subscription_plan: chosenPlanSlug,
-        plan: chosenPlanSlug,
-        initial_plan: chosenPlanSlug,
-        updated_at: now.toISOString(),
+    if (insCompErr) {
+      if (insCompErr.code === '23505' || insCompErr.message?.includes('unique')) {
+        return res.status(409).json({
+          success: false,
+          error: DUPLICATE_EMAIL_ERROR,
+        })
       }
-
-      const updateRes = await sb
-        .from('companies')
-        .update(updatePayload)
-        .eq('id', companyId)
-        .select()
-        .single()
-
-      if (updateRes.error) throw updateRes.error
-    } else {
-      const insertPayload: any = {
-        name: company_name.trim(),
-        ifu_number: (ifu_number || '').trim() || '0000000000000',
-        phone: phone.trim(),
-        email: cleanEmail,
-        country: country || 'Benin',
-        city: city?.trim() || 'Cotonou',
-        active_sector: primarySector,
-        selected_sectors: cleanSectors,
-        sectors: cleanSectors,
-        subscription_status: 'trial',
-        onboarding_completed: true,
-        currency: 'FCFA',
-        subscription_plan: chosenPlanSlug,
-        plan: chosenPlanSlug,
-        initial_plan: chosenPlanSlug,
-      }
-
-      const insertRes = await sb
-        .from('companies')
-        .insert(insertPayload)
-        .select()
-        .single()
-
-      if (insertRes.error) throw insertRes.error
-      companyId = insertRes.data.id
+      throw insCompErr
     }
 
-    // =========================================================================
-    // ETAPE 3 : Créer le profil utilisateur dans `user_profiles` si authUserId connu
-    // =========================================================================
-    if (authUserId) {
-      const defaultAdminPermissions = {
-        admin: true,
-        commercial: true,
-        stock: true,
-        treasury: true,
-        purchases: true,
-        reporting: true,
-        accounting: true,
-        hr: true,
-        ventes: { view: true, create: true, edit: true, delete: true },
-        finances: { view: true, caisse: true, tresorerie: true },
-      }
+    const companyId = newComp.id
 
-      try {
-        const { data: existingProfile } = await sb
-          .from('user_profiles')
-          .select('id')
-          .or(`auth_user_id.eq.${authUserId},email.ilike.${cleanEmail}`)
-          .maybeSingle()
-
-        if (existingProfile) {
-          await sb
-            .from('user_profiles')
-            .update({
-              company_id: companyId,
-              auth_user_id: authUserId,
-              full_name: responsible_name.trim(),
-              username: cleanEmail,
-              email: cleanEmail,
-              phone: phone.trim(),
-              role: 'administrateur',
-              is_active: true,
-              permissions: defaultAdminPermissions,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('id', existingProfile.id)
-        } else {
-          await sb
-            .from('user_profiles')
-            .insert({
-              company_id: companyId,
-              auth_user_id: authUserId,
-              full_name: responsible_name.trim(),
-              username: cleanEmail,
-              email: cleanEmail,
-              phone: phone.trim(),
-              role: 'administrateur',
-              is_active: true,
-              permissions: defaultAdminPermissions,
-            })
-        }
-      } catch (profileErr: any) {
-        console.warn('[AuthRegister] Erreur profil (non bloquante):', profileErr.message)
-      }
+    // =========================================================================
+    // ÉTAPE 3 : Créer le profil administrateur principal dans `user_profiles`
+    // =========================================================================
+    const defaultAdminPermissions = {
+      admin: true,
+      commercial: true,
+      stock: true,
+      treasury: true,
+      purchases: true,
+      reporting: true,
+      accounting: true,
+      hr: true,
+      ventes: { view: true, create: true, edit: true, delete: true },
+      finances: { view: true, caisse: true, tresorerie: true },
     }
 
-    // =========================================================================
-    // ETAPE 4 : Initialiser abonnements_global (Essai unique de 30 jours)
-    // =========================================================================
-    try {
-      await sb.from('abonnements_global').upsert(
-        {
-          entreprise_id: companyId,
-          date_debut_global: now.toISOString(),
-          date_fin_global: trialEndsDate.toISOString(),
-          statut_global: 'essai',
-          plan_code: chosenPlanSlug,
-          montant_mensuel_fcfa: chosenPriceMonthly,
-        },
-        { onConflict: 'entreprise_id' }
-      )
-    } catch (_) {}
+    await sb.from('user_profiles').insert({
+      company_id: companyId,
+      auth_user_id: authUserId,
+      full_name: responsible_name.trim(),
+      username: cleanEmail,
+      email: cleanEmail,
+      phone: phone.trim(),
+      role: 'administrateur',
+      is_active: true,
+      permissions: defaultAdminPermissions,
+      email_confirmed_at: null, // Non confirmé par défaut
+      created_at: now.toISOString(),
+      updated_at: now.toISOString(),
+    })
 
     // =========================================================================
-    // ETAPE 5 : Initialiser les secteurs (essai gratuit <= 3, en_attente_paiement > 3)
+    // ÉTAPE 4 : Initialiser `abonnements_global` (Source unique et vérifiable)
+    // =========================================================================
+    await sb.from('abonnements_global').upsert(
+      {
+        entreprise_id: companyId,
+        date_debut_global: now.toISOString(),
+        date_fin_global: trialEndsDate.toISOString(),
+        statut_global: 'essai',
+        plan_code: chosenPlanSlug,
+        montant_mensuel_fcfa: chosenPriceMonthly,
+      },
+      { onConflict: 'entreprise_id' }
+    )
+
+    // =========================================================================
+    // ÉTAPE 5 : Initialiser `abonnements_secteurs`
+    // (Les 3 premiers sont couverts par l'essai gratuit, les suivants en attente de paiement)
     // =========================================================================
     for (const slug of freeTrialSectors) {
-      try {
-        await sb.from('abonnements_secteurs').upsert(
-          {
-            entreprise_id: companyId,
-            secteur_code: toSecteurCode(slug),
-            date_debut_specifique: now.toISOString(),
-            date_fin_specifique: trialEndsDate.toISOString(),
-            statut_specifique: 'rattache_global',
-            is_premiere_activation: false,
-            rattache_au_global: true,
-          },
-          { onConflict: 'entreprise_id,secteur_code' }
-        )
-      } catch (_) {}
+      await sb.from('abonnements_secteurs').upsert(
+        {
+          entreprise_id: companyId,
+          secteur_code: toSecteurCode(slug),
+          date_debut_specifique: now.toISOString(),
+          date_fin_specifique: trialEndsDate.toISOString(),
+          statut_specifique: 'rattache_global',
+          is_premiere_activation: false,
+          rattache_au_global: true,
+          updated_at: now.toISOString(),
+        },
+        { onConflict: 'entreprise_id,secteur_code' }
+      )
     }
 
     for (const slug of pendingPaidSectors) {
-      try {
-        await sb.from('abonnements_secteurs').upsert(
-          {
-            entreprise_id: companyId,
-            secteur_code: toSecteurCode(slug),
-            date_debut_specifique: null,
-            date_fin_specifique: null,
-            statut_specifique: 'en_attente_paiement',
-            is_premiere_activation: false,
-            rattache_au_global: false,
-          },
-          { onConflict: 'entreprise_id,secteur_code' }
-        )
-      } catch (_) {}
+      await sb.from('abonnements_secteurs').upsert(
+        {
+          entreprise_id: companyId,
+          secteur_code: toSecteurCode(slug),
+          date_debut_specifique: null,
+          date_fin_specifique: null,
+          statut_specifique: 'en_attente_paiement',
+          is_premiere_activation: false,
+          rattache_au_global: false,
+          updated_at: now.toISOString(),
+        },
+        { onConflict: 'entreprise_id,secteur_code' }
+      )
     }
 
     // =========================================================================
-    // ETAPE 6 : Journal d'audit Super Admin
+    // ÉTAPE 6 : Initialiser `company_activities` (STRICTEMENT les secteurs choisis)
     // =========================================================================
-    try {
-      await sb.from('admin_audit_logs').insert({
-        admin_username: 'Systeme Inscription',
-        action: 'CREATION_COMPTE_ENTREPRISE',
-        company_id: companyId,
-        company_name: company_name.trim(),
-        sector_slug: primarySector,
-        result: isSuspicious ? 'warning' : 'success',
-        details: {
+    const activityRows = cleanSectors.map((slug, idx) => ({
+      company_id: companyId,
+      sector_slug: slug,
+      sector_code: toSecteurCode(slug),
+      activity_name: `${company_name.trim()} — ${slug.toUpperCase()}`,
+      pos_location: city || 'Siège',
+      manager_name: responsible_name.trim(),
+      status: idx < MAX_FREE_TRIAL_SECTORS ? 'ACTIVE' : 'SUSPENDUE',
+      is_active: true,
+      created_at: now.toISOString(),
+    }))
+
+    await sb.from('company_activities').insert(activityRows)
+
+    // =========================================================================
+    // ÉTAPE 7 : Envoi effectif de l'email de confirmation via le module d'envoi
+    // =========================================================================
+    const appUrl = (process.env.VITE_APP_URL || 'https://gestio229.com').replace(/\/$/, '')
+    const redirectTo = `${appUrl}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`
+    let confirmationUrl = redirectTo
+
+    if (hasAdminKey && (sb.auth as any).admin?.generateLink) {
+      try {
+        const { data: linkData } = await (sb.auth as any).admin.generateLink({
+          type: 'signup',
           email: cleanEmail,
-          phone: phone.trim(),
-          selected_sectors: cleanSectors,
-          free_trial_sectors: freeTrialSectors,
-          pending_paid_sectors: pendingPaidSectors,
-          trial_until: trialEndsDate.toISOString(),
-          is_suspicious: isSuspicious,
-          suspicious_reason: suspiciousReason,
-          auto_confirmed: autoConfirmed,
-          has_admin_key: hasAdminKey,
-        },
-        ip_address: clientIp,
-      })
-    } catch (_) {}
+          password: password,
+          options: { redirectTo },
+        })
+        if (linkData?.properties?.action_link) {
+          confirmationUrl = linkData.properties.action_link
+        }
+      } catch (linkErr: any) {
+        console.warn('[AuthRegister] generateLink notice:', linkErr?.message)
+      }
+    }
+
+    const emailHtml = buildRegistrationEmailHtml({
+      responsibleName: responsible_name.trim(),
+      companyName: company_name.trim(),
+      confirmationUrl,
+      selectedSectors: cleanSectors,
+    })
+
+    const sendResult = await sendTrackedEmail({
+      to: cleanEmail,
+      subject: '🔑 Confirmez votre adresse email — GESTIO 229 ERP',
+      html: emailHtml,
+      emailType: 'signup_confirmation',
+      clientIp,
+      metadata: { companyId, selectedSectors: cleanSectors },
+    })
 
     return res.status(200).json({
       success: true,
-      message: 'Entreprise enregistree avec succes.',
+      message: 'Compte créé avec succès. Un e-mail de confirmation vous a été envoyé.',
+      emailSent: sendResult.success,
+      emailWarning: sendResult.error,
       data: {
         companyId,
         companyName: company_name.trim(),
@@ -515,16 +482,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         pendingPaidSectors,
         subscriptionStatus: 'trial',
         trialEndsAt: trialEndsDate.toISOString(),
-        isSuspicious,
-        autoConfirmed,        // true si le compte est confirmé automatiquement
-        requiresEmailVerification: !autoConfirmed,  // true si email de confirmation requis
+        requiresEmailVerification: true,
       },
     })
   } catch (err: any) {
-    console.error('[AuthRegister] Erreur serveur:', err.message)
+    console.error('[AuthRegister] Erreur serveur :', err)
     return res.status(500).json({
       success: false,
-      error: 'Une erreur est survenue lors de l\'enregistrement. Veuillez reessayer.',
+      error: 'Une erreur est survenue lors de l\'enregistrement. Veuillez réessayer.',
     })
   }
 }

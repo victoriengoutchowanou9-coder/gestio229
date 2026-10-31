@@ -897,7 +897,7 @@ export async function evaluerAccesSecteur(
     const debutSpec = secteurSub.date_debut_specifique
       ? new Date(secteurSub.date_debut_specifique)
       : (globalSub?.date_debut_global ? new Date(globalSub.date_debut_global) : now)
-    const jours = finSpec ? computeDaysRemaining(finSpec, now) : (globalSub?.date_fin_global ? computeDaysRemaining(new Date(globalSub.date_fin_global), now) : 30)
+    const jours = finSpec ? computeDaysRemaining(finSpec, now) : (globalSub?.date_fin_global ? computeDaysRemaining(new Date(globalSub.date_fin_global), now) : 0)
 
     if (!finSpec || finSpec >= now) {
       return {
@@ -909,7 +909,7 @@ export async function evaluerAccesSecteur(
         joursRestants: jours,
         isPremiereActivationPossible: false,
         rattacheAuGlobal: secteurSub.rattache_au_global,
-        badgeLabel: `Actif — J-${jours}`,
+        badgeLabel: `Abonnement actif – ${jours} jours restants`,
         badgeColor: 'emerald',
         globalSub,
         secteurSub,
@@ -958,7 +958,7 @@ export async function evaluerAccesSecteur(
         joursRestants: joursGlobal,
         isPremiereActivationPossible: false,
         rattacheAuGlobal: true,
-        badgeLabel: '1 mois gratuit',
+        badgeLabel: `Essai gratuit – ${joursGlobal} jours restants`,
         badgeColor: 'blue',
         globalSub,
         secteurSub,
@@ -2566,6 +2566,10 @@ export async function getAbonnementsSecteurs(
       }
     }
 
+    if (rawSectors.length > 0) {
+      const validCodes = new Set(rawSectors.map((s) => toSecteurCode(s)))
+      return Array.from(bySector.values()).filter((item) => validCodes.has(toSecteurCode(item.secteur_code)))
+    }
     return Array.from(bySector.values())
   } catch (_) {
     return []

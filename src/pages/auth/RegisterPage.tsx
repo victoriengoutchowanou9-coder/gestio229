@@ -212,12 +212,23 @@ export const RegisterPage: React.FC = () => {
         const contentType = apiRes.headers.get('content-type') || ''
         if (contentType.includes('application/json')) {
           const json = await apiRes.json()
+          if (!apiRes.ok || !json.success) {
+            throw new Error(
+              json.error ||
+              'Cette adresse email est déjà associée à un compte GESTIO229. Veuillez vous connecter ou utiliser une autre adresse email.'
+            )
+          }
           if (json.success && json.data?.companyId) {
             companyId = json.data.companyId
           }
+        } else if (!apiRes.ok) {
+          throw new Error('Une erreur est survenue lors de l\'enregistrement. Veuillez vérifier votre saisie.')
         }
-      } catch (_) {
-        // En cas de réseau local
+      } catch (apiErr: any) {
+        if (apiErr.message?.includes('associée à un compte') || apiErr.message?.includes('already registered')) {
+          throw apiErr
+        }
+        console.warn('[RegisterPage] Notice API auth-register:', apiErr?.message)
       }
 
       // 3. Création du compte dans Supabase Auth
@@ -424,6 +435,19 @@ export const RegisterPage: React.FC = () => {
     setResendError(null)
 
     try {
+      // 1. Tenter le renvoi par notre endpoint serveur avec journalisation
+      const res = await fetch('/api/resend-confirmation-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: registeredEmail }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.success) {
+        setResendSuccess(data.message || '✅ Nouveau lien envoyé ! Pensez à vérifier vos spams.')
+        return
+      }
+
+      // 2. Repli Supabase
       const { error } = await supabase.auth.resend({
         type: 'signup',
         email: registeredEmail,

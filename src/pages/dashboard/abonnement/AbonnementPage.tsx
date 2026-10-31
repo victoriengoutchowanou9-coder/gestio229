@@ -414,15 +414,15 @@ export const AbonnementPage: React.FC = () => {
                 </h1>
                 {globalSub?.statut_global === 'essai' && globalDaysRemaining > 0 ? (
                   <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">
-                    Essai Gratuit Unique (Max 3 secteurs) • {globalDaysRemaining} jour(s) restant(s)
+                    Essai gratuit – {globalDaysRemaining} jours restants
                   </span>
                 ) : globalSub?.statut_global === 'actif' && globalDaysRemaining > 0 ? (
                   <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    Abonnement Global Actif • {globalDaysRemaining} jour(s) restant(s)
+                    Abonnement actif – {globalDaysRemaining} jours restants
                   </span>
                 ) : (
                   <span className="px-3 py-1 rounded-full text-xs font-semibold bg-red-500/20 text-red-300 border border-red-500/30">
-                    Période globale expirée — Renouvellement requis
+                    Abonnement expiré
                   </span>
                 )}
               </div>
