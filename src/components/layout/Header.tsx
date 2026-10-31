@@ -1,36 +1,62 @@
 // =============================================================================
-// GESTIO 229 SaaS — Header : Barre supérieure compacte & présentable
-// Conforme CDC : h-14, thème dynamique Clair / Sombre, 3 actions alignées
+// GESTIO 229 SaaS — Header Pro Style Standalone
+// Conforme Spécifications : Fond clair #f5f5f0, Palette Vert/Blanc GESTIO 229
+// Ligne 1 : Logo GESTIO 229, Pill HUB CENTRAL, Thème, Pill Caisse | Bonjour, [Entreprise]
+// Ligne 2 : Titre avec icône, X sites · Y secteurs, Quota
 // =============================================================================
 
 import React, { useState, useEffect } from 'react'
 import { useLocation, Link, useNavigate } from 'react-router-dom'
-import { Menu, Bell, ArrowLeft } from 'lucide-react'
+import {
+  Menu,
+  Wallet,
+  LayoutDashboard,
+  ShoppingCart,
+  Package,
+  Landmark,
+  Users,
+  Truck,
+  Receipt,
+  BarChart3,
+  BookOpen,
+  Settings,
+  Shield,
+  CreditCard,
+  Building2,
+  Moon,
+  Sun,
+  Layers,
+} from 'lucide-react'
 import { useAuthStore } from '../../store/authStore'
 import { useUIStore } from '../../store/uiStore'
 import { useTheme } from '../../context/ThemeContext'
 import { getActiveSectorMeta } from '../../lib/sectorClient'
 import { getCompanySubscriptionInfo } from '../../core/subscription/subscriptionEngine'
 import { supabase } from '../../lib/supabase'
-import FeedbackButton from '../common/FeedbackButton'
 import { useTenant } from '../../hooks/useTenant'
 
-// Mapping route → titre de page
-const PAGE_TITLES: Record<string, { title: string; subtitle?: string }> = {
-  'tableau-bord':  { title: 'Tableau de bord', subtitle: 'Aperçu du secteur en direct' },
-  'vente-pos':     { title: 'Vente & POS', subtitle: 'Point de vente & encaissement' },
-  'stocks':        { title: 'Stocks & Inventaire', subtitle: 'Gestion des dépôts & inventaires' },
-  'caisse':        { title: 'Caisse', subtitle: 'Sessions & clôtures de caisse' },
-  'tresorerie':    { title: 'Trésorerie', subtitle: 'Liquidités, banques & décaissements' },
-  'clients':       { title: 'Clients & Créances', subtitle: 'Gestion des comptes clients' },
-  'fournisseurs':  { title: 'Achats & Fournisseurs', subtitle: 'Bons de commande & réceptions' },
-  'depenses':      { title: 'Dépenses', subtitle: 'Saisie et suivi des charges' },
-  'reporting':     { title: 'Rapports & Analyses', subtitle: 'Indicateurs de performance' },
-  'syscohada':     { title: 'Comptabilité SYSCOHADA', subtitle: 'Journal & grand livre' },
-  'configuration': { title: 'Configuration', subtitle: 'Paramètres entreprise & fiscalité' },
-  'journal-audit': { title: "Journal d'Audit", subtitle: 'Traçabilité des opérations' },
-  'abonnement':    { title: 'Mon Abonnement', subtitle: 'Gestion de l\'offre' },
-  'utilisateurs':  { title: 'Gestion des Utilisateurs', subtitle: 'Équipe, rôles & permissions' },
+// Mapping route → titre de page & icône
+const PAGE_CONFIGS: Record<string, { title: string; icon: React.FC<{ className?: string }> }> = {
+  'tableau-bord':  { title: 'Tableau de bord', icon: LayoutDashboard },
+  'dashboard':     { title: 'Tableau de bord', icon: LayoutDashboard },
+  'vente-pos':     { title: 'Point de Vente & POS', icon: ShoppingCart },
+  'ventes':        { title: 'Ventes Commerciales', icon: ShoppingCart },
+  'stocks':        { title: 'Stocks & Inventaires', icon: Package },
+  'caisse':        { title: 'Caisse & Clôtures', icon: Wallet },
+  'cloture-caisse':{ title: 'Clôture de Caisse', icon: Wallet },
+  'tresorerie':    { title: 'Trésorerie & Banque', icon: Landmark },
+  'clients':       { title: 'Clients & Créances', icon: Users },
+  'fournisseurs':  { title: 'Achats & Fournisseurs', icon: Truck },
+  'achats':        { title: 'Achats & Fournisseurs', icon: Truck },
+  'depenses':      { title: 'Dépenses & Charges', icon: Receipt },
+  'reporting':     { title: 'Rapports & Rentabilité', icon: BarChart3 },
+  'rapports':      { title: 'Rapports & Rentabilité', icon: BarChart3 },
+  'syscohada':     { title: 'Comptabilité SYSCOHADA', icon: BookOpen },
+  'configuration': { title: 'Configuration Entreprise', icon: Settings },
+  'journal-audit': { title: "Journal d'Audit", icon: Shield },
+  'audit':         { title: "Journal d'Audit", icon: Shield },
+  'abonnement':    { title: 'Mon Abonnement', icon: CreditCard },
+  'utilisateurs':  { title: 'Gestion Utilisateurs', icon: Users },
 }
 
 const Header: React.FC = () => {
@@ -38,216 +64,140 @@ const Header: React.FC = () => {
   const location = useLocation()
   const company = useAuthStore((s) => s.company)
   const user = useAuthStore((s) => s.user)
-  const notifications = useUIStore((s) => s.notifications)
   const toggleMobileSidebar = useUIStore((s) => s.toggleMobileSidebar)
   const { toggle, isClair } = useTheme()
   const { sectorSlug } = useTenant()
   const sectorMeta = getActiveSectorMeta(sectorSlug)
 
-  // Calcul jours d'essai restants
-  const [joursRestants, setJoursRestants] = useState<number | null>(null)
-  const [isTrial, setIsTrial] = useState<boolean>(true)
+  // Calcul du nombre de secteurs & sites réels
+  const rawSectors = (company as any)?.selected_sectors || (company as any)?.sectors || []
+  const sectorsCount = Math.max(1, Array.isArray(rawSectors) && rawSectors.length > 0 ? rawSectors.length : 1)
+  const sitesCount = 1
 
-  useEffect(() => {
-    let isMounted = true
-    const fetchSubscription = async () => {
-      const companyId = company?.id
-      if (companyId) {
-        try {
-          const { data: sub } = await supabase
-            .from('subscriptions')
-            .select('fin_essai, status')
-            .eq('company_id', companyId)
-            .maybeSingle()
-          
-          if (!isMounted) return
+  // Quota & statut abonnement
+  const isExpired = company?.subscription_status === 'expired'
+  const isTrial = company?.subscription_status === 'trial' || !company?.subscription_status
+  const quotaLabel = isExpired ? 'Expiré' : isTrial ? 'Essai Pro' : 'Illimité'
 
-          if (sub?.fin_essai) {
-            const diff = Math.ceil((new Date(sub.fin_essai).getTime() - Date.now()) / 86400000)
-            setJoursRestants(Math.max(0, diff))
-            setIsTrial(sub.status !== 'active')
-            return
-          }
-        } catch (_) {}
-      }
-
-      if (isMounted) {
-        const info = getCompanySubscriptionInfo(company)
-        setJoursRestants(info.daysRemaining ?? 14)
-        setIsTrial(!info.isActive)
-      }
-    }
-
-    fetchSubscription()
-    return () => { isMounted = false }
-  }, [company?.id, company?.subscription_status, company?.created_at])
-
-  // Extraire le module actif depuis la route
-  const parts = location.pathname.split('/')
+  // Route & Métadonnées actives
+  const parts = location.pathname.split('/').filter(Boolean)
   const activeRoute = parts[parts.length - 1] || 'tableau-bord'
-  const pageInfo = PAGE_TITLES[activeRoute] ?? { title: 'Tableau de bord' }
+  const pageConfig = PAGE_CONFIGS[activeRoute] ?? { title: 'Tableau de bord', icon: LayoutDashboard }
+  const PageIcon = pageConfig.icon
 
-  // Rendu badge essai avec couleurs d'alerte conformes
-  const renderTrialBadge = () => {
-    if (!isTrial) {
-      return (
-        <div className="flex items-center gap-1.5 text-xs text-emerald-500 bg-emerald-500/10 px-2.5 py-1.5 rounded-full border border-emerald-500/20 shrink-0 font-bold">
-          <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full"></span>
-          <span>Actif</span>
-        </div>
-      )
-    }
+  // Lien direct vers la Caisse du secteur actif
+  const cleanSectorSlug = sectorSlug ? String(sectorSlug).replace(/^sec-/, '').toLowerCase() : 'boutique'
+  const caisseLink = `/app/${cleanSectorSlug}/caisse`
 
-    const j = joursRestants !== null ? joursRestants : 14
-    let colorClasses = 'text-emerald-500 bg-emerald-500/10 border-emerald-500/20'
-    let dotClasses = 'bg-emerald-500'
-
-    if (j <= 3) {
-      colorClasses = 'text-red-500 bg-red-500/15 border-red-500/30 animate-pulse'
-      dotClasses = 'bg-red-500 animate-ping'
-    } else if (j <= 7) {
-      colorClasses = 'text-orange-500 bg-orange-500/10 border-orange-500/20'
-      dotClasses = 'bg-orange-500 animate-pulse'
-    }
-
-    return (
-      <div className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-full border shrink-0 font-bold ${colorClasses}`}>
-        <span className={`w-1.5 h-1.5 rounded-full ${dotClasses}`}></span>
-        <span>Essai • J-{j}</span>
-      </div>
-    )
-  }
+  const companyDisplayName = (company?.name || 'ENTREPRISE').toUpperCase()
 
   return (
-    <header 
-      style={{
-        background: 'var(--bg-header)',
-        borderColor: 'var(--border)',
-        color: 'var(--text-main)'
-      }}
-      className="flex items-center justify-between px-3 sm:px-4 py-2 border-b h-14 sticky top-0 z-50 shrink-0 w-full select-none transition-colors duration-200"
-    >
-      {/* ── GAUCHE : Burger mobile + Retour HUB + Breadcrumb ── */}
-      <div className="flex items-center gap-2.5 sm:gap-3 min-w-0">
-        {/* Burger mobile */}
-        <button
-          onClick={toggleMobileSidebar}
-          style={{ color: 'var(--text-muted)' }}
-          className="lg:hidden p-1.5 rounded-lg hover:opacity-80 transition shrink-0"
-          title="Menu latéral"
-        >
-          <Menu className="w-4 h-4" />
-        </button>
+    <header className="w-full shrink-0 select-none transition-colors duration-200 border-b border-[#e5e5dc] dark:border-slate-800 bg-[#f5f5f0] dark:bg-slate-900">
+      {/* ══════════════════════════════════════════════════════════════════════
+          LIGNE 1 : Navigation Pill Pro & Identité Entreprise
+          Logo GESTIO 229 | HUB CENTRAL | Thème | Caisse  ┈┈┈┈┈  Bonjour, [Entreprise]
+         ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center justify-between px-3 sm:px-5 py-2.5 gap-2 sm:gap-4">
+        {/* ── Gauche : Contrôles & Boutons Pill Pro ── */}
+        <div className="flex items-center gap-1.5 sm:gap-2.5 flex-nowrap overflow-x-auto no-scrollbar py-0.5">
+          {/* Burger mobile */}
+          <button
+            onClick={toggleMobileSidebar}
+            className="lg:hidden p-1.5 rounded-full text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-slate-800 transition shrink-0"
+            title="Menu latéral"
+          >
+            <Menu className="w-5 h-5" />
+          </button>
 
-        {/* Bouton Retour au HUB */}
-        {(!user || user.role === 'administrateur' || user.role === 'super_admin') && (
+          {/* Logo GESTIO 229 (remplace la couronne) */}
           <Link
             to="/hub"
-            className="bg-emerald-600 hover:bg-emerald-500 text-white px-3 py-1 rounded-full text-xs sm:text-sm font-semibold flex items-center gap-1 transition shadow-sm shrink-0"
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-emerald-600 hover:bg-emerald-700 flex items-center justify-center text-white shadow-sm transition shrink-0 overflow-hidden"
+            title="GESTIO 229 — Accueil"
+          >
+            <img src="/icon-192.png" alt="GESTIO 229" className="w-5 h-5 sm:w-6 sm:h-6 object-contain rounded-sm" />
+          </Link>
+
+          {/* Pill "HUB CENTRAL" (remplace GOLD HUB) - Fond vert GESTIO 229 + texte blanc */}
+          <Link
+            to="/hub"
+            className="bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-extrabold text-xs sm:text-xs tracking-wide px-3.5 sm:px-4 py-1.5 rounded-full flex items-center gap-1.5 shadow-sm transition shrink-0 uppercase"
             title="Revenir au HUB multi-secteurs de GESTIO 229"
           >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span className="hidden sm:inline">← Retour au HUB</span>
-            <span className="sm:hidden">HUB</span>
+            <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+            <span>HUB CENTRAL</span>
           </Link>
-        )}
 
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-1.5 sm:gap-2 text-xs sm:text-sm truncate" style={{ color: 'var(--text-secondary)' }}>
-          <span className="font-semibold truncate max-w-[120px] sm:max-w-[180px]" style={{ color: 'var(--text-main)' }}>
-            {company?.name || 'STE GESTIO SARL'}
+          {/* Bouton Thème Sombre / Clair (Pill blanc arrondi) */}
+          <button
+            onClick={toggle}
+            type="button"
+            className="bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200/80 dark:border-slate-700 px-3 py-1.5 rounded-full text-xs font-semibold flex items-center gap-1.5 shadow-xs transition shrink-0"
+            title={isClair ? 'Basculer en mode Sombre' : 'Basculer en mode Clair'}
+          >
+            {isClair ? (
+              <>
+                <Moon className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
+                <span className="hidden md:inline">Sombre</span>
+              </>
+            ) : (
+              <>
+                <Sun className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden md:inline">Clair</span>
+              </>
+            )}
+          </button>
+
+          {/* Pill "Caisse" avec icône (Pill blanc arrondi) */}
+          <Link
+            to={caisseLink}
+            className="bg-white hover:bg-slate-100 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700 px-3.5 py-1.5 rounded-full text-xs font-bold flex items-center gap-1.5 shadow-xs transition shrink-0"
+            title="Accéder rapidement à la Caisse"
+          >
+            <Wallet className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+            <span>Caisse</span>
+          </Link>
+        </div>
+
+        {/* ── Droite : Bonjour, NOM DE L'ENTREPRISE ── */}
+        <div className="flex items-center gap-1.5 text-right shrink-0">
+          <span className="hidden sm:inline text-xs sm:text-sm text-slate-500 dark:text-slate-400 font-medium">
+            Bonjour,
           </span>
-          <span className="opacity-40">›</span>
-          <span className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30 text-xs font-semibold whitespace-nowrap flex items-center gap-1 shrink-0">
-            <span>{sectorMeta.emoji || '🏢'}</span>
-            <span className="truncate max-w-[140px] sm:max-w-[200px]">{sectorMeta.name || 'Quincaillerie & Matériaux'}</span>
-          </span>
-          <span className="opacity-40 hidden md:inline">›</span>
-          <span className="font-medium truncate hidden md:inline" style={{ color: 'var(--text-main)' }}>
-            {pageInfo.title}
+          <span className="text-xs sm:text-sm font-black text-slate-900 dark:text-white uppercase tracking-tight truncate max-w-[130px] sm:max-w-[240px] md:max-w-[320px]">
+            {companyDisplayName}
           </span>
         </div>
       </div>
 
-      {/* ── DROITE : Actions + Rectangle Blanc Contrôles Fenêtre ── */}
-      <div className="flex items-center gap-2 sm:gap-3 flex-nowrap shrink-0">
-        {/* 1. Theme Switch */}
-        <button
-          onClick={toggle}
-          title={isClair ? "Basculer en mode Sombre" : "Basculer en mode Clair"}
-          style={{
-            background: isClair ? '#0B1E3C' : 'rgba(255, 255, 255, 0.08)',
-            color: isClair ? '#FFFFFF' : '#FDBA74',
-            borderColor: 'var(--border)'
-          }}
-          className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-full border transition font-bold shrink-0 shadow-sm"
-        >
-          <span>{isClair ? '🌙' : '☀️'}</span>
-          <span className="hidden xs:inline">{isClair ? 'Sombre' : 'Clair'}</span>
-        </button>
-
-        {/* 2. Essai + jours restants */}
-        {renderTrialBadge()}
-
-        {/* 2.5 Bouton Avis & Suggestions pour les entreprises */}
-        <FeedbackButton sectorSlug={sectorMeta.slug} />
-
-        {/* 3. Cloche */}
-        <button
-          style={{
-            background: isClair ? 'rgba(11, 30, 60, 0.05)' : 'rgba(255, 255, 255, 0.06)',
-            borderColor: 'var(--border)',
-            color: 'var(--text-main)'
-          }}
-          className="relative p-2 rounded-full border transition shrink-0"
-          title="Notifications"
-        >
-          <Bell className="w-3.5 h-3.5" />
-          {notifications.length > 0 && (
-            <span className="absolute -top-1 -right-1 w-2 h-2 bg-red-500 rounded-full" />
+      {/* ══════════════════════════════════════════════════════════════════════
+          LIGNE 2 : Titre Page & Métadonnées Métier
+          [Icône] Tableau de bord  ┈┈┈┈┈  X sites · Y secteurs  |  Quota : ...
+         ══════════════════════════════════════════════════════════════════════ */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between px-3 sm:px-5 py-2 border-t border-[#e8e8df] dark:border-slate-800/80 bg-[#ebebe5] dark:bg-slate-900/90 gap-1.5 sm:gap-3">
+        {/* Titre avec Icône + Secteur */}
+        <div className="flex items-center gap-2 min-w-0">
+          <div className="w-7 h-7 rounded-lg bg-emerald-600/10 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400 flex items-center justify-center shrink-0">
+            <PageIcon className="w-4 h-4" />
+          </div>
+          <h1 className="text-sm sm:text-base font-black text-slate-900 dark:text-white tracking-tight truncate">
+            {pageConfig.title}
+          </h1>
+          {sectorMeta?.name && (
+            <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-emerald-600/10 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-600/20 dark:border-emerald-500/30 truncate shrink-0 hidden xs:inline-block">
+              {sectorMeta.name}
+            </span>
           )}
-        </button>
+        </div>
 
-        {/* 4. Rectangle Blanc Contrôles Fenêtre (Clé, 3 points, Agrandir, Réduire, X) */}
-        <div className="hidden sm:flex items-center gap-1.5 bg-white text-black px-2 py-1 rounded-xl border border-gray-200 shadow-sm top-bar-right-controls shrink-0">
-          <button 
-            type="button"
-            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
-            title="Sécurité & Clés"
-          >
-            🔑
-          </button>
-          <button 
-            type="button"
-            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
-            title="Options supplémentaires"
-          >
-            ⋮
-          </button>
-          <button 
-            type="button"
-            onClick={() => {
-              if (document.fullscreenElement) {
-                document.exitFullscreen().catch(() => {})
-              } else {
-                document.documentElement.requestFullscreen().catch(() => {})
-              }
-            }}
-            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
-            title="Plein écran / Agrandir"
-          >
-            □
-          </button>
-          <button 
-            type="button"
-            onClick={() => {
-              navigate('/hub')
-            }}
-            className="text-black hover:bg-gray-100 p-1 rounded transition text-xs font-bold"
-            title="Fermer / Retour"
-          >
-            ✕
-          </button>
+        {/* Sous-titre : X sites · Y secteurs et Quota */}
+        <div className="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 flex-wrap">
+          <span className="bg-white/90 dark:bg-slate-800 px-3 py-1 rounded-full border border-slate-200/80 dark:border-slate-700 text-[11px] sm:text-xs text-slate-700 dark:text-slate-200 shadow-2xs">
+            {sitesCount} site{sitesCount > 1 ? 's' : ''} · {sectorsCount} secteur{sectorsCount > 1 ? 's' : ''}
+          </span>
+          <span className="bg-emerald-100/90 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 border border-emerald-300/70 dark:border-emerald-800 px-3 py-1 rounded-full text-[11px] sm:text-xs font-bold shadow-2xs">
+            Quota : {quotaLabel}
+          </span>
         </div>
       </div>
     </header>
