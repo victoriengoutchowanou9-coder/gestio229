@@ -1,6 +1,6 @@
 // =============================================================================
 // GESTIO 229 SaaS — Configuration Destinataires Rapport de Caisse (Admin)
-// Gestion des emails et outil de test Gmail SMTP en direct
+// Gestion des emails, diagnostic de canal et test en direct (HTTPS / SMTP)
 // =============================================================================
 
 import React, { useState, useEffect } from 'react'
@@ -17,16 +17,26 @@ import {
   Send,
   AlertCircle,
   Check,
-  Zap
+  Zap,
+  Globe,
+  ChevronDown,
+  ChevronUp,
+  History,
+  Info
 } from 'lucide-react'
 import { ModalPortal } from '../modals/ModalPortal'
 import { showConfirm } from '../modals/CustomModalGestio'
 import {
   DestinataireRapport,
+  EmailDeliveryItem,
+  ActiveProviderStatus,
   getDestinatairesRapport,
   ajouterDestinataireRapport,
   modifierDestinataireRapport,
-  supprimerDestinataireRapport
+  supprimerDestinataireRapport,
+  getActiveEmailProvider,
+  testEmailConnection,
+  getEmailDeliveryHistory
 } from '../../services/destinatairesReportService'
 
 interface DestinatairesReportModalProps {
@@ -50,19 +60,46 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
-  // États pour le Test Gmail SMTP
+  // Fournisseur email actif détecté sur le serveur
+  const [providerStatus, setProviderStatus] = useState<ActiveProviderStatus | null>(null)
+
+  // États pour le Test Email
   const [testEmailInput, setTestEmailInput] = useState('victoriengoutchowanou2024@gmail.com')
-  const [testingSmtp, setTestingSmtp] = useState(false)
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null)
+  const [testingEmail, setTestingEmail] = useState(false)
+  const [testResult, setTestResult] = useState<{
+    success: boolean
+    message: string
+    diagnostic?: string
+    providerLabel?: string
+  } | null>(null)
+
+  // Historique des envois récents
+  const [deliveryLogs, setDeliveryLogs] = useState<EmailDeliveryItem[]>([])
+  const [showLogs, setShowLogs] = useState(false)
+  const [loadingLogs, setLoadingLogs] = useState(false)
 
   const loadData = async () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const list = await getDestinatairesRapport(companyId)
+      const [list, pStatus] = await Promise.all([
+        getDestinatairesRapport(companyId),
+        getActiveEmailProvider()
+      ])
       setDestinataires(list)
+      setProviderStatus(pStatus)
     } finally {
       setLoading(false)
+    }
+  }
+
+  const loadLogs = async () => {
+    setLoadingLogs(true)
+    try {
+      const logs = await getEmailDeliveryHistory(companyId)
+      setDeliveryLogs(logs)
+    } finally {
+      setLoadingLogs(false)
     }
   }
 
@@ -72,6 +109,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
       setErrorMessage(null)
       setSuccessMessage(null)
       setTestResult(null)
+      setShowLogs(false)
     }
   }, [isOpen, companyId])
 
@@ -114,43 +152,34 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
     }
   }
 
-  // ─── Test direct de la configuration Gmail SMTP ────────────────────────────
-  const handleTestSmtp = async () => {
+  // ─── Test direct et réel de la chaîne d'envoi d'emails ──────────────────────
+  const handleTestEmail = async () => {
     const target = testEmailInput.trim()
     if (!target || !target.includes('@')) {
-      setTestResult({ success: false, message: 'Veuillez saisir une adresse email de test valide.' })
+      setTestResult({
+        success: false,
+        message: 'Veuillez saisir une adresse email de test valide.',
+        diagnostic: 'Le format de l\'adresse email spécifiée n\'est pas reconnu.'
+      })
       return
     }
 
-    setTestingSmtp(true)
+    setTestingEmail(true)
     setTestResult(null)
 
     try {
-      const response = await fetch('/api/test-email', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ testEmail: target })
-      })
-
-      const data = await response.json()
-      if (response.ok && data.success) {
-        setTestResult({
-          success: true,
-          message: data.message || `Email de test envoyé avec succès à ${target} !`
-        })
-      } else {
-        setTestResult({
-          success: false,
-          message: data.error || 'Échec du test de connexion Gmail SMTP.'
-        })
-      }
-    } catch (err: any) {
+      const res = await testEmailConnection(target)
       setTestResult({
-        success: false,
-        message: err?.message || 'Erreur réseau lors de l\'appel de test SMTP.'
+        success: res.success,
+        message: res.message,
+        diagnostic: res.diagnostic,
+        providerLabel: res.providerLabel
       })
+      if (showLogs) {
+        await loadLogs()
+      }
     } finally {
-      setTestingSmtp(false)
+      setTestingEmail(false)
     }
   }
 
@@ -158,7 +187,8 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
 
   return (
     <ModalPortal isOpen={isOpen} onClose={onClose} id="modal-destinataires-report">
-      <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-xl w-full border border-slate-200 max-h-[92vh] flex flex-col">
+      <div className="bg-white rounded-3xl shadow-2xl p-6 max-w-xl w-full border border-slate-200 max-h-[92vh] flex flex-col animate-in fade-in zoom-in-95 duration-150">
+        
         {/* Header */}
         <div className="flex justify-between items-start pb-4 border-b border-slate-100">
           <div>
@@ -171,7 +201,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
                   Destinataires du Rapport de Caisse
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Envoi immédiat dès la fermeture de la caisse et transmission manuelle du PDF (Gmail SMTP)
+                  Envoi automatique dès confirmation de clôture &amp; transmission manuelle du PDF
                 </p>
               </div>
             </div>
@@ -179,21 +209,46 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
           <button
             onClick={onClose}
             className="p-1 text-slate-400 hover:text-slate-600 rounded-lg hover:bg-slate-100 transition"
+            title="Fermer la fenêtre"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Security Badge & Info */}
-        <div className="my-3 p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs text-slate-600">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Accès sécurisé réservé aux <strong>Administrateurs & Dirigeants</strong></span>
+        {/* Security Badge & Canal actif */}
+        <div className="my-3 space-y-2">
+          <div className="p-3 bg-slate-50 border border-slate-200 rounded-2xl flex items-center justify-between text-xs text-slate-600">
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Accès réservé aux <strong>Administrateurs &amp; Dirigeants</strong></span>
+            </div>
+            <div className="flex items-center gap-1.5 text-indigo-700 bg-indigo-50 font-bold px-2.5 py-1 rounded-xl">
+              <Clock className="w-3.5 h-3.5" />
+              <span>Déclenchement : Clôture</span>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 text-indigo-700 bg-indigo-50 font-bold px-2.5 py-1 rounded-xl">
-            <Clock className="w-3.5 h-3.5" />
-            <span>Cron : 23h00</span>
-          </div>
+
+          {/* Détection du fournisseur serveur */}
+          {providerStatus && (
+            <div className={`px-3 py-2 rounded-xl text-xs flex items-center justify-between border ${
+              providerStatus.provider === 'unconfigured'
+                ? 'bg-amber-50 border-amber-200 text-amber-800'
+                : 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+            }`}>
+              <div className="flex items-center gap-2">
+                {providerStatus.isHttps ? (
+                  <Globe className="w-4 h-4 text-emerald-600 shrink-0" />
+                ) : (
+                  <Zap className="w-4 h-4 text-emerald-600 shrink-0" />
+                )}
+                <div>
+                  <span className="font-bold">Canal actif : </span>
+                  <span>{providerStatus.label}</span>
+                </div>
+              </div>
+              <span className="text-[10px] font-mono opacity-80">{providerStatus.isHttps ? 'HTTPS 443' : 'SMTP'}</span>
+            </div>
+          )}
         </div>
 
         {/* Messages */}
@@ -253,7 +308,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
         </form>
 
         {/* Liste des Destinataires */}
-        <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[140px] max-h-[220px]">
+        <div className="flex-1 overflow-y-auto space-y-2 pr-1 min-h-[130px] max-h-[190px]">
           <div className="flex items-center justify-between text-xs text-slate-500 font-bold px-1 mb-1">
             <span>Destinataires enregistrés ({destinataires.length})</span>
             {loading && <RefreshCw className="w-3 h-3 animate-spin text-slate-400" />}
@@ -263,7 +318,7 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
             <div className="p-6 text-center bg-slate-50 rounded-2xl border border-dashed border-slate-200 text-slate-400 text-xs">
               <Mail className="w-7 h-7 mx-auto mb-1.5 opacity-40" />
               <p className="font-semibold text-slate-600">Aucun destinataire configuré</p>
-              <p className="mt-0.5">Ajoutez ci-dessus les emails qui recevront le rapport quotidien.</p>
+              <p className="mt-0.5">Ajoutez ci-dessus les emails officiels recevant le rapport de clôture.</p>
             </div>
           ) : (
             destinataires.map((dest) => (
@@ -331,15 +386,15 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
           )}
         </div>
 
-        {/* ── Section Outil de Test Gmail SMTP ── */}
-        <div className="mt-3 p-3.5 bg-slate-900 text-white rounded-2xl space-y-2">
+        {/* ── Section Outil de Test Email Réel ── */}
+        <div className="mt-3 p-3.5 bg-slate-900 text-white rounded-2xl space-y-2.5">
           <div className="flex items-center justify-between">
             <span className="text-xs font-bold flex items-center gap-1.5 text-emerald-400">
               <Zap className="w-3.5 h-3.5" />
-              Tester la configuration Gmail SMTP
+              Tester l'envoi d'email en direct
             </span>
             <span className="text-[10px] text-slate-400 font-mono">
-              smtp.gmail.com:587
+              {providerStatus?.isHttps ? 'API HTTPS (443)' : 'SMTP Direct'}
             </span>
           </div>
 
@@ -353,14 +408,14 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
             />
             <button
               type="button"
-              onClick={handleTestSmtp}
-              disabled={testingSmtp}
+              onClick={handleTestEmail}
+              disabled={testingEmail}
               className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm disabled:opacity-50 cursor-pointer shrink-0"
-              title="Envoyer un email test pour valider les paramètres SMTP Vercel"
+              title="Envoyer un email test certifié"
             >
-              {testingSmtp ? (
+              {testingEmail ? (
                 <>
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Test en cours...
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Envoi en cours...
                 </>
               ) : (
                 <>
@@ -370,28 +425,102 @@ export const DestinatairesReportModal: React.FC<DestinatairesReportModalProps> =
             </button>
           </div>
 
+          {/* Résultat réel certifié */}
           {testResult && (
             <div
-              className={`p-2 rounded-xl text-xs flex items-start gap-1.5 ${
+              className={`p-2.5 rounded-xl text-xs flex flex-col gap-1.5 ${
                 testResult.success
-                  ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
-                  : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
+                  ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30'
+                  : 'bg-rose-500/20 text-rose-200 border border-rose-500/30'
               }`}
             >
-              {testResult.success ? (
-                <Check className="w-4 h-4 shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-              )}
-              <div className="flex-1 break-words">
-                <span>{testResult.message}</span>
+              <div className="flex items-start gap-2">
+                {testResult.success ? (
+                  <Check className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                ) : (
+                  <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                )}
+                <div className="flex-1 break-words">
+                  <p className="font-bold text-[12px]">{testResult.message}</p>
+                  {testResult.providerLabel && (
+                    <p className="text-[10px] opacity-80 mt-0.5 font-mono">
+                      Canal validé : {testResult.providerLabel}
+                    </p>
+                  )}
+                </div>
               </div>
+
+              {testResult.diagnostic && !testResult.success && (
+                <div className="p-2 bg-black/40 rounded-lg text-[11px] text-slate-300 border border-white/10 mt-1">
+                  <div className="flex items-center gap-1 font-bold text-amber-400 mb-0.5">
+                    <Info className="w-3 h-3" />
+                    <span>Analyse technique :</span>
+                  </div>
+                  <p className="leading-relaxed">{testResult.diagnostic}</p>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── Section Historique des Envois Récents (Traçabilité) ── */}
+        <div className="mt-3 border-t border-slate-100 pt-2.5">
+          <button
+            type="button"
+            onClick={() => {
+              if (!showLogs) loadLogs()
+              setShowLogs(!showLogs)
+            }}
+            className="w-full flex items-center justify-between text-xs font-bold text-slate-600 hover:text-slate-900 transition py-1"
+          >
+            <span className="flex items-center gap-1.5">
+              <History className="w-3.5 h-3.5 text-indigo-600" />
+              Historique des envois récents &amp; statut
+            </span>
+            {showLogs ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+
+          {showLogs && (
+            <div className="mt-2 p-2 bg-slate-50 border border-slate-200 rounded-2xl max-h-[140px] overflow-y-auto space-y-1.5 text-xs">
+              {loadingLogs ? (
+                <div className="text-center py-3 text-slate-400 flex items-center justify-center gap-2">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" /> Chargement de l'historique...
+                </div>
+              ) : deliveryLogs.length === 0 ? (
+                <div className="text-center py-3 text-slate-400">
+                  Aucun historique d'envoi récent enregistré.
+                </div>
+              ) : (
+                deliveryLogs.map((log) => (
+                  <div key={log.id} className="p-2 bg-white rounded-xl border border-slate-100 flex items-center justify-between gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold uppercase ${
+                          log.status === 'envoye'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : log.status === 'en_attente' || log.status === 'demande'
+                            ? 'bg-amber-100 text-amber-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}>
+                          {log.status === 'envoye' ? 'Envoyé' : log.status === 'echec' ? 'Échec' : 'En attente'}
+                        </span>
+                        <span className="font-mono text-[11px] text-slate-800 truncate">{log.recipient_email}</span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 flex items-center gap-2 mt-0.5">
+                        <span>{new Date(log.created_at).toLocaleString('fr-BJ', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</span>
+                        <span>•</span>
+                        <span>{log.provider}</span>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           )}
         </div>
 
         {/* Footer */}
-        <div className="pt-3 border-t border-slate-100 mt-3 flex items-center justify-between">
+        <div className="pt-3 border-t border-slate-100 mt-2 flex items-center justify-between">
           <p className="text-[11px] text-slate-400">
             {destinataires.filter((d) => d.actif).length} destinataire(s) actif(s) sur {destinataires.length}
           </p>

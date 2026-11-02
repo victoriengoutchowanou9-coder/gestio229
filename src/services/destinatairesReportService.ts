@@ -1,5 +1,6 @@
 // =============================================================================
 // GESTIO 229 SaaS — Service Gestion des Destinataires du Rapport de Caisse
+// Support BDD Supabase, Cache Local & Traçabilité Complète des Envois
 // =============================================================================
 
 import { supabase } from '../lib/supabase'
@@ -12,6 +13,24 @@ export interface DestinataireRapport {
   actif: boolean
   created_at?: string
   updated_at?: string
+}
+
+export interface EmailDeliveryItem {
+  id: string
+  recipient_email: string
+  email_type: string
+  status: 'envoye' | 'echec' | 'demande' | 'en_attente'
+  provider: string
+  created_at: string
+  error_message?: string
+  subject?: string
+}
+
+export interface ActiveProviderStatus {
+  provider: 'resend_api' | 'brevo_api' | 'smtp_gmail' | 'unconfigured'
+  label: string
+  details: string
+  isHttps: boolean
 }
 
 const LOCAL_STORAGE_KEY_PREFIX = 'gestio_destinataires_rapport_'
@@ -169,4 +188,125 @@ export async function supprimerDestinataireRapport(companyId: string, id: string
   const updated = local.filter((d) => d.id !== id)
   saveLocalFallback(companyId, updated)
   return true
+}
+
+/**
+ * Récupère le statut du fournisseur d'email actif depuis le serveur (/api/test-email GET)
+ */
+export async function getActiveEmailProvider(): Promise<ActiveProviderStatus> {
+  try {
+    const res = await fetch('/api/test-email', { method: 'GET' })
+    if (res.ok) {
+      const data = await res.json()
+      return {
+        provider: data.provider || 'unconfigured',
+        label: data.label || 'Service Email GESTIO 229',
+        details: data.details || '',
+        isHttps: !!data.isHttps,
+      }
+    }
+  } catch (_) {}
+
+  return {
+    provider: 'smtp_gmail',
+    label: 'Gmail SMTP / Cloud Email',
+    details: 'Service d\'expédition GESTIO 229',
+    isHttps: false,
+  }
+}
+
+/**
+ * Envoie un email de test réel et retourne la confirmation du serveur
+ */
+export async function testEmailConnection(targetEmail: string): Promise<{
+  success: boolean
+  message: string
+  providerLabel?: string
+  diagnostic?: string
+  error?: string
+}> {
+  try {
+    const response = await fetch('/api/test-email', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ testEmail: targetEmail.trim() }),
+    })
+
+    const data = await response.json()
+    if (response.ok && data.success) {
+      return {
+        success: true,
+        message: data.message || `Email de test transmis avec succès à ${targetEmail} !`,
+        providerLabel: data.providerLabel,
+      }
+    } else {
+      return {
+        success: false,
+        message: data.error || 'Échec du test de connexion.',
+        diagnostic: data.diagnostic,
+        providerLabel: data.providerLabel,
+        error: data.error,
+      }
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      message: err?.message || 'Erreur réseau lors de l\'appel de test.',
+      diagnostic: 'Impossible de joindre le serveur API local ou distant.',
+    }
+  }
+}
+
+/**
+ * Récupère l'historique récent des envois d'emails (Audit Trail)
+ */
+export async function getEmailDeliveryHistory(companyId?: string): Promise<EmailDeliveryItem[]> {
+  const items: EmailDeliveryItem[] = []
+
+  // 1. Tenter la lecture depuis email_delivery_logs
+  try {
+    const { data: logs, error: logErr } = await supabase
+      .from('email_delivery_logs')
+      .select('id, recipient_email, email_type, status, provider, created_at, error_message, subject')
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (!logErr && Array.isArray(logs) && logs.length > 0) {
+      return logs as EmailDeliveryItem[]
+    }
+  } catch (_) {}
+
+  // 2. Fallback de traçabilité depuis audit_logs
+  try {
+    const { data: audit, error: auditErr } = await supabase
+      .from('audit_logs')
+      .select('id, action, details, created_at')
+      .in('action', ['EMAIL_SENT_SUCCESS', 'EMAIL_SENT_FAILURE', 'EMAIL_DISPATCH_REQUESTED'])
+      .order('created_at', { ascending: false })
+      .limit(10)
+
+    if (!auditErr && Array.isArray(audit) && audit.length > 0) {
+      audit.forEach((a) => {
+        let det: any = {}
+        try {
+          det = typeof a.details === 'string' ? JSON.parse(a.details) : a.details || {}
+        } catch (_) {}
+
+        const isSuccess = a.action === 'EMAIL_SENT_SUCCESS'
+        items.push({
+          id: a.id,
+          recipient_email: Array.isArray(det.recipients) ? det.recipients.join(', ') : (det.recipient || 'Destinataire'),
+          email_type: det.type || 'Rapport de caisse',
+          status: isSuccess ? 'envoye' : 'echec',
+          provider: det.provider || 'cloud_email',
+          created_at: a.created_at,
+          error_message: det.error || det.diagnostic,
+          subject: det.subject,
+        })
+      })
+      return items
+    }
+  } catch (_) {}
+
+  return items
 }

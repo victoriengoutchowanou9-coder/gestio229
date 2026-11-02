@@ -1,10 +1,10 @@
 // =============================================================================
-// GESTIO 229 ERP — Vercel Serverless Function : POST /api/test-email
-// Test de la connexion Gmail SMTP et envoi d'un email de vérification
+// GESTIO 229 ERP — Vercel Serverless Function : POST & GET /api/test-email
+// Vérification et test réel de la chaîne d'envoi d'emails (Resend HTTPS / Gmail SMTP)
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import nodemailer from 'nodemailer'
+import { sendTrackedEmail, getActiveEmailProviderInfo, diagnoseEmailError } from './_lib/emailHelper'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS Headers
@@ -17,139 +17,156 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end()
   }
 
+  // GET : Vérifier l'état du fournisseur actif sans envoyer d'email
+  if (req.method === 'GET') {
+    const providerInfo = getActiveEmailProviderInfo()
+    return res.status(200).json({
+      success: true,
+      provider: providerInfo.provider,
+      label: providerInfo.label,
+      details: providerInfo.details,
+      isHttps: providerInfo.isHttps,
+    })
+  }
+
   if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST.' })
+    return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST ou GET.' })
   }
 
   try {
-    const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
-    const port = Number((process.env.SMTP_PORT || '587').trim()) || 587
-    const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
-    const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
-    const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
-
-    if (!pass) {
-      return res.status(400).json({
-        success: false,
-        error: 'SMTP_PASS manquante - configurez dans Vercel'
-      })
-    }
-
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        error: 'SMTP_USER manquante - configurez dans Vercel'
-      })
-    }
-
     const { testEmail } = req.body || {}
-    const targetEmail = (testEmail || user).trim()
+    const defaultRecipient = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou2024@gmail.com').trim()
+    const targetEmail = (testEmail || defaultRecipient).trim()
 
     if (!targetEmail || !targetEmail.includes('@')) {
-      return res.status(400).json({ success: false, error: 'Adresse email de test invalide.' })
+      return res.status(400).json({
+        success: false,
+        error: 'Adresse email de test invalide. Veuillez renseigner un email valide (ex: direction@gestio229.com).',
+      })
     }
 
-    // Le test d'envoi "Tester l'envoi" doit impérativement utiliser SMTP_USER comme expéditeur
-    const fromEmail = user
-    const fromHeader = `"${fromName}" <${fromEmail}>`
-
-    // 1. Initialiser le transporteur Nodemailer
-    const transporter = nodemailer.createTransport({
-      host,
-      port,
-      secure: false, // 587 STARTTLS
-      auth: {
-        user,
-        pass
-      },
-      tls: {
-        rejectUnauthorized: false
-      }
-    })
-
-    // 2. Tester la connexion avec verify()
-    await transporter.verify()
-
-    // 3. Envoyer l'email de test
+    const providerInfo = getActiveEmailProviderInfo()
     const nowStr = new Date().toLocaleString('fr-BJ', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit'
+      second: '2-digit',
     })
 
-    const mailOptions = {
-      from: fromHeader,
-      to: targetEmail,
-      subject: `🧪 Test Configuration Gmail SMTP - GESTIO 229 (${nowStr})`,
-      text: `
-TEST DE CONNEXION GMAIL SMTP — GESTIO 229
-==========================================
-Date : ${nowStr}
-Expéditeur : ${fromName} <${fromEmail}>
-Destinataire : ${targetEmail}
+    const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
 
-Félicitations ! La configuration Gmail SMTP de GESTIO 229 fonctionne parfaitement.
-Les rapports journaliers de caisse seront bien acheminés à vos destinataires configurés à 23h00.
-
-Paramètres utilisés :
-- Serveur : ${host}:${port}
-- Utilisateur : ${user}
-- Authentification : Validée avec succès
-
---
-GESTIO 229 ERP & SaaS
-www.gestio229.com
-      `.trim(),
-      html: `
+    // Construction de l'email de test certifié
+    const htmlContent = `
 <!DOCTYPE html>
-<html>
-<head><meta charset="utf-8" /></head>
-<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px; color: #1e293b;">
-  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 16px; border: 1px solid #e2e8f0; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);">
-    <div style="background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #ffffff; padding: 24px;">
-      <h1 style="margin: 0; font-size: 18px; font-weight: 800;">✅ Test Gmail SMTP Réussi !</h1>
-      <p style="margin: 6px 0 0 0; font-size: 12px; color: #d1fae5;">GESTIO 229 — Service d'Expédition de Rapports de Caisse</p>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Test Service Email - GESTIO 229</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 32px 16px; color: #1e293b;">
+  <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);">
+    
+    <!-- En-tête vert émeraude -->
+    <div style="background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #ffffff; padding: 32px 28px; text-align: center;">
+      <div style="display: inline-block; background: rgba(255, 255, 255, 0.2); border-radius: 9999px; padding: 8px 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
+        Test Certifié Opérationnel
+      </div>
+      <h1 style="margin: 0; font-size: 24px; font-weight: 900; letter-spacing: -0.5px;">Transmission Réussie !</h1>
+      <p style="margin: 8px 0 0 0; font-size: 13px; color: #d1fae5;">Service d'Acheminement des Rapports de Caisse — GESTIO 229</p>
     </div>
-    <div style="padding: 24px; font-size: 13px; line-height: 1.6;">
-      <p style="margin-top: 0;">Bonjour,</p>
-      <p>Ce message confirme que la connexion à votre serveur <strong>Gmail SMTP</strong> est <strong>100% opérationnelle</strong>.</p>
-      
-      <div style="background: #f1f5f9; border-radius: 12px; padding: 14px; margin: 18px 0; font-family: monospace; font-size: 12px;">
-        <div><strong>Serveur :</strong> ${host}:${port} (STARTTLS)</div>
-        <div><strong>Compte :</strong> ${user}</div>
-        <div><strong>Expéditeur :</strong> ${fromName} &lt;${fromEmail}&gt;</div>
-        <div><strong>Horodatage :</strong> ${nowStr}</div>
+
+    <!-- Contenu -->
+    <div style="padding: 28px; font-size: 14px; line-height: 1.6; color: #334155;">
+      <p style="margin-top: 0; font-size: 15px;">Bonjour,</p>
+      <p>
+        Ce message confirme que votre canal d'envoi d'emails transactionnels est <strong>parfaitement actif et vérifié</strong> par le serveur.
+      </p>
+
+      <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 14px; padding: 18px; margin: 20px 0;">
+        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+          <tr>
+            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Canal utilisé :</td>
+            <td style="padding: 6px 0; font-weight: 700; color: #0f172a; text-align: right;">${providerInfo.label}</td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Protocole :</td>
+            <td style="padding: 6px 0; font-weight: 700; color: #059669; text-align: right;">${providerInfo.isHttps ? 'HTTPS REST (Port 443)' : 'SMTP Direct'}</td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Destinataire testé :</td>
+            <td style="padding: 6px 0; font-family: monospace; font-size: 12px; color: #1e293b; text-align: right;">${targetEmail}</td>
+          </tr>
+          <tr>
+            <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Horodatage serveur :</td>
+            <td style="padding: 6px 0; color: #1e293b; text-align: right;">${nowStr}</td>
+          </tr>
+        </table>
       </div>
 
-      <p style="color: #047857; font-weight: bold;">Vos rapports de caisse quotidiens (23h00) et envois manuels seront transmis sans encombre.</p>
+      <p style="color: #047857; font-weight: 700; margin-bottom: 0;">
+        ✅ Lors de chaque fermeture de caisse, le rapport PDF officiel sera généré et expédié automatiquement à vos destinataires actifs sans aucune intervention manuelle.
+      </p>
     </div>
-    <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 14px 24px; text-align: center; font-size: 11px; color: #64748b;">
-      GESTIO 229 • <a href="https://www.gestio229.com" style="color: #059669;">www.gestio229.com</a>
+
+    <!-- Footer -->
+    <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 28px; text-align: center; font-size: 12px; color: #64748b;">
+      ${fromName} ERP & SaaS • <a href="https://www.gestio229.com" style="color: #059669; text-decoration: none; font-weight: bold;">www.gestio229.com</a>
     </div>
+
   </div>
 </body>
 </html>
-      `.trim()
+    `.trim()
+
+    // 2. Déclencher un véritable envoi d'email
+    const sendResult = await sendTrackedEmail({
+      to: targetEmail,
+      subject: `🧪 Test de Connexion Email — GESTIO 229 (${nowStr})`,
+      html: htmlContent,
+      text: `Test de connexion email GESTIO 229 réussi à ${nowStr} pour ${targetEmail}. Canal: ${providerInfo.label}`,
+      emailType: 'test_email',
+      metadata: {
+        isTest: true,
+        triggered_at: nowStr,
+        channel: providerInfo.label,
+      },
+    })
+
+    if (!sendResult.success) {
+      console.error('[test-email] Échec du test :', sendResult.error)
+      return res.status(500).json({
+        success: false,
+        error: sendResult.error || 'Échec de la connexion au service email.',
+        diagnostic: sendResult.diagnostic || 'Impossible de joindre le service d\'envoi.',
+        providerLabel: sendResult.providerLabel,
+        technicalDetails: {
+          activeProvider: providerInfo.label,
+          targetEmail,
+          isHttps: providerInfo.isHttps,
+        },
+      })
     }
 
-    const info = await transporter.sendMail(mailOptions)
-    console.log(`[test-email] ✅ Test SMTP réussi pour ${targetEmail} (MessageId: ${info.messageId})`)
+    console.log(`[test-email] ✅ Test réussi pour ${targetEmail} via ${sendResult.providerLabel} (MessageId: ${sendResult.messageId})`)
 
     return res.status(200).json({
       success: true,
-      message: `Connexion SMTP validée et email de test envoyé avec succès à ${targetEmail} !`,
-      messageId: info.messageId,
-      user
+      message: `Connexion validée ! Un email de test réel a été expédié à ${targetEmail} via ${sendResult.providerLabel}.`,
+      provider: sendResult.provider,
+      providerLabel: sendResult.providerLabel,
+      messageId: sendResult.messageId,
+      targetEmail,
     })
-  } catch (error: any) {
-    console.error('[test-email] Erreur vérification Gmail SMTP :', error)
+  } catch (err: any) {
+    const diag = diagnoseEmailError(err)
+    console.error('[test-email] Exception non gérée :', err)
     return res.status(500).json({
       success: false,
-      error: error?.message || 'Échec de la connexion SMTP Gmail. Vérifiez votre mot de passe d\'application.',
-      details: error?.code || error?.command || null
+      error: err?.message || 'Erreur interne lors du test email.',
+      diagnostic: diag.diagnostic,
     })
   }
 }

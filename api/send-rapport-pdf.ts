@@ -1,11 +1,11 @@
 // =============================================================================
 // GESTIO 229 ERP — Vercel Serverless Function : POST /api/send-rapport-pdf
-// Envoi du Rapport de Caisse PDF via Gmail SMTP (Nodemailer)
+// Envoi du Rapport de Caisse PDF via moteur multi-fournisseurs (Resend HTTPS / Gmail SMTP)
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
-import nodemailer from 'nodemailer'
+import { sendTrackedEmail, getActiveEmailProviderInfo } from './_lib/emailHelper'
 
 const SUPABASE_URL = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
@@ -13,37 +13,6 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY)
 
 function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
-}
-
-function getSmtpConfig() {
-  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
-  const port = Number((process.env.SMTP_PORT || '587').trim()) || 587
-  const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
-  const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
-  const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
-  const fromEmail = user || (process.env.SMTP_FROM_EMAIL || '').trim()
-
-  if (!pass) {
-    throw new Error('SMTP_PASS manquante - configurez dans Vercel')
-  }
-  if (!user) {
-    throw new Error('SMTP_USER manquante - configurez dans Vercel')
-  }
-
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure: false, // Port 587 utilise STARTTLS
-    auth: {
-      user,
-      pass
-    },
-    tls: {
-      rejectUnauthorized: false
-    }
-  })
-
-  return { transporter, host, port, user, pass, fromName, fromEmail }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -65,27 +34,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const {
       companyId,
       secteurId,
+      caisseId,
       date,
       heure,
       pdfBase64,
       emails: customEmails,
-      metadata = {}
+      metadata = {},
     } = req.body || {}
 
-    // 1. Initialiser le transporteur Nodemailer
-    let smtpConfig: ReturnType<typeof getSmtpConfig>
-    try {
-      smtpConfig = getSmtpConfig()
-    } catch (cfgErr: any) {
-      console.warn('[send-rapport-pdf] Configuration SMTP manquante :', cfgErr.message)
-      return res.status(400).json({
-        success: false,
-        error: cfgErr.message || 'SMTP_PASS manquante - configurez dans Vercel'
-      })
-    }
-    const { transporter, user, fromName, fromEmail } = smtpConfig
-
-    // 2. Récupérer les destinataires actifs depuis parametres_destinataires (où actif = true)
+    // 1. Récupérer les destinataires actifs depuis parametres_destinataires (où actif = true)
     const targetEmails: string[] = []
     const seenEmails = new Set<string>()
 
@@ -122,7 +79,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
-    // Si aucun destinataire trouvé, repli sur l'email de l'entreprise
+    // Si aucun destinataire trouvé, repli sur l'email officiel de l'entreprise
     if (targetEmails.length === 0 && companyId) {
       try {
         const { data: comp } = await supabase
@@ -141,13 +98,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (_) {}
     }
 
-    // Si toujours aucun destinataire, utiliser SMTP_FROM_EMAIL comme secours
+    // Repli de dernier recours
     if (targetEmails.length === 0) {
-      const fallbackEmail = process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou2024@gmail.com'
-      targetEmails.push(fallbackEmail)
+      const fallbackEmail = (process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou2024@gmail.com').trim()
+      if (fallbackEmail) targetEmails.push(fallbackEmail)
     }
 
-    // 3. Préparation des données du rapport
+    if (targetEmails.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Aucun destinataire configuré pour recevoir le rapport de caisse.',
+      })
+    }
+
+    // 2. Préparation des données réelles du rapport
     const dateFormatted = date || new Date().toLocaleDateString('fr-BJ')
     const heureFormatted = heure || new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
     const dateHeure = `${dateFormatted} à ${heureFormatted}`
@@ -165,13 +129,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? metadata.margePercent
       : (ca > 0 ? Math.round((marge / ca) * 100) : 0)
     const creances = Number(metadata.totalCreances ?? metadata.creances ?? 0)
+    const ecart = Number(metadata.ecart ?? metadata.ecartEspeces ?? 0)
+    const soldeFinal = Number(metadata.fondActuel ?? metadata.totalReel ?? (espece + momo))
 
     const rawTop5 = metadata.top5Produits || metadata.top5 || []
-    const top5: Array<{ nom: string; qte: number; montant: number }> = (Array.isArray(rawTop5) ? rawTop5 : []).slice(0, 5).map((p: any) => ({
-      nom: p.nom || p.product_name || 'Produit',
-      qte: Number(p.qte ?? p.quantite ?? 1),
-      montant: Number(p.montant ?? p.totalVentes ?? p.total_ttc ?? 0)
-    }))
+    const top5: Array<{ nom: string; qte: number; montant: number }> = (Array.isArray(rawTop5) ? rawTop5 : [])
+      .slice(0, 5)
+      .map((p: any) => ({
+        nom: p.nom || p.product_name || 'Produit',
+        qte: Number(p.qte ?? p.quantite ?? 1),
+        montant: Number(p.montant ?? p.totalVentes ?? p.total_ttc ?? 0),
+      }))
 
     const top5Text = top5.length > 0
       ? top5.map((p, i) => `  ${i + 1}. ${p.nom} - ${p.qte} vendus - ${formatFCFA(p.montant)}`).join('\n')
@@ -181,6 +149,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 Fermeture de Caisse GESTIO 229
 ==============================
 ${dateHeure} - ${caissiere}
+Entreprise : ${entreprise}
 Secteur : ${secteur}
 
 CHIFFRE D'AFFAIRES DU JOUR :
@@ -188,7 +157,11 @@ CHIFFRE D'AFFAIRES DU JOUR :
 
 DÉTAILS ENCAISSEMENTS :
 - Espèce du jour : ${formatFCFA(espece)}
-- Momo du jour (MTN + Moov) : ${formatFCFA(momo)}
+- MoMo du jour (MTN + Moov) : ${formatFCFA(momo)}
+
+SOLDE ET ÉCARTS :
+- Solde final en caisse : ${formatFCFA(soldeFinal)}
+- Écart de caisse : ${ecart === 0 ? '0 FCFA (Conforme)' : formatFCFA(ecart)}
 
 RENTABILITÉ & SORTIES :
 - Marge brute du jour : ${formatFCFA(marge)} (${margePercent}%)
@@ -202,10 +175,13 @@ TOP 5 PRODUITS VENDUS DU JOUR :
 ${top5Text}
 
 Rapport généré par GESTIO 229 - ${entreprise}
+Le rapport officiel complet est joint à ce message au format PDF.
     `.trim()
 
     const top5RowsHtml = top5.length > 0
-      ? top5.map((p, i) => `
+      ? top5
+          .map(
+            (p, i) => `
         <tr>
           <td align="left" style="padding: 9px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #111827; ${i > 0 ? 'border-top: 1px solid #F1F5F9;' : ''}">
             <strong style="color: #0F1F3C; margin-right: 6px;">${i + 1}.</strong>
@@ -216,7 +192,9 @@ Rapport généré par GESTIO 229 - ${entreprise}
             ${formatFCFA(p.montant)}
           </td>
         </tr>
-      `).join('')
+      `
+          )
+          .join('')
       : `
         <tr>
           <td colspan="2" align="center" style="padding: 12px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; color: #9CA3AF; font-style: italic;">
@@ -247,7 +225,12 @@ Rapport généré par GESTIO 229 - ${entreprise}
               <table width="100%" border="0" cellpadding="0" cellspacing="0">
                 <tr>
                   <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 22px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.3px; padding-bottom: 6px;">
-                    🏪 Fermeture de Caisse
+                    🏪 Fermeture de Caisse (Z Officiel)
+                  </td>
+                </tr>
+                <tr>
+                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 600; color: #38BDF8; padding-bottom: 4px;">
+                    ${entreprise}
                   </td>
                 </tr>
                 <tr>
@@ -280,7 +263,7 @@ Rapport généré par GESTIO 229 - ${entreprise}
                     <table width="100%" border="0" cellpadding="0" cellspacing="0">
                       <tr>
                         <td align="left" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #475569;">
-                          CA total du jour
+                          Total des ventes validées
                         </td>
                         <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 26px; font-weight: 900; color: #0F1F3C; letter-spacing: -0.5px; white-space: nowrap;">
                           ${formatFCFA(ca)}
@@ -291,11 +274,11 @@ Rapport généré par GESTIO 229 - ${entreprise}
                 </tr>
               </table>
 
-              <!-- SECTION 2 - DÉTAILS ENCAISSEMENTS -->
+              <!-- SECTION 2 - DÉTAILS ENCAISSEMENTS & SOLDE -->
               <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
                 <tr>
                   <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    🏦 DÉTAILS ENCAISSEMENTS
+                    🏦 DÉTAILS ENCAISSEMENTS &amp; SOLDE
                   </td>
                 </tr>
                 <tr>
@@ -314,10 +297,21 @@ Rapport généré par GESTIO 229 - ${entreprise}
                       </tr>
                       <tr>
                         <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
-                          Momo du jour <span style="font-size: 11px; color: #94A3B8;">(MTN + Moov)</span>
+                          MoMo du jour <span style="font-size: 11px; color: #94A3B8;">(MTN + Moov)</span>
                         </td>
                         <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
                           ${formatFCFA(momo)}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td colspan="2" style="border-top: 1px solid #F1F5F9; height: 1px; padding: 0;"></td>
+                      </tr>
+                      <tr>
+                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #0F1F3C;">
+                          Solde final en caisse (report lendemain)
+                        </td>
+                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; font-weight: 900; color: #059669; white-space: nowrap;">
+                          ${formatFCFA(soldeFinal)}
                         </td>
                       </tr>
                     </table>
@@ -374,7 +368,7 @@ Rapport généré par GESTIO 229 - ${entreprise}
               <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
                 <tr>
                   <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    📋 SITUATION CRÉANCES
+                    📋 SITUATION CRÉANCES CLIENTS
                   </td>
                 </tr>
                 <tr>
@@ -419,7 +413,7 @@ Rapport généré par GESTIO 229 - ${entreprise}
               <table width="100%" border="0" cellpadding="0" cellspacing="0">
                 <tr>
                   <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; font-weight: 600; color: #64748B;">
-                    Rapport généré par GESTIO 229 — <strong style="color: #0F1F3C;">${entreprise}</strong>
+                    Rapport officiel généré par GESTIO 229 — <strong style="color: #0F1F3C;">${entreprise}</strong>
                   </td>
                 </tr>
                 <tr>
@@ -441,48 +435,71 @@ Rapport généré par GESTIO 229 - ${entreprise}
 </html>
     `.trim()
 
-    // 4. Configuration de l'expéditeur et de l'objet
-    const fromHeader = `"${fromName}" <${fromEmail}>`
-    const subject = `Fermeture de Caisse - ${secteur} - ${dateFormatted}`
-
+    // 3. Préparer le nom de fichier PDF et les pièces jointes
     const cleanSectorFileName = (secteur || 'Caisse').replace(/[^a-zA-Z0-9]/g, '_')
     const fileName = `Fermeture_Caisse_${cleanSectorFileName}_${dateFormatted.replace(/\//g, '-')}.pdf`
 
-    // Pièce jointe PDF
     const attachments: any[] = []
     if (pdfBase64) {
       const cleanBase64 = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64
       attachments.push({
         filename: fileName,
-        content: Buffer.from(cleanBase64, 'base64'),
-        contentType: 'application/pdf'
+        content: cleanBase64,
+        contentType: 'application/pdf',
       })
     }
 
-    // 5. Envoi via Nodemailer
-    const mailOptions = {
-      from: fromHeader,
-      to: targetEmails.join(', '),
+    const subject = `Fermeture de Caisse - ${secteur} - ${dateFormatted}`
+
+    // 4. Transmission via le module universel d'envoi
+    const sendResult = await sendTrackedEmail({
+      to: targetEmails,
       subject,
       text: textBody,
       html: htmlBody,
-      attachments
+      emailType: 'cash_report',
+      attachments,
+      metadata: {
+        companyId,
+        secteurId,
+        caisseId,
+        dateFormatted,
+        heureFormatted,
+        ca,
+        espece,
+        momo,
+        soldeFinal,
+        ecart,
+        caissiere,
+        entreprise,
+      },
+    })
+
+    if (!sendResult.success) {
+      console.error('[send-rapport-pdf] Échec envoi :', sendResult.error)
+      return res.status(500).json({
+        success: false,
+        error: sendResult.error || 'Erreur lors de l\'envoi du rapport de caisse.',
+        diagnostic: sendResult.diagnostic,
+        recipients: targetEmails,
+      })
     }
 
-    const info = await transporter.sendMail(mailOptions)
-    console.log(`[send-rapport-pdf] ✅ Email envoyé avec succès via Gmail SMTP à ${targetEmails.join(', ')} (MessageId: ${info.messageId})`)
+    console.log(`[send-rapport-pdf] ✅ Rapport transmis à ${targetEmails.join(', ')} via ${sendResult.providerLabel}`)
 
     return res.status(200).json({
       success: true,
-      message: `Rapport transmis avec succès à ${targetEmails.length} destinataire(s) via Gmail SMTP.`,
+      message: `Rapport transmis avec succès à ${targetEmails.length} destinataire(s) via ${sendResult.providerLabel}.`,
       recipients: targetEmails,
-      messageId: info.messageId
+      messageId: sendResult.messageId,
+      provider: sendResult.provider,
+      providerLabel: sendResult.providerLabel,
     })
   } catch (error: any) {
-    console.error('[send-rapport-pdf] Exception envoi Gmail SMTP :', error)
+    console.error('[send-rapport-pdf] Exception interne :', error)
     return res.status(500).json({
       success: false,
-      error: error?.message || 'Erreur lors de l\'envoi du rapport via Gmail SMTP.'
+      error: error?.message || 'Erreur interne lors de la transmission du rapport.',
     })
   }
 }

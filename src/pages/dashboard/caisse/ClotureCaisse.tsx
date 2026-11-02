@@ -301,7 +301,7 @@ export const ClotureCaisse: React.FC = () => {
         toast.success('Rapport envoyé instantanément par email !', `Rapport transmis à ${sentCount} destinataire(s) dès validation.`)
       } catch (e: any) {
         console.error('[ClotureCaisse] Erreur envoi automatique rapport :', e)
-        toast.error('Erreur SMTP', e?.message || 'Échec de l\'envoi automatique du rapport.')
+        toast.warning('Clôture validée avec succès !', (e?.message || 'Incident temporaire d\'envoi') + ' — Le rapport PDF reste sécurisé et téléchargeable.')
       }
 
       await refreshFonds()

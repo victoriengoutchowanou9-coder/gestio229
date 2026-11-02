@@ -101,6 +101,7 @@ interface CashClosure {
   notes?: string
   status: 'CLOTURE_VALIDEE'
   emailed_to?: string[]
+  email_status?: 'ENVOYE' | 'EN_ATTENTE' | 'ECHEC'
 }
 
 export interface CaissePageProps {
@@ -1317,7 +1318,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         total_fermeture: finalSoldeTheoriqueEsp + finalSoldeTheoriqueMomo,
         notes: opNotes || 'Clôture automatique validée',
         status: 'CLOTURE_VALIDEE',
-        emailed_to: recipientEmails
+        emailed_to: recipientEmails,
+        email_status: 'EN_ATTENTE'
       }
 
       setClosuresHistory([newClosure, ...closuresHistory])
@@ -1438,14 +1440,19 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         })
 
         const sentRecipients = res.recipients || recipientEmails
+        newClosure.email_status = 'ENVOYE'
+        newClosure.emailed_to = sentRecipients
+        setClosuresHistory((prev) => prev.map((c) => (c.id === newClosure.id ? { ...c, email_status: 'ENVOYE', emailed_to: sentRecipients } : c)))
         toast.success(
           'Rapport envoyé instantanément par email !',
           `Rapport de clôture transmis à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}).`
         )
       } catch (mailErr: any) {
         console.warn('[sendRapportCaisse] Échec envoi direct :', mailErr)
+        newClosure.email_status = 'ECHEC'
+        setClosuresHistory((prev) => prev.map((c) => (c.id === newClosure.id ? { ...c, email_status: 'ECHEC' } : c)))
         toast.warning(
-          'Rapport généré mais email non envoyé',
+          'Rapport de caisse clôturé avec succès !',
           mailErr?.message || 'Vérifiez la configuration SMTP Vercel.'
         )
       }
@@ -3526,6 +3533,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                   <th className="p-3.5 text-right">Écart</th>
                   <th className="p-3.5 text-right">MoMo</th>
                   <th className="p-3.5 text-right">Total Z</th>
+                  <th className="p-3.5 text-center">Statut Email</th>
                   <th className="p-3.5 text-center">Action</th>
                 </tr>
               </thead>
@@ -3549,6 +3557,39 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                     <td className="p-3.5 text-right text-amber-800">{fmt(cl.fond_momo)}</td>
                     <td className="p-3.5 text-right font-black text-emerald-700 text-sm">
                       {fmt(cl.total_fermeture)}
+                    </td>
+                    <td className="p-3.5 text-center font-sans">
+                      {cl.email_status === 'ENVOYE' ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 shadow-sm">
+                          <CheckCircle className="w-3 h-3 text-emerald-600" />
+                          <span>Envoyé ({cl.emailed_to?.length || 1})</span>
+                        </span>
+                      ) : cl.email_status === 'ECHEC' ? (
+                        <div className="flex items-center justify-center gap-1.5">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                            <AlertCircle className="w-3 h-3 text-rose-600" />
+                            <span>Échec</span>
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveReportClosure(cl)
+                              handleSendReportByEmail()
+                            }}
+                            disabled={isSendingReportMail}
+                            className="px-2 py-0.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-[10px] font-bold flex items-center gap-1 shadow-sm transition disabled:opacity-50 cursor-pointer"
+                            title="Relancer l'envoi du rapport par email sans refaire la clôture"
+                          >
+                            <Send className="w-2.5 h-2.5" />
+                            <span>Renvoyer</span>
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800">
+                          <Clock className="w-3 h-3 text-amber-600" />
+                          <span>En attente</span>
+                        </span>
+                      )}
                     </td>
                     <td className="p-3.5 text-center font-sans">
                       <button
