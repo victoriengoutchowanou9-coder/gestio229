@@ -756,15 +756,33 @@ export async function evaluerAccesSecteur(
   const globalSub = await verifierOuCreerAbonnementGlobal(entrepriseId, companyCreatedAt)
   const now = new Date()
 
-  // Charger les métadonnées durables consolidées
-  const meta = await getCompanySubscriptionMeta(entrepriseId, [cleanSlug], companyCreatedAt)
+  // 1. Récupérer l'état réel et tous les secteurs de l'entreprise
+  let compRow: any = null
+  try {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id, selected_sectors, sectors, active_sector, subscription_status, subscription_expires_at, created_at, subscription_plan, plan')
+      .eq('id', entrepriseId)
+      .maybeSingle()
+    compRow = comp
+  } catch (_) {}
+
+  const companyRawSectors: string[] = Array.isArray(compRow?.selected_sectors) && compRow.selected_sectors.length > 0
+    ? compRow.selected_sectors
+    : Array.isArray(compRow?.sectors) && compRow.sectors.length > 0
+    ? compRow.sectors
+    : compRow?.active_sector ? [compRow.active_sector] : [cleanSlug]
+
+  const cleanCompanySectors = Array.from(new Set(companyRawSectors.map(canonicalSectorSlug).filter(Boolean)))
+  const sectorIndexInCompany = cleanCompanySectors.indexOf(cleanSlug)
+
+  // Charger les métadonnées consolidées avec TOUS les secteurs réels de l'entreprise
+  const meta = await getCompanySubscriptionMeta(entrepriseId, cleanCompanySectors, companyCreatedAt || compRow?.created_at)
   const secMeta = meta.sectors_meta?.[cleanSlug]
-  const isInitial = secMeta
-    ? secMeta.is_initial_sector
-    : (isInitialSector || (Array.isArray(meta?.initial_sectors) && meta.initial_sectors.includes(cleanSlug)))
-  const isFreeEligible = secMeta
-    ? secMeta.is_gratuit
-    : isInitial && Array.isArray(meta?.initial_sectors) && meta.initial_sectors.indexOf(cleanSlug) >= 0 && meta.initial_sectors.indexOf(cleanSlug) < MAX_FREE_TRIAL_SECTORS
+  const isInitial = sectorIndexInCompany >= 0 || (secMeta ? secMeta.is_initial_sector : isInitialSector)
+  const isFreeEligible = sectorIndexInCompany >= 0
+    ? sectorIndexInCompany < MAX_FREE_TRIAL_SECTORS
+    : (secMeta ? secMeta.is_gratuit : false)
   const currentPlanTier: 'starter' | 'entreprise' = secMeta
     ? secMeta.plan_tier
     : isInitial && typeof meta?.initial_plan === 'string' && meta.initial_plan.includes('starter')
@@ -843,63 +861,13 @@ export async function evaluerAccesSecteur(
     }
   }
 
-  // CAS 1 : Le secteur n'a pas encore été ajouté au compte
-  if (!secteurSub) {
-    return {
-      autorise: false,
-      ouvertureSecteurAutorisee: false,
-      statutEffectif: 'non_active',
-      dateDebutEffective: null,
-      dateFinEffective: null,
-      joursRestants: 0,
-      isPremiereActivationPossible: false,
-      rattacheAuGlobal: false,
-      badgeLabel: 'Non ajouté',
-      badgeColor: 'slate',
-      messageVerrouillage: 'Ce secteur n\'est pas encore ajouté à votre espace.',
-      globalSub,
-      secteurSub: null,
-      isInitialSector: isInitial,
-      isGratuit: isFreeEligible,
-      planTier: currentPlanTier,
-    }
-  }
+  // CAS 1 : Abonnement individuel payant spécifique sur ce secteur ('actif' et non rattaché)
+  if (secteurSub?.statut_specifique === 'actif' && !secteurSub?.rattache_au_global && secteurSub?.date_fin_specifique) {
+    const finSpec = new Date(secteurSub.date_fin_specifique)
+    const debutSpec = secteurSub.date_debut_specifique ? new Date(secteurSub.date_debut_specifique) : now
+    const jours = computeDaysRemaining(finSpec, now)
 
-  // CAS 2 : Le secteur est explicitement en attente de paiement
-  if (secteurSub.statut_specifique === 'en_attente_paiement') {
-    return {
-      autorise: false,
-      ouvertureSecteurAutorisee: true,
-      statutEffectif: 'en_attente_paiement',
-      dateDebutEffective: null,
-      dateFinEffective: null,
-      joursRestants: 0,
-      isPremiereActivationPossible: false,
-      rattacheAuGlobal: false,
-      badgeLabel: isInitial ? 'Secteur initial en attente' : 'Secteur supplémentaire à activer',
-      badgeColor: 'amber',
-      messageVerrouillage: isInitial
-        ? 'Ce secteur d\'inscription nécessite un abonnement actif pour débloquer ses fonctionnalités.'
-        : `Ce secteur supplémentaire est prêt. Formules disponibles : Starter (5 000 F CFA) ou 1 Secteur Complet (10 000 F CFA).`,
-      globalSub,
-      secteurSub,
-      isInitialSector: isInitial,
-      isGratuit: isFreeEligible,
-      planTier: currentPlanTier,
-    }
-  }
-
-  // CAS 3 : Le secteur possède un abonnement payant spécifique ('actif')
-  if (secteurSub.statut_specifique === 'actif') {
-    const finSpec = secteurSub.date_fin_specifique
-      ? new Date(secteurSub.date_fin_specifique)
-      : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null)
-    const debutSpec = secteurSub.date_debut_specifique
-      ? new Date(secteurSub.date_debut_specifique)
-      : (globalSub?.date_debut_global ? new Date(globalSub.date_debut_global) : now)
-    const jours = finSpec ? computeDaysRemaining(finSpec, now) : (globalSub?.date_fin_global ? computeDaysRemaining(new Date(globalSub.date_fin_global), now) : 0)
-
-    if (!finSpec || finSpec >= now) {
+    if (finSpec >= now) {
       return {
         autorise: true,
         ouvertureSecteurAutorisee: true,
@@ -908,29 +876,9 @@ export async function evaluerAccesSecteur(
         dateFinEffective: finSpec,
         joursRestants: jours,
         isPremiereActivationPossible: false,
-        rattacheAuGlobal: secteurSub.rattache_au_global,
+        rattacheAuGlobal: false,
         badgeLabel: `Abonnement actif – ${jours} jours restants`,
         badgeColor: 'emerald',
-        globalSub,
-        secteurSub,
-        isInitialSector: isInitial,
-        isGratuit: false,
-        planTier: currentPlanTier,
-      }
-    } else {
-      return {
-        autorise: false,
-        ouvertureSecteurAutorisee: true,
-        statutEffectif: 'expire',
-        dateDebutEffective: debutSpec,
-        dateFinEffective: finSpec,
-        joursRestants: 0,
-        isPremiereActivationPossible: false,
-        rattacheAuGlobal: secteurSub.rattache_au_global,
-        badgeLabel: 'Abonnement expiré',
-        badgeColor: 'red',
-        messageVerrouillage:
-          'L\'abonnement de ce secteur est arrivé à expiration. Veuillez renouveler votre abonnement pour débloquer les modules opérationnels.',
         globalSub,
         secteurSub,
         isInitialSector: isInitial,
@@ -940,15 +888,15 @@ export async function evaluerAccesSecteur(
     }
   }
 
-  // CAS 4 : Le secteur est rattaché à l'abonnement global
+  // CAS 2 : Rattachement au compte global (Période d'essai ou Abonnement entreprise actif)
   const debutGlobal = globalSub ? new Date(globalSub.date_debut_global) : now
   const finGlobal = globalSub ? new Date(globalSub.date_fin_global) : now
   const joursGlobal = computeDaysRemaining(finGlobal, now)
   const isGlobalExpired = !globalSub || globalSub.statut_global === 'expire' || finGlobal < now
 
-  // Si l'abonnement global est en mode 'essai' (1er mois gratuit pour les 3 premiers secteurs initiaux)
-  if (globalSub?.statut_global === 'essai' && !isGlobalExpired) {
-    if (isInitial && isFreeEligible) {
+  // Si l'entreprise ou l'abonnement global est en période d'essai valide (> 0 jours restants)
+  if (globalSub?.statut_global === 'essai' && !isGlobalExpired && joursGlobal > 0) {
+    if (isFreeEligible) {
       return {
         autorise: true,
         ouvertureSecteurAutorisee: true,
@@ -968,6 +916,7 @@ export async function evaluerAccesSecteur(
       }
     }
 
+    // Secteurs supplémentaires au-delà des 3 secteurs gratuits
     return {
       autorise: false,
       ouvertureSecteurAutorisee: true,
@@ -990,17 +939,26 @@ export async function evaluerAccesSecteur(
   }
 
   // Si l'abonnement global est actif (payé) et non expiré
-  if (globalSub?.statut_global === 'actif' && !isGlobalExpired) {
+  const compExpiresAt = compRow?.subscription_expires_at ? new Date(compRow.subscription_expires_at) : null
+  const isCompActive = (compRow?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)) ||
+    (globalSub?.statut_global === 'actif' && !isGlobalExpired && joursGlobal > 0)
+
+  if (isCompActive) {
+    const effectiveDays = compExpiresAt && compExpiresAt >= now
+      ? computeDaysRemaining(compExpiresAt, now)
+      : Math.max(0, joursGlobal)
+    const effectiveFin = compExpiresAt && compExpiresAt >= now ? compExpiresAt : finGlobal
+
     return {
       autorise: true,
       ouvertureSecteurAutorisee: true,
       statutEffectif: 'actif',
       dateDebutEffective: debutGlobal,
-      dateFinEffective: finGlobal,
-      joursRestants: joursGlobal,
+      dateFinEffective: effectiveFin,
+      joursRestants: effectiveDays,
       isPremiereActivationPossible: false,
       rattacheAuGlobal: true,
-      badgeLabel: `Actif — J-${joursGlobal}`,
+      badgeLabel: `Abonnement actif – ${effectiveDays} jours restants`,
       badgeColor: 'emerald',
       globalSub,
       secteurSub,
@@ -1010,7 +968,29 @@ export async function evaluerAccesSecteur(
     }
   }
 
-  // Sinon : période expirée
+  // CAS 3 : Secteur explicitement en attente de paiement
+  if (secteurSub?.statut_specifique === 'en_attente_paiement') {
+    return {
+      autorise: false,
+      ouvertureSecteurAutorisee: true,
+      statutEffectif: 'en_attente_paiement',
+      dateDebutEffective: null,
+      dateFinEffective: null,
+      joursRestants: 0,
+      isPremiereActivationPossible: false,
+      rattacheAuGlobal: false,
+      badgeLabel: 'En attente de paiement',
+      badgeColor: 'amber',
+      messageVerrouillage: 'Ce secteur nécessite un abonnement actif pour débloquer ses fonctionnalités.',
+      globalSub,
+      secteurSub,
+      isInitialSector: isInitial,
+      isGratuit: isFreeEligible,
+      planTier: currentPlanTier,
+    }
+  }
+
+  // CAS 4 : Période expirée
   return {
     autorise: false,
     ouvertureSecteurAutorisee: true,
@@ -2538,7 +2518,46 @@ export async function getAbonnementsSecteurs(
     const compExpiresAt = company?.subscription_expires_at ? new Date(company.subscription_expires_at) : null
     const isCompanyActive = company?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)
 
-    if (isCompanyActive && rawSectors.length > 0) {
+    const isTrialActive = (globalSub?.statut_global === 'essai' || company?.subscription_status === 'trial') &&
+      globalSub?.date_fin_global && new Date(globalSub.date_fin_global) >= now
+
+    // Synchronisation automatique des secteurs de l'entreprise avec l'essai gratuit ou l'abonnement actif
+    if ((isCompanyActive || isTrialActive) && rawSectors.length > 0) {
+      const endIso = isCompanyActive
+        ? (compExpiresAt && compExpiresAt >= now
+            ? compExpiresAt.toISOString()
+            : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString())
+        : (globalSub?.date_fin_global || new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString())
+      const startIso = company?.created_at || now.toISOString()
+
+      rawSectors.forEach((s, idx) => {
+        const code = toSecteurCode(s)
+        const existing = bySector.get(code)
+        const isFreeSector = isTrialActive ? idx < MAX_FREE_TRIAL_SECTORS : true
+        const targetStatut: StatutSpecifique = isCompanyActive
+          ? 'actif'
+          : (isFreeSector ? 'rattache_global' : 'en_attente_paiement')
+
+        if (!existing || existing.statut_specifique === 'expire' || (!isFreeSector && existing.statut_specifique === 'rattache_global')) {
+          bySector.set(code, {
+            id: existing?.id || `auto-${code}`,
+            entreprise_id: companyId,
+            secteur_code: code,
+            date_debut_specifique: existing?.date_debut_specifique || (isFreeSector ? startIso : null),
+            date_fin_specifique: existing?.date_fin_specifique && new Date(existing.date_fin_specifique) >= now
+              ? existing.date_fin_specifique
+              : (isFreeSector ? endIso : null),
+            statut_specifique: targetStatut,
+            is_premiere_activation: false,
+            rattache_au_global: isFreeSector,
+            created_at: existing?.created_at || startIso,
+            updated_at: now.toISOString(),
+          } as AbonnementSecteurRow)
+        }
+      })
+    }
+
+    if (false && isCompanyActive && rawSectors.length > 0) {
       const endIso = compExpiresAt && compExpiresAt >= now
         ? compExpiresAt.toISOString()
         : new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()

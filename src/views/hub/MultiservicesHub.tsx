@@ -287,10 +287,21 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   // - « En attente de paiement » (secteur ajouté au-delà des 3 secteurs d'essai ou non encore payé)
   // - « Abonnement expiré » (essai ou abonnement arrivé à échéance)
   const getSectorBadgeInfo = useCallback((sectorSlug: string) => {
-    const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, sectorSlug));
+    const cleanSlug = canonicalSectorSlug(sectorSlug);
+    const sub = sectorSubs.find((s) => matchesSectorCode(s.secteur_code, cleanSlug));
     const now = new Date();
 
-    // 0. Déterminer si l'entreprise ou l'abonnement global est actif
+    // 0. Déterminer les secteurs de l'entreprise et l'éligibilité aux 3 premiers secteurs gratuits
+    const rawCompSectors = Array.isArray(company?.selected_sectors) && company.selected_sectors.length > 0
+      ? company.selected_sectors
+      : Array.isArray(company?.sectors) && company.sectors.length > 0
+      ? company.sectors
+      : [cleanSlug];
+    const cleanCompSectors = Array.from(new Set(rawCompSectors.map(canonicalSectorSlug).filter(Boolean)));
+    const sectorIndex = cleanCompSectors.indexOf(cleanSlug);
+    const isFreeEligible = sectorIndex >= 0 && sectorIndex < 3;
+
+    // Déterminer si l'entreprise ou l'abonnement global est actif (payé)
     const compExpiresAt = company?.subscription_expires_at ? new Date(company.subscription_expires_at) : null;
     const isCompanyActive =
       (company?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)) ||
@@ -302,15 +313,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       ? compExpiresAt.toLocaleDateString('fr-FR')
       : (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global).toLocaleDateString('fr-FR') : '');
 
-    // 1. Abonnement spécifique actif sur ce secteur
-    if (sub?.statut_specifique === 'actif' || (sub?.date_fin_specifique && new Date(sub.date_fin_specifique) >= now)) {
-      const fin = sub.date_fin_specifique
-        ? new Date(sub.date_fin_specifique)
-        : (compExpiresAt || (globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null));
-      const days = fin ? calcDaysRemaining(fin) : effectiveGlobalDays;
-      const expDateStr = fin ? fin.toLocaleDateString('fr-FR') : effectiveGlobalDateStr;
+    // 1. Abonnement spécifique payant actif et indépendant sur ce secteur (hors rattachement)
+    if (sub?.statut_specifique === 'actif' && !sub?.rattache_au_global && sub?.date_fin_specifique) {
+      const fin = new Date(sub.date_fin_specifique);
+      const days = calcDaysRemaining(fin);
+      const expDateStr = fin.toLocaleDateString('fr-FR');
 
-      if (!fin || fin.getTime() >= now.getTime()) {
+      if (fin >= now) {
         return {
           label: `Abonnement actif – ${days} jours restants`,
           statusText: 'Actif',
@@ -321,21 +330,10 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           days,
           badgeClass: 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 font-black shadow-sm',
         };
-      } else if (!isCompanyActive) {
-        return {
-          label: 'Abonnement expiré',
-          statusText: 'Abonnement expiré',
-          expirationText: `Expiré le ${expDateStr}`,
-          isIndividuel: false,
-          isRattache: false,
-          isNonActive: true,
-          days: 0,
-          badgeClass: 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold',
-        };
       }
     }
 
-    // 2. Lien automatique et direct : Si l'abonnement entreprise ou global est actif, TOUTE activité est automatiquement couverte et active
+    // 2. Si l'abonnement global ou de l'entreprise est actif (payé)
     if (isCompanyActive) {
       if (sub?.statut_specifique !== 'en_attente_paiement') {
         return {
@@ -351,84 +349,55 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       }
     }
 
-    // 3. Statut en attente de paiement explicite
-    if (sub?.statut_specifique === 'en_attente_paiement') {
-      return {
-        label: 'En attente de paiement',
-        statusText: 'En attente de paiement',
-        expirationText: 'Activation requise',
-        isIndividuel: false,
-        isRattache: false,
-        isNonActive: true,
-        days: 0,
-        badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
-      };
+    // 3. Période d'essai gratuit active (> 0 jours restants)
+    const isTrialActive = (globalSub?.statut_global === 'essai' || company?.subscription_status === 'trial') && globalDaysRemaining > 0;
+    if (isTrialActive) {
+      const finGlobal = globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null;
+      const expGlobalStr = finGlobal ? finGlobal.toLocaleDateString('fr-FR') : '';
+
+      if (isFreeEligible) {
+        return {
+          label: `Essai gratuit – ${globalDaysRemaining} jours restants`,
+          statusText: 'Essai gratuit',
+          expirationText: expGlobalStr ? `Fin d'essai : ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
+          isIndividuel: false,
+          isRattache: true,
+          isNonActive: false,
+          days: globalDaysRemaining,
+          badgeClass: darkMode
+            ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 font-bold'
+            : 'bg-blue-50 text-blue-700 border-blue-200 font-bold',
+        };
+      } else {
+        return {
+          label: 'En attente de paiement',
+          statusText: 'En attente de paiement',
+          expirationText: 'Au-delà des 3 secteurs gratuits',
+          isIndividuel: false,
+          isRattache: false,
+          isNonActive: true,
+          days: 0,
+          badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
+        };
+      }
     }
 
-    // 4. Période d'essai initiale
-    const trialRattaches = sectorSubs.filter(
-      (s) => s.rattache_au_global && s.statut_specifique !== 'en_attente_paiement'
-    );
-    const indexInTrial = trialRattaches.findIndex((s) => matchesSectorCode(s.secteur_code, sectorSlug));
-
-    if (globalSub?.statut_global === 'essai' && indexInTrial >= 3) {
-      return {
-        label: 'En attente de paiement',
-        statusText: 'En attente de paiement',
-        expirationText: 'Au-delà des 3 secteurs gratuits',
-        isIndividuel: false,
-        isRattache: false,
-        isNonActive: true,
-        days: 0,
-        badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
-      };
-    }
-
+    // 4. Statut expiré (fin d'essai ou d'abonnement échue)
     const finGlobal = globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null;
     const expGlobalStr = finGlobal ? finGlobal.toLocaleDateString('fr-FR') : '';
-    const isGlobalExpired = !isCompanyActive && (!globalSub || globalSub.statut_global === 'expire' || globalDaysRemaining <= 0);
-
-    if (isGlobalExpired) {
-      return {
-        label: 'Abonnement expiré',
-        statusText: 'Abonnement expiré',
-        expirationText: expGlobalStr ? `Expiré le ${expGlobalStr}` : 'Expiré',
-        isIndividuel: false,
-        isRattache: true,
-        isNonActive: true,
-        days: 0,
-        badgeClass: 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold',
-      };
-    }
-
-    if (globalSub?.statut_global === 'essai') {
-      return {
-        label: `Essai gratuit – ${globalDaysRemaining} jours restants`,
-        statusText: 'Essai gratuit',
-        expirationText: expGlobalStr ? `Fin d'essai : ${expGlobalStr} (${globalDaysRemaining}j restants)` : `${globalDaysRemaining}j restants`,
-        isIndividuel: false,
-        isRattache: true,
-        isNonActive: false,
-        days: globalDaysRemaining,
-        badgeClass: darkMode
-          ? 'bg-blue-500/15 text-blue-400 border-blue-500/30 font-bold'
-          : 'bg-blue-50 text-blue-700 border-blue-200 font-bold',
-      };
-    }
-
     return {
-      label: 'En attente de paiement',
-      statusText: 'En attente de paiement',
-      expirationText: 'Activation requise',
+      label: 'Abonnement expiré',
+      statusText: 'Abonnement expiré',
+      expirationText: expGlobalStr ? `Expiré le ${expGlobalStr}` : 'Expiré',
       isIndividuel: false,
-      isRattache: false,
+      isRattache: true,
       isNonActive: true,
       days: 0,
-      badgeClass: 'bg-amber-500/20 text-amber-400 border-amber-500/40 font-bold',
+      badgeClass: 'bg-rose-500/20 text-rose-400 border-rose-500/40 font-bold',
     };
   }, [sectorSubs, globalSub, globalDaysRemaining, company, darkMode]);
 
-  // Date du jour formatée en heure locale Cotonou (Africa/Porto-Novo)
+    // Date du jour formatée en heure locale Cotonou (Africa/Porto-Novo)
   const todayDateDisplay = useMemo(() => {
     try {
       return new Intl.DateTimeFormat('fr-FR', {

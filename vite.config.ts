@@ -3,7 +3,18 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from 'tailwindcss'
 import autoprefixer from 'autoprefixer'
 import path from 'path'
+import fs from 'fs'
 import { VitePWA } from 'vite-plugin-pwa'
+
+// Version synchronisée avec public/version.json généré par prebuild
+let appVersion = String(Date.now())
+try {
+  const vf = path.resolve(__dirname, 'public/version.json')
+  if (fs.existsSync(vf)) {
+    const raw = JSON.parse(fs.readFileSync(vf, 'utf8'))
+    if (raw && raw.version) appVersion = String(raw.version).trim()
+  }
+} catch (_) {}
 
 // https://vitejs.dev/config/
 export default defineConfig({

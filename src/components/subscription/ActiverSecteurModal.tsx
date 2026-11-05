@@ -106,7 +106,7 @@ export const ActiverSecteurModal: React.FC<ActiverSecteurModalProps> = ({
 
         const now = new Date()
 
-        if (sRow?.statut_specifique === 'actif' && sRow.date_fin_specifique) {
+        if (sRow?.statut_specifique === 'actif' && !sRow?.rattache_au_global && sRow.date_fin_specifique) {
           const fin = new Date(sRow.date_fin_specifique)
           if (fin > now) {
             setSectorSubStatus({

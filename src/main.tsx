@@ -33,9 +33,10 @@ if (typeof window !== 'undefined') {
     document.documentElement.classList.add('dark')
   }
 
-  // ── 2. Gestion de version & Déclenchement automatique des mises à jour ─────
-  // Règle absolue : Chaque déploiement doit être appliqué automatiquement à tous les utilisateurs
-  // sans nécessiter de désinstaller l'ancienne version ni de vider le cache manuellement.
+  // ── 2. Gestion de version & Déclenchement transparent des mises à jour ─────
+  // Règle de stabilité absolue : Le logiciel ne doit JAMAIS redémarrer ou recharger automatiquement
+  // en cours de session (protège les ventes, caisses, formulaires et opérations).
+  // Les mises à jour sont notifiées élégamment via le composant PwaUpdateToast.
   const PWA_VERSION_KEY = 'pwa-version'
 
   const purgeCacheAndReload = async (newVer?: string) => {
@@ -63,19 +64,13 @@ if (typeof window !== 'undefined') {
     window.location.reload()
   }
 
-  // Contrôle au démarrage
+  // Contrôle au démarrage (mise à jour du marqueur sans rechargement intempestif)
   try {
-    const storedVersion = localStorage.getItem(PWA_VERSION_KEY)
     const currentVersion = __APP_VERSION__
-
-    if (storedVersion && storedVersion !== currentVersion) {
-      purgeCacheAndReload(currentVersion)
-    } else {
-      localStorage.setItem(PWA_VERSION_KEY, currentVersion)
-    }
+    localStorage.setItem(PWA_VERSION_KEY, currentVersion)
   } catch (_) {}
 
-  // Vérificateur en arrière-plan de nouvelle version déployée (polling intelligent)
+  // Vérificateur en arrière-plan (notification non-bloquante sans coupure de session)
   const checkForNewVersion = async () => {
     try {
       const res = await fetch(`/version.json?t=${Date.now()}`, {
@@ -88,8 +83,8 @@ if (typeof window !== 'undefined') {
       const localVersion = String(localStorage.getItem(PWA_VERSION_KEY) || __APP_VERSION__).trim()
 
       if (serverVersion && localVersion && serverVersion !== localVersion) {
-        console.log(`[GESTIO 229] Nouvelle mise à jour détectée (${serverVersion} vs ${localVersion}). Actualisation transparente...`)
-        purgeCacheAndReload(serverVersion)
+        console.log(`[GESTIO 229] Mise à jour disponible (${serverVersion} vs ${localVersion}). Notification utilisateur...`)
+        window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
       }
     } catch (_) {}
   }
@@ -132,23 +127,18 @@ if (typeof window !== 'undefined') {
     }
   })
 
-  // ── 4. Service Worker PWA : Déclenchement automatique de mise à jour ───────
+  // ── 4. Service Worker PWA : Gestion professionnelle des mises à jour ────────
   if ('serviceWorker' in navigator) {
-    let refreshing = false
-
-    // Dès qu'un nouveau Service Worker prend le contrôle (via skipWaiting), rafraîchir immédiatement !
+    // Dès qu'un nouveau Service Worker est prêt, avertir l'utilisateur via le Toast
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (refreshing) return
-      refreshing = true
-      console.log('[GESTIO 229] Nouveau Service Worker actif : actualisation automatique.')
-      window.location.reload()
+      console.log('[GESTIO 229] Service Worker mis à jour.')
+      window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
     })
 
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
-          // Si un worker est déjà en attente
           if (reg.waiting) {
             reg.waiting.postMessage({ type: 'SKIP_WAITING' })
             window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
@@ -158,37 +148,15 @@ if (typeof window !== 'undefined') {
             const newWorker = reg.installing
             if (newWorker) {
               newWorker.addEventListener('statechange', () => {
-                if (newWorker.state === 'installed') {
-                  if (navigator.serviceWorker.controller) {
-                    newWorker.postMessage({ type: 'SKIP_WAITING' })
-                    window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
-                  }
+                if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                  window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
                 }
               })
             }
           })
 
-          // Vérification immédiate au démarrage
+          // Contrôle unique en arrière-plan sans timer récurrent de rechargement
           reg.update().catch(() => {})
-
-          // Vérification automatique périodique toutes les 45 secondes
-          setInterval(() => {
-            reg.update().catch(() => {})
-            checkForNewVersion()
-          }, 45000)
-
-          // Vérification immédiate dès que l'utilisateur revient sur l'application / déverrouille l'écran
-          document.addEventListener('visibilitychange', () => {
-            if (document.visibilityState === 'visible') {
-              reg.update().catch(() => {})
-              checkForNewVersion()
-            }
-          })
-
-          window.addEventListener('focus', () => {
-            reg.update().catch(() => {})
-            checkForNewVersion()
-          })
         })
         .catch(() => {})
     })
