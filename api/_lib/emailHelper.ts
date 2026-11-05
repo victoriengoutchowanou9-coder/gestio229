@@ -36,8 +36,8 @@ export interface EmailSendResult {
 }
 
 function getSupabaseClient() {
-  const url = process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
   return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
 }
 
@@ -555,4 +555,82 @@ async function recordEmailFailure(
       }),
     })
   } catch (_) {}
+}
+
+/**
+ * Modèle HTML de l'email de confirmation d'inscription GESTIO 229
+ */
+export function buildRegistrationEmailHtml(params: {
+  responsibleName: string
+  companyName: string
+  confirmationUrl: string
+  selectedSectors: string[]
+}) {
+  const { responsibleName, companyName, confirmationUrl, selectedSectors } = params
+  const sectorsListHtml = selectedSectors.map((s) => `<li style="padding: 4px 0; color: #1e293b;">• <strong>${s.toUpperCase()}</strong></li>`).join('')
+
+  return `
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Confirmez votre inscription à GESTIO 229 ERP</title>
+</head>
+<body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f8fafc; margin: 0; padding: 24px;">
+  <table width="100%" border="0" cellspacing="0" cellpadding="0">
+    <tr>
+      <td align="center">
+        <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08); border: 1px solid #e2e8f0;">
+          <tr style="background: linear-gradient(135deg, #059669 0%, #047857 100%);">
+            <td style="padding: 32px 40px; text-align: center;">
+              <h1 style="color: #ffffff; margin: 0; font-size: 26px; font-weight: 800; letter-spacing: -0.5px;">GESTIO 229 ERP</h1>
+              <p style="color: #d1fae5; margin: 8px 0 0 0; font-size: 14px;">Plateforme de Gestion Intégrée Multi-Activités</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding: 40px;">
+              <h2 style="color: #0f172a; margin-top: 0; font-size: 20px;">Bonjour ${responsibleName || 'Cher Partenaire'},</h2>
+              <p style="color: #475569; font-size: 15px; line-height: 1.6;">
+                Nous sommes ravis d'accueillir votre entreprise <strong>${companyName}</strong> sur <strong>GESTIO 229</strong>.
+              </p>
+              <p style="color: #475569; font-size: 15px; line-height: 1.6;">
+                Pour activer définitivement votre compte administrateur et accéder à votre <strong>HUB Central</strong>, veuillez confirmer votre adresse email en cliquant sur le bouton ci-dessous :
+              </p>
+              <div style="text-align: center; margin: 36px 0;">
+                <a href="${confirmationUrl}" style="background-color: #059669; color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 10px; font-size: 16px; font-weight: bold; display: inline-block; box-shadow: 0 4px 8px rgba(5, 150, 105, 0.25);">
+                  ✅ Confirmer mon adresse email
+                </a>
+              </div>
+              <div style="background-color: #f1f5f9; border-radius: 12px; padding: 20px; margin: 24px 0;">
+                <p style="margin: 0 0 10px 0; font-size: 13px; font-weight: bold; color: #334155;">Secteurs sélectionnés (${selectedSectors.length}) :</p>
+                <ul style="margin: 0; padding-left: 20px; font-size: 13px;">
+                  ${sectorsListHtml}
+                </ul>
+                <p style="margin: 12px 0 0 0; font-size: 12px; color: #64748b;">
+                  🎁 <em>Votre période d'essai gratuit de 30 jours (pour un maximum de 3 secteurs) débutera dès l'activation de votre compte.</em>
+                </p>
+              </div>
+              <p style="color: #94a3b8; font-size: 13px; line-height: 1.5; margin-top: 30px;">
+                Si le bouton ne fonctionne pas, copiez et collez le lien suivant dans votre navigateur :<br>
+                <a href="${confirmationUrl}" style="color: #059669; word-break: break-all;">${confirmationUrl}</a>
+              </p>
+              <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 30px 0;">
+              <p style="color: #64748b; font-size: 12px; line-height: 1.5; margin: 0;">
+                Ce message a été envoyé automatiquement suite à votre inscription sur <strong>gestio229.com</strong>.
+              </p>
+            </td>
+          </tr>
+          <tr style="background-color: #f8fafc; border-top: 1px solid #e2e8f0;">
+            <td style="padding: 20px; text-align: center; color: #94a3b8; font-size: 12px;">
+              © ${new Date().getFullYear()} GESTIO 229 ERP — République du Bénin & Espace UEMOA.<br>
+              Support d'assistance : <a href="mailto:support@gestio229.com" style="color: #059669;">support@gestio229.com</a>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+`
 }

@@ -196,8 +196,15 @@ export async function supprimerDestinataireRapport(companyId: string, id: string
 export async function getActiveEmailProvider(): Promise<ActiveProviderStatus> {
   try {
     const res = await fetch('/api/test-email', { method: 'GET' })
-    if (res.ok) {
-      const data = await res.json()
+    const text = await res.text()
+    let data: any
+    try {
+      data = JSON.parse(text)
+    } catch {
+      data = null
+    }
+
+    if (res.ok && data) {
       return {
         provider: data.provider || 'unconfigured',
         label: data.label || 'Service Email GESTIO 229',
@@ -232,8 +239,15 @@ export async function testEmailConnection(targetEmail: string): Promise<{
       body: JSON.stringify({ testEmail: targetEmail.trim() }),
     })
 
-    const data = await response.json()
-    if (response.ok && data.success) {
+    const text = await response.text()
+    let data: any
+    try {
+      data = JSON.parse(text)
+    } catch {
+      throw new Error(text.slice(0, 300) || `Erreur serveur HTTP ${response.status}`)
+    }
+
+    if (response.ok && data?.success) {
       return {
         success: true,
         message: data.message || `Email de test transmis avec succès à ${targetEmail} !`,
@@ -242,17 +256,17 @@ export async function testEmailConnection(targetEmail: string): Promise<{
     } else {
       return {
         success: false,
-        message: data.error || 'Échec du test de connexion.',
-        diagnostic: data.diagnostic,
-        providerLabel: data.providerLabel,
-        error: data.error,
+        message: data?.error || data?.message || 'Échec du test de connexion.',
+        diagnostic: data?.diagnostic || `Réponse serveur HTTP ${response.status}`,
+        providerLabel: data?.providerLabel,
+        error: data?.error,
       }
     }
   } catch (err: any) {
     return {
       success: false,
       message: err?.message || 'Erreur réseau lors de l\'appel de test.',
-      diagnostic: 'Impossible de joindre le serveur API local ou distant.',
+      diagnostic: 'Détails retournés : ' + (err?.message?.slice(0, 200) || 'Impossible de joindre le serveur API local ou distant.'),
     }
   }
 }

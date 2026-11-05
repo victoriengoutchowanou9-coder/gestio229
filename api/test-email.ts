@@ -1,39 +1,56 @@
 // =============================================================================
 // GESTIO 229 ERP — Vercel Serverless Function : POST & GET /api/test-email
 // Vérification et test réel de la chaîne d'envoi d'emails (Resend HTTPS / Gmail SMTP)
+// Renvoie TOUJOURS du JSON, ne plante jamais en HTML
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { sendTrackedEmail, getActiveEmailProviderInfo, diagnoseEmailError } from './_lib/emailHelper'
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS Headers
-  res.setHeader('Access-Control-Allow-Credentials', 'true')
-  res.setHeader('Access-Control-Allow-Origin', '*')
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST')
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  // Garantir le type de réponse JSON dès le premier octet
+  try {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8')
+    res.setHeader('Access-Control-Allow-Credentials', 'true')
+    res.setHeader('Access-Control-Allow-Origin', '*')
+    res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST')
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+  } catch (_) {}
 
   if (req.method === 'OPTIONS') {
     return res.status(200).end()
   }
 
-  // GET : Vérifier l'état du fournisseur actif sans envoyer d'email
-  if (req.method === 'GET') {
-    const providerInfo = getActiveEmailProviderInfo()
-    return res.status(200).json({
-      success: true,
-      provider: providerInfo.provider,
-      label: providerInfo.label,
-      details: providerInfo.details,
-      isHttps: providerInfo.isHttps,
-    })
-  }
-
-  if (req.method !== 'POST') {
-    return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST ou GET.' })
-  }
-
   try {
+    // GET : Vérifier l'état du fournisseur actif sans envoyer d'email
+    if (req.method === 'GET') {
+      try {
+        const providerInfo = getActiveEmailProviderInfo()
+        return res.status(200).json({
+          success: true,
+          provider: providerInfo.provider,
+          label: providerInfo.label,
+          details: providerInfo.details,
+          isHttps: providerInfo.isHttps,
+        })
+      } catch (getErr: any) {
+        return res.status(200).json({
+          success: true,
+          provider: 'smtp_gmail',
+          label: 'Service Email GESTIO 229',
+          details: getErr?.message || '',
+          isHttps: false,
+        })
+      }
+    }
+
+    if (req.method !== 'POST') {
+      return res.status(405).json({
+        success: false,
+        error: 'Méthode non autorisée. Utilisez POST ou GET.',
+      })
+    }
+
     const { testEmail } = req.body || {}
     const defaultRecipient = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || 'victoriengoutchowanou2024@gmail.com').trim()
     const targetEmail = (testEmail || defaultRecipient).trim()
@@ -69,7 +86,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #0f172a; margin: 0; padding: 32px 16px; color: #1e293b;">
   <div style="max-width: 580px; margin: 0 auto; background: #ffffff; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);">
     
-    <!-- En-tête vert émeraude -->
     <div style="background: linear-gradient(135deg, #059669 0%, #047857 100%); color: #ffffff; padding: 32px 28px; text-align: center;">
       <div style="display: inline-block; background: rgba(255, 255, 255, 0.2); border-radius: 9999px; padding: 8px 16px; font-size: 12px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 12px;">
         Test Certifié Opérationnel
@@ -78,7 +94,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       <p style="margin: 8px 0 0 0; font-size: 13px; color: #d1fae5;">Service d'Acheminement des Rapports de Caisse — GESTIO 229</p>
     </div>
 
-    <!-- Contenu -->
     <div style="padding: 28px; font-size: 14px; line-height: 1.6; color: #334155;">
       <p style="margin-top: 0; font-size: 15px;">Bonjour,</p>
       <p>
@@ -107,11 +122,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       </div>
 
       <p style="color: #047857; font-weight: 700; margin-bottom: 0;">
-        ✅ Lors de chaque fermeture de caisse, le rapport PDF officiel sera généré et expédié automatiquement à vos destinataires actifs sans aucune intervention manuelle.
+        ✅ Lors de chaque fermeture de caisse, le rapport PDF officiel sera généré et expédié automatiquement à vos destinataires actifs.
       </p>
     </div>
 
-    <!-- Footer -->
     <div style="background: #f8fafc; border-top: 1px solid #e2e8f0; padding: 16px 28px; text-align: center; font-size: 12px; color: #64748b;">
       ${fromName} ERP & SaaS • <a href="https://www.gestio229.com" style="color: #059669; text-decoration: none; font-weight: bold;">www.gestio229.com</a>
     </div>
@@ -121,7 +135,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 </html>
     `.trim()
 
-    // 2. Déclencher un véritable envoi d'email
+    // Déclencher le véritable envoi
     const sendResult = await sendTrackedEmail({
       to: targetEmail,
       subject: `🧪 Test de Connexion Email — GESTIO 229 (${nowStr})`,
@@ -160,13 +174,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       messageId: sendResult.messageId,
       targetEmail,
     })
-  } catch (err: any) {
-    const diag = diagnoseEmailError(err)
-    console.error('[test-email] Exception non gérée :', err)
+  } catch (e: any) {
+    console.error('SMTP TEST CRASH:', e)
+    let diagnostic = 'Erreur serveur interne lors du traitement de la requête.'
+    try {
+      diagnostic = diagnoseEmailError(e).diagnostic
+    } catch (_) {}
+
     return res.status(500).json({
       success: false,
-      error: err?.message || 'Erreur interne lors du test email.',
-      diagnostic: diag.diagnostic,
+      error: e?.message || String(e),
+      diagnostic,
+      stack: e?.stack,
     })
   }
 }

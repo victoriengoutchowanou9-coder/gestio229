@@ -526,7 +526,13 @@ export async function envoyerRapportCaisseMail(params: {
       })
     })
 
-    const result = await response.json()
+    const text = await response.text()
+    let result: any
+    try {
+      result = JSON.parse(text)
+    } catch {
+      throw new Error(text.slice(0, 300) || 'Erreur serveur HTTP ' + response.status)
+    }
 
     if (!response.ok || !result.success) {
       throw new Error(result.error || result.message || `Erreur serveur (${response.status})`)
