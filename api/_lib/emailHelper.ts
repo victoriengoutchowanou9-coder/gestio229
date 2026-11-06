@@ -74,7 +74,7 @@ export function getActiveEmailProviderInfo(): {
   const smtpPass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
   const smtpUser = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
   if (smtpPass && smtpUser) {
-    const port = Number(process.env.SMTP_PORT || '465') || 465
+    const port = Number(process.env.SMTP_PORT || '587') || 587
     return {
       provider: 'smtp_gmail',
       label: `Gmail SMTP (${smtpUser} sur port ${port})`,
@@ -258,9 +258,9 @@ function createSmtpTransporter(port: number, secure: boolean) {
     secure,
     auth: { user, pass },
     tls: { rejectUnauthorized: false },
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 15000,
+    connectionTimeout: 5000,
+    greetingTimeout: 5000,
+    socketTimeout: 10000,
   })
 }
 
@@ -268,10 +268,10 @@ export const createResilientTransporter = createSmtpTransporter
 
 /**
  * Envoie un email avec traçabilité complète et cascade de secours intelligente :
- * 1. Resend API (HTTPS Port 443 — Priorité 1 pour stabilité Vercel)
- * 2. Brevo API (HTTPS Port 443 — Priorité 2)
- * 3. Gmail SMTP Port 465 (SSL direct — Priorité 3)
- * 4. Gmail SMTP Port 587 (STARTTLS — Repli final SMTP)
+ * 1. Resend API (HTTPS Port 443 — Priorité 1 si configuré)
+ * 2. Brevo API (HTTPS Port 443 — Priorité 2 si configuré)
+ * 3. Gmail SMTP selon le port configuré (587 STARTTLS ou 465 SSL — Priorité par défaut)
+ * 4. Repli automatique vers l'autre port SMTP en cas de fermeture de socket
  */
 export async function sendTrackedEmail(options: EmailSendOptions): Promise<EmailSendResult> {
   const sb = getSupabaseClient()
@@ -349,7 +349,7 @@ export async function sendTrackedEmail(options: EmailSendOptions): Promise<Email
         logId,
       }
     } else {
-      console.warn('[EmailHelper] Échec Resend API, tentative des autres canaux...', resendRes.error)
+      console.warn('[EmailHelper] Échec Resend API, repli automatique vers les autres canaux...', resendRes.error)
     }
   }
 
@@ -372,26 +372,45 @@ export async function sendTrackedEmail(options: EmailSendOptions): Promise<Email
     }
   }
 
-  // ─── 4. CAS C : GMAIL SMTP VIA NODEMAILER (PORT 465 SSL PUIS PORT 587 TLS) ─
+  // ─── 4. CAS C : GMAIL SMTP VIA NODEMAILER (PORT 587 STARTTLS / PORT 465 SSL) ─
   const smtpPass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
   const smtpUser = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
 
   if (smtpPass && smtpUser) {
     let lastSmtpError: any = null
     let info: any = null
-    let activeSmtpProvider: 'smtp_gmail_465' | 'smtp_gmail_587' = 'smtp_gmail_465'
+    let activeSmtpProvider: 'smtp_gmail_465' | 'smtp_gmail_587' = 'smtp_gmail_587'
 
     // Formater les pièces jointes pour Nodemailer
-    const nodemailerAttachments = options.attachments?.map((att) => ({
-      filename: att.filename,
-      content: typeof att.content === 'string' ? Buffer.from(att.content, 'base64') : att.content,
-      contentType: att.contentType || 'application/pdf',
-    }))
+    const nodemailerAttachments = options.attachments?.map((att) => {
+      let content: Buffer
+      if (Buffer.isBuffer(att.content)) {
+        content = att.content
+      } else if (typeof att.content === 'string') {
+        const cleanBase64 = att.content.replace(/^data:[^;]+;base64,/, '').trim()
+        content = Buffer.from(cleanBase64, 'base64')
+      } else {
+        content = Buffer.from(String(att.content || ''))
+      }
+      return {
+        filename: att.filename,
+        content,
+        contentType: att.contentType || 'application/pdf',
+      }
+    })
 
-    // Tentative 1 : Port 465 (SSL direct avec TLS implicite dès la connexion)
+    // Ordre dynamique selon SMTP_PORT configuré dans Vercel (587 par défaut, recommandé cloud)
+    const configuredPort = Number(process.env.SMTP_PORT || '587') || 587
+    const prefer587 = configuredPort === 587
+    const firstPort = prefer587 ? 587 : 465
+    const firstSecure = prefer587 ? false : true
+    const secondPort = prefer587 ? 465 : 587
+    const secondSecure = prefer587 ? true : false
+
+    // Tentative 1 : Port prioritaire (587 par défaut — rapide et non bloqué par AWS Lambda / Vercel)
     try {
-      const transporter465 = createSmtpTransporter(465, true)
-      info = await transporter465.sendMail({
+      const transporterFirst = createSmtpTransporter(firstPort, firstSecure)
+      info = await transporterFirst.sendMail({
         from: fromHeader,
         to: cleanRecipients.join(', '),
         subject: options.subject,
@@ -399,15 +418,15 @@ export async function sendTrackedEmail(options: EmailSendOptions): Promise<Email
         text: options.text || options.html.replace(/<[^>]+>/g, ' '),
         attachments: nodemailerAttachments,
       })
-      activeSmtpProvider = 'smtp_gmail_465'
-    } catch (err465: any) {
-      lastSmtpError = err465
-      console.warn('[EmailHelper] Échec port 465 SSL, repli vers port 587 STARTTLS...', err465?.message)
+      activeSmtpProvider = firstPort === 465 ? 'smtp_gmail_465' : 'smtp_gmail_587'
+    } catch (errFirst: any) {
+      lastSmtpError = errFirst
+      console.warn(`[EmailHelper] Port ${firstPort} échoué (${errFirst?.message}), repli vers Port ${secondPort}...`)
 
-      // Tentative 2 : Port 587 (STARTTLS)
+      // Tentative 2 : Port de secours
       try {
-        const transporter587 = createSmtpTransporter(587, false)
-        info = await transporter587.sendMail({
+        const transporterSecond = createSmtpTransporter(secondPort, secondSecure)
+        info = await transporterSecond.sendMail({
           from: fromHeader,
           to: cleanRecipients.join(', '),
           subject: options.subject,
@@ -415,11 +434,11 @@ export async function sendTrackedEmail(options: EmailSendOptions): Promise<Email
           text: options.text || options.html.replace(/<[^>]+>/g, ' '),
           attachments: nodemailerAttachments,
         })
-        activeSmtpProvider = 'smtp_gmail_587'
+        activeSmtpProvider = secondPort === 465 ? 'smtp_gmail_465' : 'smtp_gmail_587'
         lastSmtpError = null
-      } catch (err587: any) {
-        lastSmtpError = err587
-        console.error('[EmailHelper] Échec port 587 également :', err587?.message)
+      } catch (errSecond: any) {
+        lastSmtpError = errSecond
+        console.error(`[EmailHelper] Port ${secondPort} échoué également :`, errSecond?.message)
       }
     }
 

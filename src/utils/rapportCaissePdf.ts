@@ -544,7 +544,7 @@ export async function envoyerRapportCaisseMail(params: {
 
     return {
       success: true,
-      message: result.message || 'Rapport transmis avec succès via Gmail SMTP !',
+      message: result.message || 'Rapport transmis avec succès !',
       recipients: result.recipients || emails || []
     }
   } catch (err: any) {

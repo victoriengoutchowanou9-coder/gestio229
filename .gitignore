@@ -45,3 +45,4 @@ output/
 .DS_Store
 Thumbs.db
 *.pem
+.env*

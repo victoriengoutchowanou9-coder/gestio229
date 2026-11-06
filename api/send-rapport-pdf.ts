@@ -1,12 +1,12 @@
 // =============================================================================
-// GESTIO 229 ERP — Vercel Serverless Function : POST /api/send-rapport-pdf
-// Envoi du Rapport de Caisse PDF via moteur multi-fournisseurs (Resend HTTPS / Gmail SMTP)
-// 100% Autonome — Zéro dépendance relative — Ne plante jamais en FUNCTION_INVOCATION_FAILED
+// GESTIO 229 ERP — Vercel Serverless Function : POST & GET /api/send-rapport-pdf
+// Envoi du Rapport de Caisse PDF via le service centralisé emailHelper
+// 100% Fiable — Mêmes variables, même configuration SMTP, même transport que le test
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import nodemailer from 'nodemailer'
 import { createClient } from '@supabase/supabase-js'
+import { sendTrackedEmail, getActiveEmailProviderInfo, diagnoseEmailError } from './_lib/emailHelper.ts'
 
 function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
@@ -18,177 +18,6 @@ function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
 }
 
-// ─── Envoi via Resend API (HTTPS Port 443) ───────────────────────────────────
-async function sendViaResend(
-  apiKey: string,
-  fromName: string,
-  fromEmail: string,
-  recipients: string[],
-  subject: string,
-  html: string,
-  text: string,
-  attachments?: Array<{ filename: string; content: string }>
-) {
-  let sender = `${fromName} <${fromEmail}>`
-  if (fromEmail.includes('@gmail.com') || fromEmail.includes('@yahoo.') || fromEmail.includes('@hotmail.')) {
-    sender = `${fromName} <onboarding@resend.dev>`
-  }
-
-  const payload: any = {
-    from: sender,
-    to: recipients,
-    reply_to: fromEmail,
-    subject,
-    html,
-    text,
-  }
-
-  if (attachments && attachments.length > 0) {
-    payload.attachments = attachments.map((att) => ({
-      filename: att.filename,
-      content: att.content,
-    }))
-  }
-
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify(payload),
-  })
-
-  const data = await res.json()
-  if (!res.ok || data.error) {
-    throw new Error(data.error?.message || data.message || `Erreur Resend HTTP ${res.status}`)
-  }
-  return { messageId: data.id, provider: 'Resend API (HTTPS Port 443)' }
-}
-
-// ─── Envoi via Brevo API (HTTPS Port 443) ────────────────────────────────────
-async function sendViaBrevo(
-  apiKey: string,
-  fromName: string,
-  fromEmail: string,
-  recipients: string[],
-  subject: string,
-  html: string,
-  text: string,
-  attachments?: Array<{ filename: string; content: string }>
-) {
-  const payload: any = {
-    sender: { name: fromName, email: fromEmail },
-    to: recipients.map((email) => ({ email })),
-    subject,
-    htmlContent: html,
-    textContent: text,
-  }
-
-  if (attachments && attachments.length > 0) {
-    payload.attachment = attachments.map((att) => ({
-      name: att.filename,
-      content: att.content,
-    }))
-  }
-
-  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'api-key': apiKey,
-    },
-    body: JSON.stringify(payload),
-  })
-
-  const data = await res.json()
-  if (!res.ok || data.code) {
-    throw new Error(data.message || `Erreur Brevo HTTP ${res.status}`)
-  }
-  return { messageId: data.messageId || data.id, provider: 'Brevo API (HTTPS Port 443)' }
-}
-
-// ─── Envoi via Gmail SMTP Direct (Port 465 SSL puis Port 587 TLS) ───────────
-async function sendViaSmtp(
-  fromHeader: string,
-  recipients: string[],
-  subject: string,
-  html: string,
-  text: string,
-  attachments?: Array<{ filename: string; content: string }>
-) {
-  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
-  const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
-  const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
-
-  const nodemailerAttachments = attachments?.map((att) => ({
-    filename: att.filename,
-    content: Buffer.from(att.content, 'base64'),
-    contentType: 'application/pdf',
-  }))
-
-  let lastError: any = null
-
-  // Tentative 1 : Port 465 (SSL direct)
-  try {
-    const transporter465 = nodemailer.createTransport({
-      host,
-      port: 465,
-      secure: true,
-      auth: { user, pass },
-      tls: { rejectUnauthorized: false },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-    })
-
-    const info = await transporter465.sendMail({
-      from: fromHeader,
-      to: recipients.join(', '),
-      subject,
-      html,
-      text,
-      attachments: nodemailerAttachments,
-    })
-
-    return { messageId: info.messageId, provider: 'Gmail SMTP (Port 465 SSL)' }
-  } catch (err465: any) {
-    lastError = err465
-    console.warn('[send-rapport-pdf] Port 465 échoué, tentative sur Port 587...', err465?.message)
-  }
-
-  // Tentative 2 : Port 587 (STARTTLS)
-  try {
-    const transporter587 = nodemailer.createTransport({
-      host,
-      port: 587,
-      secure: false,
-      auth: { user, pass },
-      tls: { rejectUnauthorized: false },
-      connectionTimeout: 10000,
-      greetingTimeout: 10000,
-      socketTimeout: 15000,
-    })
-
-    const info = await transporter587.sendMail({
-      from: fromHeader,
-      to: recipients.join(', '),
-      subject,
-      html,
-      text,
-      attachments: nodemailerAttachments,
-    })
-
-    return { messageId: info.messageId, provider: 'Gmail SMTP (Port 587 TLS)' }
-  } catch (err587: any) {
-    lastError = err587
-    console.error('[send-rapport-pdf] Port 587 échoué également :', err587?.message)
-  }
-
-  throw lastError || new Error('Impossible d\'expédier l\'email via SMTP.')
-}
-
-// ─── Handler Principal ───────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -202,6 +31,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(200).end()
   }
 
+  // Support GET pour vérification de statut & diagnostic
+  if (req.method === 'GET') {
+    const providerInfo = getActiveEmailProviderInfo()
+    return res.status(200).json({
+      success: true,
+      service: 'send-rapport-pdf',
+      provider: providerInfo.provider,
+      label: providerInfo.label,
+      details: providerInfo.details,
+      isHttps: providerInfo.isHttps,
+      hasCredentials: providerInfo.provider !== 'unconfigured',
+    })
+  }
+
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, error: 'Méthode non autorisée. Utilisez POST.' })
   }
@@ -209,6 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const supabase = getSupabaseClient()
 
   try {
+    const body = typeof req.body === 'string' ? JSON.parse(req.body) : (req.body || {})
     const {
       companyId,
       secteurId,
@@ -218,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       pdfBase64,
       emails: customEmails,
       metadata = {},
-    } = req.body || {}
+    } = body
 
     // 1. Récupération des destinataires actifs dans la base de données
     const targetEmails: string[] = []
@@ -232,7 +76,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .eq('company_id', companyId)
           .eq('actif', true)
 
-        if (!dbErr && dbDest && dbDest.length > 0) {
+        if (!dbErr && Array.isArray(dbDest)) {
           dbDest.forEach((d) => {
             const em = (d.email || '').trim().toLowerCase()
             if (em && em.includes('@') && !seenEmails.has(em)) {
@@ -246,7 +90,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Destinataires supplémentaires spécifiés
+    // Destinataires supplémentaires spécifiés (ex: customEmails ou utilisateur connecté)
     if (Array.isArray(customEmails)) {
       customEmails.forEach((raw) => {
         const em = (raw || '').trim().toLowerCase()
@@ -276,7 +120,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (_) {}
     }
 
-    // Repli par défaut
+    // Repli par défaut sur l'adresse d'expédition configurée
     if (targetEmails.length === 0) {
       const fallbackEmail = (process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou2024@gmail.com').trim()
       if (fallbackEmail) targetEmails.push(fallbackEmail)
@@ -434,71 +278,70 @@ Le rapport officiel complet est joint à ce message au format PDF.
 
     // 3. Préparer la pièce jointe PDF
     const cleanSectorFileName = (secteur || 'Caisse').replace(/[^a-zA-Z0-9]/g, '_')
-    const fileName = `Fermeture_Caisse_${cleanSectorFileName}_${dateFormatted.replace(/\//g, '-')}.pdf`
+    const fileName = `Fermeture_Caisse_${cleanSectorFileName}_${String(dateFormatted).replace(/\//g, '-')}.pdf`
 
-    const attachments: Array<{ filename: string; content: string }> = []
+    const attachments: Array<{ filename: string; content: string; contentType?: string }> = []
     if (pdfBase64) {
-      const cleanBase64 = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64
       attachments.push({
         filename: fileName,
-        content: cleanBase64,
+        content: pdfBase64,
+        contentType: 'application/pdf',
       })
     }
 
     const subject = `🏪 Fermeture de Caisse - ${secteur} - ${dateFormatted}`
-    const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
-    const fromEmail = (process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou2024@gmail.com').trim()
-    const fromHeader = `"${fromName}" <${fromEmail}>`
 
-    // 4. Transmission
-    let sendResult: { messageId?: string; provider: string }
-    const resendKey = (process.env.RESEND_API_KEY || process.env.VITE_RESEND_API_KEY || '').trim()
-    const brevoKey = (process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || '').trim()
-
-    if (resendKey && resendKey.startsWith('re_')) {
-      sendResult = await sendViaResend(resendKey, fromName, fromEmail, targetEmails, subject, htmlBody, textBody, attachments)
-    } else if (brevoKey) {
-      sendResult = await sendViaBrevo(brevoKey, fromName, fromEmail, targetEmails, subject, htmlBody, textBody, attachments)
-    } else {
-      sendResult = await sendViaSmtp(fromHeader, targetEmails, subject, htmlBody, textBody, attachments)
-    }
-
-    // 5. Journalisation dans Supabase
-    try {
-      await supabase.from('email_delivery_logs').insert(
-        targetEmails.map((email) => ({
-          recipient_email: email,
-          email_type: 'cash_report',
-          status: 'envoye',
-          provider: sendResult.provider,
-          subject,
-          metadata: {
-            companyId,
-            secteurId,
-            caisseId,
-            ca,
-            soldeFinal,
-            messageId: sendResult.messageId,
-            sent_at: new Date().toISOString(),
-          },
-        }))
-      )
-    } catch (_) {}
-
-    return res.status(200).json({
-      success: true,
-      message: `Rapport transmis avec succès à ${targetEmails.length} destinataire(s) via ${sendResult.provider}.`,
-      recipients: targetEmails,
-      messageId: sendResult.messageId,
-      provider: sendResult.provider,
+    // 4. Transmission via le moteur centralisé sendTrackedEmail
+    const sendResult = await sendTrackedEmail({
+      to: targetEmails,
+      subject,
+      html: htmlBody,
+      text: textBody,
+      emailType: 'cash_report',
+      attachments,
+      metadata: {
+        companyId,
+        secteurId,
+        caisseId,
+        dateFormatted,
+        heureFormatted,
+        ca,
+        espece,
+        momo,
+        soldeFinal,
+        ecart,
+        caissiere,
+        entreprise,
+      },
     })
+
+    if (sendResult.success) {
+      return res.status(200).json({
+        success: true,
+        message: `Rapport transmis avec succès à ${sendResult.recipients?.length || targetEmails.length} destinataire(s) via ${sendResult.providerLabel}.`,
+        recipients: sendResult.recipients || targetEmails,
+        messageId: sendResult.messageId,
+        provider: sendResult.provider,
+        providerLabel: sendResult.providerLabel,
+      })
+    } else {
+      return res.status(200).json({
+        success: false,
+        error: sendResult.error || 'Erreur lors de l\'envoi du rapport de caisse.',
+        diagnostic: sendResult.diagnostic || 'Vérifiez la configuration SMTP dans Vercel.',
+        recipients: targetEmails,
+        providerLabel: sendResult.providerLabel,
+      })
+    }
   } catch (err: any) {
     console.error('[send-rapport-pdf] Erreur :', err)
+    const diag = diagnoseEmailError(err)
 
     return res.status(200).json({
       success: false,
       error: err?.message || 'Erreur lors de l\'envoi du rapport de caisse.',
-      diagnostic: 'Vérifiez vos paramètres SMTP (SMTP_USER, SMTP_PASS) ou configurez RESEND_API_KEY dans Vercel.',
+      diagnostic: diag.diagnostic,
+      code: diag.code,
     })
   }
 }

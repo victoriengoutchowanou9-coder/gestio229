@@ -1,5 +1,11 @@
 {
   "crons": [],
+  "functions": {
+    "api/*.ts": {
+      "maxDuration": 60,
+      "memory": 1024
+    }
+  },
   "headers": [
     {
       "source": "/(index.html|sw.js|registerSW.js|manifest.webmanifest|manifest.json|version.json)",

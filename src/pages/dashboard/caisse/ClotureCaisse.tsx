@@ -298,20 +298,23 @@ export const ClotureCaisse: React.FC = () => {
           }
         })
         const sentCount = res.recipients?.length || targetEmails.length
-        toast.success('Rapport envoyé instantanément par email !', `Rapport transmis à ${sentCount} destinataire(s) dès validation.`)
+        await refreshFonds()
+        setClotureSuccess(true)
+        setShowConfirmModal(false)
+        toast.success(
+          'Journée clôturée & Rapport envoyé !',
+          `Clôture validée avec succès. Rapport PDF transmis à ${sentCount} destinataire(s).`
+        )
       } catch (e: any) {
         console.error('[ClotureCaisse] Erreur envoi automatique rapport :', e)
-        toast.warning('Clôture validée avec succès !', (e?.message || 'Incident temporaire d\'envoi') + ' — Le rapport PDF reste sécurisé et téléchargeable.')
+        await refreshFonds()
+        setClotureSuccess(true)
+        setShowConfirmModal(false)
+        toast.warning(
+          'Journée clôturée (Envoi email en attente)',
+          `Clôture enregistrée avec succès. L'envoi automatique a rencontré une anomalie (${e?.message || 'Erreur réseau'}). Le rapport PDF reste sécurisé et téléchargeable.`
+        )
       }
-
-      await refreshFonds()
-      setClotureSuccess(true)
-      setShowConfirmModal(false)
-
-      toast.success(
-        'Journée clôturée avec succès !',
-        'Les soldes finaux (positifs ou découverts) sont reportés au lendemain.'
-      )
     } catch (err: any) {
       toast.error('Erreur lors de la clôture', err.message)
     } finally {

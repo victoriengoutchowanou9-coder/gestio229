@@ -1443,36 +1443,45 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         newClosure.email_status = 'ENVOYE'
         newClosure.emailed_to = sentRecipients
         setClosuresHistory((prev) => prev.map((c) => (c.id === newClosure.id ? { ...c, email_status: 'ENVOYE', emailed_to: sentRecipients } : c)))
+        
+        // 4. Fermeture locale de la caisse et réinitialisation UI
+        saveCaisseState('FERMEE', null, '', 0, 0)
+        setActiveSessionId(null)
+        setShowCloseModal(false)
+        setShowReportModal(false)
+        setClosingNotes('')
+        setEcartReason('')
+        setLastClosure({
+          fond_reel_especes: finalMontantConserve,
+          fond_reel_momo: finalSoldeTheoriqueMomo,
+        })
+
         toast.success(
-          'Rapport envoyé instantanément par email !',
-          `Rapport de clôture transmis à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}).`
+          'Caisse clôturée & Rapport envoyé !',
+          `Clôture validée. Nouveaux fonds : ${fmt(finalSoldeTheoriqueEsp)} (Espèces) | MoMo : ${fmt(finalSoldeTheoriqueMomo)}. Rapport PDF transmis à ${sentRecipients.length} destinataire(s) (${sentRecipients.join(', ')}).`
         )
       } catch (mailErr: any) {
         console.warn('[sendRapportCaisse] Échec envoi direct :', mailErr)
         newClosure.email_status = 'ECHEC'
         setClosuresHistory((prev) => prev.map((c) => (c.id === newClosure.id ? { ...c, email_status: 'ECHEC' } : c)))
+        
+        // 4. Fermeture locale de la caisse même si l'envoi email a échoué
+        saveCaisseState('FERMEE', null, '', 0, 0)
+        setActiveSessionId(null)
+        setShowCloseModal(false)
+        setShowReportModal(false)
+        setClosingNotes('')
+        setEcartReason('')
+        setLastClosure({
+          fond_reel_especes: finalMontantConserve,
+          fond_reel_momo: finalSoldeTheoriqueMomo,
+        })
+
         toast.warning(
-          'Rapport de caisse clôturé avec succès !',
-          mailErr?.message || 'Vérifiez la configuration SMTP Vercel.'
+          'Caisse clôturée (Envoi du rapport en attente)',
+          `La caisse est clôturée et les fonds sont actualisés (${fmt(finalSoldeTheoriqueEsp)} Espèces / ${fmt(finalSoldeTheoriqueMomo)} MoMo). L'envoi automatique du rapport a rencontré un incident : ${mailErr?.message || 'Erreur réseau'}. Vous pouvez renvoyer le rapport à tout moment depuis l'historique sans refaire de clôture.`
         )
       }
-
-      // 4. Fermeture locale de la caisse et réinitialisation UI
-      saveCaisseState('FERMEE', null, '', 0, 0)
-      setActiveSessionId(null)
-      setShowCloseModal(false)
-      setShowReportModal(false)
-      setClosingNotes('')
-      setEcartReason('')
-      setLastClosure({
-        fond_reel_especes: finalMontantConserve,
-        fond_reel_momo: finalSoldeTheoriqueMomo,
-      })
-
-      toast.success(
-        'Caisse clôturée avec succès !',
-        `Nouveaux fonds actuels : ${fmt(finalSoldeTheoriqueEsp)} (Espèces) | MoMo : ${fmt(finalSoldeTheoriqueMomo)}`
-      )
 
       await loadCaisseData()
       if (refreshFonds) await refreshFonds()
