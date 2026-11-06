@@ -301,6 +301,7 @@ export const RegisterPage: React.FC = () => {
               selected_sectors: cleanSectors,
               sectors: cleanSectors,
               subscription_status: 'trial',
+              subscription_expires_at: trialEnds.toISOString(),
               onboarding_completed: true,
               currency: 'FCFA',
               subscription_plan: planSummary.planSlug,

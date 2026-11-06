@@ -203,18 +203,36 @@ export async function verifyServerAccess(
     }
   }
 
-  // Vérification de l'expiration globale
+  // Vérification de l'expiration globale avec priorité à l'état réel de l'abonnement
+  const isGlobalActiveOrTrial =
+    globalSub &&
+    (globalSub.statut_global === 'actif' || globalSub.statut_global === 'essai') &&
+    new Date(globalSub.date_fin_global).getTime() >= now.getTime()
+
   const globalExpired =
     globalSub &&
     (globalSub.statut_global === 'expire' || new Date(globalSub.date_fin_global).getTime() < now.getTime())
 
-  if (globalExpired || company.subscription_status === 'expired') {
+  // Si l'abonnement global n'est ni actif ni en cours d'essai valide, et qu'il est marqué expiré
+  if (!isGlobalActiveOrTrial && (globalExpired || company.subscription_status === 'expired')) {
     return {
       allowed: false,
       code: 'SUBSCRIPTION_EXPIRED',
       error:
         'Votre période d\'essai ou d\'abonnement est arrivée à son terme. Veuillez souscrire à un abonnement pour débloquer les modules opérationnels.',
     }
+  }
+
+  // Auto-réconciliation : si l'abonnement global est en essai valide mais le statut company était 'expired'
+  if (isGlobalActiveOrTrial && company.subscription_status === 'expired') {
+    sb.from('companies')
+      .update({
+        subscription_status: globalSub.statut_global === 'actif' ? 'active' : 'trial',
+        updated_at: now.toISOString(),
+      })
+      .eq('id', companyId)
+      .then(() => {})
+      .catch(() => {})
   }
 
   let userProfile: any = null

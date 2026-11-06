@@ -579,11 +579,23 @@ export async function verifierOuCreerAbonnementGlobal(
     }
 
     // Créer l'abonnement global (essai ou actif selon l'état de l'entreprise)
-    const debut = comp?.created_at ? new Date(comp.created_at) : (companyCreatedAt ? new Date(companyCreatedAt) : now)
-    const fin = isCompanyActive
-      ? (compExpiresAt || new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000))
-      : new Date(debut.getTime() + 30 * 24 * 60 * 60 * 1000)
-    const statut: StatutGlobal = isCompanyActive ? 'actif' : (fin < now ? 'expire' : 'essai')
+    let debut = comp?.created_at ? new Date(comp.created_at) : (companyCreatedAt ? new Date(companyCreatedAt) : now)
+    let fin: Date
+    if (isCompanyActive) {
+      fin = compExpiresAt || new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+    } else if (compExpiresAt && compExpiresAt >= now) {
+      fin = compExpiresAt
+    } else {
+      // Pour tout nouveau client ou compte en essai : 30 jours pleins
+      const diffFromCreated = now.getTime() - debut.getTime()
+      if (diffFromCreated < 0 || diffFromCreated > 30 * 24 * 60 * 60 * 1000) {
+        debut = now
+      }
+      fin = new Date(debut.getTime() + 30 * 24 * 60 * 60 * 1000)
+    }
+    const statut: StatutGlobal = isCompanyActive
+      ? 'actif'
+      : (comp?.subscription_status === 'trial' && fin >= now ? 'essai' : (fin < now ? 'expire' : 'essai'))
 
     const { data: inserted } = await supabase
       .from('abonnements_global')
@@ -739,6 +751,16 @@ export async function initialiserSecteursInscription(
       sectors_meta: sectorsMeta,
     }
     await saveCompanySubscriptionMeta(entrepriseId, compMeta)
+
+    // Garantir que l'état officiel dans companies reflète l'essai gratuit
+    await supabase
+      .from('companies')
+      .update({
+        subscription_status: 'trial',
+        subscription_expires_at: finEssai.toISOString(),
+        updated_at: now.toISOString(),
+      })
+      .eq('id', entrepriseId)
   } catch (err) {
     console.warn('[abonnementService] Erreur initialiserSecteursInscription:', err)
   }

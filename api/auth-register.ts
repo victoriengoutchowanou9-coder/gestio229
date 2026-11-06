@@ -302,6 +302,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       selected_sectors: cleanSectors, // STRICTEMENT les secteurs choisis
       sectors: cleanSectors,          // STRICTEMENT les secteurs choisis
       subscription_status: 'trial',
+      subscription_expires_at: trialEndsDate.toISOString(),
       onboarding_completed: true,
       currency: 'FCFA',
       subscription_plan: chosenPlanSlug,

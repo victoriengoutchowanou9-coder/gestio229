@@ -20,6 +20,7 @@ import {
 import { showSuccess, showError } from '../../components/modals/CustomModalGestio';
 import { supabase } from '../../lib/supabase';
 import { ALL_SECTORS_CATALOG } from '../../core/modules/moduleRegistry';
+import { initialiserSecteursInscription } from '../../services/abonnementService';
 
 export interface SaaSCompany {
   id: string;
@@ -214,21 +215,32 @@ export const SuperAdminDashboard: React.FC = () => {
     if (isSubmittingCompany) return;
     setIsSubmittingCompany(true);
     try {
+      const now = new Date();
+      const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
       const payload: any = {
         name: newCompanyForm.name.trim(),
-        ifu: newCompanyForm.ifu.trim(),
-        responsible_name: newCompanyForm.responsible.trim(),
+        ifu_number: newCompanyForm.ifu.trim() || '0000000000000',
         phone: newCompanyForm.phone.trim(),
         email: newCompanyForm.email.trim(),
         subscription_status: 'trial',
+        subscription_expires_at: trialEnds.toISOString(),
         selected_sectors: newCompanyForm.selectedSectors,
         sectors: newCompanyForm.selectedSectors,
         active_sector: newCompanyForm.selectedSectors[0] || 'boutique',
         is_active: true,
       };
 
-      const { error } = await supabase.from('companies').insert([payload]);
+      const { data: insertedComp, error } = await supabase.from('companies').insert([payload]).select().single();
       if (error) throw error;
+
+      if (insertedComp?.id) {
+        await initialiserSecteursInscription(
+          insertedComp.id,
+          newCompanyForm.selectedSectors,
+          now,
+          trialEnds
+        ).catch(() => {});
+      }
 
       await loadRealCompanies();
       setShowAddCompanyModal(false);

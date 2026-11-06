@@ -710,8 +710,9 @@ export function getTrialStatus(company?: Company | null): {
   }
 
   const createdAt = company.created_at ? new Date(company.created_at) : new Date()
-  const trialEndsAt = (company as any).trial_ends_at
-    ? new Date((company as any).trial_ends_at)
+  const rawTrialEnd = (company as any).trial_ends_at || company.subscription_expires_at
+  const trialEndsAt = rawTrialEnd
+    ? new Date(rawTrialEnd)
     : new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000)
   const now = new Date()
   const diffMs = trialEndsAt.getTime() - now.getTime()
