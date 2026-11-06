@@ -494,16 +494,17 @@ export async function envoyerRapportCaisseMail(params: {
   pdfBase64: string
   emails?: string[]
   metadata: {
-    caDuJour: number
-    especesDuJour: number
-    momoDuJour: number
-    fondActuel: number
-    totalDepensesJour: number
-    margeBruteJour: number
-    totalCreances: number
-    nomCaissier: string
-    secteurNom: string
-    top5Produits?: Array<{ nom: string; quantite: number; totalVentes: number }>
+    caDuJour?: number
+    especesDuJour?: number
+    momoDuJour?: number
+    fondActuel?: number
+    totalDepensesJour?: number
+    margeBruteJour?: number
+    totalCreances?: number
+    nomCaissier?: string
+    secteurNom?: string
+    top5Produits?: Array<{ nom: string; quantite?: number; qte?: number; totalVentes?: number; montant?: number }>
+    [key: string]: any
   }
 }): Promise<{ success: boolean; message: string; recipients: string[] }> {
   const { companyId, secteurId, caisseId, date, heure, pdfBase64, emails, metadata } = params

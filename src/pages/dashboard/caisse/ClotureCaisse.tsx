@@ -283,18 +283,29 @@ export const ClotureCaisse: React.FC = () => {
           metadata: {
             secteurNom: currentSectorSlug ? `Secteur ${currentSectorSlug.toUpperCase()}` : 'Synthèse Multi-Secteurs',
             entreprise: user?.user_metadata?.company_name || 'GESTIO 229',
+            caisseReference: 'Consolidation Caisses',
+            caissiere: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+            fermePar: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+            nomCaissier: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
+            operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
             totalReel: totalSolde,
             caDuJour: repData.synthese.caDuJour,
             especesDuJour: repData.synthese.especesDuJour,
             momoDuJour: repData.synthese.momoDuJour,
+            fondInitialEspeces: repData.synthese.fondInitialEspeces || 0,
+            encaissementsEspeces: repData.synthese.encaissementsEspeces || 0,
+            depensesEspeces: repData.synthese.depensesEspeces || 0,
+            depensesMomo: repData.synthese.depensesMomo || 0,
+            fondTheoriqueEspeces: repData.synthese.fondTheoriqueEspeces || 0,
+            fondReelEspeces: repData.synthese.fondReelEspeces || 0,
+            ecartEspeces: repData.synthese.ecartEspeces || 0,
             totalDepensesJour: (repData.synthese.depensesEspeces || 0) + (repData.synthese.depensesMomo || 0),
             totalRemboursementsJour: repData.synthese.totalRemboursementsJour || 0,
             remboursement: 0,
             margeBruteJour: repData.synthese.margeBruteJour || 0,
             totalCreances: repData.synthese.totalCreances || 0,
-            nomCaissier: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
-            operateur: user?.user_metadata?.full_name || user?.email || 'Gestionnaire Caisse',
-            top5Produits: repData.top5Produits || []
+            top5Produits: repData.top5Produits || [],
+            observations: repData.notes || 'Clôture de journée validée'
           }
         })
         const sentCount = res.recipients?.length || targetEmails.length

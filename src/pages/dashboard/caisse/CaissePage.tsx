@@ -234,6 +234,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const [isSendingReportMail, setIsSendingReportMail] = useState<boolean>(false)
   const [isOperatingCaisse, setIsOperatingCaisse] = useState<boolean>(false)
   const [totalCreances, setTotalCreances] = useState<number>(0)
+  const [clientsDebiteursList, setClientsDebiteursList] = useState<Array<{ nom: string; solde: number }>>([])
 
   // Droits d'accès d'administration (Rapport par Email & Gestion Destinataires)
   const userRole = ((user?.role || '') as string).toLowerCase()
@@ -938,13 +939,21 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           try {
             const { data: dbClients } = await supabase
               .from('customers')
-              .select('current_debt, sector_slug')
+              .select('id, name, current_debt, sector_slug')
               .eq('company_id', currentCompanyId)
               .eq('sector_slug', currentSectorSlug)
               .neq('is_active', false)
             if (dbClients && dbClients.length > 0) {
               const cTot = dbClients.reduce((acc, c: any) => acc + (Number(c.current_debt ?? 0)), 0)
               setTotalCreances(cTot)
+              const debiteurs = dbClients
+                .filter((c: any) => Number(c.current_debt || 0) > 0)
+                .map((c: any) => ({ nom: c.name || 'Client', solde: Number(c.current_debt || 0) }))
+                .sort((a: any, b: any) => b.solde - a.solde)
+              setClientsDebiteursList(debiteurs)
+            } else {
+              setTotalCreances(0)
+              setClientsDebiteursList([])
             }
           } catch (_) {}
 
@@ -1414,6 +1423,43 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         const { blob } = genererRapportCaissePDF(donneesPDF, { save: false })
         const pdfBase64 = await blobToBase64(blob)
 
+        // Calcul des métadonnées enrichies pour le rapport complet
+        const nbVentesCloture = salesToday.filter((s: any) => s.status !== 'CANCELLED' && s.status !== 'annule').length
+        const nbArticlesCloture = salesToday.reduce((acc: number, s: any) => {
+          if (s.status === 'CANCELLED' || s.status === 'annule') return acc
+          let lines = Array.isArray(s.lines) ? s.lines : null
+          if (!lines && s.notes) {
+            try {
+              const pNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+              if (Array.isArray(pNotes.lines)) lines = pNotes.lines
+            } catch (_) {}
+          }
+          if (Array.isArray(lines) && lines.length > 0) {
+            return acc + lines.reduce((sub: number, l: any) => sub + (Number(l.qty || l.quantity || 1)), 0)
+          }
+          return acc + 1
+        }, 0)
+        const ventesCreditCloture = salesToday.reduce((acc: number, s: any) => {
+          if (s.status === 'CANCELLED' || s.status === 'annule') return acc
+          const isCredit = s.payment_status === 'credit' || (s.parsedPayments && s.parsedPayments.some((p: any) => p.method === 'credit'))
+          if (isCredit) {
+            const credAmt = s.parsedPayments?.find((p: any) => p.method === 'credit')?.amount ?? (Number(s.total_amount || 0) - Number(s.paid_amount || 0))
+            return acc + (Number(credAmt) > 0 ? Number(credAmt) : Number(s.total_amount || 0))
+          }
+          return acc
+        }, 0)
+        const coutAchatEstimeCloture = salesToday.reduce((acc: number, s: any) => acc + (Number(s.total_cost) || 0), 0) || Math.max(0, (syn.caDuJour || caDuJour) - margeBruteJour)
+        const salesAnnuleesCloture = salesToday.filter((s: any) => s.status === 'CANCELLED' || s.status === 'annule')
+        const clientsServisCountCloture = new Set(salesToday.filter((s: any) => s.status !== 'CANCELLED' && s.status !== 'annule').map((s: any) => s.customer_id || s.customer_name || s.id)).size
+        const depensesDetailsListCloture = movementsHistory
+          .filter((m: any) => m.type === 'RETRAIT' || (m.motif && m.motif.toLowerCase().includes('dépense')))
+          .map((m: any) => ({
+            motif: m.motif || 'Dépense de caisse',
+            montant: m.amount,
+            mode: m.payment_channel || 'Espèces',
+            auteur: m.user_name || 'Caissier'
+          }))
+
         const res = await envoyerRapportCaisseMail({
           companyId: currentCompanyId,
           secteurId: currentSectorSlug,
@@ -1424,18 +1470,57 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           emails: recipientEmails.length > 0 ? recipientEmails : undefined,
           metadata: {
             nomCaissier: closedBy,
+            caissiere: closedBy,
+            fermePar: closedBy,
             secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
             entreprise: company?.name || 'GESTIO 229',
+            caisseReference: caisseActive?.nom || `Caisse ${currentSectorSlug.toUpperCase()}`,
+            
+            // CA & Ventes
             caDuJour: syn.caDuJour || caDuJour,
             especesDuJour: finalEspecesJour,
             momoDuJour: finalMomoJour,
+            ventesCredit: ventesCreditCloture,
+            nombreVentes: nbVentesCloture,
+            nombreArticles: nbArticlesCloture,
+
+            // Marge
+            margeBruteJour: margeBruteJour,
+            margePercent: (syn.caDuJour || caDuJour) > 0 ? Math.round((margeBruteJour / (syn.caDuJour || caDuJour)) * 100) : 0,
+            coutAchat: coutAchatEstimeCloture,
+
+            // Bilan Caisse Espèces
+            fondInitialEspeces: syn.fondInitialEspeces,
+            encaissementsEspeces: finalEspecesJour,
+            approvisionnementsEspeces: 0,
+            depensesEspeces: syn.depensesEspeces,
+            retraitsEspeces: syn.versementsEspeces || retraitsEspecesJour,
+            fondTheoriqueEspeces: finalSoldeTheoriqueEsp,
+            fondReelEspeces: finalMontantConserve,
+            ecartEspeces: 0,
+
+            // Sorties & Solde
             fondActuel: finalMontantConserve + finalSoldeTheoriqueMomo,
             totalDepensesJour: syn.depensesEspeces + syn.depensesMomo,
+            depensesMomo: syn.depensesMomo,
+            depensesDetails: depensesDetailsListCloture,
             totalRemboursementsJour: sumRemboursements,
             remboursement: sumRemboursements,
-            margeBruteJour: margeBruteJour,
+            remboursementsCount: repaymentsToday.length,
+
+            // Créances
             totalCreances: totalCreances,
-            top5Produits: top5ProduitsJour
+            nouvellesCreancesJour: ventesCreditCloture,
+            nombreDossiersCreances: clientsDebiteursList.length,
+            clientsDebiteurs: clientsDebiteursList.slice(0, 5),
+            reglementsCreancesCount: repaymentsToday.length,
+
+            // Produits & Contrôle
+            top5Produits: top5ProduitsJour,
+            nombreClientsServis: clientsServisCountCloture,
+            ventesAnnuleesCount: salesAnnuleesCloture.length,
+            ventesAnnuleesMontant: salesAnnuleesCloture.reduce((acc: number, s: any) => acc + (Number(s.total_amount) || 0), 0),
+            observations: opNotes || 'Clôture automatique validée'
           }
         })
 
@@ -1681,6 +1766,42 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       const pdfBase64 = await blobToBase64(blob)
 
       // 2. Transmettre au backend /api/send-rapport-pdf (Gmail SMTP)
+      const nbVentesMan = salesToday.filter((s: any) => s.status !== 'CANCELLED' && s.status !== 'annule').length
+      const nbArticlesMan = salesToday.reduce((acc: number, s: any) => {
+        if (s.status === 'CANCELLED' || s.status === 'annule') return acc
+        let lines = Array.isArray(s.lines) ? s.lines : null
+        if (!lines && s.notes) {
+          try {
+            const pNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+            if (Array.isArray(pNotes.lines)) lines = pNotes.lines
+          } catch (_) {}
+        }
+        if (Array.isArray(lines) && lines.length > 0) {
+          return acc + lines.reduce((sub: number, l: any) => sub + (Number(l.qty || l.quantity || 1)), 0)
+        }
+        return acc + 1
+      }, 0)
+      const ventesCreditMan = salesToday.reduce((acc: number, s: any) => {
+        if (s.status === 'CANCELLED' || s.status === 'annule') return acc
+        const isCredit = s.payment_status === 'credit' || (s.parsedPayments && s.parsedPayments.some((p: any) => p.method === 'credit'))
+        if (isCredit) {
+          const credAmt = s.parsedPayments?.find((p: any) => p.method === 'credit')?.amount ?? (Number(s.total_amount || 0) - Number(s.paid_amount || 0))
+          return acc + (Number(credAmt) > 0 ? Number(credAmt) : Number(s.total_amount || 0))
+        }
+        return acc
+      }, 0)
+      const coutAchatEstimeMan = salesToday.reduce((acc: number, s: any) => acc + (Number(s.total_cost) || 0), 0) || Math.max(0, caDuJour - margeBruteJour)
+      const salesAnnuleesMan = salesToday.filter((s: any) => s.status === 'CANCELLED' || s.status === 'annule')
+      const clientsServisCountMan = new Set(salesToday.filter((s: any) => s.status !== 'CANCELLED' && s.status !== 'annule').map((s: any) => s.customer_id || s.customer_name || s.id)).size
+      const depensesDetailsListMan = movementsHistory
+        .filter((m: any) => m.type === 'RETRAIT' || (m.motif && m.motif.toLowerCase().includes('dépense')))
+        .map((m: any) => ({
+          motif: m.motif || 'Dépense de caisse',
+          montant: m.amount,
+          mode: m.payment_channel || 'Espèces',
+          auteur: m.user_name || 'Caissier'
+        }))
+
       const res = await envoyerRapportCaisseMail({
         companyId: currentCompanyId,
         secteurId: currentSectorSlug,
@@ -1691,18 +1812,45 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         emails: allEmails.length > 0 ? allEmails : undefined,
         metadata: {
           nomCaissier: activeReportClosure.closed_by || user?.full_name || 'Caissier',
+          caissiere: activeReportClosure.closed_by || user?.full_name || 'Caissier',
+          fermePar: activeReportClosure.closed_by || user?.full_name || 'Caissier',
           secteurNom: secteurActif?.nom || currentSectorSlug.toUpperCase(),
           entreprise: company?.name || 'GESTIO 229',
+          caisseReference: caisseActive?.nom || activeReportClosure.caisse_name || `Caisse ${currentSectorSlug.toUpperCase()}`,
           caDuJour: caDuJour,
           especesDuJour: especesDuJour,
           momoDuJour: momoDuJour || activeReportClosure.fond_momo,
+          ventesCredit: ventesCreditMan,
+          nombreVentes: nbVentesMan,
+          nombreArticles: nbArticlesMan,
+          margeBruteJour: margeBruteJour,
+          margePercent: caDuJour > 0 ? Math.round((margeBruteJour / caDuJour) * 100) : 0,
+          coutAchat: coutAchatEstimeMan,
+          fondInitialEspeces: activeReportClosure.fond_especes_theorique,
+          encaissementsEspeces: especesDuJour,
+          approvisionnementsEspeces: 0,
+          depensesEspeces: sumDepensesEspeces,
+          retraitsEspeces: retraitsEspecesJour,
+          fondTheoriqueEspeces: activeReportClosure.fond_especes_theorique,
+          fondReelEspeces: activeReportClosure.fond_especes_physique,
+          ecartEspeces: activeReportClosure.ecart_especes,
           fondActuel: fondActuelEspeces + fondActuelMomo,
           totalDepensesJour: sumDepensesEspeces + depensesMomoJour,
+          depensesMomo: depensesMomoJour,
+          depensesDetails: depensesDetailsListMan,
           totalRemboursementsJour: remboursementsEspeces + remboursementsMomo,
           remboursement: remboursementsEspeces + remboursementsMomo,
-          margeBruteJour: margeBruteJour,
+          remboursementsCount: repaymentsToday.length,
           totalCreances: totalCreances,
-          top5Produits: top5ProduitsJour
+          nouvellesCreancesJour: ventesCreditMan,
+          nombreDossiersCreances: clientsDebiteursList.length,
+          clientsDebiteurs: clientsDebiteursList.slice(0, 5),
+          reglementsCreancesCount: repaymentsToday.length,
+          top5Produits: top5ProduitsJour,
+          nombreClientsServis: clientsServisCountMan,
+          ventesAnnuleesCount: salesAnnuleesMan.length,
+          ventesAnnuleesMontant: salesAnnuleesMan.reduce((acc: number, s: any) => acc + (Number(s.total_amount) || 0), 0),
+          observations: activeReportClosure.notes || ''
         }
       })
 
