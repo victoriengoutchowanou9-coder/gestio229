@@ -22,6 +22,7 @@ export default defineConfig({
     react(),
     VitePWA({
       registerType: 'autoUpdate',
+      manifestFilename: 'manifest.json',
       workbox: {
         skipWaiting: true,
         clientsClaim: true,
@@ -35,12 +36,12 @@ export default defineConfig({
         short_name: 'GESTIO 229',
         description: 'Logiciel de gestion commerciale, stocks, caisse, facturation et multi-activités GESTIO 229',
         display: 'standalone',
-        display_override: ['standalone'],
+        display_override: ['standalone', 'window-controls-overlay'],
         orientation: 'any',
         scope: '/',
         start_url: '/',
         background_color: '#064e3b',
-        theme_color: '#059669',
+        theme_color: '#064e3b',
         lang: 'fr-BJ',
         categories: ['business', 'finance', 'productivity'],
         icons: [

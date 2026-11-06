@@ -1,7 +1,8 @@
 // src/components/common/SplashScreen.tsx
 // =============================================================================
 // GESTIO 229 — Native-Feel Splash Screen (React Component)
-// Affiche le fond #0a1931, le logo GESTIO 229 animé (pulse), le texte et le spinner
+// Affiche le fond #064e3b, le logo GESTIO 229 animé (pulse), le texte et le spinner
+// Design identique au splash natif HTML de index.html pour transition fluide
 // =============================================================================
 
 import React from 'react'
@@ -44,9 +45,14 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
           <span className="text-amber-400">229</span>
         </div>
 
-        {/* Sous-titre entreprise */}
-        <div className="text-[11px] font-bold tracking-[0.2em] text-slate-400 uppercase mt-1">
-          STE GESTIO SARL
+        {/* Sous-titre ERP & CAISSE */}
+        <div className="text-xs font-bold tracking-[0.2em] text-emerald-400 uppercase mt-1.5">
+          ERP &amp; CAISSE
+        </div>
+
+        {/* STANDARD DU BÉNIN */}
+        <div className="text-[10px] font-semibold tracking-[0.15em] text-slate-400 uppercase mt-1">
+          STANDARD DU B&#201;NIN
         </div>
       </div>
 
@@ -64,11 +70,6 @@ export const SplashScreen: React.FC<SplashScreenProps> = ({
             {submessage}
           </p>
         )}
-      </div>
-
-      {/* Footer standard Bénin */}
-      <div className="absolute bottom-6 text-[10px] font-semibold text-slate-400 tracking-wider uppercase">
-        RÉPUBLIQUE DU BÉNIN &bull; ERP & CAISSE
       </div>
     </div>
   )
