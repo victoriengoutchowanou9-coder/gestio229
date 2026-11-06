@@ -1276,8 +1276,8 @@ export async function cloturerSessionCaisseAutomatique(params: {
             caisse_id: isValidUUID(caisseId) ? caisseId : null,
             fond_actuel_especes: montantConserve,
             fond_actuel_momo: finalSoldeMomo,
-            fond_initial_especes: montantConserve,
-            fond_initial_momo: finalSoldeMomo,
+            fond_initial_especes: synthese.fondInitialEspeces, // Préserver le fond initial de la session
+            fond_initial_momo: synthese.fondInitialMomo,
             updated_at: nowIso,
           })
           .catch(() => {})
@@ -2056,15 +2056,24 @@ export async function cloturerCaisseOfficielle(
     const curJour = await getCaisseJournaliereBySector(companyId, secteurId, caisseId, today)
     const curFond = await getFondsActuelsBySector(companyId, secteurId, caisseId)
 
-    const espTransf = curJour.especes_du_jour || 0
-    const momoTransf = curJour.momo_du_jour || 0
-    const newEsp = (curFond.fond_actuel_especes || 0) + espTransf
-    const newMomo = (curFond.fond_actuel_momo || 0) + momoTransf
+    const espTransf = Number(curJour.especes_du_jour || 0)
+    const momoTransf = Number(curJour.momo_du_jour || 0)
 
-    const fondTheorique = details?.solde_theorique ?? details?.fond_theorique ?? curFond.fond_actuel_especes ?? 0
-    const fondReel = details?.fond_reel ?? newEsp
+    // RÈGLE COMPTABLE STRICTE (ANTI-DOUBLE COMPTABILISATION) :
+    // Fonds final théorique = Fonds initial + Encaissements du jour - Dépenses - Retraits
+    // curFond.fond_actuel_especes intègre déjà les entrées/sorties. On ne doit JAMAIS lui rajouter espTransf !
+    const fondInitialEspJour = Number(details?.fond_initial_matin ?? details?.fond_initial ?? curFond.fond_initial_especes ?? 0)
+    const totalEntreesEspJour = Number(details?.total_entrees_jour ?? details?.total_entrees ?? espTransf)
+    const totalDepensesEspJour = Number(details?.total_depenses_jour ?? details?.total_sorties ?? 0)
+
+    const soldeTheoriqueCalculeEsp = details?.solde_theorique ?? details?.fond_theorique ?? (fondInitialEspJour + totalEntreesEspJour - totalDepensesEspJour)
+    const fondTheorique = soldeTheoriqueCalculeEsp
+    const fondReel = details?.fond_reel ?? soldeTheoriqueCalculeEsp
     const ecart = details?.ecart ?? (fondReel - fondTheorique)
     const montantLaisse = details?.fond_initial_suivant ?? details?.montant_laisse ?? fondReel
+
+    const fondInitialMomoJour = Number(curFond.fond_initial_momo || 0)
+    const soldeTheoriqueMomo = Number(curFond.fond_actuel_momo ?? (fondInitialMomoJour + momoTransf))
 
     // Mettre à jour fonds_actuels si secteur valide
     if (validSecteurId) {
@@ -2076,9 +2085,9 @@ export async function cloturerCaisseOfficielle(
             secteur_id: validSecteurId,
             caisse_id: validCaisseId,
             fond_actuel_especes: montantLaisse,
-            fond_actuel_momo: newMomo,
-            fond_initial_especes: montantLaisse,
-            fond_initial_momo: newMomo,
+            fond_actuel_momo: soldeTheoriqueMomo,
+            fond_initial_especes: fondInitialEspJour, // Préserver strictement le fond initial sans écrasement
+            fond_initial_momo: fondInitialMomoJour,
             updated_at: new Date().toISOString(),
           })
 

@@ -35,10 +35,52 @@ export interface EmailSendResult {
   recipients?: string[]
 }
 
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+const OFFICIAL_SUPABASE_URL = 'https://inknljnhqmrykcrgglts.supabase.co'
+const OFFICIAL_SUPABASE_ANON_KEY = 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
+
+function sanitizeSupabaseUrl(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return OFFICIAL_SUPABASE_URL
+  const trimmed = raw.trim().replace(/["']/g, '')
+  // Sécurité absolue : Une adresse email (contenant @) ne peut JAMAIS être une URL Supabase
+  if (trimmed.includes('@')) {
+    console.warn('[emailHelper] Attention : La variable d\'environnement SUPABASE_URL contient une adresse email. Repli automatique sur l\'URL Supabase certifiée.')
+    return OFFICIAL_SUPABASE_URL
+  }
+  let withProto = trimmed
+  if (!withProto.startsWith('http://') && !withProto.startsWith('https://')) {
+    withProto = `https://${withProto}`
+  }
+  try {
+    const parsed = new URL(withProto)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return withProto
+    }
+  } catch (_) {}
+  return OFFICIAL_SUPABASE_URL
+}
+
+function sanitizeSupabaseKey(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return OFFICIAL_SUPABASE_ANON_KEY
+  const trimmed = raw.trim().replace(/["']/g, '')
+  if (trimmed.includes('@') || trimmed.length < 10) {
+    return OFFICIAL_SUPABASE_ANON_KEY
+  }
+  return trimmed
+}
+
+export function getSupabaseClient() {
+  const rawUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL
+  const finalUrl = sanitizeSupabaseUrl(rawUrl)
+
+  const rawKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY
+  const finalKey = sanitizeSupabaseKey(rawKey)
+
+  try {
+    return createClient(finalUrl, finalKey, { auth: { persistSession: false, autoRefreshToken: false } })
+  } catch (err) {
+    console.warn('[emailHelper] Erreur initialisation client Supabase, repli certifié :', err)
+    return createClient(OFFICIAL_SUPABASE_URL, OFFICIAL_SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
+  }
 }
 
 /**

@@ -7,13 +7,41 @@ import { createResilientFetch } from './supabaseResilientFetch'
 
 const env = (typeof import.meta !== 'undefined' && import.meta.env) ? import.meta.env : (typeof process !== 'undefined' ? process.env : {}) as any
 
-let rawUrl = (env.VITE_SUPABASE_URL as string) || 'https://inknljnhqmrykcrgglts.supabase.co'
-if (rawUrl && !rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
-  rawUrl = `https://${rawUrl}`
+const OFFICIAL_SUPABASE_URL = 'https://inknljnhqmrykcrgglts.supabase.co'
+const OFFICIAL_SUPABASE_ANON_KEY = 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
+
+function sanitizeSupabaseUrl(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return OFFICIAL_SUPABASE_URL
+  const trimmed = raw.trim().replace(/["']/g, '')
+  // Une adresse email (contenant @) ne peut JAMAIS être une URL Supabase
+  if (trimmed.includes('@')) {
+    console.warn('[supabase.ts] La variable VITE_SUPABASE_URL contient une adresse email. Utilisation automatique de l\'URL Supabase officielle.')
+    return OFFICIAL_SUPABASE_URL
+  }
+  let withProto = trimmed
+  if (!withProto.startsWith('http://') && !withProto.startsWith('https://')) {
+    withProto = `https://${withProto}`
+  }
+  try {
+    const parsed = new URL(withProto)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      return withProto
+    }
+  } catch (_) {}
+  return OFFICIAL_SUPABASE_URL
 }
 
-const supabaseUrl = rawUrl
-const supabaseAnonKey = (env.VITE_SUPABASE_ANON_KEY as string) || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
+function sanitizeSupabaseKey(raw?: string): string {
+  if (!raw || typeof raw !== 'string') return OFFICIAL_SUPABASE_ANON_KEY
+  const trimmed = raw.trim().replace(/["']/g, '')
+  if (trimmed.includes('@') || trimmed.length < 10) {
+    return OFFICIAL_SUPABASE_ANON_KEY
+  }
+  return trimmed
+}
+
+const supabaseUrl = sanitizeSupabaseUrl(env.VITE_SUPABASE_URL || env.NEXT_PUBLIC_SUPABASE_URL || env.SUPABASE_URL)
+const supabaseAnonKey = sanitizeSupabaseKey(env.VITE_SUPABASE_ANON_KEY || env.NEXT_PUBLIC_SUPABASE_ANON_KEY || env.SUPABASE_ANON_KEY)
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {

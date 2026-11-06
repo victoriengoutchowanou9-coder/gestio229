@@ -14,8 +14,11 @@ serve(async (req) => {
   try {
     const { company_id, secteur_id, caisse_id, date, pdfBase64, emails, metadata } = await req.json()
 
-    const supabaseUrl = Deno.env.get('SUPABASE_URL') || ''
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || ''
+    const rawSbUrl = Deno.env.get('SUPABASE_URL') || ''
+    const supabaseUrl = (rawSbUrl && rawSbUrl.startsWith('http') && !rawSbUrl.includes('@'))
+      ? rawSbUrl
+      : 'https://inknljnhqmrykcrgglts.supabase.co'
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') || Deno.env.get('SUPABASE_ANON_KEY') || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
     const resendApiKey = Deno.env.get('RESEND_API_KEY') || ''
 
     const supabase = createClient(supabaseUrl, supabaseServiceKey)

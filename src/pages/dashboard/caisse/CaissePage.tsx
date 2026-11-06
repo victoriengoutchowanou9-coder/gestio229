@@ -93,6 +93,8 @@ interface CashClosure {
   closed_at: string
   closed_by: string
   caisse_name: string
+  fond_initial?: number
+  fond_initial_momo?: number
   fond_especes_theorique: number
   fond_especes_physique: number
   ecart_especes: number
@@ -1157,36 +1159,36 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const retraitsEspecesJour = totalRetraitsEspeces
   const retraitsMomoJour = totalRetraitsMomo
 
-  // 2. Fond Initial / Report réel du matin (RÈGLE MÉTIER OFFICIELLE) :
-  // Le Report doit correspondre au Fond Initial Matin réel laissé lors de la dernière clôture.
-  // Ne jamais afficher 0 si un fond persistant existe en caisse.
-  const reportEspecesRaw = Number(lastClosure.fond_reel_especes) || Number(fondsActuelsData.fond_initial_especes) || initialCash
-  const netMouvementsEspecesJour = especesDuJour - depensesEspecesJour - retraitsEspecesJour
-  const fondSecteurEsp = Number(fondsActuelsData.fond_actuel_especes) || 0
+  // 2. Fond Initial / Report réel du matin (RÈGLE MÉTIER STRICTE - ZÉRO DOUBLE COMPTABILISATION) :
+  // Le Fond Initial Matin doit correspondre au fond d'ouverture réel de la session.
+  // En session fermée, il ne doit JAMAIS être remplacé par le solde final pour recalculer les fonds !
+  const fondInitialOuvertureEsp = (initialCash > 0)
+    ? initialCash
+    : (Number(lastClosure.fond_initial) || Number(fondsActuelsData.fond_initial_especes) || Number(lastClosure.fond_reel_especes) || 0)
 
-  const reportEspeces = reportEspecesRaw > 0
-    ? reportEspecesRaw
-    : (fondSecteurEsp > netMouvementsEspecesJour && fondSecteurEsp > 0
-        ? Math.max(0, fondSecteurEsp - netMouvementsEspecesJour)
-        : reportEspecesRaw)
+  const fondInitialOuvertureMomo = (initialMomo > 0)
+    ? initialMomo
+    : (Number(lastClosure.fond_initial_momo) || Number(fondsActuelsData.fond_initial_momo) || Number(lastClosure.fond_reel_momo) || 0)
 
-  const reportMomoRaw = Number(lastClosure.fond_reel_momo) || Number(fondsActuelsData.fond_initial_momo) || initialMomo
-  const netMouvementsMomoJour = momoDuJour - depensesMomoJour - retraitsMomoJour
-  const fondSecteurMomo = Number(fondsActuelsData.fond_actuel_momo) || 0
+  const fondInitialEspeces = fondInitialOuvertureEsp
+  const fondInitialMomo = fondInitialOuvertureMomo
 
-  const reportMomo = reportMomoRaw > 0
-    ? reportMomoRaw
-    : (fondSecteurMomo > netMouvementsMomoJour && fondSecteurMomo > 0
-        ? Math.max(0, fondSecteurMomo - netMouvementsMomoJour)
-        : reportMomoRaw)
+  // 3. FOND ACTUEL & SOLDE THÉORIQUE (FORMULES COMPTABLES OFFICIELLES GESTIO 229) :
+  // En session OUVERTE :
+  //   Solde Théorique = Fond Initial + Encaissements du jour (ventes + recouvrements) - Dépenses - Retraits
+  // En session FERMÉE :
+  //   Le Solde Théorique et le Fond Actuel correspondent exactement au solde final arrêté lors de la clôture,
+  //   sans JAMAIS ré-additionner une seconde fois les ventes de la journée !
+  const soldeTheoriqueEnCoursEsp = fondInitialEspeces + especesDuJour - depensesEspecesJour - retraitsEspecesJour
+  const soldeTheoriqueEnCoursMomo = fondInitialMomo + momoDuJour - depensesMomoJour - retraitsMomoJour
 
-  const fondInitialEspeces = (caisseStatus === 'OUVERTE' && initialCash > 0) ? initialCash : reportEspeces
-  const fondInitialMomo = (caisseStatus === 'OUVERTE' && initialMomo > 0) ? initialMomo : reportMomo
+  const fondTheoriqueEsp = (caisseStatus === 'FERMEE' && lastClosure.fond_especes_theorique !== undefined)
+    ? Number(lastClosure.fond_especes_theorique)
+    : soldeTheoriqueEnCoursEsp
 
-  // 3. FOND ACTUEL & SOLDE THÉORIQUE (RÈGLE MÉTIER OFFICIELLE) :
-  // Fond Actuel Espèces = Fond Initial du Matin (clôture veille) + Somme ventes Espèces du jour + Autres entrées espèces - Dépenses espèces - Versements banque/retraits
-  const fondTheoriqueEsp = fondInitialEspeces + especesDuJour - depensesEspecesJour - retraitsEspecesJour
-  const fondTheoriqueMomo = fondInitialMomo + momoDuJour - depensesMomoJour - retraitsMomoJour
+  const fondTheoriqueMomo = (caisseStatus === 'FERMEE' && lastClosure.fond_momo !== undefined)
+    ? Number(lastClosure.fond_momo)
+    : soldeTheoriqueEnCoursMomo
 
   const fondActuelEspeces = fondTheoriqueEsp
   const fondActuelMomo = fondTheoriqueMomo
@@ -1320,6 +1322,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         closed_at: closedAt,
         closed_by: closedBy,
         caisse_name: caisseActive?.nom || `Caisse ${currentSectorSlug.toUpperCase()}`,
+        fond_initial: syn.fondInitialEspeces,
+        fond_initial_momo: syn.fondInitialMomo,
         fond_especes_theorique: finalSoldeTheoriqueEsp,
         fond_especes_physique: finalSoldeTheoriqueEsp,
         ecart_especes: 0,

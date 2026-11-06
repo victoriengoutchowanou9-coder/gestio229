@@ -5,13 +5,17 @@
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
-import { createClient } from '@supabase/supabase-js'
-import { sendTrackedEmail, getActiveEmailProviderInfo, diagnoseEmailError } from './_lib/emailHelper.ts'
+import { sendTrackedEmail, getActiveEmailProviderInfo, diagnoseEmailError, getSupabaseClient } from './_lib/emailHelper.ts'
 
-function getSupabaseClient() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || 'sb_publishable_GxeQWvSKrMpnH9VkAEfGFQ_I_uKxaXr'
-  return createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } })
+// Cache en mémoire pour protection anti-doublon et idempotence (fenêtre 2 minutes)
+const recentDispatches = new Map<string, { timestamp: number; recipients: string[]; messageId?: string }>()
+function purgeRecentDispatches() {
+  const now = Date.now()
+  for (const [key, val] of recentDispatches.entries()) {
+    if (now - val.timestamp > 120000) {
+      recentDispatches.delete(key)
+    }
+  }
 }
 
 function formatFCFA(n: number = 0): string {
@@ -64,33 +68,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       metadata = {},
     } = body
 
-    // 1. Récupération des destinataires actifs dans la base de données
+    // 1. Protection Anti-Doublons & Idempotence stricte
+    purgeRecentDispatches()
+    const idempotencyKey = String(body.clotureId || metadata.clotureId || `${companyId}_${secteurId}_${date}_${metadata.caDuJour}_${metadata.fondActuel}`)
+    if (recentDispatches.has(idempotencyKey)) {
+      const cached = recentDispatches.get(idempotencyKey)!
+      console.log(`[send-rapport-pdf] Requête idempotente détectée pour ${idempotencyKey}, retour confirmation sans réexpédition.`)
+      return res.status(200).json({
+        success: true,
+        message: `Rapport déjà transmis avec succès à ${cached.recipients.length} destinataire(s).`,
+        recipients: cached.recipients,
+        messageId: cached.messageId,
+        idempotent: true,
+      })
+    }
+
+    // 2. Récupération consolidée de TOUS les destinataires actifs
     const targetEmails: string[] = []
     const seenEmails = new Set<string>()
 
-    if (companyId) {
-      try {
-        const { data: dbDest, error: dbErr } = await supabase
-          .from('parametres_destinataires')
-          .select('email, nom, actif')
-          .eq('company_id', companyId)
-          .eq('actif', true)
-
-        if (!dbErr && Array.isArray(dbDest)) {
-          dbDest.forEach((d) => {
-            const em = (d.email || '').trim().toLowerCase()
-            if (em && em.includes('@') && !seenEmails.has(em)) {
-              seenEmails.add(em)
-              targetEmails.push(em)
-            }
-          })
-        }
-      } catch (err) {
-        console.warn('[send-rapport-pdf] Erreur lecture parametres_destinataires :', err)
-      }
-    }
-
-    // Destinataires supplémentaires spécifiés
+    // Priorité 1 : Destinataires fournis directement par le client de caisse
     if (Array.isArray(customEmails)) {
       customEmails.forEach((raw) => {
         const em = (raw || '').trim().toLowerCase()
@@ -99,6 +96,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           targetEmails.push(em)
         }
       })
+    }
+
+    // Priorité 2 : Destinataires actifs configurés dans parametres_destinataires (BDD)
+    try {
+      let q = supabase
+        .from('parametres_destinataires')
+        .select('email, nom, actif, company_id')
+        .eq('actif', true)
+
+      if (companyId) {
+        q = q.eq('company_id', companyId)
+      }
+
+      const { data: dbDest, error: dbErr } = await q
+
+      if (!dbErr && Array.isArray(dbDest)) {
+        dbDest.forEach((d) => {
+          const em = (d.email || '').trim().toLowerCase()
+          if (em && em.includes('@') && !seenEmails.has(em)) {
+            seenEmails.add(em)
+            targetEmails.push(em)
+          }
+        })
+      }
+    } catch (err) {
+      console.warn('[send-rapport-pdf] Notice lecture parametres_destinataires :', err)
     }
 
     // Fallback email officiel entreprise
@@ -831,6 +854,12 @@ Plateforme GESTIO 229 ERP • www.gestio229.com
     })
 
     if (sendResult.success) {
+      recentDispatches.set(idempotencyKey, {
+        timestamp: Date.now(),
+        recipients: sendResult.recipients || targetEmails,
+        messageId: sendResult.messageId,
+      })
+
       return res.status(200).json({
         success: true,
         message: `Rapport transmis avec succès à ${sendResult.recipients?.length || targetEmails.length} destinataire(s) via ${sendResult.providerLabel}.`,
