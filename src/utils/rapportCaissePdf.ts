@@ -531,7 +531,11 @@ export async function envoyerRapportCaisseMail(params: {
     try {
       result = JSON.parse(text)
     } catch {
-      throw new Error(text.slice(0, 300) || 'Erreur serveur HTTP ' + response.status)
+      let cleanMsg = text.replace(/<[^>]+>/g, '').trim().slice(0, 300)
+      if (cleanMsg.includes('FUNCTION_INVOCATION_FAILED')) {
+        cleanMsg = "Échec d'exécution serveur Vercel. Vérifiez les variables d'environnement SMTP dans Vercel."
+      }
+      throw new Error(cleanMsg || 'Erreur serveur HTTP ' + response.status)
     }
 
     if (!response.ok || !result.success) {

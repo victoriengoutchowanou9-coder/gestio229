@@ -1,11 +1,12 @@
 // =============================================================================
 // GESTIO 229 ERP — Vercel Serverless Function : POST /api/send-rapport-pdf
 // Envoi du Rapport de Caisse PDF via moteur multi-fournisseurs (Resend HTTPS / Gmail SMTP)
+// 100% Autonome — Zéro dépendance relative — Ne plante jamais en FUNCTION_INVOCATION_FAILED
 // =============================================================================
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
+import nodemailer from 'nodemailer'
 import { createClient } from '@supabase/supabase-js'
-import { sendTrackedEmail, getActiveEmailProviderInfo } from './_lib/emailHelper'
 
 function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || 'https://inknljnhqmrykcrgglts.supabase.co'
@@ -17,6 +18,177 @@ function formatFCFA(n: number = 0): string {
   return `${Math.round(n).toLocaleString('fr-FR')} FCFA`
 }
 
+// ─── Envoi via Resend API (HTTPS Port 443) ───────────────────────────────────
+async function sendViaResend(
+  apiKey: string,
+  fromName: string,
+  fromEmail: string,
+  recipients: string[],
+  subject: string,
+  html: string,
+  text: string,
+  attachments?: Array<{ filename: string; content: string }>
+) {
+  let sender = `${fromName} <${fromEmail}>`
+  if (fromEmail.includes('@gmail.com') || fromEmail.includes('@yahoo.') || fromEmail.includes('@hotmail.')) {
+    sender = `${fromName} <onboarding@resend.dev>`
+  }
+
+  const payload: any = {
+    from: sender,
+    to: recipients,
+    reply_to: fromEmail,
+    subject,
+    html,
+    text,
+  }
+
+  if (attachments && attachments.length > 0) {
+    payload.attachments = attachments.map((att) => ({
+      filename: att.filename,
+      content: att.content,
+    }))
+  }
+
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  const data = await res.json()
+  if (!res.ok || data.error) {
+    throw new Error(data.error?.message || data.message || `Erreur Resend HTTP ${res.status}`)
+  }
+  return { messageId: data.id, provider: 'Resend API (HTTPS Port 443)' }
+}
+
+// ─── Envoi via Brevo API (HTTPS Port 443) ────────────────────────────────────
+async function sendViaBrevo(
+  apiKey: string,
+  fromName: string,
+  fromEmail: string,
+  recipients: string[],
+  subject: string,
+  html: string,
+  text: string,
+  attachments?: Array<{ filename: string; content: string }>
+) {
+  const payload: any = {
+    sender: { name: fromName, email: fromEmail },
+    to: recipients.map((email) => ({ email })),
+    subject,
+    htmlContent: html,
+    textContent: text,
+  }
+
+  if (attachments && attachments.length > 0) {
+    payload.attachment = attachments.map((att) => ({
+      name: att.filename,
+      content: att.content,
+    }))
+  }
+
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'api-key': apiKey,
+    },
+    body: JSON.stringify(payload),
+  })
+
+  const data = await res.json()
+  if (!res.ok || data.code) {
+    throw new Error(data.message || `Erreur Brevo HTTP ${res.status}`)
+  }
+  return { messageId: data.messageId || data.id, provider: 'Brevo API (HTTPS Port 443)' }
+}
+
+// ─── Envoi via Gmail SMTP Direct (Port 465 SSL puis Port 587 TLS) ───────────
+async function sendViaSmtp(
+  fromHeader: string,
+  recipients: string[],
+  subject: string,
+  html: string,
+  text: string,
+  attachments?: Array<{ filename: string; content: string }>
+) {
+  const host = (process.env.SMTP_HOST || 'smtp.gmail.com').trim()
+  const user = (process.env.SMTP_USER || process.env.SMTP_FROM_EMAIL || '').trim()
+  const pass = (process.env.SMTP_PASS || '').trim().replace(/\s+/g, '')
+
+  const nodemailerAttachments = attachments?.map((att) => ({
+    filename: att.filename,
+    content: Buffer.from(att.content, 'base64'),
+    contentType: 'application/pdf',
+  }))
+
+  let lastError: any = null
+
+  // Tentative 1 : Port 465 (SSL direct)
+  try {
+    const transporter465 = nodemailer.createTransport({
+      host,
+      port: 465,
+      secure: true,
+      auth: { user, pass },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+    })
+
+    const info = await transporter465.sendMail({
+      from: fromHeader,
+      to: recipients.join(', '),
+      subject,
+      html,
+      text,
+      attachments: nodemailerAttachments,
+    })
+
+    return { messageId: info.messageId, provider: 'Gmail SMTP (Port 465 SSL)' }
+  } catch (err465: any) {
+    lastError = err465
+    console.warn('[send-rapport-pdf] Port 465 échoué, tentative sur Port 587...', err465?.message)
+  }
+
+  // Tentative 2 : Port 587 (STARTTLS)
+  try {
+    const transporter587 = nodemailer.createTransport({
+      host,
+      port: 587,
+      secure: false,
+      auth: { user, pass },
+      tls: { rejectUnauthorized: false },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000,
+    })
+
+    const info = await transporter587.sendMail({
+      from: fromHeader,
+      to: recipients.join(', '),
+      subject,
+      html,
+      text,
+      attachments: nodemailerAttachments,
+    })
+
+    return { messageId: info.messageId, provider: 'Gmail SMTP (Port 587 TLS)' }
+  } catch (err587: any) {
+    lastError = err587
+    console.error('[send-rapport-pdf] Port 587 échoué également :', err587?.message)
+  }
+
+  throw lastError || new Error('Impossible d\'expédier l\'email via SMTP.')
+}
+
+// ─── Handler Principal ───────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
     res.setHeader('Content-Type', 'application/json; charset=utf-8')
@@ -48,7 +220,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       metadata = {},
     } = req.body || {}
 
-    // 1. Récupérer les destinataires actifs depuis parametres_destinataires (où actif = true)
+    // 1. Récupération des destinataires actifs dans la base de données
     const targetEmails: string[] = []
     const seenEmails = new Set<string>()
 
@@ -74,7 +246,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
-    // Destinataires supplémentaires passés en paramètre
+    // Destinataires supplémentaires spécifiés
     if (Array.isArray(customEmails)) {
       customEmails.forEach((raw) => {
         const em = (raw || '').trim().toLowerCase()
@@ -85,7 +257,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       })
     }
 
-    // Si aucun destinataire trouvé, repli sur l'email officiel de l'entreprise
+    // Si aucun destinataire, repli sur l'email officiel de l'entreprise
     if (targetEmails.length === 0 && companyId) {
       try {
         const { data: comp } = await supabase
@@ -104,20 +276,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       } catch (_) {}
     }
 
-    // Repli de dernier recours
+    // Repli par défaut
     if (targetEmails.length === 0) {
       const fallbackEmail = (process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou2024@gmail.com').trim()
       if (fallbackEmail) targetEmails.push(fallbackEmail)
     }
 
     if (targetEmails.length === 0) {
-      return res.status(400).json({
+      return res.status(200).json({
         success: false,
         error: 'Aucun destinataire configuré pour recevoir le rapport de caisse.',
+        diagnostic: 'Veuillez enregistrer au moins une adresse email active dans "Destinataires du Rapport de Caisse".',
       })
     }
 
-    // 2. Préparation des données réelles du rapport
+    // 2. Préparation des statistiques et des données du rapport
     const dateFormatted = date || new Date().toLocaleDateString('fr-BJ')
     const heureFormatted = heure || new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
     const dateHeure = `${dateFormatted} à ${heureFormatted}`
@@ -175,7 +348,7 @@ RENTABILITÉ & SORTIES :
 - Remboursement du jour : ${formatFCFA(remboursement)}
 
 SITUATION CRÉANCES :
-- Situation des créances actuel : ${formatFCFA(creances)} (total restant dû clients à ce jour)
+- Situation des créances actuel : ${formatFCFA(creances)}
 
 TOP 5 PRODUITS VENDUS DU JOUR :
 ${top5Text}
@@ -210,302 +383,122 @@ Le rapport officiel complet est joint à ce message au format PDF.
       `
 
     const htmlBody = `
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml">
-<head>
-  <meta http-equiv="Content-Type" content="text/html; charset=UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Fermeture de Caisse - ${secteur}</title>
-</head>
-<body style="margin: 0; padding: 0; background-color: #F3F4F6; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
-
-  <table width="100%" border="0" cellpadding="0" cellspacing="0" style="background-color: #F3F4F6; margin: 0; padding: 24px 0;">
+<!DOCTYPE html>
+<html lang="fr">
+<head><meta charset="utf-8" /></head>
+<body style="margin: 0; padding: 24px 12px; background-color: #064e3b; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
+  <table width="100%" border="0" cellpadding="0" cellspacing="0">
     <tr>
-      <td align="center" style="padding: 0 12px;">
-
-        <table width="100%" border="0" cellpadding="0" cellspacing="0" style="max-width: 600px; width: 100%; background-color: #FFFFFF; border-radius: 16px; overflow: hidden; border: 1px solid #E5E7EB; box-shadow: 0 4px 12px rgba(15, 31, 60, 0.05);">
-
-          <!-- HEADER BLEU NUIT (#0F1F3C) -->
+      <td align="center">
+        <table width="100%" border="0" cellpadding="0" cellspacing="0" style="max-width: 600px; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 16px 36px rgba(0,0,0,0.35);">
           <tr>
-            <td align="center" style="background-color: #0F1F3C; padding: 28px 24px; text-align: center;">
-              <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 22px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.3px; padding-bottom: 6px;">
-                    🏪 Fermeture de Caisse (Z Officiel)
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 600; color: #38BDF8; padding-bottom: 4px;">
-                    ${entreprise}
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 500; color: #CBD5E1; padding-bottom: 4px;">
-                    ${dateHeure} — <strong style="color: #FFFFFF;">${caissiere}</strong>
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; font-weight: 700; color: #94A3B8; text-transform: uppercase; letter-spacing: 0.5px;">
-                    Secteur : <span style="color: #FFFFFF;">${secteur}</span>
-                  </td>
-                </tr>
-              </table>
+            <td align="center" style="background: linear-gradient(135deg, #059669 0%, #064e3b 100%); padding: 28px 24px; text-align: center; color: #ffffff;">
+              <h1 style="margin: 0; font-size: 22px; font-weight: 900;">🏪 Fermeture de Caisse (Z Officiel)</h1>
+              <p style="margin: 6px 0 0; font-size: 14px; font-weight: 600; color: #34d399;">${entreprise}</p>
+              <p style="margin: 4px 0 0; font-size: 12px; color: #cbd5e1;">${dateHeure} — <strong>${caissiere}</strong> (${secteur})</p>
             </td>
           </tr>
-
-          <!-- CORPS DU RAPPORT -->
           <tr>
-            <td style="padding: 22px 24px 24px 24px;">
+            <td style="padding: 24px 28px; font-size: 14px; color: #334155;">
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+                <p style="margin: 6px 0; font-size: 16px;"><strong>Chiffre d'Affaires du Jour :</strong> <span style="color: #059669; font-weight: 900;">${formatFCFA(ca)}</span></p>
+                <p style="margin: 4px 0;">• Espèces : <strong>${formatFCFA(espece)}</strong> | Mobile Money : <strong>${formatFCFA(momo)}</strong></p>
+                <p style="margin: 4px 0;">• Dépenses : <strong>${formatFCFA(depenses)}</strong> | Remboursements : <strong>${formatFCFA(remboursement)}</strong></p>
+                <p style="margin: 4px 0;">• Marge brute : <strong>${formatFCFA(marge)} (${margePercent}%)</strong></p>
+                <p style="margin: 4px 0;">• Solde final : <strong>${formatFCFA(soldeFinal)}</strong> | Écart : <strong style="color: ${ecart === 0 ? '#059669' : '#dc2626'};">${ecart === 0 ? '0 FCFA (Conforme)' : formatFCFA(ecart)}</strong></p>
+                <p style="margin: 4px 0;">• Créances restantes dues : <strong>${formatFCFA(creances)}</strong></p>
+              </div>
 
-              <!-- SECTION 1 - CHIFFRE D'AFFAIRES DU JOUR -->
-              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
-                <tr>
-                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    💰 CHIFFRE D'AFFAIRES DU JOUR
-                  </td>
-                </tr>
-                <tr>
-                  <td style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 18px 20px;">
-                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td align="left" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #475569;">
-                          Total des ventes validées
-                        </td>
-                        <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 26px; font-weight: 900; color: #0F1F3C; letter-spacing: -0.5px; white-space: nowrap;">
-                          ${formatFCFA(ca)}
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
+              <h3 style="margin: 16px 0 8px; font-size: 13px; text-transform: uppercase; color: #064e3b; letter-spacing: 0.5px;">🏆 Top 5 Produits Vendus</h3>
+              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="background: #ffffff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 6px 14px; margin-bottom: 20px;">
+                ${top5RowsHtml}
               </table>
 
-              <!-- SECTION 2 - DÉTAILS ENCAISSEMENTS & SOLDE -->
-              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
-                <tr>
-                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    🏦 DÉTAILS ENCAISSEMENTS &amp; SOLDE
-                  </td>
-                </tr>
-                <tr>
-                  <td style="background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 6px 18px;">
-                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
-                          Espèce du jour
-                        </td>
-                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
-                          ${formatFCFA(espece)}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="border-top: 1px solid #F1F5F9; height: 1px; padding: 0;"></td>
-                      </tr>
-                      <tr>
-                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
-                          MoMo du jour <span style="font-size: 11px; color: #94A3B8;">(MTN + Moov)</span>
-                        </td>
-                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
-                          ${formatFCFA(momo)}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="border-top: 1px solid #F1F5F9; height: 1px; padding: 0;"></td>
-                      </tr>
-                      <tr>
-                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #0F1F3C;">
-                          Solde final en caisse (report lendemain)
-                        </td>
-                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; font-weight: 900; color: #059669; white-space: nowrap;">
-                          ${formatFCFA(soldeFinal)}
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- SECTION 3 - RENTABILITÉ & SORTIES -->
-              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
-                <tr>
-                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    📈 RENTABILITÉ &amp; SORTIES
-                  </td>
-                </tr>
-                <tr>
-                  <td style="background-color: #ECFDF5; border: 1px solid #A7F3D0; border-radius: 12px; padding: 6px 18px;">
-                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; font-weight: 700; color: #065F46;">
-                          Marge brute du jour
-                        </td>
-                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #0E9F6E; white-space: nowrap;">
-                          ${formatFCFA(marge)} <span style="font-size: 12px; font-weight: 800; color: #0E9F6E; margin-left: 4px;">(${margePercent}%)</span>
-                        </td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="border-top: 1px solid #A7F3D0; height: 1px; padding: 0;"></td>
-                      </tr>
-                      <tr>
-                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #374151;">
-                          Dépenses du jour
-                        </td>
-                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
-                          ${formatFCFA(depenses)}
-                        </td>
-                      </tr>
-                      <tr>
-                        <td colspan="2" style="border-top: 1px solid #A7F3D0; height: 1px; padding: 0;"></td>
-                      </tr>
-                      <tr>
-                        <td align="left" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #374151;">
-                          Remboursement du jour
-                        </td>
-                        <td align="right" style="padding: 10px 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 14px; font-weight: 800; color: #111827; white-space: nowrap;">
-                          ${formatFCFA(remboursement)}
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- SECTION 4 - SITUATION CRÉANCES -->
-              <table width="100%" border="0" cellpadding="0" cellspacing="0" style="margin-bottom: 20px;">
-                <tr>
-                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    📋 SITUATION CRÉANCES CLIENTS
-                  </td>
-                </tr>
-                <tr>
-                  <td style="background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 14px 18px;">
-                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                      <tr>
-                        <td align="left" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 13px; color: #475569;">
-                          Situation des créances actuel<br/>
-                          <span style="font-size: 11px; color: #94A3B8;">(total restant dû clients à ce jour)</span>
-                        </td>
-                        <td align="right" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 15px; font-weight: 800; color: #111827; white-space: nowrap;">
-                          ${formatFCFA(creances)}
-                        </td>
-                      </tr>
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
-              <!-- SECTION 5 - TOP 5 PRODUITS VENDUS DU JOUR -->
-              <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 11px; font-weight: 800; color: #0F1F3C; text-transform: uppercase; letter-spacing: 0.6px; padding-bottom: 8px;">
-                    🏆 TOP 5 PRODUITS VENDUS DU JOUR
-                  </td>
-                </tr>
-                <tr>
-                  <td style="background-color: #FFFFFF; border: 1px solid #E5E7EB; border-radius: 12px; padding: 6px 18px;">
-                    <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                      ${top5RowsHtml}
-                    </table>
-                  </td>
-                </tr>
-              </table>
-
+              <p style="color: #059669; font-weight: 700; margin-bottom: 0;">
+                📎 Le rapport officiel complet avec tous les détails de session est joint à cet email au format PDF.
+              </p>
             </td>
           </tr>
-
-          <!-- FOOTER -->
           <tr>
-            <td align="center" style="background-color: #F8FAFC; border-top: 1px solid #E2E8F0; padding: 18px 24px; text-align: center;">
-              <table width="100%" border="0" cellpadding="0" cellspacing="0">
-                <tr>
-                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 12px; font-weight: 600; color: #64748B;">
-                    Rapport officiel généré par GESTIO 229 — <strong style="color: #0F1F3C;">${entreprise}</strong>
-                  </td>
-                </tr>
-                <tr>
-                  <td align="center" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; font-size: 10px; color: #94A3B8; padding-top: 4px;">
-                    Plateforme de Gestion Commerciale, Caisse &amp; Trésorerie • www.gestio229.com
-                  </td>
-                </tr>
-              </table>
+            <td align="center" style="background: #f1f5f9; padding: 14px; text-align: center; font-size: 12px; color: #64748b;">
+              GESTIO 229 ERP • STANDARD DU BÉNIN • <a href="https://www.gestio229.com" style="color: #059669; font-weight: bold;">www.gestio229.com</a>
             </td>
           </tr>
-
         </table>
-
       </td>
     </tr>
   </table>
-
 </body>
 </html>
     `.trim()
 
-    // 3. Préparer le nom de fichier PDF et les pièces jointes
+    // 3. Préparer la pièce jointe PDF
     const cleanSectorFileName = (secteur || 'Caisse').replace(/[^a-zA-Z0-9]/g, '_')
     const fileName = `Fermeture_Caisse_${cleanSectorFileName}_${dateFormatted.replace(/\//g, '-')}.pdf`
 
-    const attachments: any[] = []
+    const attachments: Array<{ filename: string; content: string }> = []
     if (pdfBase64) {
       const cleanBase64 = pdfBase64.includes(',') ? pdfBase64.split(',')[1] : pdfBase64
       attachments.push({
         filename: fileName,
         content: cleanBase64,
-        contentType: 'application/pdf',
       })
     }
 
-    const subject = `Fermeture de Caisse - ${secteur} - ${dateFormatted}`
+    const subject = `🏪 Fermeture de Caisse - ${secteur} - ${dateFormatted}`
+    const fromName = (process.env.SMTP_FROM_NAME || 'GESTIO 229').trim()
+    const fromEmail = (process.env.SMTP_FROM_EMAIL || process.env.SMTP_USER || 'victoriengoutchowanou2024@gmail.com').trim()
+    const fromHeader = `"${fromName}" <${fromEmail}>`
 
-    // 4. Transmission via le module universel d'envoi
-    const sendResult = await sendTrackedEmail({
-      to: targetEmails,
-      subject,
-      text: textBody,
-      html: htmlBody,
-      emailType: 'cash_report',
-      attachments,
-      metadata: {
-        companyId,
-        secteurId,
-        caisseId,
-        dateFormatted,
-        heureFormatted,
-        ca,
-        espece,
-        momo,
-        soldeFinal,
-        ecart,
-        caissiere,
-        entreprise,
-      },
-    })
+    // 4. Transmission
+    let sendResult: { messageId?: string; provider: string }
+    const resendKey = (process.env.RESEND_API_KEY || process.env.VITE_RESEND_API_KEY || '').trim()
+    const brevoKey = (process.env.BREVO_API_KEY || process.env.SENDINBLUE_API_KEY || '').trim()
 
-    if (!sendResult.success) {
-      console.error('[send-rapport-pdf] Échec envoi :', sendResult.error)
-      return res.status(500).json({
-        success: false,
-        error: sendResult.error || 'Erreur lors de l\'envoi du rapport de caisse.',
-        diagnostic: sendResult.diagnostic,
-        recipients: targetEmails,
-      })
+    if (resendKey && resendKey.startsWith('re_')) {
+      sendResult = await sendViaResend(resendKey, fromName, fromEmail, targetEmails, subject, htmlBody, textBody, attachments)
+    } else if (brevoKey) {
+      sendResult = await sendViaBrevo(brevoKey, fromName, fromEmail, targetEmails, subject, htmlBody, textBody, attachments)
+    } else {
+      sendResult = await sendViaSmtp(fromHeader, targetEmails, subject, htmlBody, textBody, attachments)
     }
 
-    console.log(`[send-rapport-pdf] ✅ Rapport transmis à ${targetEmails.join(', ')} via ${sendResult.providerLabel}`)
+    // 5. Journalisation dans Supabase
+    try {
+      await supabase.from('email_delivery_logs').insert(
+        targetEmails.map((email) => ({
+          recipient_email: email,
+          email_type: 'cash_report',
+          status: 'envoye',
+          provider: sendResult.provider,
+          subject,
+          metadata: {
+            companyId,
+            secteurId,
+            caisseId,
+            ca,
+            soldeFinal,
+            messageId: sendResult.messageId,
+            sent_at: new Date().toISOString(),
+          },
+        }))
+      )
+    } catch (_) {}
 
     return res.status(200).json({
       success: true,
-      message: `Rapport transmis avec succès à ${targetEmails.length} destinataire(s) via ${sendResult.providerLabel}.`,
+      message: `Rapport transmis avec succès à ${targetEmails.length} destinataire(s) via ${sendResult.provider}.`,
       recipients: targetEmails,
       messageId: sendResult.messageId,
       provider: sendResult.provider,
-      providerLabel: sendResult.providerLabel,
     })
-  } catch (error: any) {
-    console.error('[send-rapport-pdf] Exception interne :', error)
-    return res.status(500).json({
+  } catch (err: any) {
+    console.error('[send-rapport-pdf] Erreur :', err)
+
+    return res.status(200).json({
       success: false,
-      error: error?.message || 'Erreur interne lors de la transmission du rapport.',
+      error: err?.message || 'Erreur lors de l\'envoi du rapport de caisse.',
+      diagnostic: 'Vérifiez vos paramètres SMTP (SMTP_USER, SMTP_PASS) ou configurez RESEND_API_KEY dans Vercel.',
     })
   }
 }

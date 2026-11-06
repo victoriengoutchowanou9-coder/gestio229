@@ -5,7 +5,7 @@
 
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
-import { sendTrackedEmail, buildRegistrationEmailHtml } from './_lib/emailHelper'
+import { sendTrackedEmail, buildRegistrationEmailHtml } from './_lib/emailHelper.ts'
 
 const MAX_FREE_TRIAL_SECTORS = 3
 
