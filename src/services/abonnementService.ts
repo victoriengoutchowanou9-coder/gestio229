@@ -561,6 +561,20 @@ export async function verifierOuCreerAbonnementGlobal(
           .maybeSingle()
         return (updated || { ...existing, statut_global: 'expire' }) as AbonnementGlobalRow
       }
+
+      // Si l'abonnement global est en cours d'essai valide (non échu) mais que l'entreprise
+      // a un statut désynchronisé (ex: 'expired'), réconcilier automatiquement le statut entreprise
+      if (existing.statut_global === 'essai' && fin >= now) {
+        if (comp && comp.subscription_status !== 'trial' && comp.subscription_status !== 'active') {
+          try {
+            await supabase
+              .from('companies')
+              .update({ subscription_status: 'trial', updated_at: now.toISOString() })
+              .eq('id', entrepriseId)
+          } catch (_) {}
+        }
+      }
+
       return existing as AbonnementGlobalRow
     }
 
@@ -2523,11 +2537,13 @@ export async function getAbonnementsSecteurs(
     // Si l'entreprise possède un abonnement actif en cours de validité :
     // Tout secteur appartenant à l'entreprise sans abonnement individuel actif
     // est automatiquement lié et activé avec la durée de l'abonnement entreprise.
+    const globalSub = await verifierOuCreerAbonnementGlobal(companyId, company?.created_at)
     const compExpiresAt = company?.subscription_expires_at ? new Date(company.subscription_expires_at) : null
     const isCompanyActive = company?.subscription_status === 'active' && (!compExpiresAt || compExpiresAt >= now)
+    const finGlobalDate = globalSub?.date_fin_global ? new Date(globalSub.date_fin_global) : null
 
     const isTrialActive = (globalSub?.statut_global === 'essai' || company?.subscription_status === 'trial') &&
-      globalSub?.date_fin_global && new Date(globalSub.date_fin_global) >= now
+      finGlobalDate !== null && finGlobalDate >= now
 
     // Synchronisation automatique des secteurs de l'entreprise avec l'essai gratuit ou l'abonnement actif
     if ((isCompanyActive || isTrialActive) && rawSectors.length > 0) {

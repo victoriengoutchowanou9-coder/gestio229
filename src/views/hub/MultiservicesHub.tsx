@@ -240,12 +240,16 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const loadSubscriptions = useCallback(async () => {
     if (!companyId) return;
     try {
-      const [gSub, sSubs] = await Promise.all([
+      const [gSubRes, sSubsRes] = await Promise.allSettled([
         getAbonnementGlobal(companyId, company),
         getAbonnementsSecteurs(companyId, company),
       ]);
-      setGlobalSub(gSub);
-      setSectorSubs(sSubs);
+      if (gSubRes.status === 'fulfilled' && gSubRes.value) {
+        setGlobalSub(gSubRes.value);
+      }
+      if (sSubsRes.status === 'fulfilled' && Array.isArray(sSubsRes.value)) {
+        setSectorSubs(sSubsRes.value);
+      }
     } catch (err) {
       console.warn('[Hub] Erreur chargement abonnements:', err);
     }
@@ -256,8 +260,15 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   }, [loadSubscriptions]);
 
   const globalDaysRemaining = useMemo(() => {
-    return calcDaysRemaining(globalSub?.date_fin_global);
-  }, [globalSub]);
+    if (globalSub?.date_fin_global) {
+      return calcDaysRemaining(globalSub.date_fin_global);
+    }
+    if (company?.created_at && (company?.subscription_status === 'trial' || !company?.subscription_status)) {
+      const trialEnd = new Date(new Date(company.created_at).getTime() + 30 * 24 * 60 * 60 * 1000);
+      return Math.max(0, calcDaysRemaining(trialEnd));
+    }
+    return 0;
+  }, [globalSub, company]);
 
   // Badge Global en haut du HUB : Abonnement actif (ou Essai J-XX / Expiré)
   const isAnySectorActive = useMemo(() => {
@@ -278,9 +289,14 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         : globalDaysRemaining;
       return activeDays > 0 ? `Abonnement actif – ${activeDays} jours restants` : 'Abonnement actif';
     }
-    if (!globalSub) return 'Abonnement expiré';
-    if (globalSub.statut_global === 'expire' || globalDaysRemaining <= 0) return 'Abonnement expiré';
-    return `Essai gratuit – ${globalDaysRemaining} jours restants`;
+    const isTrial = (globalSub?.statut_global === 'essai' || company?.subscription_status === 'trial') && globalDaysRemaining > 0;
+    if (isTrial) {
+      return `Essai gratuit – ${globalDaysRemaining} jours restants`;
+    }
+    if (!globalSub && (!company?.subscription_status || company?.subscription_status === 'trial') && globalDaysRemaining > 0) {
+      return `Essai gratuit – ${globalDaysRemaining} jours restants`;
+    }
+    return 'Abonnement expiré';
   }, [isAnySectorActive, globalSub, globalDaysRemaining, company]);
 
   // Badge sur chaque tuile secteur (Section 12 du cahier des charges) :
