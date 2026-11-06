@@ -207,6 +207,14 @@ export function canonicalSectorSlug(raw: string): string {
   return map[clean] || clean
 }
 
+export const canonicalSectorsSlug = canonicalSectorSlug
+
+// Sécurité d'exécution globale pour éviter tout ReferenceError
+if (typeof window !== 'undefined') {
+  (window as any).canonicalSectorSlug = canonicalSectorSlug;
+  (window as any).canonicalSectorsSlug = canonicalSectorSlug;
+}
+
 /**
  * Normalise un slug de secteur en code standardisé majuscule (ex: 'TRANSPORT_LOGISTIQUE')
  */

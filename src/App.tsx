@@ -13,7 +13,7 @@ import SectorErrorBoundary from './components/common/SectorErrorBoundary'
 import { getCompanySubscriptionInfo } from './core/subscription/subscriptionEngine'
 import { safeLazy } from './lib/safeLazy'
 import { useTenant } from './hooks/useTenant'
-import { getActiveSectorSlug } from './lib/sectorClient'
+import { getActiveSectorSlug, canonicalSectorSlug, canonicalSectorsSlug } from './lib/sectorClient'
 import { ThemeProvider } from './context/ThemeContext'
 import { useAppCacheStore } from './store/appCacheStore'
 import { preloadCommonModules } from './lib/modulePreloader'
@@ -257,7 +257,8 @@ const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   // Si c'est un utilisateur interne : redirection directe et stricte vers son module autorisé (pas de HUB, pas d'email requis)
   if (!isAdmin) {
     const perm = (typeof user?.permissions === 'object' && user.permissions) ? user.permissions : {}
-    const assignedSector = (perm.sector_slug || perm.sector_id || user?.sector_id || localStorage.getItem('gestio229_active_sector') || 'boutique').toLowerCase().replace(/^sec-/, '')
+    const rawSector = perm.sector_slug || perm.sector_id || user?.sector_id || localStorage.getItem('gestio229_active_sector') || 'boutique'
+    const assignedSector = canonicalSectorSlug(rawSector) || 'boutique'
     const role = user?.role?.toLowerCase() || ''
     let targetModule = 'tableau-bord'
     if (role === 'caissier' || role === 'vendeur') targetModule = 'vente-pos'

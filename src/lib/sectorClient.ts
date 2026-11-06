@@ -82,6 +82,13 @@ export function canonicalSectorSlug(slug?: string | null): string {
 }
 
 export const normalizeSectorSlug = canonicalSectorSlug
+export const canonicalSectorsSlug = canonicalSectorSlug
+
+// Sécurité d'exécution globale pour éviter tout ReferenceError
+if (typeof window !== 'undefined') {
+  (window as any).canonicalSectorSlug = canonicalSectorSlug;
+  (window as any).canonicalSectorsSlug = canonicalSectorSlug;
+}
 
 /**
  * Vérifie si l'entreprise a souscrit au secteur demandé

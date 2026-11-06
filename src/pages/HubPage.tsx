@@ -7,7 +7,7 @@ import React from 'react'
 import { useNavigate } from 'react-router-dom'
 import { MultiservicesHub } from '../views/hub/MultiservicesHub'
 import { useAuthStore } from '../store/authStore'
-import { setActiveSector } from '../lib/sectorClient'
+import { setActiveSector, canonicalSectorSlug, canonicalSectorsSlug } from '../lib/sectorClient'
 
 const HubPage: React.FC = () => {
   const navigate = useNavigate()
@@ -22,19 +22,20 @@ const HubPage: React.FC = () => {
     location?: string
   ) => {
     // Mémoriser le sous-logiciel actif pour isolation stricte
-    setActiveSector(sectorSlug, activityId, activityName)
-    localStorage.setItem('gestio229_active_sector', sectorSlug)
+    const cleanSlug = canonicalSectorSlug(sectorSlug) || sectorSlug
+    setActiveSector(cleanSlug, activityId, activityName)
+    localStorage.setItem('gestio229_active_sector', cleanSlug)
     localStorage.setItem('gestio229_active_activity_id', activityId)
     localStorage.setItem('secteur_actif_id', activityId)
     if (activityName) {
       localStorage.setItem('gestio229_active_activity_name', activityName)
       localStorage.setItem('secteur_actif_nom', activityName)
     }
-    localStorage.setItem('secteur_actif_slug', sectorSlug)
+    localStorage.setItem('secteur_actif_slug', cleanSlug)
     if (location) localStorage.setItem('gestio229_active_activity_location', location)
 
     // Naviguer vers l'espace d'exploitation autonome du sous-logiciel
-    navigate(`/app/${sectorSlug}/tableau-bord`)
+    navigate(`/app/${cleanSlug}/tableau-bord`)
   }
 
   const handleOpenOnboarding = (_sectorSlug: string) => {

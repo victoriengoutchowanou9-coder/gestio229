@@ -42,6 +42,8 @@ import {
   ajouterSecteurAuCompte,
   AbonnementGlobal,
   AbonnementSecteur,
+  canonicalSectorSlug,
+  canonicalSectorsSlug,
 } from '../../services/abonnementService';
 import { ActiverSecteurModal } from '../../components/subscription/ActiverSecteurModal';
 
