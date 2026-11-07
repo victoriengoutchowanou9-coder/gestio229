@@ -52,7 +52,7 @@ const LoginPage: React.FC = () => {
   const [resendMessage, setResendMessage] = useState<string | null>(null)
 
   const handleResendConfirmation = async () => {
-    const targetEmail = (urlEmail || identifier).trim()
+    const targetEmail = (urlEmail || identifier).trim().toLowerCase()
     if (!targetEmail || !targetEmail.includes('@')) {
       setResendMessage('Veuillez saisir votre adresse e-mail dans le champ ci-dessous.')
       return
@@ -60,11 +60,41 @@ const LoginPage: React.FC = () => {
     setResendLoading(true)
     setResendMessage(null)
     try {
+      // 1. Tenter le renvoi par notre endpoint serveur avec traçabilité et journalisation
+      const res = await fetch('/api/resend-confirmation-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: targetEmail }),
+      })
+      const data = await res.json().catch(() => ({}))
+
+      if (data.alreadyConfirmed) {
+        setConfirmedSuccess(true)
+        setResendMessage('✅ Votre adresse email est déjà confirmée. Vous pouvez vous connecter.')
+        return
+      }
+
+      if (res.status === 429) {
+        setResendMessage(data.error || 'Trop de demandes de renvoi. Veuillez patienter 15 minutes.')
+        return
+      }
+
+      if (res.ok && data.success) {
+        setResendMessage(data.message || '✅ Email renvoyé avec succès ! Pensez à vérifier vos courriers indésirables (spams).')
+        return
+      }
+
+      if (!res.ok && data.error) {
+        setResendMessage(data.error)
+        return
+      }
+
+      // 2. Repli Supabase Auth
       const { error } = await supabase.auth.resend({
         type: 'signup',
-        email: targetEmail.toLowerCase(),
+        email: targetEmail,
         options: {
-          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(targetEmail.toLowerCase())}`,
+          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(targetEmail)}`,
         },
       })
       if (error) throw error

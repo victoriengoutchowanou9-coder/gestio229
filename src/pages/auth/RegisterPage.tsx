@@ -231,53 +231,53 @@ export const RegisterPage: React.FC = () => {
         console.warn('[RegisterPage] Notice API auth-register:', apiErr?.message)
       }
 
-      // 3. Création du compte dans Supabase Auth
-      // RÈGLE CRITIQUE BUG 1 : Ne JAMAIS connecter l'utilisateur directement.
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: cleanEmail,
-        password: form.password,
-        options: {
-          emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
-          data: {
-            full_name: form.responsible_name.trim(),
-            responsible_name: form.responsible_name.trim(),
-            company_name: form.company_name.trim(),
-            phone: form.phone.trim(),
-            ifu_number: form.ifu_number.trim() || '0000000000000',
-            city: form.city,
-            country: form.country,
-            primary_sector: primarySector,
-            selected_sectors: cleanSectors,
-            chosen_plan: planSummary.planSlug,
-            chosen_plan_name: planSummary.planName,
-            role: 'administrateur',
-          },
-        },
-      })
-
-      if (authError) {
-        const msg = authError.message.toLowerCase()
-        if (msg.includes('already registered') || msg.includes('already been registered')) {
-          throw new Error(
-            'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
-          )
-        } else {
-          throw authError
-        }
-      }
-
-      const authUserId = authData?.user?.id ?? null
-
-      // RÈGLE CRITIQUE BUG 1 : Déconnexion immédiate de toute session automatique générée
-      if (authData?.session) {
-        await supabase.auth.signOut().catch(() => {})
-      }
-
-      // 4. Créer ou lier l'entreprise dans la table companies si non créée par l'API
-      const now = new Date()
-      const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
-
+      // Si l'API serveur a traité l'inscription complète, on évite le doublon d'appel client
       if (!companyId) {
+        // 3. Fallback création de secours dans Supabase Auth
+        // RÈGLE CRITIQUE BUG 1 : Ne JAMAIS connecter l'utilisateur directement.
+        const { data: authData, error: authError } = await supabase.auth.signUp({
+          email: cleanEmail,
+          password: form.password,
+          options: {
+            emailRedirectTo: `${window.location.origin}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`,
+            data: {
+              full_name: form.responsible_name.trim(),
+              responsible_name: form.responsible_name.trim(),
+              company_name: form.company_name.trim(),
+              phone: form.phone.trim(),
+              ifu_number: form.ifu_number.trim() || '0000000000000',
+              city: form.city,
+              country: form.country,
+              primary_sector: primarySector,
+              selected_sectors: cleanSectors,
+              chosen_plan: planSummary.planSlug,
+              chosen_plan_name: planSummary.planName,
+              role: 'administrateur',
+            },
+          },
+        })
+
+        if (authError) {
+          const msg = authError.message.toLowerCase()
+          if (msg.includes('already registered') || msg.includes('already been registered')) {
+            throw new Error(
+              'Cette adresse e-mail possède déjà un compte. Veuillez vous connecter sur la page de connexion.'
+            )
+          } else {
+            throw authError
+          }
+        }
+
+        const authUserId = authData?.user?.id ?? null
+
+        if (authData?.session) {
+          await supabase.auth.signOut().catch(() => {})
+        }
+
+        // 4. Créer ou lier l'entreprise dans la table companies en secours
+        const now = new Date()
+        const trialEnds = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000)
+
         const { data: existingComp } = await supabase
           .from('companies')
           .select('*')
@@ -306,7 +306,6 @@ export const RegisterPage: React.FC = () => {
               currency: 'FCFA',
               subscription_plan: planSummary.planSlug,
               plan: planSummary.planSlug,
-              initial_plan: planSummary.planSlug,
             })
             .select()
             .single()
@@ -316,83 +315,80 @@ export const RegisterPage: React.FC = () => {
             companyData = insertedComp
           }
         }
-      }
 
-      // 5. Initialiser les abonnements dans la base de données
-      if (companyId) {
-        await initialiserSecteursInscription(
-          companyId,
-          cleanSectors,
-          now,
-          trialEnds,
-          form.singleSectorPlanTier
-        ).catch(() => {})
+        // 5. Initialiser les abonnements dans la base de données
+        if (companyId) {
+          await initialiserSecteursInscription(
+            companyId,
+            cleanSectors,
+            now,
+            trialEnds,
+            form.singleSectorPlanTier
+          ).catch(() => {})
 
-        // Enregistrer dans la table subscriptions (historique)
-        try {
-          await supabase.from('subscriptions').insert({
-            company_id: companyId,
-            sector_slug: primarySector,
-            plan_slug: planSummary.planSlug,
-            plan_name: planSummary.planName,
-            status: 'trial',
-            price_monthly: planSummary.monthlyPrice,
-            started_at: now.toISOString(),
-            expires_at: trialEnds.toISOString(),
-            fin_essai: trialEnds.toISOString(),
-          })
-        } catch (_) {}
-
-        // Enregistrer les activités dans company_activities
-        for (let i = 0; i < cleanSectors.length; i++) {
-          const slug = cleanSectors[i]
-          const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
-          const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
           try {
-            await supabase.from('company_activities').insert({
+            await supabase.from('subscriptions').insert({
               company_id: companyId,
-              sector_slug: slug,
-              sector_code: toSecteurCode(slug),
-              activity_name: `${form.company_name.trim()} — ${secMeta?.name || slug.toUpperCase()}`,
-              pos_location: form.city || 'Siège',
-              manager_name: form.responsible_name.trim(),
-              status: isFreeTrial ? 'ACTIVE' : 'PENDING_PAYMENT',
-              is_active: true,
+              sector_slug: primarySector,
+              plan_slug: planSummary.planSlug,
+              plan_name: planSummary.planName,
+              status: 'trial',
+              price_monthly: planSummary.monthlyPrice,
+              started_at: now.toISOString(),
+              expires_at: trialEnds.toISOString(),
+              fin_essai: trialEnds.toISOString(),
             })
           } catch (_) {}
-        }
 
-        // Créer ou mettre à jour user_profiles
-        if (authUserId) {
-          const defaultAdminPermissions = {
-            admin: true,
-            commercial: true,
-            stock: true,
-            treasury: true,
-            purchases: true,
-            reporting: true,
-            accounting: true,
-            hr: true,
-            ventes: { view: true, create: true, edit: true, delete: true },
-            finances: { view: true, caisse: true, tresorerie: true },
+          for (let i = 0; i < cleanSectors.length; i++) {
+            const slug = cleanSectors[i]
+            const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
+            const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+            try {
+              await supabase.from('company_activities').insert({
+                company_id: companyId,
+                sector_slug: slug,
+                sector_code: toSecteurCode(slug),
+                activity_name: `${form.company_name.trim()} — ${secMeta?.name || slug.toUpperCase()}`,
+                pos_location: form.city || 'Siège',
+                manager_name: form.responsible_name.trim(),
+                status: isFreeTrial ? 'ACTIVE' : 'PENDING_PAYMENT',
+                is_active: true,
+              })
+            } catch (_) {}
           }
 
-          try {
-            await supabase.from('user_profiles').upsert(
-              {
-                company_id: companyId,
-                auth_user_id: authUserId,
-                full_name: form.responsible_name.trim(),
-                username: cleanEmail,
-                email: cleanEmail,
-                phone: form.phone.trim(),
-                role: 'administrateur',
-                is_active: true,
-                permissions: defaultAdminPermissions,
-              },
-              { onConflict: 'email' }
-            )
-          } catch (_) {}
+          if (authUserId) {
+            const defaultAdminPermissions = {
+              admin: true,
+              commercial: true,
+              stock: true,
+              treasury: true,
+              purchases: true,
+              reporting: true,
+              accounting: true,
+              hr: true,
+              ventes: { view: true, create: true, edit: true, delete: true },
+              finances: { view: true, caisse: true, tresorerie: true },
+            }
+
+            try {
+              await supabase.from('user_profiles').upsert(
+                {
+                  company_id: companyId,
+                  auth_user_id: authUserId,
+                  full_name: form.responsible_name.trim(),
+                  username: cleanEmail,
+                  email: cleanEmail,
+                  phone: form.phone.trim(),
+                  role: 'administrateur',
+                  is_active: true,
+                  permissions: defaultAdminPermissions,
+                },
+                { onConflict: 'email' }
+              )
+            } catch (_) {}
+          }
         }
       }
 

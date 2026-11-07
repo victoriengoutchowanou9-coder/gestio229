@@ -13,11 +13,29 @@ export const ConfirmEmailPage: React.FC = () => {
 
   const queryParams = new URLSearchParams(location.search)
   const urlEmail = queryParams.get('email') || (location.state as any)?.email || ''
+  const errorCode = queryParams.get('error')
+
+  const getInitialErrorMessage = (code: string | null): string | null => {
+    if (!code) return null
+    if (code === 'expired') {
+      return '⏱️ Ce lien de confirmation a expiré (validité 24 heures). Cliquez ci-dessous pour en recevoir un nouveau.'
+    }
+    if (code === 'superseded') {
+      return '⚠️ Ce lien a été remplacé par un lien plus récent. Vérifiez le dernier e-mail reçu ou cliquez ci-dessous pour en renvoyer un.'
+    }
+    if (code === 'invalid' || code === 'missing_token') {
+      return '❌ Ce lien de confirmation est invalide ou incomplet. Veuillez demander un nouveau lien ci-dessous.'
+    }
+    if (code === 'not_found') {
+      return '❌ Aucun compte trouvé pour cette adresse e-mail. Veuillez vérifier votre saisie.'
+    }
+    return 'Une erreur est survenue lors de la confirmation. Veuillez demander un nouveau lien.'
+  }
 
   const [emailInput, setEmailInput] = useState<string>(urlEmail)
   const [resendLoading, setResendLoading] = useState(false)
   const [resendSuccess, setResendSuccess] = useState<string | null>(null)
-  const [resendError, setResendError] = useState<string | null>(null)
+  const [resendError, setResendError] = useState<string | null>(getInitialErrorMessage(errorCode))
 
   const handleResend = async () => {
     const target = emailInput.trim().toLowerCase()
@@ -38,8 +56,24 @@ export const ConfirmEmailPage: React.FC = () => {
         body: JSON.stringify({ email: target }),
       })
       const data = await res.json().catch(() => ({}))
+
+      if (data.alreadyConfirmed) {
+        navigate(`/login?confirmed=true&email=${encodeURIComponent(target)}`, { replace: true })
+        return
+      }
+
+      if (res.status === 429) {
+        setResendError(data.error || 'Trop de demandes de renvoi. Veuillez patienter 15 minutes avant de réessayer.')
+        return
+      }
+
       if (res.ok && data.success) {
         setResendSuccess(data.message || '✅ Nouveau lien envoyé ! Pensez à vérifier vos spams ou courriers indésirables.')
+        return
+      }
+
+      if (!res.ok && data.error) {
+        setResendError(data.error)
         return
       }
 

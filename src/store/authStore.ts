@@ -244,12 +244,31 @@ export const useAuthStore = create<AuthState>()(
               password: rawPassword,
             })
 
-            // BUG 1 RÈGLE 2 : Vérification stricte de confirmation d'email
-            if (authData?.user && !authData.user.email_confirmed_at) {
-              await supabase.auth.signOut().catch(() => {})
-              const confMsg = "Votre adresse email n'a pas encore été confirmée. Veuillez cliquer sur le lien reçu dans votre boîte mail pour activer votre compte. Pensez à vérifier vos SPAM."
-              set({ status: 'unauthenticated', errorMessage: confMsg })
-              return { success: false, error: confMsg }
+            // DISTINCTION STRICTE : Inscription publique autonome vs Compte interne créé par admin
+            if (authData?.user) {
+              const { data: userProfile } = await supabase
+                .from('user_profiles')
+                .select('id, role, permissions, is_active')
+                .ilike('email', emailLower)
+                .maybeSingle()
+
+              const isInternalAccount = Boolean(
+                userProfile &&
+                userProfile.role !== 'administrateur' &&
+                userProfile.role !== 'super_admin'
+              ) || Boolean(userProfile?.permissions?.is_internal)
+
+              const isConfirmedViaToken = Boolean(userProfile?.permissions?.email_confirmed)
+              const isConfirmedViaAuth = Boolean(authData.user.email_confirmed_at)
+
+              // Les comptes internes créés par l'admin sont dispensés de confirmation email
+              // Les comptes publics créés par inscription autonome doivent obligatoirement être confirmés
+              if (!isInternalAccount && !isConfirmedViaToken && !isConfirmedViaAuth) {
+                await supabase.auth.signOut().catch(() => {})
+                const confMsg = "Votre adresse email n'a pas encore été confirmée. Veuillez cliquer sur le lien reçu dans votre boîte mail pour activer votre compte. Pensez à vérifier vos SPAM."
+                set({ status: 'unauthenticated', errorMessage: confMsg })
+                return { success: false, error: confMsg }
+              }
             }
 
             if (authError || !authData?.user) {
@@ -270,6 +289,16 @@ export const useAuthStore = create<AuthState>()(
                 .maybeSingle()
 
               if (fallbackUser && fallbackUser.is_active !== false) {
+                const isInternalAccount = Boolean(
+                  fallbackUser.role !== 'administrateur' && fallbackUser.role !== 'super_admin'
+                ) || Boolean(fallbackUser.permissions?.is_internal)
+                const isConfirmedViaToken = Boolean(fallbackUser.permissions?.email_confirmed)
+
+                if (!isInternalAccount && !isConfirmedViaToken) {
+                  const confMsg = "Votre adresse email n'a pas encore été confirmée. Veuillez cliquer sur le lien reçu dans votre boîte mail pour activer votre compte. Pensez à vérifier vos SPAM."
+                  set({ status: 'unauthenticated', errorMessage: confMsg })
+                  return { success: false, error: confMsg }
+                }
                 // Vérifier si le mot de passe correspond au mot de passe / PIN enregistré, au téléphone, ou mot de passe de secours
                 const savedPwdOrPin = String(fallbackUser.pos_pin_code || '').trim()
                 const phone = String(fallbackUser.phone || '').replace(/\D/g, '')

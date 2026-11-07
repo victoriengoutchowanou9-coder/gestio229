@@ -6,6 +6,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import { sendTrackedEmail, buildRegistrationEmailHtml } from './_lib/emailHelper.ts'
+import { generateConfirmationToken } from './_lib/confirmationToken.ts'
 
 const MAX_FREE_TRIAL_SECTORS = 3
 
@@ -195,14 +196,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
   }
 
-  // 2. Vérifier si l'email existe dans `user_profiles` pour un compte administrateur
+  // 2. Vérifier si l'email existe déjà dans `user_profiles`
   const { data: existingProfile } = await sb
     .from('user_profiles')
     .select('id, role')
     .ilike('email', cleanEmail)
     .maybeSingle()
 
-  if (existingProfile && (existingProfile.role === 'administrateur' || existingProfile.role === 'super_admin')) {
+  if (existingProfile) {
     return res.status(409).json({
       success: false,
       error: DUPLICATE_EMAIL_ERROR,
@@ -286,6 +287,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       authUserId = adminAuthData?.user?.id || null
+    } else {
+      const { data: signUpData, error: signUpError } = await sb.auth.signUp({
+        email: cleanEmail,
+        password: password,
+        options: {
+          data: {
+            full_name: responsible_name.trim(),
+            responsible_name: responsible_name.trim(),
+            company_name: company_name.trim(),
+            phone: phone.trim(),
+            ifu_number: (ifu_number || '').trim() || '0000000000000',
+            city: city || 'Cotonou',
+            country: country || 'Bénin',
+            primary_sector: primarySector,
+            selected_sectors: cleanSectors,
+            role: 'administrateur',
+          },
+        },
+      })
+
+      if (signUpError) {
+        const msg = signUpError.message?.toLowerCase() || ''
+        if (
+          msg.includes('already registered') ||
+          msg.includes('already been registered') ||
+          msg.includes('already exists')
+        ) {
+          return res.status(409).json({
+            success: false,
+            error: DUPLICATE_EMAIL_ERROR,
+          })
+        }
+      }
+
+      authUserId = signUpData?.user?.id || null
     }
 
     // =========================================================================
@@ -307,7 +343,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       currency: 'FCFA',
       subscription_plan: chosenPlanSlug,
       plan: chosenPlanSlug,
-      initial_plan: chosenPlanSlug,
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
     }
@@ -332,7 +367,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // =========================================================================
     // ÉTAPE 3 : Créer le profil administrateur principal dans `user_profiles`
+    // Générer un token sécurisé et temporaire avec nonce d'invalidation
     // =========================================================================
+    const confirmationTokenData = generateConfirmationToken(cleanEmail)
+
     const defaultAdminPermissions = {
       admin: true,
       commercial: true,
@@ -344,6 +382,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       hr: true,
       ventes: { view: true, create: true, edit: true, delete: true },
       finances: { view: true, caisse: true, tresorerie: true },
+      email_confirmed: false,
+      last_confirmation_nonce: confirmationTokenData.nonce,
+      confirmation_token_sent_at: now.toISOString(),
+      is_internal: false,
+      registered_publicly: true,
     }
 
     await sb.from('user_profiles').insert({
@@ -356,7 +399,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       role: 'administrateur',
       is_active: true,
       permissions: defaultAdminPermissions,
-      email_confirmed_at: null, // Non confirmé par défaut
       created_at: now.toISOString(),
       updated_at: now.toISOString(),
     })
@@ -431,26 +473,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // =========================================================================
     // ÉTAPE 7 : Envoi effectif de l'email de confirmation via le module d'envoi
+    // Génération du lien de validation signé pointant vers notre endpoint serveur
     // =========================================================================
     const appUrl = (process.env.VITE_APP_URL || 'https://gestio229.com').replace(/\/$/, '')
-    const redirectTo = `${appUrl}/login?confirmed=true&email=${encodeURIComponent(cleanEmail)}`
-    let confirmationUrl = redirectTo
-
-    if (hasAdminKey && (sb.auth as any).admin?.generateLink) {
-      try {
-        const { data: linkData } = await (sb.auth as any).admin.generateLink({
-          type: 'signup',
-          email: cleanEmail,
-          password: password,
-          options: { redirectTo },
-        })
-        if (linkData?.properties?.action_link) {
-          confirmationUrl = linkData.properties.action_link
-        }
-      } catch (linkErr: any) {
-        console.warn('[AuthRegister] generateLink notice:', linkErr?.message)
-      }
-    }
+    const confirmationUrl = `${appUrl}/api/confirm-email?token=${encodeURIComponent(confirmationTokenData.token)}&email=${encodeURIComponent(cleanEmail)}`
 
     const emailHtml = buildRegistrationEmailHtml({
       responsibleName: responsible_name.trim(),
@@ -465,7 +491,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       html: emailHtml,
       emailType: 'signup_confirmation',
       clientIp,
-      metadata: { companyId, selectedSectors: cleanSectors },
+      metadata: { companyId, selectedSectors: cleanSectors, tokenNonce: confirmationTokenData.nonce },
     })
 
     return res.status(200).json({

@@ -267,8 +267,8 @@ const AdminHubGuard: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     return <Navigate to={`/app/${assignedSector}/${targetModule}`} replace />
   }
 
-  // Pour l'administrateur uniquement : si email non confirmé
-  if ((user as any)?.email_confirmed_at === null) {
+  // Pour l'administrateur uniquement : si email non confirmé (ni par Supabase Auth ni par token signé)
+  if ((user as any)?.email_confirmed_at === null && !(user as any)?.permissions?.email_confirmed) {
     return <Navigate to="/confirm-email" replace state={{ email: user?.email }} />
   }
 
