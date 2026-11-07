@@ -61,6 +61,12 @@ export interface SectorMetrics {
   monthExpenses: number;  // DÉPENSES D'EXPLOITATION DU MOIS
   monthNetMargin: number; // MARGE NETTE DU MOIS (Marge brute - Dépenses)
   hasKnownCost: boolean;
+  totalRevenue?: number;  // CA CUMULÉ GLOBAL DU SECTEUR (TTC)
+  totalRevenueHT?: number;
+  totalCogsHT?: number;
+  totalGrossMargin?: number;
+  totalExpenses?: number; // DÉPENSES CUMULÉES GLOBALES DU SECTEUR
+  totalNetMargin?: number;
   /** Indicateurs financiers dédiés au secteur Station-Service (6 KPI) */
   stationFinancials?: StationSectorFinancials;
 }
@@ -213,6 +219,12 @@ export async function fetchHubFinancialMetrics(
         monthGrossMargin: 0,
         monthExpenses: 0,
         monthNetMargin: 0,
+        totalRevenue: 0,
+        totalRevenueHT: 0,
+        totalCogsHT: 0,
+        totalGrossMargin: 0,
+        totalExpenses: 0,
+        totalNetMargin: 0,
         hasKnownCost: true,
       };
     }
@@ -226,42 +238,38 @@ export async function fetchHubFinancialMetrics(
     new Promise<{ data: null; error: any }>((resolve) => setTimeout(() => resolve({ data: null, error: new Error('RPC timeout') }), 1200))
   ]);
 
-  // Ventes : filtrage strict du 1er jour du mois à 00:00:00 au dernier jour à 23:59:59 (heure Cotonou)
+  // Ventes : récupération de toutes les ventes valides de l'entreprise (triées par date décroissante)
   const salesPromise = supabase
     .from('sales_orders')
     .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status, notes')
     .eq('company_id', companyId)
-    .gte('created_at', monthStartIso)
-    .lte('created_at', monthEndIso)
     .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(1000);
 
   // Dépenses via caisse_mouvements (table centrale du flux caisse de tous les secteurs)
   const caisseMvtPromise = supabase
     .from('caisse_mouvements')
     .select('id, montant, created_at, sector_slug, secteur_slug, sens, type, caisse_id, motif')
     .eq('company_id', companyId)
-    .gte('created_at', monthStartIso)
-    .lte('created_at', monthEndIso)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(1000);
 
   // Dépenses via table expenses (si utilisée)
   const expensesPromise = supabase
     .from('expenses')
     .select('id, amount, expense_date, created_at, sector_slug, category, title, notes')
     .eq('company_id', companyId)
-    .gte('created_at', monthStartIso)
-    .lte('created_at', monthEndIso)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(500);
 
   // Dépenses via table depenses (si table présente)
   const depensesPromise = supabase
     .from('depenses')
     .select('id, montant, date_depense, created_at, secteur_id, categorie, description')
     .eq('company_id', companyId)
-    .gte('created_at', monthStartIso)
-    .lte('created_at', monthEndIso)
-    .order('created_at', { ascending: false });
+    .order('created_at', { ascending: false })
+    .limit(500);
 
   const [rpcRes, salesRes, caisseRes, expRes, depRes] = await Promise.allSettled([
     rpcPromise,
@@ -291,13 +299,6 @@ export async function fetchHubFinancialMetrics(
     const salesList = salesRes.value.data;
     for (const item of salesList) {
       const itemDate = extractCotonouDate(item.order_date, item.created_at);
-      if (!itemDate) continue;
-
-      const isToday = itemDate === todayStr;
-      const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
-
-      if (!isToday && !isThisMonth) continue;
-
       const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'boutique';
       const card = initSector(secSlug);
 
@@ -305,6 +306,17 @@ export async function fetchHubFinancialMetrics(
       if (!orderMargin.hasKnownCost) {
         card.hasKnownCost = false;
       }
+
+      // Cumul historique total du secteur
+      card.totalRevenue = (card.totalRevenue || 0) + orderMargin.revenueTTC;
+      card.totalRevenueHT = (card.totalRevenueHT || 0) + orderMargin.revenueHT;
+      card.totalCogsHT = (card.totalCogsHT || 0) + orderMargin.cogsHT;
+      card.totalGrossMargin = (card.totalGrossMargin || 0) + orderMargin.grossMargin;
+
+      if (!itemDate) continue;
+
+      const isToday = itemDate === todayStr;
+      const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
 
       if (isToday) {
         card.dayRevenue += orderMargin.revenueTTC;
@@ -335,18 +347,17 @@ export async function fetchHubFinancialMetrics(
         continue;
       }
 
+      processedExpenseIds.add(String(m.id));
+      const montant = safeNum(m.montant);
+      const targetSlug = (m.sector_slug || m.secteur_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+      const card = initSector(targetSlug);
+      card.totalExpenses = (card.totalExpenses || 0) + montant;
+
       const dDate = extractCotonouDate(null, m.created_at);
       if (!dDate) continue;
 
       const isToday = dDate === todayStr;
       const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
-      if (!isToday && !isThisMonth) continue;
-
-      processedExpenseIds.add(String(m.id));
-
-      const montant = safeNum(m.montant);
-      const targetSlug = (m.sector_slug || m.secteur_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-      const card = initSector(targetSlug);
 
       if (isToday) {
         card.dayExpenses += montant;
@@ -368,18 +379,17 @@ export async function fetchHubFinancialMetrics(
         continue;
       }
 
+      processedExpenseIds.add(String(e.id));
+      const montant = safeNum(e.amount);
+      const targetSlug = (e.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+      const card = initSector(targetSlug);
+      card.totalExpenses = (card.totalExpenses || 0) + montant;
+
       const dDate = extractCotonouDate(e.expense_date, e.created_at);
       if (!dDate) continue;
 
       const isToday = dDate === todayStr;
       const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
-      if (!isToday && !isThisMonth) continue;
-
-      processedExpenseIds.add(String(e.id));
-
-      const montant = safeNum(e.amount);
-      const targetSlug = (e.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-      const card = initSector(targetSlug);
 
       if (isToday) {
         card.dayExpenses += montant;
@@ -396,18 +406,17 @@ export async function fetchHubFinancialMetrics(
       if (processedExpenseIds.has(String(d.id))) continue;
       if (!isTrueOperatingExpense(d)) continue;
 
+      processedExpenseIds.add(String(d.id));
+      const montant = safeNum(d.montant);
+      const targetSlug = (d.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
+      const card = initSector(targetSlug);
+      card.totalExpenses = (card.totalExpenses || 0) + montant;
+
       const dDate = extractCotonouDate(d.date_depense, d.created_at);
       if (!dDate) continue;
 
       const isToday = dDate === todayStr;
       const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
-      if (!isToday && !isThisMonth) continue;
-
-      processedExpenseIds.add(String(d.id));
-
-      const montant = safeNum(d.montant);
-      const targetSlug = (d.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-      const card = initSector(targetSlug);
 
       if (isToday) {
         card.dayExpenses += montant;
@@ -438,6 +447,17 @@ export async function fetchHubFinancialMetrics(
 
     const monthMarginBase = (c.monthGrossMargin > 0 || c.monthCogsHT > 0) ? c.monthGrossMargin : c.monthRevenue;
     c.monthNetMargin = Math.round((monthMarginBase - c.monthExpenses) * 100) / 100;
+
+    c.totalRevenue = Math.round((c.totalRevenue || 0) * 100) / 100;
+    c.totalRevenueHT = Math.round((c.totalRevenueHT || 0) * 100) / 100;
+    c.totalCogsHT = Math.round((c.totalCogsHT || 0) * 100) / 100;
+    c.totalGrossMargin = Math.round((c.totalGrossMargin || 0) * 100) / 100;
+    c.totalExpenses = Math.round((c.totalExpenses || 0) * 100) / 100;
+
+    const totalMarginBase = ((c.totalGrossMargin || 0) > 0 || (c.totalCogsHT || 0) > 0)
+      ? (c.totalGrossMargin || 0)
+      : (c.totalRevenue || 0);
+    c.totalNetMargin = Math.round((totalMarginBase - (c.totalExpenses || 0)) * 100) / 100;
   }
 
   // 4B. Calcul des 6 indicateurs financiers spécifiques au secteur Station-Service

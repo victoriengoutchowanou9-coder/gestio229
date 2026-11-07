@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   TrendingUp,
@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { supabase } from '../../lib/supabase';
-import { fetchHubFinancialMetrics, HubFinancialTotals, StationSectorFinancials } from '../../services/hubFinancialService';
+import { fetchHubFinancialMetrics, HubFinancialTotals, StationSectorFinancials, SectorMetrics } from '../../services/hubFinancialService';
 import { useUIStore } from '../../store/uiStore';
 import { formatNumber, formatFCFA } from '../../utils/formatters';
 import {
@@ -209,6 +209,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
     return [];
   });
+
+  // Source de vérité isolée des métriques par secteur (Persistance localStorage + rechargement instantané)
+  const [sectorMetricsMap, setSectorMetricsMap] = useState<Record<string, SectorMetrics>>(() => {
+    if (!companyId) return {};
+    try {
+      const saved = localStorage.getItem(`gestio229_metrics_${companyId}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') return parsed;
+      }
+    } catch (_) {}
+    return {};
+  });
+  const sectorMetricsRef = useRef<Record<string, SectorMetrics>>(sectorMetricsMap);
+  useEffect(() => {
+    sectorMetricsRef.current = sectorMetricsMap;
+  }, [sectorMetricsMap]);
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -444,6 +462,62 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   }, []);
 
+  // ── Métriques financières réelles consolidées (Règle d'or Hub : Fuseau Africa/Porto-Novo) ──
+  const loadFinancialMetrics = useCallback(async () => {
+    if (!companyId) return;
+    try {
+      const result = await fetchHubFinancialMetrics(companyId);
+      if (result?.totals) {
+        setHubTotals(result.totals);
+      }
+      if (result?.sectors) {
+        sectorMetricsRef.current = result.sectors;
+        setSectorMetricsMap(result.sectors);
+        try {
+          localStorage.setItem(`gestio229_metrics_${companyId}`, JSON.stringify(result.sectors));
+        } catch (_) {}
+
+        setActivities((prev) => {
+          const updated = prev.map((act) => {
+            const normSlug = (act.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+            const card = result.sectors[normSlug] || result.sectors[act.sectorSlug];
+            if (!card) return act;
+            const rev = card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0);
+            const exp = card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0);
+            const net = (card.monthRevenue > 0 || card.monthExpenses > 0)
+              ? card.monthNetMargin
+              : (card.totalNetMargin ?? card.monthNetMargin);
+            return {
+              ...act,
+              dayRevenue: card.dayRevenue,
+              dayRevenueHT: card.dayRevenueHT,
+              dayCogsHT: card.dayCogsHT,
+              dayGrossMargin: card.dayGrossMargin,
+              dayExpenses: card.dayExpenses,
+              dayNetMargin: card.dayNetMargin,
+              monthRevenue: card.monthRevenue,
+              monthRevenueHT: card.monthRevenueHT,
+              monthCogsHT: card.monthCogsHT,
+              monthGrossMargin: card.monthGrossMargin,
+              monthExpenses: card.monthExpenses,
+              monthNetMargin: card.monthNetMargin,
+              revenue: rev,
+              expenses: exp,
+              netMargin: net,
+              stationFinancials: card.stationFinancials,
+            };
+          });
+          try {
+            localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(updated));
+          } catch (_) {}
+          return updated;
+        });
+      }
+    } catch (e) {
+      console.warn('[Hub] Erreur métriques financières consolidées:', e);
+    }
+  }, [companyId]);
+
   // ── Synchronisation Supabase company_activities ─────────────────────────────
   const loadActivitiesFromSupabase = useCallback(async () => {
     if (!companyId) return;
@@ -474,6 +548,26 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         rawSectorList.push(comp.active_sector);
       }
 
+      // 3. Lire les activités existantes depuis la table company_activities
+      const { data: dbActivities, error: dbErr } = await supabase
+        .from('company_activities')
+        .select('*')
+        .eq('company_id', companyId)
+        .order('created_at', { ascending: true });
+
+      if (dbErr) {
+        console.warn('[Hub] Erreur lecture company_activities Supabase:', dbErr.message);
+      }
+
+      // Si dbActivities a des activités enregistrées pour cette entreprise, leurs secteurs sont également légitimes
+      if (dbActivities && dbActivities.length > 0) {
+        for (const row of dbActivities) {
+          if (row.sector_slug) {
+            rawSectorList.push(row.sector_slug);
+          }
+        }
+      }
+
       const targetSlugs = Array.from(
         new Set(
           rawSectorList
@@ -487,30 +581,25 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         targetSlugs.push('boutique');
       }
 
-      // 3. Lire les activités existantes depuis la table company_activities
-      const { data: dbActivities, error: dbErr } = await supabase
-        .from('company_activities')
-        .select('*')
-        .eq('company_id', companyId)
-        .order('created_at', { ascending: true });
-
-      if (dbErr) {
-        console.warn('[Hub] Erreur lecture company_activities Supabase:', dbErr.message);
-      }
-
       const existingEntries: ActivityEntry[] = [];
       const coveredSlugs = new Set<string>();
 
       const targetSet = new Set(targetSlugs);
+      const metrics = sectorMetricsRef.current;
+
       if (dbActivities && dbActivities.length > 0) {
         for (const row of dbActivities) {
           const rawSlug = (row.sector_slug || '').replace(/^sec-/, '').toLowerCase().trim();
-          // RÈGLE CRITIQUE SECTION C : Ne jamais afficher un secteur qui ne fait pas partie des secteurs sélectionnés par l'entreprise !
           if (!targetSet.has(rawSlug)) {
             continue;
           }
           coveredSlugs.add(rawSlug);
           const meta = getSectorMeta(rawSlug) || getSectorMeta(row.sector_slug) || getSectorMeta(row.sector_code?.toLowerCase());
+          const card = metrics[rawSlug] || metrics[row.sector_slug];
+          const rev = card ? (card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0)) : 0;
+          const exp = card ? (card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0)) : 0;
+          const net = card ? ((card.monthRevenue > 0 || card.monthExpenses > 0) ? card.monthNetMargin : (card.totalNetMargin ?? card.monthNetMargin)) : 0;
+
           existingEntries.push({
             id: row.id,
             sectorSlug: rawSlug || row.sector_slug,
@@ -522,15 +611,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             manager: row.manager_name || comp?.responsible_name || '',
             status: row.status as ActivityStatus,
             isConfigured: true,
-            revenue: 0,
-            grossMargin: 0,
-            expenses: 0,
-            netMargin: 0,
-            monthRevenue: 0,
-            monthGrossMargin: 0,
-            monthExpenses: 0,
-            monthNetMargin: 0,
+            revenue: rev,
+            grossMargin: card ? (card.monthGrossMargin > 0 ? card.monthGrossMargin : (card.totalGrossMargin || 0)) : 0,
+            expenses: exp,
+            netMargin: net,
+            dayRevenue: card?.dayRevenue ?? 0,
+            dayRevenueHT: card?.dayRevenueHT ?? 0,
+            dayCogsHT: card?.dayCogsHT ?? 0,
+            dayGrossMargin: card?.dayGrossMargin ?? 0,
+            dayExpenses: card?.dayExpenses ?? 0,
+            dayNetMargin: card?.dayNetMargin ?? 0,
+            monthRevenue: card?.monthRevenue ?? 0,
+            monthRevenueHT: card?.monthRevenueHT ?? 0,
+            monthCogsHT: card?.monthCogsHT ?? 0,
+            monthGrossMargin: card?.monthGrossMargin ?? 0,
+            monthExpenses: card?.monthExpenses ?? 0,
+            monthNetMargin: card?.monthNetMargin ?? 0,
             archivedAt: row.archived_at || undefined,
+            stationFinancials: card?.stationFinancials,
           });
         }
       }
@@ -544,7 +642,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           const meta = getSectorMeta(rawSlug);
           const actName = `${companyName || comp?.name || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
           const assignedId = `act-${companyId.slice(0, 8)}-${rawSlug}`;
-          
+          const card = metrics[rawSlug];
+          const rev = card ? (card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0)) : 0;
+          const exp = card ? (card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0)) : 0;
+          const net = card ? ((card.monthRevenue > 0 || card.monthExpenses > 0) ? card.monthNetMargin : (card.totalNetMargin ?? card.monthNetMargin)) : 0;
+
           newSeededEntries.push({
             id: assignedId,
             sectorSlug: rawSlug,
@@ -556,14 +658,23 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             manager: comp?.responsible_name || '',
             status: 'ACTIVE',
             isConfigured: true,
-            revenue: 0,
-            grossMargin: 0,
-            expenses: 0,
-            netMargin: 0,
-            monthRevenue: 0,
-            monthGrossMargin: 0,
-            monthExpenses: 0,
-            monthNetMargin: 0,
+            revenue: rev,
+            grossMargin: card ? (card.monthGrossMargin > 0 ? card.monthGrossMargin : (card.totalGrossMargin || 0)) : 0,
+            expenses: exp,
+            netMargin: net,
+            dayRevenue: card?.dayRevenue ?? 0,
+            dayRevenueHT: card?.dayRevenueHT ?? 0,
+            dayCogsHT: card?.dayCogsHT ?? 0,
+            dayGrossMargin: card?.dayGrossMargin ?? 0,
+            dayExpenses: card?.dayExpenses ?? 0,
+            dayNetMargin: card?.dayNetMargin ?? 0,
+            monthRevenue: card?.monthRevenue ?? 0,
+            monthRevenueHT: card?.monthRevenueHT ?? 0,
+            monthCogsHT: card?.monthCogsHT ?? 0,
+            monthGrossMargin: card?.monthGrossMargin ?? 0,
+            monthExpenses: card?.monthExpenses ?? 0,
+            monthNetMargin: card?.monthNetMargin ?? 0,
+            stationFinancials: card?.stationFinancials,
           });
 
           return {
@@ -601,15 +712,51 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       }
 
       if (finalUnique.length > 0) {
-        setActivities(finalUnique);
-        try {
-          localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(finalUnique));
-        } catch (_) {}
+        setActivities((prev) => {
+          const prevMap = new Map(prev.map((p) => [p.id, p]));
+          const merged = finalUnique.map((item) => {
+            const existing = prevMap.get(item.id) || prev.find((p) => p.sectorSlug === item.sectorSlug);
+            if (
+              existing &&
+              item.revenue === 0 &&
+              (existing.revenue > 0 || existing.monthRevenue > 0 || existing.expenses > 0 || existing.netMargin !== 0)
+            ) {
+              return {
+                ...item,
+                revenue: existing.revenue,
+                grossMargin: existing.grossMargin,
+                expenses: existing.expenses,
+                netMargin: existing.netMargin,
+                dayRevenue: existing.dayRevenue,
+                dayRevenueHT: existing.dayRevenueHT,
+                dayCogsHT: existing.dayCogsHT,
+                dayGrossMargin: existing.dayGrossMargin,
+                dayExpenses: existing.dayExpenses,
+                dayNetMargin: existing.dayNetMargin,
+                monthRevenue: existing.monthRevenue,
+                monthRevenueHT: existing.monthRevenueHT,
+                monthCogsHT: existing.monthCogsHT,
+                monthGrossMargin: existing.monthGrossMargin,
+                monthExpenses: existing.monthExpenses,
+                monthNetMargin: existing.monthNetMargin,
+                stationFinancials: existing.stationFinancials,
+              };
+            }
+            return item;
+          });
+          try {
+            localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(merged));
+          } catch (_) {}
+          return merged;
+        });
+
+        // Synchroniser immédiatement les métriques financières réelles
+        loadFinancialMetrics();
       }
     } catch (err) {
       console.error('[Hub] Erreur sync Supabase:', err);
     }
-  }, [companyId, company, companyName]);
+  }, [companyId, company, companyName, loadFinancialMetrics]);
 
   // Synchronisation immédiate si company est disponible et activities est vide
   useEffect(() => {
@@ -621,9 +768,14 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         : company.active_sector ? [company.active_sector] : [];
       const slugs = Array.from(new Set(raw.map((s: string) => String(s).replace(/^sec-/, '').toLowerCase().trim()).filter(Boolean)));
       if (slugs.length > 0) {
+        const metrics = sectorMetricsRef.current;
         const initial = slugs.map((slug: string) => {
           const meta = getSectorMeta(slug);
           const actName = `${companyName || company.name || 'Mon Établissement'} — ${meta?.label || slug}`.toUpperCase();
+          const card = metrics[slug];
+          const rev = card ? (card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0)) : 0;
+          const exp = card ? (card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0)) : 0;
+          const net = card ? ((card.monthRevenue > 0 || card.monthExpenses > 0) ? card.monthNetMargin : (card.totalNetMargin ?? card.monthNetMargin)) : 0;
           return {
             id: `act-${(companyId || 'comp').slice(0, 8)}-${slug}`,
             sectorSlug: slug,
@@ -635,14 +787,23 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             manager: company.responsible_name || '',
             status: 'ACTIVE' as ActivityStatus,
             isConfigured: true,
-            revenue: 0,
-            grossMargin: 0,
-            expenses: 0,
-            netMargin: 0,
-            monthRevenue: 0,
-            monthGrossMargin: 0,
-            monthExpenses: 0,
-            monthNetMargin: 0,
+            revenue: rev,
+            grossMargin: card ? (card.monthGrossMargin > 0 ? card.monthGrossMargin : (card.totalGrossMargin || 0)) : 0,
+            expenses: exp,
+            netMargin: net,
+            dayRevenue: card?.dayRevenue ?? 0,
+            dayRevenueHT: card?.dayRevenueHT ?? 0,
+            dayCogsHT: card?.dayCogsHT ?? 0,
+            dayGrossMargin: card?.dayGrossMargin ?? 0,
+            dayExpenses: card?.dayExpenses ?? 0,
+            dayNetMargin: card?.dayNetMargin ?? 0,
+            monthRevenue: card?.monthRevenue ?? 0,
+            monthRevenueHT: card?.monthRevenueHT ?? 0,
+            monthCogsHT: card?.monthCogsHT ?? 0,
+            monthGrossMargin: card?.monthGrossMargin ?? 0,
+            monthExpenses: card?.monthExpenses ?? 0,
+            monthNetMargin: card?.monthNetMargin ?? 0,
+            stationFinancials: card?.stationFinancials,
           };
         });
         setActivities(initial);
@@ -653,62 +814,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   // Chargement initial depuis Supabase uniquement
   useEffect(() => {
     loadActivitiesFromSupabase();
-  }, [companyId, loadActivitiesFromSupabase]);
-
-  // ── Métriques financières réelles consolidées (Règle d'or Hub : Fuseau Africa/Porto-Novo) ──
-  const loadFinancialMetrics = useCallback(async () => {
-    if (!companyId) return;
-    try {
-      const result = await fetchHubFinancialMetrics(companyId);
-      setHubTotals(result.totals);
-
-      setActivities((prev) =>
-        prev.map((act) => {
-          const normSlug = (act.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
-          const card = result.sectors[normSlug] || result.sectors[act.sectorSlug] || {
-            sector_slug: normSlug,
-            dayRevenue: 0,
-            dayRevenueHT: 0,
-            dayCogsHT: 0,
-            dayGrossMargin: 0,
-            dayExpenses: 0,
-            dayNetMargin: 0,
-            monthRevenue: 0,
-            monthRevenueHT: 0,
-            monthCogsHT: 0,
-            monthGrossMargin: 0,
-            monthExpenses: 0,
-            monthNetMargin: 0,
-            hasKnownCost: true,
-          };
-          return {
-            ...act,
-            // Métriques isolées strictement du jour et du mois pour ce secteur
-            dayRevenue: card.dayRevenue,
-            dayRevenueHT: card.dayRevenueHT,
-            dayCogsHT: card.dayCogsHT,
-            dayGrossMargin: card.dayGrossMargin,
-            dayExpenses: card.dayExpenses,
-            dayNetMargin: card.dayNetMargin,
-            monthRevenue: card.monthRevenue,
-            monthRevenueHT: card.monthRevenueHT,
-            monthCogsHT: card.monthCogsHT,
-            monthGrossMargin: card.monthGrossMargin,
-            monthExpenses: card.monthExpenses,
-            monthNetMargin: card.monthNetMargin,
-            // RÈGLE MÉTIER ATTENDUE : Les cartes affichent le cumul du mois en cours (Cotonou UTC+1)
-            revenue: card.monthRevenue,
-            expenses: card.monthExpenses,
-            netMargin: card.monthNetMargin,
-            // Indicateurs financiers Station-Service (6 KPI)
-            stationFinancials: card.stationFinancials,
-          };
-        })
-      );
-    } catch (e) {
-      console.warn('[Hub] Erreur métriques financières consolidées:', e);
-    }
-  }, [companyId]);
+    loadFinancialMetrics();
+  }, [companyId, loadActivitiesFromSupabase, loadFinancialMetrics]);
 
   // Synchronisation Realtime Supabase multi-appareils (Ventes, Dépenses, Caisses, Activités)
   useEffect(() => {
@@ -841,56 +948,96 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // ── CALCULS CONSOLIDÉS DU JOUR (PARTIE 3) & DU MOIS (PARTIE 4) ─────────────
   const dayTotals = useMemo(() => {
-    const sumRevenue = activeActivities.reduce((a, s) => a + (s.dayRevenue ?? 0), 0);
-    const sumGrossMargin = activeActivities.reduce((a, s) => a + (s.dayGrossMargin || 0), 0);
-    const sumCogs = activeActivities.reduce((a, s) => a + (s.dayCogsHT || 0), 0);
-    const sumExpenses = activeActivities.reduce((a, s) => a + (s.dayExpenses ?? 0), 0);
-    const sumNetMargin = activeActivities.reduce((a, s) => a + (s.dayNetMargin ?? 0), 0);
+    const sumRevenue = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.dayRevenue ?? s.dayRevenue ?? 0);
+    }, 0);
+    const sumGrossMargin = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.dayGrossMargin ?? s.dayGrossMargin ?? 0);
+    }, 0);
+    const sumCogs = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.dayCogsHT ?? s.dayCogsHT ?? 0);
+    }, 0);
+    const sumExpenses = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.dayExpenses ?? s.dayExpenses ?? 0);
+    }, 0);
+    const sumNetMargin = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.dayNetMargin ?? s.dayNetMargin ?? 0);
+    }, 0);
 
-    const totalRevenue = hubTotals && typeof hubTotals.ca_jour === 'number'
+    const totalRevenue = hubTotals && typeof hubTotals.ca_jour === 'number' && hubTotals.ca_jour > 0
       ? hubTotals.ca_jour
       : sumRevenue;
-    const totalGrossMargin = hubTotals && typeof hubTotals.marge_brute_jour === 'number'
+    const totalGrossMargin = hubTotals && typeof hubTotals.marge_brute_jour === 'number' && hubTotals.marge_brute_jour > 0
       ? hubTotals.marge_brute_jour
       : sumGrossMargin;
-    const totalCogs = hubTotals && typeof hubTotals.cogs_jour_ht === 'number'
+    const totalCogs = hubTotals && typeof hubTotals.cogs_jour_ht === 'number' && hubTotals.cogs_jour_ht > 0
       ? hubTotals.cogs_jour_ht
       : sumCogs;
-    const totalExpenses = hubTotals && typeof hubTotals.depenses_jour === 'number'
+    const totalExpenses = hubTotals && typeof hubTotals.depenses_jour === 'number' && hubTotals.depenses_jour > 0
       ? hubTotals.depenses_jour
       : sumExpenses;
-    const totalNetMargin = hubTotals && typeof hubTotals.marge_jour === 'number'
+    const totalNetMargin = hubTotals && typeof hubTotals.marge_jour === 'number' && hubTotals.marge_jour !== 0
       ? hubTotals.marge_jour
       : sumNetMargin;
     const netMarginRate = totalRevenue > 0 ? (totalNetMargin / totalRevenue) * 100 : 0;
     return { totalRevenue, totalGrossMargin, totalCogs, totalExpenses, totalNetMargin, netMarginRate };
-  }, [activeActivities, hubTotals]);
+  }, [activeActivities, hubTotals, sectorMetricsMap]);
 
   const monthTotals = useMemo(() => {
-    const sumRevenue = activeActivities.reduce((a, s) => a + (s.monthRevenue || 0), 0);
-    const sumGrossMargin = activeActivities.reduce((a, s) => a + (s.monthGrossMargin || 0), 0);
-    const sumCogs = activeActivities.reduce((a, s) => a + (s.monthCogsHT || 0), 0);
-    const sumExpenses = activeActivities.reduce((a, s) => a + (s.monthExpenses || 0), 0);
-    const sumNetMargin = activeActivities.reduce((a, s) => a + (s.monthNetMargin || 0), 0);
+    const sumRevenue = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.monthRevenue ?? s.monthRevenue ?? s.revenue ?? 0);
+    }, 0);
+    const sumGrossMargin = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.monthGrossMargin ?? s.monthGrossMargin ?? 0);
+    }, 0);
+    const sumCogs = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.monthCogsHT ?? s.monthCogsHT ?? 0);
+    }, 0);
+    const sumExpenses = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.monthExpenses ?? s.monthExpenses ?? 0);
+    }, 0);
+    const sumNetMargin = activeActivities.reduce((a, s) => {
+      const norm = (s.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
+      const m = sectorMetricsMap[norm] || sectorMetricsMap[s.sectorSlug];
+      return a + (m?.monthNetMargin ?? s.monthNetMargin ?? 0);
+    }, 0);
 
-    const totalRevenue = hubTotals && typeof hubTotals.ca_mois === 'number'
+    const totalRevenue = hubTotals && typeof hubTotals.ca_mois === 'number' && hubTotals.ca_mois > 0
       ? hubTotals.ca_mois
       : sumRevenue;
-    const totalGrossMargin = hubTotals && typeof hubTotals.marge_brute_mois === 'number'
+    const totalGrossMargin = hubTotals && typeof hubTotals.marge_brute_mois === 'number' && hubTotals.marge_brute_mois > 0
       ? hubTotals.marge_brute_mois
       : sumGrossMargin;
-    const totalCogs = hubTotals && typeof hubTotals.cogs_mois_ht === 'number'
+    const totalCogs = hubTotals && typeof hubTotals.cogs_mois_ht === 'number' && hubTotals.cogs_mois_ht > 0
       ? hubTotals.cogs_mois_ht
       : sumCogs;
-    const totalExpenses = hubTotals && typeof hubTotals.depenses_mois === 'number'
+    const totalExpenses = hubTotals && typeof hubTotals.depenses_mois === 'number' && hubTotals.depenses_mois > 0
       ? hubTotals.depenses_mois
       : sumExpenses;
-    const totalNetMargin = hubTotals && typeof hubTotals.marge_mois === 'number'
+    const totalNetMargin = hubTotals && typeof hubTotals.marge_mois === 'number' && hubTotals.marge_mois !== 0
       ? hubTotals.marge_mois
       : sumNetMargin;
     const netMarginRate = totalRevenue > 0 ? (totalNetMargin / totalRevenue) * 100 : 0;
     return { totalRevenue, totalGrossMargin, totalCogs, totalExpenses, totalNetMargin, netMarginRate };
-  }, [activeActivities, hubTotals]);
+  }, [activeActivities, hubTotals, sectorMetricsMap]);
 
   // ── Actions : Ajout d'activité (PARTIE 6) ──────────────────────────────────
   const handleAddSubmit = async () => {
@@ -1177,12 +1324,15 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await Promise.all([
-      loadActivitiesFromSupabase(),
-      loadFinancialMetrics(),
-      loadSubscriptions(),
-    ]);
-    setTimeout(() => setIsRefreshing(false), 300);
+    try {
+      await loadActivitiesFromSupabase();
+      await loadFinancialMetrics();
+      await loadSubscriptions();
+    } catch (err) {
+      console.warn('[Hub] Erreur rafraîchissement:', err);
+    } finally {
+      setTimeout(() => setIsRefreshing(false), 300);
+    }
   };
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -1613,7 +1763,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                   {(() => {
                     const normSlug = (act.sectorSlug || '').toLowerCase().replace(/^sec-/, '');
                     const isStation = normSlug === 'station-service' || normSlug === 'station';
-                    const sf = act.stationFinancials;
+                    const cardMetric = sectorMetricsMap[normSlug] || sectorMetricsMap[act.sectorSlug];
+                    const sf = cardMetric?.stationFinancials || act.stationFinancials;
 
                     if (isStation && sf) {
                       // ═══ CARTE STATION-SERVICE — 6 INDICATEURS FINANCIERS ═══
@@ -1697,24 +1848,36 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     }
 
                     // ═══ CARTE STANDARD (Tous les autres secteurs) ═══
+                    const caVal = cardMetric
+                      ? (cardMetric.monthRevenue > 0 ? cardMetric.monthRevenue : (cardMetric.totalRevenue || 0))
+                      : (act.monthRevenue ?? act.revenue ?? 0);
+                    const depVal = cardMetric
+                      ? (cardMetric.monthExpenses > 0 ? cardMetric.monthExpenses : (cardMetric.totalExpenses || 0))
+                      : (act.monthExpenses ?? act.expenses ?? 0);
+                    const netMarginVal = cardMetric
+                      ? ((cardMetric.monthRevenue > 0 || cardMetric.monthExpenses > 0)
+                          ? cardMetric.monthNetMargin
+                          : (cardMetric.totalNetMargin ?? cardMetric.monthNetMargin))
+                      : (act.monthNetMargin ?? act.netMargin ?? 0);
+
                     return (
                       <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
                         darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
                       }`}>
                         <div className="flex items-center justify-between text-xs">
                           <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
-                          <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(act.monthRevenue ?? act.revenue)} F CFA</span>
+                          <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(caVal)} F CFA</span>
                         </div>
                         <div className="flex items-center justify-between text-xs">
                           <span className={darkMode ? "text-slate-400" : "text-slate-500"}>Dépenses :</span>
-                          <span className="font-mono font-bold text-rose-500">{fmt(act.monthExpenses ?? act.expenses)} F CFA</span>
+                          <span className="font-mono font-bold text-rose-500">{fmt(depVal)} F CFA</span>
                         </div>
                         <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
                           darkMode ? 'border-slate-800/80' : 'border-slate-200'
                         }`}>
-                          <span className={`font-semibold ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
-                          <span className={`font-mono font-black ${(act.monthNetMargin ?? act.netMargin) >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                            {fmt(act.monthNetMargin ?? act.netMargin)} F CFA {(act.monthNetMargin ?? act.netMargin) < 0 ? '(Déficit)' : ''}
+                          <span className={`font-semibold ${netMarginVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
+                          <span className={`font-mono font-black ${netMarginVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
+                            {fmt(netMarginVal)} F CFA {netMarginVal < 0 ? '(Déficit)' : ''}
                           </span>
                         </div>
                       </div>
