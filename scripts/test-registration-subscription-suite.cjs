@@ -33,8 +33,8 @@ assert(emailHelperContent.includes('status: \'envoye\''), 'Confirmation de réce
 assert(emailHelperContent.includes('status: \'echec\''), 'Enregistrement d\'échec en cas de rejet')
 assert(emailHelperContent.includes('createResilientTransporter'), 'Transporteur résilient avec repli 465 SSL / 587 TLS')
 
-const resendEndpointContent = fs.readFileSync(path.resolve('api/resend-confirmation-email.ts'), 'utf8')
-assert(resendEndpointContent.includes('resend-confirmation-email'), 'Endpoint de renvoi opérationnel')
+const resendEndpointContent = fs.readFileSync(path.resolve('api/confirm-email.ts'), 'utf8')
+assert(resendEndpointContent.includes('resend_confirmation') || resendEndpointContent.includes('isResendAction'), 'Endpoint de renvoi opérationnel')
 assert(resendEndpointContent.includes('administrateur') && resendEndpointContent.includes('interne'), 'Utilisateurs internes exemptés de confirmation d\'email')
 
 // ─── TEST 2 : Unicité absolue de l'adresse email ─────────────────────────────

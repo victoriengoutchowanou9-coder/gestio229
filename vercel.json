@@ -28,6 +28,14 @@
   ],
   "rewrites": [
     {
+      "source": "/api/resend-confirmation-email",
+      "destination": "/api/confirm-email"
+    },
+    {
+      "source": "/api/admin-feedback",
+      "destination": "/api/feedback"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },
