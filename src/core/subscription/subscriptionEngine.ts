@@ -339,6 +339,15 @@ export function calculateDurationPrice(
  * - Cas 1 : Renouvellement AVANT expiration -> prolonge à partir de la date de fin existante (aucun jour perdu).
  * - Cas 2 : Renouvellement APRÈS expiration (ou 1ère activation payante) -> démarre à la date de validation.
  */
+export function computeCalendarDaysRemaining(endDate: Date | null, now: Date = new Date()): number {
+  if (!endDate || isNaN(endDate.getTime())) return 0
+  if (endDate.getTime() <= now.getTime()) return 0
+  const startOfNow = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfEnd = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime()
+  const calendarDiff = Math.round((startOfEnd - startOfNow) / (1000 * 60 * 60 * 24))
+  return Math.max(1, calendarDiff)
+}
+
 export function calculateRenewalDates(
   currentExpiresAt: string | Date | null | undefined,
   durationMonths: number,
@@ -357,9 +366,7 @@ export function calculateRenewalDates(
 
   const isExtensionBeforeExpiry = Boolean(existingEnd && existingEnd.getTime() > now.getTime())
   const baseDate = isExtensionBeforeExpiry && existingEnd ? new Date(existingEnd.getTime()) : new Date(now.getTime())
-  const preservedDays = isExtensionBeforeExpiry && existingEnd
-    ? Math.max(0, Math.ceil((existingEnd.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)))
-    : 0
+  const preservedDays = isExtensionBeforeExpiry && existingEnd ? computeCalendarDaysRemaining(existingEnd, now) : 0
 
   const newExpirationDate = new Date(baseDate.getTime())
   newExpirationDate.setMonth(newExpirationDate.getMonth() + dur)
@@ -705,8 +712,12 @@ export function getTrialStatus(company?: Company | null): {
   }
 
   const status = (company.subscription_status || 'trial').toLowerCase()
+  const now = new Date()
+
   if (status === 'active') {
-    return { isInTrial: false, isTrialExpired: false, daysRemaining: 365, trialEndsAt: null }
+    const activeEndsAt = company.subscription_expires_at ? new Date(company.subscription_expires_at) : null
+    const daysRemaining = activeEndsAt ? computeCalendarDaysRemaining(activeEndsAt, now) : 365
+    return { isInTrial: false, isTrialExpired: false, daysRemaining, trialEndsAt: activeEndsAt }
   }
 
   const createdAt = company.created_at ? new Date(company.created_at) : new Date()
@@ -714,10 +725,8 @@ export function getTrialStatus(company?: Company | null): {
   const trialEndsAt = rawTrialEnd
     ? new Date(rawTrialEnd)
     : new Date(createdAt.getTime() + 30 * 24 * 60 * 60 * 1000)
-  const now = new Date()
-  const diffMs = trialEndsAt.getTime() - now.getTime()
-  const daysRemaining = Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
-  const isTrialExpired = diffMs <= 0 || status === 'expired'
+  const isTrialExpired = trialEndsAt.getTime() <= now.getTime() || status === 'expired'
+  const daysRemaining = isTrialExpired ? 0 : computeCalendarDaysRemaining(trialEndsAt, now)
 
   return {
     isInTrial: status === 'trial' && !isTrialExpired,

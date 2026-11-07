@@ -285,12 +285,16 @@ export const AbonnementPage: React.FC = () => {
     return calculateRenewalDates(currentExp, durationMonths, new Date())
   }, [targetScope, globalSub, secteursStatus, durationMonths])
 
-  // Jours restants globaux
+  // Jours restants globaux (calcul unifié en jours calendaires réels)
   const globalDaysRemaining = useMemo(() => {
-    if (!globalSub?.date_fin_global) return 0
-    const diff = new Date(globalSub.date_fin_global).getTime() - Date.now()
-    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
-  }, [globalSub])
+    const targetFin =
+      globalSub?.date_fin_global ||
+      company?.subscription_expires_at ||
+      (company?.created_at && (!company?.subscription_status || company?.subscription_status === 'trial')
+        ? new Date(new Date(company.created_at).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+        : null)
+    return calcDaysRemaining(targetFin)
+  }, [globalSub, company])
 
   const handleProofFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -412,11 +416,15 @@ export const AbonnementPage: React.FC = () => {
                 <h1 className="text-xl font-bold text-white">
                   Abonnement Global & Secteurs d'Activité
                 </h1>
-                {globalSub?.statut_global === 'essai' && globalDaysRemaining > 0 ? (
+                {loadingSubData ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-semibold bg-slate-700/50 text-slate-300 animate-pulse border border-slate-600/50">
+                    Vérification de l'abonnement...
+                  </span>
+                ) : (globalSub?.statut_global === 'essai' || (!globalSub && (!company?.subscription_status || company?.subscription_status === 'trial'))) && globalDaysRemaining > 0 ? (
                   <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30">
                     Essai gratuit – {globalDaysRemaining} jours restants
                   </span>
-                ) : globalSub?.statut_global === 'actif' && globalDaysRemaining > 0 ? (
+                ) : (globalSub?.statut_global === 'actif' || company?.subscription_status === 'active') && globalDaysRemaining > 0 ? (
                   <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                     Abonnement actif – {globalDaysRemaining} jours restants
                   </span>

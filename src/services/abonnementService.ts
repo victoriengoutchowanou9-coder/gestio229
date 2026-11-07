@@ -241,10 +241,16 @@ export function fromSecteurCodeToSlug(code: string): string {
   return canonicalSectorSlug(code)
 }
 
-function computeDaysRemaining(endDate: Date | null, now: Date = new Date()): number {
+export function computeDaysRemaining(endDate: Date | null, now: Date = new Date()): number {
   if (!endDate || isNaN(endDate.getTime())) return 0
-  const diffMs = endDate.getTime() - now.getTime()
-  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)))
+  if (endDate.getTime() <= now.getTime()) return 0
+
+  // Calcul exact en jours calendaires entiers pour éviter le bug de 31 jours dû aux décalages horaires / millisecondes
+  const startOfNow = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+  const startOfEnd = new Date(endDate.getFullYear(), endDate.getMonth(), endDate.getDate()).getTime()
+  const calendarDiff = Math.round((startOfEnd - startOfNow) / (1000 * 60 * 60 * 24))
+
+  return Math.max(1, calendarDiff)
 }
 
 /**
@@ -559,7 +565,31 @@ export async function verifierOuCreerAbonnementGlobal(
           .eq('id', existing.id)
           .select()
           .maybeSingle()
+        if (comp && comp.subscription_status !== 'expired' && comp.subscription_status !== 'deleted') {
+          try {
+            await supabase
+              .from('companies')
+              .update({ subscription_status: 'expired', updated_at: now.toISOString() })
+              .eq('id', entrepriseId)
+          } catch (_) {}
+        }
         return (updated || { ...existing, statut_global: 'expire' }) as AbonnementGlobalRow
+      }
+
+      // Synchronisation bidirectionnelle : si la date de fin globale existe mais que companies.subscription_expires_at est nul ou désynchronisé
+      if (existing.date_fin_global && comp && (!comp.subscription_expires_at || comp.subscription_expires_at !== existing.date_fin_global)) {
+        try {
+          await supabase
+            .from('companies')
+            .update({
+              subscription_expires_at: existing.date_fin_global,
+              ...(existing.statut_global === 'essai' && comp.subscription_status !== 'trial' && comp.subscription_status !== 'active'
+                ? { subscription_status: 'trial' }
+                : {}),
+              updated_at: now.toISOString(),
+            })
+            .eq('id', entrepriseId)
+        } catch (_) {}
       }
 
       // Si l'abonnement global est en cours d'essai valide (non échu) mais que l'entreprise
@@ -613,7 +643,20 @@ export async function verifierOuCreerAbonnementGlobal(
       .select()
       .maybeSingle()
 
-    if (inserted) return inserted as AbonnementGlobalRow
+    if (inserted) {
+      if (comp && (!comp.subscription_expires_at || comp.subscription_expires_at !== fin.toISOString())) {
+        try {
+          await supabase
+            .from('companies')
+            .update({
+              subscription_expires_at: fin.toISOString(),
+              updated_at: now.toISOString(),
+            })
+            .eq('id', entrepriseId)
+        } catch (_) {}
+      }
+      return inserted as AbonnementGlobalRow
+    }
 
     return {
       id: `local-${entrepriseId}`,

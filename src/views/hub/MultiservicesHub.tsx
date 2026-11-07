@@ -281,6 +281,9 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     if (globalSub?.date_fin_global) {
       return calcDaysRemaining(globalSub.date_fin_global);
     }
+    if (company?.subscription_expires_at) {
+      return calcDaysRemaining(company.subscription_expires_at);
+    }
     if (company?.created_at && (company?.subscription_status === 'trial' || !company?.subscription_status)) {
       const trialEnd = new Date(new Date(company.created_at).getTime() + 30 * 24 * 60 * 60 * 1000);
       return Math.max(0, calcDaysRemaining(trialEnd));
