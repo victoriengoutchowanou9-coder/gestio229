@@ -107,6 +107,11 @@ export interface Company {
   logo_url?: string
   subscription_status: SubscriptionStatus
   trial_ends_at?: string
+  subscription_expires_at?: string | null
+  subscription_plan?: string
+  is_active?: boolean
+  selected_sectors?: string[]
+  active_sector?: string
   onboarding_completed: boolean
   e_mecef_active?: boolean
   e_mecef_nim?: string

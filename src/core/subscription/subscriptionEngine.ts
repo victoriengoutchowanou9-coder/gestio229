@@ -348,6 +348,12 @@ export function computeCalendarDaysRemaining(endDate: Date | null, now: Date = n
   return Math.max(1, calendarDiff)
 }
 
+export function calcDaysRemaining(dateStr?: string | Date | null): number {
+  if (!dateStr) return 0
+  const d = dateStr instanceof Date ? dateStr : new Date(dateStr)
+  return computeCalendarDaysRemaining(d, new Date())
+}
+
 export function calculateRenewalDates(
   currentExpiresAt: string | Date | null | undefined,
   durationMonths: number,

@@ -50,6 +50,7 @@ import {
   DemandePaiementAbonnement,
   SubscriptionNotificationItem,
   canonicalSectorSlug,
+  calcDaysRemaining,
 } from '../../../services/abonnementService'
 import {
   AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE,
@@ -58,7 +59,89 @@ import {
 
 const PRESET_DURATIONS = [1, 2, 3, 4, 6, 12]
 
-export const AbonnementPage: React.FC = () => {
+// Calcul sécurisé et résilient des jours restants calendaires
+function safeCalcDaysRemaining(dateStr?: string | Date | null): number {
+  try {
+    if (typeof calcDaysRemaining === 'function') {
+      return calcDaysRemaining(dateStr)
+    }
+  } catch (_) {}
+  if (!dateStr) return 0
+  try {
+    const d = dateStr instanceof Date ? dateStr : new Date(dateStr)
+    if (isNaN(d.getTime())) return 0
+    const now = new Date()
+    if (d.getTime() <= now.getTime()) return 0
+    const startOfNow = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    const startOfEnd = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+    const diff = Math.round((startOfEnd - startOfNow) / (1000 * 60 * 60 * 24))
+    return Math.max(1, diff)
+  } catch (_) {
+    return 0
+  }
+}
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean
+  error: Error | null
+}
+
+class AbonnementErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props)
+    this.state = { hasError: false, error: null }
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error }
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error('[AbonnementPage] Erreur interceptée par le bouclier de sécurité:', error, errorInfo)
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-950 text-slate-100 p-6 flex flex-col items-center justify-center">
+          <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-6 text-center shadow-2xl">
+            <div className="w-12 h-12 rounded-full bg-blue-500/20 text-blue-400 flex items-center justify-center mx-auto mb-4">
+              <RefreshCw size={24} className="animate-spin" />
+            </div>
+            <h2 className="text-lg font-bold text-white mb-2">Module Abonnement</h2>
+            <p className="text-sm text-slate-400 mb-6">
+              Le chargement des données d'abonnement a rencontré une interruption temporaire. Vos données et votre accès restent intégralement préservés.
+            </p>
+            <div className="flex gap-3 justify-center">
+              <button
+                type="button"
+                onClick={() => this.setState({ hasError: false, error: null })}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-sm font-semibold transition"
+              >
+                Réessayer
+              </button>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-sm font-semibold transition"
+              >
+                Actualiser
+              </button>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
+
+const AbonnementPageContent: React.FC = () => {
   const { sectorSlug: routeSectorSlug } = useParams<{ sectorSlug?: string }>()
   const { company } = useAuthStore()
 
@@ -72,7 +155,7 @@ export const AbonnementPage: React.FC = () => {
         : company?.active_sector
         ? [company.active_sector]
         : ['boutique']
-    return Array.from(new Set(raw.map((s: string) => canonicalSectorSlug(s)).filter(Boolean)))
+    return Array.from(new Set(raw.map((s: any) => canonicalSectorSlug(typeof s === 'string' ? s : (s?.sector?.code || s?.sector_id || ''))).filter(Boolean)))
   }, [company])
 
   // États chargés depuis Supabase
@@ -285,15 +368,20 @@ export const AbonnementPage: React.FC = () => {
     return calculateRenewalDates(currentExp, durationMonths, new Date())
   }, [targetScope, globalSub, secteursStatus, durationMonths])
 
-  // Jours restants globaux (calcul unifié en jours calendaires réels)
+  // Jours restants globaux (calcul unifié en jours calendaires réels et blindé)
   const globalDaysRemaining = useMemo(() => {
-    const targetFin =
-      globalSub?.date_fin_global ||
-      company?.subscription_expires_at ||
-      (company?.created_at && (!company?.subscription_status || company?.subscription_status === 'trial')
-        ? new Date(new Date(company.created_at).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
-        : null)
-    return calcDaysRemaining(targetFin)
+    try {
+      const targetFin =
+        globalSub?.date_fin_global ||
+        (company as any)?.subscription_expires_at ||
+        (company?.created_at && (!company?.subscription_status || company?.subscription_status === 'trial')
+          ? new Date(new Date(company.created_at).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString()
+          : null)
+      return safeCalcDaysRemaining(targetFin)
+    } catch (err) {
+      console.warn('[AbonnementPage] Erreur calcul globalDaysRemaining:', err)
+      return 0
+    }
   }, [globalSub, company])
 
   const handleProofFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1306,6 +1394,14 @@ export const AbonnementPage: React.FC = () => {
         </div>
       )}
     </div>
+  )
+}
+
+export const AbonnementPage: React.FC = () => {
+  return (
+    <AbonnementErrorBoundary>
+      <AbonnementPageContent />
+    </AbonnementErrorBoundary>
   )
 }
 
