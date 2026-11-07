@@ -137,6 +137,18 @@ export function getCotonouDates(baseDate?: Date | string): {
   const todayStartIso = `${todayStr}T00:00:00.000+01:00`;
   const todayEndIso = `${todayStr}T23:59:59.999+01:00`;
 
+  // Date d'il y a 30 jours (durée de 1 mois glissant pour couvrir 30 jours calendaires pleins)
+  const dMinus30 = new Date(d.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const oneMonthAgoStr = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Africa/Porto-Novo',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(dMinus30);
+
+  // Début effectif couvrant la durée de 1 mois (soit le 1er du mois ou les 30 derniers jours)
+  const effectiveMonthStart = monthStartStr < oneMonthAgoStr ? monthStartStr : oneMonthAgoStr;
+
   const todayFormatted = new Intl.DateTimeFormat('fr-FR', {
     day: '2-digit',
     month: '2-digit',
@@ -161,6 +173,8 @@ export function getCotonouDates(baseDate?: Date | string): {
     todayStr,
     monthStartStr,
     monthEndStr,
+    oneMonthAgoStr,
+    effectiveMonthStart,
     monthStartIso,
     monthEndIso,
     todayStartIso,
@@ -198,7 +212,7 @@ export async function fetchHubFinancialMetrics(
   companyId: string,
   targetDateStr?: string
 ): Promise<HubFinancialResult> {
-  const { todayStr, monthStartStr, monthEndStr, monthStartIso, monthEndIso } = getCotonouDates(targetDateStr);
+  const { todayStr, monthStartStr, monthEndStr, effectiveMonthStart, monthStartIso, monthEndIso } = getCotonouDates(targetDateStr);
 
   const sectorsMap: Record<string, SectorMetrics> = {};
 
@@ -316,7 +330,7 @@ export async function fetchHubFinancialMetrics(
       if (!itemDate) continue;
 
       const isToday = itemDate === todayStr;
-      const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
+      const isThisMonth = itemDate >= effectiveMonthStart && itemDate <= monthEndStr;
 
       if (isToday) {
         card.dayRevenue += orderMargin.revenueTTC;
@@ -357,7 +371,7 @@ export async function fetchHubFinancialMetrics(
       if (!dDate) continue;
 
       const isToday = dDate === todayStr;
-      const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+      const isThisMonth = dDate >= effectiveMonthStart && dDate <= monthEndStr;
 
       if (isToday) {
         card.dayExpenses += montant;
@@ -389,7 +403,7 @@ export async function fetchHubFinancialMetrics(
       if (!dDate) continue;
 
       const isToday = dDate === todayStr;
-      const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+      const isThisMonth = dDate >= effectiveMonthStart && dDate <= monthEndStr;
 
       if (isToday) {
         card.dayExpenses += montant;
@@ -416,7 +430,7 @@ export async function fetchHubFinancialMetrics(
       if (!dDate) continue;
 
       const isToday = dDate === todayStr;
-      const isThisMonth = dDate >= monthStartStr && dDate <= monthEndStr;
+      const isThisMonth = dDate >= effectiveMonthStart && dDate <= monthEndStr;
 
       if (isToday) {
         card.dayExpenses += montant;
@@ -547,7 +561,7 @@ export async function fetchHubFinancialMetrics(
       for (const item of stationSales) {
         const itemDate = extractCotonouDate(item.order_date, item.created_at);
         if (!itemDate) continue;
-        const isThisMonth = itemDate >= monthStartStr && itemDate <= monthEndStr;
+        const isThisMonth = itemDate >= effectiveMonthStart && itemDate <= monthEndStr;
         if (!isThisMonth) continue;
 
         const orderMargin = computeOrderMargin(item);
@@ -592,7 +606,7 @@ export async function fetchHubFinancialMetrics(
           .from('station_shifts_clotures')
           .select('date, volume_distribue, prix_litre, montant_theorique, montant_verse, produit')
           .eq('company_id', companyId)
-          .gte('date', monthStartStr)
+          .gte('date', effectiveMonthStart)
           .lte('date', monthEndStr);
 
         if (shifts && shifts.length > 0) {

@@ -599,9 +599,9 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           coveredSlugs.add(rawSlug);
           const meta = getSectorMeta(rawSlug) || getSectorMeta(row.sector_slug) || getSectorMeta(row.sector_code?.toLowerCase());
           const card = metrics[rawSlug] || metrics[row.sector_slug];
-          const rev = card ? (card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0)) : 0;
-          const exp = card ? (card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0)) : 0;
-          const net = card ? ((card.monthRevenue > 0 || card.monthExpenses > 0) ? card.monthNetMargin : (card.totalNetMargin ?? card.monthNetMargin)) : 0;
+          const rev = card ? (card.monthRevenue ?? 0) : 0;
+          const exp = card ? (card.monthExpenses ?? 0) : 0;
+          const net = card ? (card.monthNetMargin ?? 0) : 0;
 
           existingEntries.push({
             id: row.id,
@@ -615,7 +615,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             status: row.status as ActivityStatus,
             isConfigured: true,
             revenue: rev,
-            grossMargin: card ? (card.monthGrossMargin > 0 ? card.monthGrossMargin : (card.totalGrossMargin || 0)) : 0,
+            grossMargin: card ? (card.monthGrossMargin ?? 0) : 0,
             expenses: exp,
             netMargin: net,
             dayRevenue: card?.dayRevenue ?? 0,
@@ -646,9 +646,9 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           const actName = `${companyName || comp?.name || 'Mon Établissement'} — ${meta?.label || rawSlug}`.toUpperCase();
           const assignedId = `act-${companyId.slice(0, 8)}-${rawSlug}`;
           const card = metrics[rawSlug];
-          const rev = card ? (card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0)) : 0;
-          const exp = card ? (card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0)) : 0;
-          const net = card ? ((card.monthRevenue > 0 || card.monthExpenses > 0) ? card.monthNetMargin : (card.totalNetMargin ?? card.monthNetMargin)) : 0;
+          const rev = card ? (card.monthRevenue ?? 0) : 0;
+          const exp = card ? (card.monthExpenses ?? 0) : 0;
+          const net = card ? (card.monthNetMargin ?? 0) : 0;
 
           newSeededEntries.push({
             id: assignedId,
@@ -662,7 +662,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             status: 'ACTIVE',
             isConfigured: true,
             revenue: rev,
-            grossMargin: card ? (card.monthGrossMargin > 0 ? card.monthGrossMargin : (card.totalGrossMargin || 0)) : 0,
+            grossMargin: card ? (card.monthGrossMargin ?? 0) : 0,
             expenses: exp,
             netMargin: net,
             dayRevenue: card?.dayRevenue ?? 0,
@@ -1770,19 +1770,24 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     const sf = cardMetric?.stationFinancials || act.stationFinancials;
 
                     if (isStation && sf) {
-                      // ═══ CARTE STATION-SERVICE — 6 INDICATEURS FINANCIERS ═══
+                      // ═══ CARTE STATION-SERVICE — 6 INDICATEURS FINANCIERS (DURÉE 1 MOIS) ═══
                       return (
                         <div className={`rounded-xl p-4 space-y-1.5 mb-6 border ${
                           darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
                         }`}>
                           {/* Titre section */}
-                          <div className={`flex items-center gap-1.5 mb-2 pb-1.5 border-b ${
+                          <div className={`flex items-center justify-between gap-1.5 mb-2 pb-1.5 border-b ${
                             darkMode ? 'border-slate-800' : 'border-slate-200'
                           }`}>
-                            <Fuel size={13} className="text-amber-500" />
-                            <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                              darkMode ? 'text-amber-400/80' : 'text-amber-700'
-                            }`}>Indicateurs financiers — {currentMonthLabel}</span>
+                            <span className="flex items-center gap-1.5">
+                              <Fuel size={13} className="text-amber-500" />
+                              <span className={`text-[10px] font-bold uppercase tracking-wider ${
+                                darkMode ? 'text-amber-400/80' : 'text-amber-700'
+                              }`}>Données du mois (30 jours)</span>
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-semibold lowercase">
+                              ({currentMonthLabel})
+                            </span>
                           </div>
 
                           {/* 1. Marge brute des carburants */}
@@ -1850,23 +1855,33 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                       );
                     }
 
-                    // ═══ CARTE STANDARD (Tous les autres secteurs) ═══
+                    // ═══ CARTE STANDARD (Tous les autres secteurs) — INDICATEURS POUR UNE DURÉE DE 1 MOIS ═══
                     const caVal = cardMetric
-                      ? (cardMetric.monthRevenue > 0 ? cardMetric.monthRevenue : (cardMetric.totalRevenue || 0))
+                      ? (cardMetric.monthRevenue ?? 0)
                       : (act.monthRevenue ?? act.revenue ?? 0);
                     const depVal = cardMetric
-                      ? (cardMetric.monthExpenses > 0 ? cardMetric.monthExpenses : (cardMetric.totalExpenses || 0))
+                      ? (cardMetric.monthExpenses ?? 0)
                       : (act.monthExpenses ?? act.expenses ?? 0);
                     const netMarginVal = cardMetric
-                      ? ((cardMetric.monthRevenue > 0 || cardMetric.monthExpenses > 0)
-                          ? cardMetric.monthNetMargin
-                          : (cardMetric.totalNetMargin ?? cardMetric.monthNetMargin))
+                      ? (cardMetric.monthNetMargin ?? 0)
                       : (act.monthNetMargin ?? act.netMargin ?? 0);
 
                     return (
                       <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
                         darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
                       }`}>
+                        {/* En-tête de période : Durée 1 mois */}
+                        <div className={`flex items-center justify-between text-[11px] font-bold uppercase tracking-wider mb-2 pb-1.5 border-b ${
+                          darkMode ? 'text-indigo-400/90 border-slate-800' : 'text-indigo-600 border-slate-200'
+                        }`}>
+                          <span className="flex items-center gap-1.5">
+                            <Calendar size={12} className="text-indigo-500 shrink-0" />
+                            Données du mois (30 jours)
+                          </span>
+                          <span className="text-[10px] text-slate-400 font-semibold lowercase">
+                            ({currentMonthLabel})
+                          </span>
+                        </div>
                         <div className="flex items-center justify-between text-xs">
                           <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
                           <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(caVal)} F CFA</span>
