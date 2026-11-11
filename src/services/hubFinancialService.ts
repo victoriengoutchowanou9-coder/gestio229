@@ -17,6 +17,7 @@ import {
   safeNum,
 } from '../lib/financialCalcul';
 import { OFFICIAL_STATION_FUELS } from './stationFuelService';
+import { getStatsToutesActivites } from '../lib/stats';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Interface des 6 indicateurs financiers spécifiques au secteur Station-Service
@@ -137,17 +138,9 @@ export function getCotonouDates(baseDate?: Date | string): {
   const todayStartIso = `${todayStr}T00:00:00.000+01:00`;
   const todayEndIso = `${todayStr}T23:59:59.999+01:00`;
 
-  // Date d'il y a 30 jours (durée de 1 mois glissant pour couvrir 30 jours calendaires pleins)
-  const dMinus30 = new Date(d.getTime() - 30 * 24 * 60 * 60 * 1000);
-  const oneMonthAgoStr = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Africa/Porto-Novo',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(dMinus30);
-
-  // Début effectif couvrant la durée de 1 mois (soit le 1er du mois ou les 30 derniers jours)
-  const effectiveMonthStart = monthStartStr < oneMonthAgoStr ? monthStartStr : oneMonthAgoStr;
+  // Mois calendaire en cours (1er jour du mois à aujourd'hui) - suppression stricte des 30j glissants
+  const oneMonthAgoStr = monthStartStr;
+  const effectiveMonthStart = monthStartStr;
 
   const todayFormatted = new Intl.DateTimeFormat('fr-FR', {
     day: '2-digit',
@@ -206,578 +199,95 @@ export function extractCotonouDate(rawDate?: string | null, rawTimestamp?: strin
 }
 
 /**
- * Charge les métriques réelles consolidées du HUB (du jour et du mois) avec filtrage strict par date
+ * Charge les métriques réelles consolidées du HUB (du jour et du mois) avec filtrage strict par date.
+ * Unifié à 100% avec le moteur unique de stats (lib/stats.ts).
  */
 export async function fetchHubFinancialMetrics(
   companyId: string,
   targetDateStr?: string
 ): Promise<HubFinancialResult> {
-  const { todayStr, monthStartStr, monthEndStr, effectiveMonthStart, monthStartIso, monthEndIso } = getCotonouDates(targetDateStr);
+  const { todayStr, monthStartStr, monthEndStr } = getCotonouDates(targetDateStr);
+
+  const [monthStatsMap, dayStatsMap] = await Promise.all([
+    getStatsToutesActivites(companyId, monthStartStr, todayStr),
+    getStatsToutesActivites(companyId, todayStr, todayStr),
+  ]);
 
   const sectorsMap: Record<string, SectorMetrics> = {};
-
-  const initSector = (slug: string): SectorMetrics => {
-    const clean = (slug || '').toLowerCase().trim().replace(/^sec-/, '');
-    if (!sectorsMap[clean]) {
-      sectorsMap[clean] = {
-        sector_slug: clean,
-        dayRevenue: 0,
-        dayRevenueHT: 0,
-        dayCogsHT: 0,
-        dayGrossMargin: 0,
-        dayExpenses: 0,
-        dayNetMargin: 0,
-        monthRevenue: 0,
-        monthRevenueHT: 0,
-        monthCogsHT: 0,
-        monthGrossMargin: 0,
-        monthExpenses: 0,
-        monthNetMargin: 0,
-        totalRevenue: 0,
-        totalRevenueHT: 0,
-        totalCogsHT: 0,
-        totalGrossMargin: 0,
-        totalExpenses: 0,
-        totalNetMargin: 0,
-        hasKnownCost: true,
-      };
-    }
-    return sectorsMap[clean];
-  };
-
-  // 1. Tenter l'appel RPC et les requêtes Supabase en parallèle strict
-  let rpcTotals: HubFinancialTotals | null = null;
-  const rpcPromise = Promise.race([
-    supabase.rpc('fn_dashboard_hub', { p_company_id: companyId, p_date: todayStr }),
-    new Promise<{ data: null; error: any }>((resolve) => setTimeout(() => resolve({ data: null, error: new Error('RPC timeout') }), 1200))
-  ]);
-
-  // Ventes : récupération de toutes les ventes valides de l'entreprise (triées par date décroissante)
-  const salesPromise = supabase
-    .from('sales_orders')
-    .select('id, total_amount, subtotal_ht, total_cost, gross_margin, sector_slug, order_date, created_at, status, notes')
-    .eq('company_id', companyId)
-    .not('status', 'in', '("annule","annulée","cancelled","CANCELLED")')
-    .order('created_at', { ascending: false })
-    .limit(1000);
-
-  // Dépenses via caisse_mouvements (table centrale du flux caisse de tous les secteurs)
-  const caisseMvtPromise = supabase
-    .from('caisse_mouvements')
-    .select('id, montant, created_at, sector_slug, secteur_slug, sens, type, caisse_id, motif')
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false })
-    .limit(1000);
-
-  // Dépenses via table expenses (si utilisée)
-  const expensesPromise = supabase
-    .from('expenses')
-    .select('id, amount, expense_date, created_at, sector_slug, category, title, notes')
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false })
-    .limit(500);
-
-  // Dépenses via table depenses (si table présente)
-  const depensesPromise = supabase
-    .from('depenses')
-    .select('id, montant, date_depense, created_at, secteur_id, categorie, description')
-    .eq('company_id', companyId)
-    .order('created_at', { ascending: false })
-    .limit(500);
-
-  const [rpcRes, salesRes, caisseRes, expRes, depRes] = await Promise.allSettled([
-    rpcPromise,
-    salesPromise,
-    caisseMvtPromise,
-    expensesPromise,
-    depensesPromise,
-  ]);
-
-  if (rpcRes.status === 'fulfilled' && rpcRes.value.data) {
-    const rpcData = rpcRes.value.data as any;
-    rpcTotals = {
-      date: rpcData.date || todayStr,
-      ca_jour: Number(rpcData.ca_jour) || 0,
-      depenses_jour: Number(rpcData.depenses_jour) || 0,
-      marge_jour: Number(rpcData.marge_jour) || 0,
-      ca_mois: Number(rpcData.ca_mois) || 0,
-      depenses_mois: Number(rpcData.depenses_mois) || 0,
-      marge_mois: Number(rpcData.marge_mois) || 0,
-      mois_debut: rpcData.mois_debut || monthStartStr,
-      mois_fin: rpcData.mois_fin || monthEndStr,
-    };
-  }
-
-  // 2. Traiter les ventes par secteur
-  if (salesRes.status === 'fulfilled' && salesRes.value.data) {
-    const salesList = salesRes.value.data;
-    for (const item of salesList) {
-      const itemDate = extractCotonouDate(item.order_date, item.created_at);
-      const secSlug = (item.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'boutique';
-      const card = initSector(secSlug);
-
-      const orderMargin = computeOrderMargin(item);
-      if (!orderMargin.hasKnownCost) {
-        card.hasKnownCost = false;
-      }
-
-      // Cumul historique total du secteur
-      card.totalRevenue = (card.totalRevenue || 0) + orderMargin.revenueTTC;
-      card.totalRevenueHT = (card.totalRevenueHT || 0) + orderMargin.revenueHT;
-      card.totalCogsHT = (card.totalCogsHT || 0) + orderMargin.cogsHT;
-      card.totalGrossMargin = (card.totalGrossMargin || 0) + orderMargin.grossMargin;
-
-      if (!itemDate) continue;
-
-      const isToday = itemDate === todayStr;
-      const isThisMonth = itemDate >= effectiveMonthStart && itemDate <= monthEndStr;
-
-      if (isToday) {
-        card.dayRevenue += orderMargin.revenueTTC;
-        card.dayRevenueHT += orderMargin.revenueHT;
-        card.dayCogsHT += orderMargin.cogsHT;
-        card.dayGrossMargin += orderMargin.grossMargin;
-      }
-
-      if (isThisMonth) {
-        card.monthRevenue += orderMargin.revenueTTC;
-        card.monthRevenueHT += orderMargin.revenueHT;
-        card.monthCogsHT += orderMargin.cogsHT;
-        card.monthGrossMargin += orderMargin.grossMargin;
-      }
-    }
-  }
-
-  // 3. Traiter les dépenses par secteur (caisse_mouvements + expenses + depenses sans doublons)
-  const processedExpenseIds = new Set<string>();
-
-  // 3.1 Dépenses enregistrées dans caisse_mouvements
-  if (caisseRes.status === 'fulfilled' && caisseRes.value.data && caisseRes.value.data.length > 0) {
-    for (const m of caisseRes.value.data) {
-      if (!isTrueOperatingExpense({
-        ...m,
-        description: m.motif,
-      })) {
-        continue;
-      }
-
-      processedExpenseIds.add(String(m.id));
-      const montant = safeNum(m.montant);
-      const targetSlug = (m.sector_slug || m.secteur_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-      const card = initSector(targetSlug);
-      card.totalExpenses = (card.totalExpenses || 0) + montant;
-
-      const dDate = extractCotonouDate(null, m.created_at);
-      if (!dDate) continue;
-
-      const isToday = dDate === todayStr;
-      const isThisMonth = dDate >= effectiveMonthStart && dDate <= monthEndStr;
-
-      if (isToday) {
-        card.dayExpenses += montant;
-      }
-      if (isThisMonth) {
-        card.monthExpenses += montant;
-      }
-    }
-  }
-
-  // 3.2 Dépenses enregistrées dans expenses
-  if (expRes.status === 'fulfilled' && expRes.value.data && expRes.value.data.length > 0) {
-    for (const e of expRes.value.data) {
-      if (processedExpenseIds.has(String(e.id))) continue;
-      if (!isTrueOperatingExpense({
-        ...e,
-        description: e.title || e.category,
-      })) {
-        continue;
-      }
-
-      processedExpenseIds.add(String(e.id));
-      const montant = safeNum(e.amount);
-      const targetSlug = (e.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-      const card = initSector(targetSlug);
-      card.totalExpenses = (card.totalExpenses || 0) + montant;
-
-      const dDate = extractCotonouDate(e.expense_date, e.created_at);
-      if (!dDate) continue;
-
-      const isToday = dDate === todayStr;
-      const isThisMonth = dDate >= effectiveMonthStart && dDate <= monthEndStr;
-
-      if (isToday) {
-        card.dayExpenses += montant;
-      }
-      if (isThisMonth) {
-        card.monthExpenses += montant;
-      }
-    }
-  }
-
-  // 3.3 Dépenses enregistrées dans table depenses (si présente)
-  if (depRes.status === 'fulfilled' && depRes.value.data && depRes.value.data.length > 0) {
-    for (const d of depRes.value.data) {
-      if (processedExpenseIds.has(String(d.id))) continue;
-      if (!isTrueOperatingExpense(d)) continue;
-
-      processedExpenseIds.add(String(d.id));
-      const montant = safeNum(d.montant);
-      const targetSlug = (d.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '') || 'general';
-      const card = initSector(targetSlug);
-      card.totalExpenses = (card.totalExpenses || 0) + montant;
-
-      const dDate = extractCotonouDate(d.date_depense, d.created_at);
-      if (!dDate) continue;
-
-      const isToday = dDate === todayStr;
-      const isThisMonth = dDate >= effectiveMonthStart && dDate <= monthEndStr;
-
-      if (isToday) {
-        card.dayExpenses += montant;
-      }
-      if (isThisMonth) {
-        card.monthExpenses += montant;
-      }
-    }
-  }
-
-  // 4. Calculer la marge nette par secteur : Marge Nette = Marge Brute (ou CA si pas de COGS) - Dépenses
-  const sectorCards = Object.values(sectorsMap);
-  for (const c of sectorCards) {
-    c.dayRevenue = Math.round(c.dayRevenue * 100) / 100;
-    c.dayRevenueHT = Math.round(c.dayRevenueHT * 100) / 100;
-    c.dayCogsHT = Math.round(c.dayCogsHT * 100) / 100;
-    c.dayGrossMargin = Math.round(c.dayGrossMargin * 100) / 100;
-    c.dayExpenses = Math.round(c.dayExpenses * 100) / 100;
-    
-    const dayMarginBase = (c.dayGrossMargin > 0 || c.dayCogsHT > 0) ? c.dayGrossMargin : c.dayRevenue;
-    c.dayNetMargin = Math.round((dayMarginBase - c.dayExpenses) * 100) / 100;
-
-    c.monthRevenue = Math.round(c.monthRevenue * 100) / 100;
-    c.monthRevenueHT = Math.round(c.monthRevenueHT * 100) / 100;
-    c.monthCogsHT = Math.round(c.monthCogsHT * 100) / 100;
-    c.monthGrossMargin = Math.round(c.monthGrossMargin * 100) / 100;
-    c.monthExpenses = Math.round(c.monthExpenses * 100) / 100;
-
-    const monthMarginBase = (c.monthGrossMargin > 0 || c.monthCogsHT > 0) ? c.monthGrossMargin : c.monthRevenue;
-    c.monthNetMargin = Math.round((monthMarginBase - c.monthExpenses) * 100) / 100;
-
-    c.totalRevenue = Math.round((c.totalRevenue || 0) * 100) / 100;
-    c.totalRevenueHT = Math.round((c.totalRevenueHT || 0) * 100) / 100;
-    c.totalCogsHT = Math.round((c.totalCogsHT || 0) * 100) / 100;
-    c.totalGrossMargin = Math.round((c.totalGrossMargin || 0) * 100) / 100;
-    c.totalExpenses = Math.round((c.totalExpenses || 0) * 100) / 100;
-
-    const totalMarginBase = ((c.totalGrossMargin || 0) > 0 || (c.totalCogsHT || 0) > 0)
-      ? (c.totalGrossMargin || 0)
-      : (c.totalRevenue || 0);
-    c.totalNetMargin = Math.round((totalMarginBase - (c.totalExpenses || 0)) * 100) / 100;
-  }
-
-  // 4B. Calcul des 6 indicateurs financiers spécifiques au secteur Station-Service
-  // ─────────────────────────────────────────────────────────────────────────────────
-  const stationCard = sectorsMap['station-service'] || sectorsMap['station'];
-  if (stationCard) {
-    try {
-      // Charger les configs officielles des 3 carburants pour les coûts d'achat
-      const fuelConfigsMap = new Map<string, { prix_achat_reference: number; taux_tva: number; is_tva_applicable: boolean }>();
-      try {
-        const { data: fuelProducts } = await supabase
-          .from('products')
-          .select('code, name, selling_price, cost_price, tva_rate, is_taxable, sector_meta')
-          .eq('company_id', companyId)
-          .eq('sector_slug', 'station-service');
-
-        for (const fuelDef of OFFICIAL_STATION_FUELS) {
-          const found = (fuelProducts || []).find((p: any) => {
-            const code = (p.code || '').toUpperCase();
-            const name = (p.name || '').toLowerCase();
-            if (code === fuelDef.code) return true;
-            if (fuelDef.nom === 'Essence Super' && (name.includes('super') || name.includes('essence'))) return true;
-            if (fuelDef.nom === 'Gasoil' && name.includes('gasoil')) return true;
-            if (fuelDef.nom === 'Pétrole lampant' && (name.includes('pétrole') || name.includes('petrole'))) return true;
-            return false;
-          });
-
-          fuelConfigsMap.set(fuelDef.nom.toLowerCase(), {
-            prix_achat_reference: found ? (Number(found.cost_price) || fuelDef.defaultCostPrice) : fuelDef.defaultCostPrice,
-            taux_tva: found ? (typeof found.tva_rate === 'number' ? found.tva_rate : 18) : 18,
-            is_tva_applicable: found ? (found.is_taxable !== false) : true,
-          });
-        }
-      } catch {
-        // Fallback aux valeurs par défaut
-        for (const f of OFFICIAL_STATION_FUELS) {
-          fuelConfigsMap.set(f.nom.toLowerCase(), {
-            prix_achat_reference: f.defaultCostPrice,
-            taux_tva: 18,
-            is_tva_applicable: true,
-          });
-        }
-      }
-
-      // Séparer les ventes station-service entre carburants et lubrifiants/général
-      const stationSales = salesRes.status === 'fulfilled' && salesRes.value.data
-        ? salesRes.value.data.filter((s: any) => {
-            const slug = (s.sector_slug || '').toLowerCase().replace(/^sec-/, '');
-            return slug === 'station-service' || slug === 'station';
-          })
-        : [];
-
-      let fuelRevenueTTC = 0;
-      let fuelRevenueHT = 0;
-      let fuelCogsHT = 0;
-      let generalRevenueTTC = 0;
-      let generalRevenueHT = 0;
-      let generalCogsHT = 0;
-
-      // Noms de carburants pour classifier les ventes
-      const fuelKeywords = ['super', 'essence', 'gasoil', 'pétrole', 'petrole'];
-
-      const isFuelSale = (item: any): boolean => {
-        const meta = item.metadata || {};
-        if (meta.is_carburant === true) return true;
-        const orderType = (item.order_type || '').toLowerCase();
-        if (orderType === 'carburant_distributeur' || orderType === 'carburant') return true;
-        const produit = (meta.produit || '').toLowerCase();
-        const notes = typeof item.notes === 'string' ? item.notes.toLowerCase() : '';
-        return fuelKeywords.some(kw => produit.includes(kw) || notes.includes(kw));
-      };
-
-      const identifyFuelType = (item: any): string | null => {
-        const meta = item.metadata || {};
-        const produit = (meta.produit || '').toLowerCase();
-        const notes = typeof item.notes === 'string' ? item.notes.toLowerCase() : '';
-        const combined = produit + ' ' + notes;
-        if (combined.includes('super') || combined.includes('essence')) return 'essence super';
-        if (combined.includes('gasoil')) return 'gasoil';
-        if (combined.includes('pétrole') || combined.includes('petrole')) return 'pétrole lampant';
-        return null;
-      };
-
-      // Dates de ventes carburants enregistrées dans sales_orders (pour anti-doublon avec shifts)
-      const fuelSalesDates = new Set<string>();
-
-      for (const item of stationSales) {
-        const itemDate = extractCotonouDate(item.order_date, item.created_at);
-        if (!itemDate) continue;
-        const isThisMonth = itemDate >= effectiveMonthStart && itemDate <= monthEndStr;
-        if (!isThisMonth) continue;
-
-        const orderMargin = computeOrderMargin(item);
-
-        if (isFuelSale(item)) {
-          fuelSalesDates.add(itemDate);
-          fuelRevenueTTC += orderMargin.revenueTTC;
-          fuelRevenueHT += orderMargin.revenueHT;
-
-          // Calcul COGS carburant avec prix d'achat de référence converti en HT
-          const fuelType = identifyFuelType(item);
-          if (fuelType && orderMargin.cogsHT <= 0) {
-            const conf = fuelConfigsMap.get(fuelType);
-            if (conf && conf.prix_achat_reference > 0) {
-              const meta = item.metadata || {};
-              const volLitres = Number(meta.volume_litres) || 0;
-              if (volLitres > 0) {
-                const costTTC = conf.prix_achat_reference;
-                const costHT = (conf.is_tva_applicable && conf.taux_tva > 0)
-                  ? costTTC / (1 + conf.taux_tva / 100)
-                  : costTTC;
-                fuelCogsHT += volLitres * costHT;
-              } else {
-                fuelCogsHT += orderMargin.cogsHT;
-              }
-            } else {
-              fuelCogsHT += orderMargin.cogsHT;
-            }
-          } else {
-            fuelCogsHT += orderMargin.cogsHT;
-          }
-        } else {
-          generalRevenueTTC += orderMargin.revenueTTC;
-          generalRevenueHT += orderMargin.revenueHT;
-          generalCogsHT += orderMargin.cogsHT;
-        }
-      }
-
-      // Intégrer les clôtures de shift (station_shifts_clotures) sur les dates sans vente carburant dans sales_orders
-      try {
-        const { data: shifts } = await supabase
-          .from('station_shifts_clotures')
-          .select('date, volume_distribue, prix_litre, montant_theorique, montant_verse, produit')
-          .eq('company_id', companyId)
-          .gte('date', effectiveMonthStart)
-          .lte('date', monthEndStr);
-
-        if (shifts && shifts.length > 0) {
-          for (const shift of shifts) {
-            const shiftDate = (shift.date || '').slice(0, 10);
-            // Anti-doublon : n'inclure les shifts que si aucune vente carburant sales_orders n'existe ce jour-là
-            if (fuelSalesDates.has(shiftDate)) continue;
-
-            const vol = Number(shift.volume_distribue) || 0;
-            const prixLitre = Number(shift.prix_litre) || 0;
-            const montant = Number(shift.montant_theorique) || Number(shift.montant_verse) || (vol * prixLitre);
-
-            if (montant > 0) {
-              // Identifier le type de carburant du shift
-              const produitLower = (shift.produit || '').toLowerCase();
-              let shiftFuelType: string | null = null;
-              if (produitLower.includes('super') || produitLower.includes('essence')) shiftFuelType = 'essence super';
-              else if (produitLower.includes('gasoil')) shiftFuelType = 'gasoil';
-              else if (produitLower.includes('pétrole') || produitLower.includes('petrole')) shiftFuelType = 'pétrole lampant';
-
-              // Le montant du shift est en TTC
-              fuelRevenueTTC += montant;
-              // Calcul HT
-              const conf = shiftFuelType ? fuelConfigsMap.get(shiftFuelType) : null;
-              const tvaRate = conf?.taux_tva ?? 18;
-              const isTaxable = conf?.is_tva_applicable ?? true;
-              const shiftHT = (isTaxable && tvaRate > 0) ? montant / (1 + tvaRate / 100) : montant;
-              fuelRevenueHT += shiftHT;
-
-              // COGS du shift
-              if (vol > 0 && conf && conf.prix_achat_reference > 0) {
-                const costTTC = conf.prix_achat_reference;
-                const costHT = (isTaxable && tvaRate > 0) ? costTTC / (1 + tvaRate / 100) : costTTC;
-                fuelCogsHT += vol * costHT;
-              }
-            }
-          }
-        }
-      } catch (shiftErr) {
-        console.warn('[hubFinancialService] Notice lecture station_shifts_clotures:', shiftErr);
-      }
-
-      // Arrondis
-      fuelRevenueTTC = Math.round(fuelRevenueTTC * 100) / 100;
-      fuelRevenueHT = Math.round(fuelRevenueHT * 100) / 100;
-      fuelCogsHT = Math.round(fuelCogsHT * 100) / 100;
-      generalRevenueTTC = Math.round(generalRevenueTTC * 100) / 100;
-      generalRevenueHT = Math.round(generalRevenueHT * 100) / 100;
-      generalCogsHT = Math.round(generalCogsHT * 100) / 100;
-
-      // 1. Marge brute des carburants = CA HT carburants - COGS HT carburants
-      const margeBruteCarburants = Math.round((fuelRevenueHT - fuelCogsHT) * 100) / 100;
-
-      // 2. Marge brute des ventes générales et lubrifiants
-      const margeBruteGeneraleLubrifiants = Math.round((generalRevenueHT - generalCogsHT) * 100) / 100;
-
-      // 3. Marge brute globale = somme des deux marges brutes
-      const margeBruteGlobale = Math.round((margeBruteCarburants + margeBruteGeneraleLubrifiants) * 100) / 100;
-
-      // 4. CA global (TTC et HT)
-      const caGlobal = Math.round((fuelRevenueTTC + generalRevenueTTC) * 100) / 100;
-      const caGlobalHT = Math.round((fuelRevenueHT + generalRevenueHT) * 100) / 100;
-
-      // 5. Dépenses globales = dépenses d'exploitation validées pour le secteur station
-      const depensesGlobales = stationCard.monthExpenses;
-
-      // 6. Marge nette globale = Marge brute globale - Dépenses globales
-      const margeNetteGlobale = Math.round((margeBruteGlobale - depensesGlobales) * 100) / 100;
-
-      stationCard.stationFinancials = {
-        margeBruteCarburants,
-        margeBruteGeneraleLubrifiants,
-        margeBruteGlobale,
-        caGlobal,
-        caGlobalHT,
-        depensesGlobales,
-        margeNetteGlobale,
-        caCarburantsTTC: fuelRevenueTTC,
-        caCarburantsHT: fuelRevenueHT,
-        caLubrifiantsGeneralTTC: generalRevenueTTC,
-        caLubrifiantsGeneralHT: generalRevenueHT,
-      };
-    } catch (stationErr) {
-      console.warn('[hubFinancialService] Erreur calcul indicateurs station-service:', stationErr);
-    }
-  }
-
-  // 5. Calculer les totaux consolidés globaux
   let totalCaJour = 0;
-  let totalCaJourHT = 0;
-  let totalCogsJourHT = 0;
-  let totalMargeBruteJour = 0;
-  let totalDepensesJour = 0;
-
+  let totalDepJour = 0;
+  let totalMargeJour = 0;
   let totalCaMois = 0;
-  let totalCaMoisHT = 0;
-  let totalCogsMoisHT = 0;
-  let totalMargeBruteMois = 0;
-  let totalDepensesMois = 0;
+  let totalDepMois = 0;
+  let totalMargeMois = 0;
 
-  for (const c of sectorCards) {
-    totalCaJour += c.dayRevenue;
-    totalCaJourHT += c.dayRevenueHT;
-    totalCogsJourHT += c.dayCogsHT;
-    totalMargeBruteJour += c.dayGrossMargin;
-    totalDepensesJour += c.dayExpenses;
+  const allSlugs = new Set([...Object.keys(monthStatsMap), ...Object.keys(dayStatsMap)]);
 
-    totalCaMois += c.monthRevenue;
-    totalCaMoisHT += c.monthRevenueHT;
-    totalCogsMoisHT += c.monthCogsHT;
-    totalMargeBruteMois += c.monthGrossMargin;
-    totalDepensesMois += c.monthExpenses;
+  for (const slug of allSlugs) {
+    const m = monthStatsMap[slug] || {
+      caNet: 0,
+      caBrut: 0,
+      cogs: 0,
+      margeBrute: 0,
+      depenses: 0,
+      margeNette: 0,
+    };
+    const d = dayStatsMap[slug] || {
+      caNet: 0,
+      caBrut: 0,
+      cogs: 0,
+      margeBrute: 0,
+      depenses: 0,
+      margeNette: 0,
+    };
+
+    sectorsMap[slug] = {
+      sector_slug: slug,
+      dayRevenue: d.caNet,
+      dayRevenueHT: d.caNet,
+      dayCogsHT: d.cogs,
+      dayGrossMargin: d.margeBrute,
+      dayExpenses: d.depenses,
+      dayNetMargin: d.margeNette,
+      monthRevenue: m.caNet,
+      monthRevenueHT: m.caNet,
+      monthCogsHT: m.cogs,
+      monthGrossMargin: m.margeBrute,
+      monthExpenses: m.depenses,
+      monthNetMargin: m.margeNette,
+      totalRevenue: m.caNet,
+      totalRevenueHT: m.caNet,
+      totalCogsHT: m.cogs,
+      totalGrossMargin: m.margeBrute,
+      totalExpenses: m.depenses,
+      totalNetMargin: m.margeNette,
+      hasKnownCost: true,
+      stationFinancials: m.stationFinancials,
+    };
+
+    totalCaJour += d.caNet;
+    totalDepJour += d.depenses;
+    totalMargeJour += d.margeNette;
+    totalCaMois += m.caNet;
+    totalDepMois += m.depenses;
+    totalMargeMois += m.margeNette;
   }
 
-  // Règle d'or : Marge nette = Marge brute - Dépenses
-  const totalMargeNetteJour = Math.round((totalMargeBruteJour - totalDepensesJour) * 100) / 100;
-  const totalMargeNetteMois = Math.round((totalMargeBruteMois - totalDepensesMois) * 100) / 100;
-
-  const tauxMargeNetteMois = totalCaMoisHT > 0
-    ? Math.round((totalMargeNetteMois / totalCaMoisHT) * 10000) / 100
-    : 0;
-
-  const calculatedTotals: HubFinancialTotals = {
+  const totals: HubFinancialTotals = {
     date: todayStr,
     ca_jour: Math.round(totalCaJour * 100) / 100,
-    ca_jour_ht: Math.round(totalCaJourHT * 100) / 100,
-    cogs_jour_ht: Math.round(totalCogsJourHT * 100) / 100,
-    marge_brute_jour: Math.round(totalMargeBruteJour * 100) / 100,
-    depenses_jour: Math.round(totalDepensesJour * 100) / 100,
-    marge_jour: totalMargeNetteJour,
+    depenses_jour: Math.round(totalDepJour * 100) / 100,
+    marge_jour: Math.round(totalMargeJour * 100) / 100,
     ca_mois: Math.round(totalCaMois * 100) / 100,
-    ca_mois_ht: Math.round(totalCaMoisHT * 100) / 100,
-    cogs_mois_ht: Math.round(totalCogsMoisHT * 100) / 100,
-    marge_brute_mois: Math.round(totalMargeBruteMois * 100) / 100,
-    depenses_mois: Math.round(totalDepensesMois * 100) / 100,
-    marge_mois: totalMargeNetteMois,
+    depenses_mois: Math.round(totalDepMois * 100) / 100,
+    marge_mois: Math.round(totalMargeMois * 100) / 100,
     mois_debut: monthStartStr,
     mois_fin: monthEndStr,
-    taux_marge_nette_mois: tauxMargeNetteMois,
+    taux_marge_nette_mois: totalCaMois > 0 ? Math.round((totalMargeMois / totalCaMois) * 10000) / 100 : 0,
   };
 
-  // Si une RPC existe et renvoie des totaux valides, s'assurer qu'elle n'applique JAMAIS ca - depenses
-  let finalTotals = calculatedTotals;
-  if (rpcTotals) {
-    const rpcMargeMoisIsErroneous = rpcTotals.marge_mois === (rpcTotals.ca_mois - rpcTotals.depenses_mois);
-    const resolvedDepensesMois = rpcTotals.depenses_mois > 0 ? rpcTotals.depenses_mois : calculatedTotals.depenses_mois;
-    const resolvedDepensesJour = rpcTotals.depenses_jour > 0 ? rpcTotals.depenses_jour : calculatedTotals.depenses_jour;
-
-    // Si la RPC a retourné l'ancienne formule erronée (CA - Dépenses), on force la vraie marge nette (Marge Brute - Dépenses)
-    const correctedMargeMois = (rpcTotals.marge_mois > 0 && !rpcMargeMoisIsErroneous)
-      ? (rpcTotals.marge_mois - resolvedDepensesMois)
-      : calculatedTotals.marge_mois;
-
-    const correctedMargeJour = (rpcTotals.marge_jour > 0 && rpcTotals.marge_jour !== (rpcTotals.ca_jour - rpcTotals.depenses_jour))
-      ? (rpcTotals.marge_jour - resolvedDepensesJour)
-      : calculatedTotals.marge_jour;
-
-    finalTotals = {
-      ...calculatedTotals,
-      ca_jour: rpcTotals.ca_jour > 0 ? rpcTotals.ca_jour : calculatedTotals.ca_jour,
-      ca_mois: rpcTotals.ca_mois > 0 ? rpcTotals.ca_mois : calculatedTotals.ca_mois,
-      depenses_jour: resolvedDepensesJour,
-      depenses_mois: resolvedDepensesMois,
-      marge_jour: correctedMargeJour,
-      marge_mois: correctedMargeMois,
-      taux_marge_nette_mois: calculatedTotals.taux_marge_nette_mois,
-    };
-  }
-
   return {
-    totals: finalTotals,
+    totals,
     sectors: sectorsMap,
   };
 }

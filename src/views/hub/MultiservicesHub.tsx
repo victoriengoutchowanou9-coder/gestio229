@@ -168,7 +168,15 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             const filtered = validSlugs.size > 0
               ? parsed.filter((p: any) => validSlugs.has((p.sectorSlug || '').replace(/^sec-/, '').toLowerCase().trim()))
               : parsed;
-            if (filtered.length > 0) return filtered;
+            // Réinitialiser les métriques financières à 0 pour forcer le recalcul depuis Supabase
+            if (filtered.length > 0) return filtered.map((entry: any) => ({
+              ...entry,
+              revenue: 0, grossMargin: 0, expenses: 0, netMargin: 0,
+              monthRevenue: 0, monthRevenueHT: 0, monthCogsHT: 0, monthGrossMargin: 0,
+              monthExpenses: 0, monthNetMargin: 0,
+              dayRevenue: 0, dayRevenueHT: 0, dayCogsHT: 0, dayGrossMargin: 0,
+              dayExpenses: 0, dayNetMargin: 0,
+            }));
           }
         }
       } catch (_) {}
@@ -210,16 +218,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     return [];
   });
 
-  // Source de vérité isolée des métriques par secteur (Persistance localStorage + rechargement instantané)
+  // Source de vérité isolée des métriques par secteur — on ne lit plus le cache localStorage
+  // car il peut contenir des données du mois précédent. On attend le fetch Supabase.
   const [sectorMetricsMap, setSectorMetricsMap] = useState<Record<string, SectorMetrics>>(() => {
-    if (!companyId) return {};
-    try {
-      const saved = localStorage.getItem(`gestio229_metrics_${companyId}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') return parsed;
-      }
-    } catch (_) {}
+    // Invalider le cache stale au montage
+    if (companyId) {
+      try { localStorage.removeItem(`gestio229_metrics_${companyId}`); } catch (_) {}
+    }
     return {};
   });
   const sectorMetricsRef = useRef<Record<string, SectorMetrics>>(sectorMetricsMap);
@@ -485,11 +490,10 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             const normSlug = (act.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
             const card = result.sectors[normSlug] || result.sectors[act.sectorSlug];
             if (!card) return act;
-            const rev = card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0);
-            const exp = card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0);
-            const net = (card.monthRevenue > 0 || card.monthExpenses > 0)
-              ? card.monthNetMargin
-              : (card.totalNetMargin ?? card.monthNetMargin);
+            // Mois calendaire strict — jamais de fallback sur totalRevenue
+            const rev = card.monthRevenue ?? 0;
+            const exp = card.monthExpenses ?? 0;
+            const net = card.monthNetMargin ?? 0;
             return {
               ...act,
               dayRevenue: card.dayRevenue,
@@ -718,33 +722,6 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         setActivities((prev) => {
           const prevMap = new Map(prev.map((p) => [p.id, p]));
           const merged = finalUnique.map((item) => {
-            const existing = prevMap.get(item.id) || prev.find((p) => p.sectorSlug === item.sectorSlug);
-            if (
-              existing &&
-              item.revenue === 0 &&
-              (existing.revenue > 0 || existing.monthRevenue > 0 || existing.expenses > 0 || existing.netMargin !== 0)
-            ) {
-              return {
-                ...item,
-                revenue: existing.revenue,
-                grossMargin: existing.grossMargin,
-                expenses: existing.expenses,
-                netMargin: existing.netMargin,
-                dayRevenue: existing.dayRevenue,
-                dayRevenueHT: existing.dayRevenueHT,
-                dayCogsHT: existing.dayCogsHT,
-                dayGrossMargin: existing.dayGrossMargin,
-                dayExpenses: existing.dayExpenses,
-                dayNetMargin: existing.dayNetMargin,
-                monthRevenue: existing.monthRevenue,
-                monthRevenueHT: existing.monthRevenueHT,
-                monthCogsHT: existing.monthCogsHT,
-                monthGrossMargin: existing.monthGrossMargin,
-                monthExpenses: existing.monthExpenses,
-                monthNetMargin: existing.monthNetMargin,
-                stationFinancials: existing.stationFinancials,
-              };
-            }
             return item;
           });
           try {
@@ -776,9 +753,9 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           const meta = getSectorMeta(slug);
           const actName = `${companyName || company.name || 'Mon Établissement'} — ${meta?.label || slug}`.toUpperCase();
           const card = metrics[slug];
-          const rev = card ? (card.monthRevenue > 0 ? card.monthRevenue : (card.totalRevenue || 0)) : 0;
-          const exp = card ? (card.monthExpenses > 0 ? card.monthExpenses : (card.totalExpenses || 0)) : 0;
-          const net = card ? ((card.monthRevenue > 0 || card.monthExpenses > 0) ? card.monthNetMargin : (card.totalNetMargin ?? card.monthNetMargin)) : 0;
+          const rev = card ? (card.monthRevenue ?? 0) : 0;
+          const exp = card ? (card.monthExpenses ?? 0) : 0;
+          const net = card ? (card.monthNetMargin ?? 0) : 0;
           return {
             id: `act-${(companyId || 'comp').slice(0, 8)}-${slug}`,
             sectorSlug: slug,
@@ -791,7 +768,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             status: 'ACTIVE' as ActivityStatus,
             isConfigured: true,
             revenue: rev,
-            grossMargin: card ? (card.monthGrossMargin > 0 ? card.monthGrossMargin : (card.totalGrossMargin || 0)) : 0,
+            grossMargin: card ? (card.monthGrossMargin ?? 0) : 0,
             expenses: exp,
             netMargin: net,
             dayRevenue: card?.dayRevenue ?? 0,
@@ -1783,7 +1760,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                               <Fuel size={13} className="text-amber-500" />
                               <span className={`text-[10px] font-bold uppercase tracking-wider ${
                                 darkMode ? 'text-amber-400/80' : 'text-amber-700'
-                              }`}>Données du mois (30 jours)</span>
+                              }`}>Données du mois</span>
                             </span>
                             <span className="text-[10px] text-slate-400 font-semibold lowercase">
                               ({currentMonthLabel})
@@ -1876,7 +1853,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                         }`}>
                           <span className="flex items-center gap-1.5">
                             <Calendar size={12} className="text-indigo-500 shrink-0" />
-                            Données du mois (30 jours)
+                            Données du mois
                           </span>
                           <span className="text-[10px] text-slate-400 font-semibold lowercase">
                             ({currentMonthLabel})
