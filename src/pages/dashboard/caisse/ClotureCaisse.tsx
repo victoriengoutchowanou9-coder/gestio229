@@ -240,6 +240,7 @@ export const ClotureCaisse: React.FC = () => {
             await supabase.from('caisses').update({
               fond_ouverture_especes: ligne.soldeActuel, // NÉGATIF REPORTÉ
               solde_actuel: ligne.soldeActuel,
+              solde_especes_final: ligne.soldeActuel,
               date_fermeture: nowIso,
               statut: 'fermee',
               updated_at: nowIso,
@@ -249,6 +250,45 @@ export const ClotureCaisse: React.FC = () => {
               fond_ouverture_momo: ligne.soldeActuel,
               updated_at: nowIso,
             }).eq('id', ligne.caisseId)
+          }
+        } catch (_) {}
+
+        // Mettre à jour fonds_actuels et réinitialiser caisse_journaliere
+        try {
+          const isValidUUID = (u?: string | null) => !!u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u)
+          if (isValidUUID(ligne.secteurId)) {
+            if (ligne.mode === 'espece') {
+              await supabase.from('fonds_actuels').upsert({
+                company_id: companyId,
+                secteur_id: ligne.secteurId,
+                caisse_id: isValidUUID(ligne.caisseId) ? ligne.caisseId : null,
+                fond_actuel_especes: ligne.soldeActuel,
+                updated_at: nowIso,
+              })
+            } else if (ligne.mode === 'mtn_momo') {
+              await supabase.from('fonds_actuels').upsert({
+                company_id: companyId,
+                secteur_id: ligne.secteurId,
+                caisse_id: isValidUUID(ligne.caisseId) ? ligne.caisseId : null,
+                fond_actuel_momo: ligne.soldeActuel,
+                updated_at: nowIso,
+              })
+            }
+            await supabase
+              .from('caisse_journaliere')
+              .update({
+                especes_du_jour: 0,
+                momo_du_jour: 0,
+                ventes_especes_du_jour: 0,
+                ventes_momo_du_jour: 0,
+                remboursements_especes_du_jour: 0,
+                remboursements_momo_du_jour: 0,
+                nb_ventes: 0,
+                updated_at: nowIso,
+              })
+              .eq('company_id', companyId)
+              .eq('date_jour', dateCloture)
+              .eq('secteur_id', ligne.secteurId)
           }
         } catch (_) {}
       }

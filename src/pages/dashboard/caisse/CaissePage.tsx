@@ -834,6 +834,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           setLastClosure({
             fond_reel_especes: repEsp,
             fond_reel_momo: repMo,
+            fond_especes_theorique: repEsp,
+            fond_momo: repMo,
           })
 
           // Clôtures archivées pour le sous-texte
@@ -1141,14 +1143,19 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const sumDepensesMomo = Number(depensesMomo) || 0
   const sumRemboursements = (Number(remboursementsEspeces) || 0) + (Number(remboursementsMomo) || 0)
 
-  // 1. Compteurs Du Jour (Uniquement encaissements : ventes + remboursements)
-  const especesDuJour = caisseJourData.especes_du_jour > 0
-    ? caisseJourData.especes_du_jour
-    : (sumVentesEspeces + (Number(remboursementsEspeces) || 0))
+  // 1. Compteurs Du Jour (Uniquement encaissements de la session ouverte active)
+  // RÈGLE COMPTABLE STRICTE : En session FERMÉE, les encaissements de session en cours sont à 0
+  const especesDuJour = caisseStatus === 'FERMEE'
+    ? 0
+    : (caisseJourData.especes_du_jour > 0
+        ? caisseJourData.especes_du_jour
+        : (sumVentesEspeces + (Number(remboursementsEspeces) || 0)))
 
-  const momoDuJour = caisseJourData.momo_du_jour > 0
-    ? caisseJourData.momo_du_jour
-    : (sumVentesMomo + (Number(remboursementsMomo) || 0))
+  const momoDuJour = caisseStatus === 'FERMEE'
+    ? 0
+    : (caisseJourData.momo_du_jour > 0
+        ? caisseJourData.momo_du_jour
+        : (sumVentesMomo + (Number(remboursementsMomo) || 0)))
 
   const nbVentesDuJour = caisseJourData.nb_ventes > 0
     ? caisseJourData.nb_ventes
@@ -1182,12 +1189,20 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const soldeTheoriqueEnCoursEsp = fondInitialEspeces + especesDuJour - depensesEspecesJour - retraitsEspecesJour
   const soldeTheoriqueEnCoursMomo = fondInitialMomo + momoDuJour - depensesMomoJour - retraitsMomoJour
 
-  const fondTheoriqueEsp = (caisseStatus === 'FERMEE' && lastClosure.fond_especes_theorique !== undefined)
-    ? Number(lastClosure.fond_especes_theorique)
+  const fondTheoriqueEsp = (caisseStatus === 'FERMEE')
+    ? (lastClosure.fond_especes_theorique !== undefined
+        ? Number(lastClosure.fond_especes_theorique)
+        : (lastClosure.fond_reel_especes !== undefined
+            ? Number(lastClosure.fond_reel_especes)
+            : Number(fondsActuelsData.fond_actuel_especes || 0)))
     : soldeTheoriqueEnCoursEsp
 
-  const fondTheoriqueMomo = (caisseStatus === 'FERMEE' && lastClosure.fond_momo !== undefined)
-    ? Number(lastClosure.fond_momo)
+  const fondTheoriqueMomo = (caisseStatus === 'FERMEE')
+    ? (lastClosure.fond_momo !== undefined
+        ? Number(lastClosure.fond_momo)
+        : (lastClosure.fond_reel_momo !== undefined
+            ? Number(lastClosure.fond_reel_momo)
+            : Number(fondsActuelsData.fond_actuel_momo || 0)))
     : soldeTheoriqueEnCoursMomo
 
   const fondActuelEspeces = fondTheoriqueEsp
@@ -1338,28 +1353,17 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       setClosuresHistory([newClosure, ...closuresHistory])
       setActiveReportClosure(newClosure)
 
-      // Transfert officiel M048
-      const validUserId = user?.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(user.id) ? user.id : null
-      try {
-        await cloturerCaisseOfficielle(currentCompanyId, secteurActif.id, cashRegisterId || caisseActive.id, validUserId, {
-          fond_initial: syn.fondInitialEspeces,
-          total_entrees: finalEspecesJour,
-          total_sorties: syn.depensesEspeces + syn.versementsEspeces,
-          fond_theorique: finalSoldeTheoriqueEsp,
-          fond_reel: finalSoldeTheoriqueEsp,
-          ecart: 0,
-          fond_initial_matin: syn.fondInitialEspeces,
-          total_entrees_jour: finalEspecesJour,
-          total_depenses_jour: syn.depensesEspeces,
-          solde_theorique: finalSoldeTheoriqueEsp,
-          fond_initial_suivant: finalMontantConserve,
-          montant_laisse: finalMontantConserve,
-          versement_coffre: syn.montantReverse,
-          commentaire: opNotes || 'Clôture de session validée',
-        })
-      } catch (clotErr) {
-        console.warn('Erreur cloturerCaisseOfficielle:', clotErr)
-      }
+      // FIX ANTI-DOUBLE COMPTABILISATION :
+      // cloturerSessionCaisseAutomatique (appelée ci-dessus) a DÉJÀ mis à jour :
+      // - fonds_actuels (fond_actuel_especes, fond_actuel_momo)
+      // - caisses (fond_ouverture_especes, fond_ouverture_momo)
+      // - clotures_caisse (historique Z)
+      // - caisse_journaliere (remise à 0)
+      // - caisse_sessions (statut fermée)
+      // Appeler cloturerCaisseOfficielle en plus provoquait un DOUBLE ÉCRASEMENT
+      // des fonds_actuels via le RPC fn_cloturer_caisse qui ajoutait
+      // v_esp_jour sur un fond_actuel_especes contenant déjà les ventes.
+      // => Appel supplémentaire supprimé pour éliminer la double comptabilisation.
 
       // ── 3. ENVOI AUTOMATIQUE INSTANTANÉ DU RAPPORT PDF VIA GMAIL SMTP ──
       try {
@@ -1543,6 +1547,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         setLastClosure({
           fond_reel_especes: finalMontantConserve,
           fond_reel_momo: finalSoldeTheoriqueMomo,
+          fond_especes_theorique: finalSoldeTheoriqueEsp,
+          fond_momo: finalSoldeTheoriqueMomo,
+          fond_initial: syn.fondInitialEspeces,
+          fond_initial_momo: syn.fondInitialMomo,
         })
 
         toast.success(
@@ -1564,6 +1572,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         setLastClosure({
           fond_reel_especes: finalMontantConserve,
           fond_reel_momo: finalSoldeTheoriqueMomo,
+          fond_especes_theorique: finalSoldeTheoriqueEsp,
+          fond_momo: finalSoldeTheoriqueMomo,
+          fond_initial: syn.fondInitialEspeces,
+          fond_initial_momo: syn.fondInitialMomo,
         })
 
         toast.warning(
@@ -1617,6 +1629,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         setLastClosure({
           fond_reel_especes: fondTheoriqueEsp,
           fond_reel_momo: fondTheoriqueMomo,
+          fond_especes_theorique: fondTheoriqueEsp,
+          fond_momo: fondTheoriqueMomo,
+          fond_initial: fondInitialEspeces,
+          fond_initial_momo: fondInitialMomo,
         })
         await loadCaisseData()
         if (refreshFonds) await refreshFonds()
@@ -2352,11 +2368,11 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                   closed_at: new Date().toISOString(),
                   closed_by: user?.full_name || 'Caissier',
                   caisse_name: caisseActive?.nom || `Caisse ${currentSectorSlug.toUpperCase()}`,
-                  fond_especes_theorique: fondActuelEspeces + especesDuJour,
-                  fond_especes_physique: fondActuelEspeces + especesDuJour,
+                  fond_especes_theorique: fondActuelEspeces,
+                  fond_especes_physique: fondActuelEspeces,
                   ecart_especes: 0,
-                  fond_momo: fondActuelMomo + momoDuJour,
-                  total_fermeture: fondActuelEspeces + especesDuJour + fondActuelMomo + momoDuJour,
+                  fond_momo: fondActuelMomo,
+                  total_fermeture: fondActuelEspeces + fondActuelMomo,
                   notes: 'Rapport intermédiaire de caisse',
                   status: 'CLOTURE_VALIDEE',
                   emailed_to: company?.email ? [company.email] : []
@@ -2433,7 +2449,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             )}
           </div>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5 font-medium">
-            Report {fmt(fondInitialEspeces)} + Jour {fmt(especesDuJour)} - Dépenses {fmt(sumDepensesEspeces)}{retraitsEspecesJour > 0 ? ` - Versements ${fmt(retraitsEspecesJour)}` : ''}
+            {caisseStatus === 'FERMEE'
+              ? `Clôture validée : ${fmt(fondActuelEspeces)} FCFA (Report pour ouverture)`
+              : `Report ${fmt(fondInitialEspeces)} + Jour ${fmt(especesDuJour)} - Dépenses ${fmt(sumDepensesEspeces)}${retraitsEspecesJour > 0 ? ` - Versements ${fmt(retraitsEspecesJour)}` : ''}`
+            }
           </p>
         </div>
 
@@ -2460,7 +2479,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             )}
           </div>
           <p className="text-[10px] text-slate-400 mt-2 border-t border-slate-100 pt-1.5 font-medium">
-            Report {fmt(fondInitialMomo)} + Jour {fmt(momoDuJour)} - Dépenses {fmt(sumDepensesMomo)}{retraitsMomoJour > 0 ? ` - Versements ${fmt(retraitsMomoJour)}` : ''}
+            {caisseStatus === 'FERMEE'
+              ? `Clôture validée : ${fmt(fondActuelMomo)} FCFA (Report pour ouverture)`
+              : `Report ${fmt(fondInitialMomo)} + Jour ${fmt(momoDuJour)} - Dépenses ${fmt(sumDepensesMomo)}${retraitsMomoJour > 0 ? ` - Versements ${fmt(retraitsMomoJour)}` : ''}`
+            }
           </p>
         </div>
 

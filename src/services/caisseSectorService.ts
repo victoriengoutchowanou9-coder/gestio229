@@ -1998,8 +1998,9 @@ export async function getCaisseJournaliereBySector(
 
 /**
  * Clôture officielle avec transfert :
- * FOND ACTUEL = FOND ACTUEL + DU JOUR
- * DU JOUR = 0
+ * REGLE ANTI-DOUBLE COMPTABILISATION :
+ * fond_actuel contient DEJA les ventes. Ne JAMAIS rajouter especes_du_jour.
+ * DU JOUR = 0 apres cloture
  */
 export async function cloturerCaisseOfficielle(
   companyId: string,
@@ -2107,7 +2108,7 @@ export async function cloturerCaisseOfficielle(
           .update({
             fond_ouverture_especes: montantLaisse,
             solde_especes_final: montantLaisse,
-            fond_ouverture_momo: newMomo,
+            fond_ouverture_momo: soldeTheoriqueMomo,
             updated_at: new Date().toISOString(),
           })
           .eq('id', validCaisseId)
@@ -2126,14 +2127,14 @@ export async function cloturerCaisseOfficielle(
         fond_especes_avant: curFond.fond_actuel_especes || 0,
         fond_momo_avant: curFond.fond_actuel_momo || 0,
         fond_especes_apres: montantLaisse,
-        fond_momo_apres: newMomo,
+        fond_momo_apres: soldeTheoriqueMomo,
         fond_initial: details?.fond_initial_matin ?? details?.fond_initial ?? curFond.fond_initial_especes ?? 0,
         total_entrees: details?.total_entrees_jour ?? details?.total_entrees ?? espTransf,
         total_sorties: details?.total_depenses_jour ?? details?.total_sorties ?? 0,
         fond_theorique: fondTheorique,
         fond_reel: fondReel,
         fond_reel_especes: fondReel,
-        fond_reel_momo: newMomo,
+        fond_reel_momo: soldeTheoriqueMomo,
         ecart: ecart,
         commentaire: details?.commentaire || 'Clôture de caisse effectuée',
         created_by: validUserId,
