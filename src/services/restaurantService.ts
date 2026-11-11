@@ -24,6 +24,25 @@ export interface FicheTechniqueItem {
   cout_unitaire: number
   cout_matiere_ligne?: number
   prix_vente_unitaire?: number
+  mode_preparation?: 'UNITE' | 'LOT'
+  rendement_portions?: number
+  unite_portion?: string
+  cout_revient_portion?: number
+  notes?: string
+}
+
+export interface PreparationCuisineRecord {
+  id?: string
+  company_id: string
+  reference?: string
+  plat_nom: string
+  nb_preparations: number
+  portions_obtenues: number
+  cout_total_matieres: number
+  cout_revient_unitaire: number
+  declare_par: string
+  date_heure: string
+  statut: 'DISPONIBLE' | 'EPUISE' | 'PARTIEL'
   notes?: string
 }
 
@@ -87,7 +106,7 @@ const isValidUUID = (u?: string | null): boolean =>
   Boolean(u && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(u))
 
 /**
- * 1. Déstockage atomique & idempotent des matières premières pour un plat ou commande
+ * 1. Déstockage atomique & idempotent selon le mode de recette (A: Unité ou B: Lot avec portions)
  */
 export async function destockerMatieresPlat(params: {
   company_id: string
@@ -96,11 +115,11 @@ export async function destockerMatieresPlat(params: {
   plat_nom: string
   portion_qty: number
   sector_slug?: string
-}): Promise<{ destocke: boolean; matieresCount: number; coutTotalMatiere: number }> {
+}): Promise<{ destocke: boolean; matieresCount: number; coutTotalMatiere: number; mode: 'UNITE' | 'LOT' }> {
   const { company_id, order_id, order_number, plat_nom, portion_qty, sector_slug = 'restaurant' } = params
 
   if (!company_id || !order_number || !plat_nom || portion_qty <= 0) {
-    return { destocke: false, matieresCount: 0, coutTotalMatiere: 0 }
+    return { destocke: false, matieresCount: 0, coutTotalMatiere: 0, mode: 'UNITE' }
   }
 
   try {
@@ -112,9 +131,105 @@ export async function destockerMatieresPlat(params: {
       .ilike('plat_nom', plat_nom.trim())
 
     if (fErr || !ingredients || ingredients.length === 0) {
-      return { destocke: false, matieresCount: 0, coutTotalMatiere: 0 }
+      return { destocke: false, matieresCount: 0, coutTotalMatiere: 0, mode: 'UNITE' }
     }
 
+    // 2. Détecter le mode de production et le rendement depuis la fiche
+    let modePrep: 'UNITE' | 'LOT' = 'UNITE'
+    let rendement = 1
+    let coutRevientPortion = 0
+
+    for (const ing of ingredients) {
+      if (ing.notes) {
+        try {
+          const parsed = typeof ing.notes === 'string' ? JSON.parse(ing.notes) : ing.notes
+          if (parsed && typeof parsed === 'object') {
+            if (parsed.mode_preparation) modePrep = parsed.mode_preparation
+            if (parsed.rendement_portions) rendement = Number(parsed.rendement_portions) || 1
+            if (parsed.cout_revient_portion) coutRevientPortion = Number(parsed.cout_revient_portion) || 0
+            break
+          }
+        } catch (_) {}
+      }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // MODE B : PRÉPARATION EN LOT (STOCK DE PORTIONS)
+    // ═════════════════════════════════════════════════════════════════════════
+    // Les matières premières ont DÉJÀ été déduites lors de la préparation.
+    // Lors de la vente : on décrémente UNIQUEMENT le stock de portions disponibles
+    // pour éviter ABSOLUMENT toute double déduction des ingrédients !
+    if (modePrep === 'LOT') {
+      const idempotencyKey = `destock-portion-${order_number}-${plat_nom.replace(/\s+/g, '_')}`
+
+      if (coutRevientPortion <= 0) {
+        const totalLotCost = ingredients.reduce(
+          (sum, ing) => sum + (Number(ing.cout_matiere_ligne) || (Number(ing.quantite_necessaire) * Number(ing.cout_unitaire) || 0)),
+          0
+        )
+        coutRevientPortion = rendement > 0 ? Math.round(totalLotCost / rendement) : 0
+      }
+      const totalCoutVente = coutRevientPortion * portion_qty
+
+      const { error: insErr } = await supabase
+        .from('restaurant_destockage_log')
+        .insert({
+          company_id,
+          idempotency_key: idempotencyKey,
+          order_id: isValidUUID(order_id) ? order_id : null,
+          order_number,
+          plat_nom,
+          portion_qty,
+          matiere_nom: `Portion ${plat_nom}`,
+          qte_destockee: portion_qty,
+          unite: 'portion',
+          cout_unitaire: coutRevientPortion,
+          total_cout: totalCoutVente,
+          emplacement: 'CUISINE_PORTIONS'
+        })
+
+      if (!insErr) {
+        // Diminution du stock de portions disponibles du plat dans products
+        try {
+          const { data: matchedProds } = await supabase
+            .from('products')
+            .select('id, stock_vente, sector_meta')
+            .eq('company_id', company_id)
+            .ilike('name', plat_nom.trim())
+
+          if (matchedProds && matchedProds.length > 0) {
+            const prod = matchedProds[0]
+            const curStock = Number(prod.stock_vente ?? prod.sector_meta?.stock_vente ?? 0)
+            const newStock = Math.max(0, curStock - portion_qty)
+            const meta = { ...(prod.sector_meta || {}), stock_vente: newStock }
+            await supabase
+              .from('products')
+              .update({ stock_vente: newStock, sector_meta: meta, updated_at: new Date().toISOString() })
+              .eq('id', prod.id)
+          }
+        } catch (stockErr) {
+          console.warn('[RestaurantService] Erreur mise à jour stock portion:', stockErr)
+        }
+
+        // Tracer le mouvement de stock
+        await supabase.from('stock_movements').insert({
+          company_id,
+          sector_slug,
+          reference_type: 'vente_portion_recette',
+          reference_id: isValidUUID(order_id) ? order_id : null,
+          reference_number: order_number,
+          quantity: -portion_qty,
+          notes: `Vente ${portion_qty} portion(s) : ${plat_nom} (Stock portions déduit, ingrédients préservés sans double déduction)`
+        })
+      }
+
+      return { destocke: !insErr, matieresCount: 1, coutTotalMatiere: totalCoutVente, mode: 'LOT' }
+    }
+
+    // ═════════════════════════════════════════════════════════════════════════
+    // MODE A : RECETTE À L'UNITÉ (PRÉPARATION À LA COMMANDE : Pizza, Chawarma...)
+    // ═════════════════════════════════════════════════════════════════════════
+    // Déduction automatique directe des ingrédients proportionnellement aux unités vendues
     let coutTotal = 0
     let count = 0
 
@@ -154,13 +269,11 @@ export async function destockerMatieresPlat(params: {
             .eq('company_id', company_id)
             .ilike('name', ing.ingredient_nom.trim())
 
-          // Trouver le produit cuisine correspondant
           const prod = (matchedProducts && matchedProducts.length > 0)
             ? (matchedProducts.find((p: any) => p.restaurant_circuit === 'CUISINE' || p.sector_meta?.restaurant_circuit === 'CUISINE' || p.is_matiere_premiere || p.sector_meta?.is_matiere_premiere) || matchedProducts[0])
             : null
 
           if (prod) {
-            // Facteur de conversion d'unité
             const storageUnit = (prod.uv || prod.unit || ing.unite || 'kg').toLowerCase().trim()
             const ingUnit = (ing.unite || 'kg').toLowerCase().trim()
             let convFactor = 1
@@ -205,10 +318,314 @@ export async function destockerMatieresPlat(params: {
       }
     }
 
-    return { destocke: count > 0, matieresCount: count, coutTotalMatiere: coutTotal }
+    return { destocke: count > 0, matieresCount: count, coutTotalMatiere: coutTotal, mode: 'UNITE' }
   } catch (err) {
     console.warn('[RestaurantService] Erreur déstockage matières:', err)
-    return { destocke: false, matieresCount: 0, coutTotalMatiere: 0 }
+    return { destocke: false, matieresCount: 0, coutTotalMatiere: 0, mode: 'UNITE' }
+  }
+}
+
+/**
+ * 1.B Validation d'une préparation culinaire en cuisine (Mode B : Marmite / Lot de portions)
+ * - Déduit automatiquement les ingrédients du stock cuisine UNE SEULE FOIS
+ * - Crédite le stock de portions disponibles à la vente pour ce plat
+ * - Enregistre la session de préparation et sa traçabilité
+ */
+export async function validerPreparationCuisine(params: {
+  company_id: string
+  plat_nom: string
+  nb_lots?: number
+  rendement_effectif?: number
+  declare_par: string
+  sector_slug?: string
+  notes?: string
+}): Promise<{
+  success: boolean
+  portions_ajoutees: number
+  cout_total: number
+  cout_unitaire_portion: number
+  matieres_deduites: number
+  message: string
+}> {
+  const {
+    company_id,
+    plat_nom,
+    nb_lots = 1,
+    rendement_effectif,
+    declare_par,
+    sector_slug = 'restaurant',
+    notes = ''
+  } = params
+
+  if (!company_id || !plat_nom || nb_lots <= 0) {
+    return {
+      success: false,
+      portions_ajoutees: 0,
+      cout_total: 0,
+      cout_unitaire_portion: 0,
+      matieres_deduites: 0,
+      message: 'Paramètres de préparation invalides.'
+    }
+  }
+
+  try {
+    // 1. Récupérer les ingrédients de la fiche technique
+    const { data: ingredients, error: fErr } = await supabase
+      .from('restaurant_fiches_techniques')
+      .select('*')
+      .eq('company_id', company_id)
+      .ilike('plat_nom', plat_nom.trim())
+
+    if (fErr || !ingredients || ingredients.length === 0) {
+      return {
+        success: false,
+        portions_ajoutees: 0,
+        cout_total: 0,
+        cout_unitaire_portion: 0,
+        matieres_deduites: 0,
+        message: `Fiche technique introuvable pour "${plat_nom}".`
+      }
+    }
+
+    // Récupérer le rendement prévu
+    let rendementStandard = 10
+    if (ingredients[0]?.notes) {
+      try {
+        const p = typeof ingredients[0].notes === 'string' ? JSON.parse(ingredients[0].notes) : ingredients[0].notes
+        if (p?.rendement_portions) rendementStandard = Number(p.rendement_portions) || 10
+      } catch (_) {}
+    }
+
+    const portionsObtenues = Math.round(Number(rendement_effectif || (rendementStandard * nb_lots)))
+    const prepRef = `PREP-${Date.now().toString().slice(-6)}`
+    let coutTotalPreparation = 0
+    let matieresCount = 0
+
+    // 2. Déduire les matières premières consommées du stock cuisine
+    for (const ing of ingredients) {
+      const qteConsommee = Math.round(Number(ing.quantite_necessaire || 1) * nb_lots * 1000) / 1000
+      const coutU = Number(ing.cout_unitaire || 0)
+      const coutLigne = Math.round(qteConsommee * coutU)
+      coutTotalPreparation += coutLigne
+
+      const idempotencyKey = `prep-${prepRef}-${ing.ingredient_nom.replace(/\s+/g, '_')}`
+
+      await supabase.from('restaurant_destockage_log').insert({
+        company_id,
+        idempotency_key: idempotencyKey,
+        order_number: prepRef,
+        plat_nom,
+        portion_qty: portionsObtenues,
+        matiere_nom: ing.ingredient_nom,
+        qte_destockee: qteConsommee,
+        unite: ing.unite || 'kg',
+        cout_unitaire: coutU,
+        total_cout: coutLigne,
+        emplacement: 'CUISINE'
+      })
+
+      // Déduction du produit dans products
+      try {
+        const { data: matched } = await supabase
+          .from('products')
+          .select('id, unit, uv, stock_vente, sector_meta')
+          .eq('company_id', company_id)
+          .ilike('name', ing.ingredient_nom.trim())
+
+        if (matched && matched.length > 0) {
+          const prod = matched[0]
+          const storageUnit = (prod.uv || prod.unit || ing.unite || 'kg').toLowerCase().trim()
+          const ingUnit = (ing.unite || 'kg').toLowerCase().trim()
+          let factor = 1
+          if (storageUnit === 'kg' && ingUnit === 'g') factor = 0.001
+          else if (ingUnit === 'kg' && storageUnit === 'g') factor = 1000
+          else if (storageUnit === 'l' && ingUnit === 'cl') factor = 0.01
+          else if (storageUnit === 'l' && ingUnit === 'ml') factor = 0.001
+
+          const qteADeduire = Math.round(qteConsommee * factor * 1000) / 1000
+          const curStock = Number(prod.stock_vente ?? prod.sector_meta?.stock_vente ?? 0)
+          const newStock = Math.max(0, Math.round((curStock - qteADeduire) * 1000) / 1000)
+          const meta = { ...(prod.sector_meta || {}), stock_vente: newStock }
+
+          await supabase.from('products').update({
+            stock_vente: newStock,
+            sector_meta: meta,
+            updated_at: new Date().toISOString()
+          }).eq('id', prod.id)
+        }
+      } catch (err) {
+        console.warn('[validerPreparationCuisine] Erreur déstockage ingrédient:', err)
+      }
+
+      // Tracer le mouvement de stock
+      await supabase.from('stock_movements').insert({
+        company_id,
+        sector_slug,
+        reference_type: 'preparation_cuisine',
+        reference_number: prepRef,
+        quantity: -qteConsommee,
+        notes: `Préparation cuisine ${plat_nom} (${portionsObtenues} portions) : déduction ${qteConsommee} ${ing.unite || 'kg'} de ${ing.ingredient_nom}`
+      })
+
+      matieresCount++
+    }
+
+    const coutUnitairePortion = portionsObtenues > 0 ? Math.round(coutTotalPreparation / portionsObtenues) : 0
+
+    // 3. Créditer le stock de portions disponibles pour ce plat
+    try {
+      const { data: platProds } = await supabase
+        .from('products')
+        .select('id, stock_vente, sector_meta, cost_price')
+        .eq('company_id', company_id)
+        .ilike('name', plat_nom.trim())
+
+      if (platProds && platProds.length > 0) {
+        const pPlat = platProds[0]
+        const currentPortions = Number(pPlat.stock_vente ?? pPlat.sector_meta?.stock_vente ?? 0)
+        const newPortions = currentPortions + portionsObtenues
+        const meta = {
+          ...(pPlat.sector_meta || {}),
+          stock_vente: newPortions,
+          is_recipe: true,
+          restaurant_circuit: 'CUISINE',
+          dernier_lot_prep: prepRef,
+          derniere_prep_date: new Date().toISOString(),
+          portions_disponibles: newPortions
+        }
+
+        await supabase.from('products').update({
+          stock_vente: newPortions,
+          cost_price: coutUnitairePortion > 0 ? coutUnitairePortion : pPlat.cost_price,
+          sector_meta: meta,
+          updated_at: new Date().toISOString()
+        }).eq('id', pPlat.id)
+      } else {
+        // Créer le produit s'il n'existe pas encore
+        const autoCode = `PLAT-${Date.now().toString().slice(-4)}`
+        await supabase.from('products').insert({
+          company_id,
+          code: autoCode,
+          name: plat_nom.trim(),
+          unit: 'Portion',
+          uv: 'Portion',
+          stock_vente: portionsObtenues,
+          cost_price: coutUnitairePortion,
+          selling_price: Number(ingredients[0]?.prix_vente_unitaire) || 0,
+          sector_slug,
+          is_active: true,
+          restaurant_circuit: 'CUISINE',
+          is_matiere_premiere: false,
+          sector_meta: {
+            restaurant_circuit: 'CUISINE',
+            is_matiere_premiere: false,
+            is_recipe: true,
+            portions_disponibles: portionsObtenues
+          }
+        })
+      }
+    } catch (platErr) {
+      console.warn('[validerPreparationCuisine] Erreur crédit stock portions:', platErr)
+    }
+
+    // Mouvement d'entrée de portions prêtes
+    await supabase.from('stock_movements').insert({
+      company_id,
+      sector_slug,
+      reference_type: 'entree_portions_pretes',
+      reference_number: prepRef,
+      quantity: portionsObtenues,
+      notes: `Préparation validée par ${declare_par} : +${portionsObtenues} portions de ${plat_nom} disponibles (Coût unitaire: ${coutUnitairePortion} FCFA)`
+    })
+
+    return {
+      success: true,
+      portions_ajoutees: portionsObtenues,
+      cout_total: coutTotalPreparation,
+      cout_unitaire_portion: coutUnitairePortion,
+      matieres_deduites: matieresCount,
+      message: `Préparation validée : ${portionsObtenues} portions de « ${plat_nom} » disponibles au service.`
+    }
+  } catch (err: any) {
+    console.error('[validerPreparationCuisine] Erreur:', err)
+    return {
+      success: false,
+      portions_ajoutees: 0,
+      cout_total: 0,
+      cout_unitaire_portion: 0,
+      matieres_deduites: 0,
+      message: err.message || 'Erreur lors de la validation de la préparation.'
+    }
+  }
+}
+
+/**
+ * 1.C Déclarer une perte ou un invendu de portions
+ */
+export async function declarerPertePortions(params: {
+  company_id: string
+  plat_nom: string
+  quantite_perdue: number
+  motif: string
+  declare_par: string
+  cout_unitaire?: number
+  notes?: string
+}): Promise<boolean> {
+  const { company_id, plat_nom, quantite_perdue, motif, declare_par, cout_unitaire = 0, notes } = params
+  if (!company_id || !plat_nom || quantite_perdue <= 0) return false
+
+  try {
+    // 1. Décrémenter le stock de portions du plat
+    const { data: platProds } = await supabase
+      .from('products')
+      .select('id, stock_vente, sector_meta, cost_price')
+      .eq('company_id', company_id)
+      .ilike('name', plat_nom.trim())
+
+    let resolvedCost = cout_unitaire
+    if (platProds && platProds.length > 0) {
+      const p = platProds[0]
+      if (resolvedCost <= 0) resolvedCost = Number(p.cost_price || 0)
+      const curStock = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
+      const newStock = Math.max(0, curStock - quantite_perdue)
+      const meta = { ...(p.sector_meta || {}), stock_vente: newStock }
+
+      await supabase.from('products').update({
+        stock_vente: newStock,
+        sector_meta: meta,
+        updated_at: new Date().toISOString()
+      }).eq('id', p.id)
+    }
+
+    const valeurEstimee = Math.round(quantite_perdue * resolvedCost)
+
+    // 2. Insérer dans restaurant_pertes_gaspillage
+    await supabase.from('restaurant_pertes_gaspillage').insert({
+      company_id,
+      sector_slug: 'restaurant',
+      produit_nom: plat_nom,
+      categorie: 'Cuisine / Portions',
+      quantite: quantite_perdue,
+      unite: 'portion',
+      valeur_estimee: valeurEstimee,
+      motif: motif || 'PERIME',
+      declare_par,
+      notes: notes || `Perte/invendu de ${quantite_perdue} portion(s) de ${plat_nom}`
+    })
+
+    // 3. Mouvement de stock négatif
+    await supabase.from('stock_movements').insert({
+      company_id,
+      sector_slug: 'restaurant',
+      reference_type: 'perte_portion_cuisine',
+      quantity: -quantite_perdue,
+      notes: `Perte constatée par ${declare_par} : -${quantite_perdue} portion(s) de ${plat_nom} (Motif: ${motif})`
+    })
+
+    return true
+  } catch (err) {
+    console.warn('[declarerPertePortions] Erreur:', err)
+    return false
   }
 }
 
