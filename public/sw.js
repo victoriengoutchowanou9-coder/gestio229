@@ -126,43 +126,75 @@ self.addEventListener('push', (event) => {
   }
 
   const title = data.title || 'GESTIO 229 : Nouvelle entreprise inscrite !';
+  const tag = data.tag || `gestio229-push-${Date.now()}`;
+  const targetUrl = data.data?.url || '/admin/companies';
+
   const options = {
     body: data.body || 'Une nouvelle entreprise a finalisé son inscription sur GESTIO 229.',
-    icon: data.icon || '/icons/icon-192.png',
+    icon: data.icon || '/icon-192.png',
     badge: data.badge || '/icons/favicon.png',
     vibrate: [300, 100, 300, 100, 300],
-    data: data.data || { url: '/admin/companies' },
-    tag: data.tag || `gestio229-reg-${Date.now()}`,
+    data: {
+      url: targetUrl,
+      ...(data.data || {}),
+      receivedAt: Date.now()
+    },
+    tag: tag,
     renotify: true,
     requireInteraction: true,
     actions: [
-      { action: 'open_admin', title: '👁️ Ouvrir Super Admin' }
+      { action: 'open_admin', title: 'Ouvrir Super Admin' }
     ]
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  const showPromise = self.registration.showNotification(title, options).then(() => {
+    if (self.clients && self.clients.matchAll) {
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+        windowClients.forEach((client) => {
+          try {
+            client.postMessage({
+              type: 'GESTIO_PUSH_RECEIVED',
+              title,
+              body: options.body,
+              tag,
+              timestamp: Date.now()
+            });
+          } catch (_) {}
+        });
+      });
+    }
+  });
+
+  event.waitUntil(showPromise);
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || '/admin/companies';
+  const rawUrl = event.notification.data?.url || '/admin/companies';
+  const fullTargetUrl = new URL(rawUrl, self.location.origin).href;
 
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      // Si une fenêtre Super Admin est déjà ouverte, lui donner le focus
-      for (const client of windowClients) {
-        if (client.url && client.url.includes('/admin') && 'focus' in client) {
-          if ('navigate' in client && targetUrl) {
-            client.navigate(targetUrl);
-          }
-          return client.focus();
+  const clickPromise = self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+    for (const client of windowClients) {
+      if (client.url && client.url.includes('/admin') && 'focus' in client) {
+        if ('navigate' in client && fullTargetUrl) {
+          client.navigate(fullTargetUrl);
         }
+        return client.focus();
       }
-      // Sinon, ouvrir une nouvelle fenêtre vers l'espace Super Admin
-      if (clients.openWindow) {
-        return clients.openWindow(targetUrl);
+    }
+    for (const client of windowClients) {
+      if ('focus' in client) {
+        if ('navigate' in client && fullTargetUrl) {
+          client.navigate(fullTargetUrl);
+        }
+        return client.focus();
       }
-    })
-  );
+    }
+    if (self.clients && self.clients.openWindow) {
+      return self.clients.openWindow(fullTargetUrl);
+    }
+  });
+
+  event.waitUntil(clickPromise);
 });
 

@@ -172,12 +172,21 @@ export async function removeCreatorSubscription(
   endpoint: string
 ): Promise<boolean> {
   try {
-    await sb
+    const { data } = await sb
       .from('admin_audit_logs')
-      .delete()
+      .select('id, details')
       .eq('action', 'PUSH_DEVICE_SUBSCRIPTION')
-      .contains('details', { endpoint })
-
+    if (data && data.length > 0) {
+      const idsToDelete = data
+        .filter((r: any) => {
+          const ep = r.details?.endpoint || r.details?.subscription?.endpoint
+          return ep === endpoint
+        })
+        .map((r: any) => r.id)
+      if (idsToDelete.length > 0) {
+        await sb.from('admin_audit_logs').delete().in('id', idsToDelete)
+      }
+    }
     return true
   } catch (err) {
     console.warn('[PushHelper] Erreur suppression souscription:', err)
@@ -249,7 +258,7 @@ export async function sendRegistrationPushToCreator(
   const payload = JSON.stringify({
     title,
     body,
-    icon: '/icons/icon-192.png',
+    icon: '/icon-192.png',
     badge: '/icons/favicon.png',
     tag: `new-company-${companyId}`,
     data: {
@@ -273,8 +282,13 @@ export async function sendRegistrationPushToCreator(
         },
         payload,
         {
-          TTL: 24 * 60 * 60, // 24 heures pour délivrance garantie sur téléphone
+          TTL: 86400,
           urgency: 'high',
+          vapidDetails: {
+            subject: VAPID_SUBJECT,
+            publicKey: VAPID_PUBLIC_KEY,
+            privateKey: VAPID_PRIVATE_KEY,
+          },
         }
       )
       sentCount++
@@ -329,7 +343,7 @@ export async function sendTestPushToCreator(
 ): Promise<{ success: boolean; sentCount: number; error?: string }> {
   const subscriptions = await getCreatorSubscriptions(sb)
   if (subscriptions.length === 0) {
-    return { success: false, sentCount: 0, error: 'Aucun appareil enregistré. Activez d\'abord les notifications sur votre téléphone.' }
+    return { success: false, sentCount: 0, error: 'Aucun appareil enregistré. Activez d\'abord les notifications sur votre téléphone Android.' }
   }
 
   const nowFormatted = new Intl.DateTimeFormat('fr-FR', {
@@ -344,14 +358,15 @@ export async function sendTestPushToCreator(
   const payload = JSON.stringify({
     title,
     body,
-    icon: '/icons/icon-192.png',
+    icon: '/icon-192.png',
     badge: '/icons/favicon.png',
     tag: `test-push-${Date.now()}`,
-    data: { url: '/admin/dashboard', type: 'test' },
+    data: { url: '/admin/dashboard', type: 'test', timestamp: Date.now() },
   })
 
   let sentCount = 0
   const expiredEndpoints: string[] = []
+  const sendErrors: string[] = []
 
   for (const sub of subscriptions) {
     try {
@@ -361,12 +376,23 @@ export async function sendTestPushToCreator(
           keys: sub.keys,
         },
         payload,
-        { TTL: 60, urgency: 'high' }
+        {
+          TTL: 86400,
+          urgency: 'high',
+          vapidDetails: {
+            subject: VAPID_SUBJECT,
+            publicKey: VAPID_PUBLIC_KEY,
+            privateKey: VAPID_PRIVATE_KEY,
+          },
+        }
       )
       sentCount++
     } catch (err: any) {
+      console.warn('[PushHelper] Échec test push vers endpoint:', err?.statusCode, err?.message)
       if (err?.statusCode === 410 || err?.statusCode === 404) {
         expiredEndpoints.push(sub.endpoint)
+      } else {
+        sendErrors.push(`Code ${err?.statusCode || 'inconnu'}: ${err?.message || 'Erreur d\'envoi'}`)
       }
     }
   }
@@ -375,7 +401,34 @@ export async function sendTestPushToCreator(
     await removeCreatorSubscription(sb, ep)
   }
 
-  return { success: sentCount > 0, sentCount }
+  try {
+    await sb.from('admin_audit_logs').insert({
+      admin_username: 'Super Admin',
+      action: 'PUSH_TEST_SENT',
+      result: sentCount > 0 ? 'success' : 'failed',
+      details: {
+        title,
+        body,
+        sentCount,
+        totalDevices: subscriptions.length,
+        expiredCleaned: expiredEndpoints.length,
+        errors: sendErrors,
+        testedAt: nowFormatted,
+      },
+      ip_address: '127.0.0.1',
+    })
+  } catch (_) {}
+
+  if (sentCount === 0) {
+    const errorDetails = sendErrors.length > 0 ? sendErrors.join(' ; ') : 'Abonnement expiré ou invalide (410/404).'
+    return {
+      success: false,
+      sentCount: 0,
+      error: `Échec de transmission : ${errorDetails}`,
+    }
+  }
+
+  return { success: true, sentCount }
 }
 
 /**

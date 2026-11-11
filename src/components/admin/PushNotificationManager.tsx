@@ -1,13 +1,13 @@
 // =============================================================================
 // GESTIO 229 ADMIN — Gestionnaire des Notifications Push du Concepteur
-// Permet d'enregistrer le téléphone du concepteur, tester la réception,
-// et consulter l'historique exhaustif des notifications d'inscriptions.
+// Permet d'enregistrer le téléphone du concepteur (Android / Chrome / PWA),
+// tester la réception réelle de bout en bout et consulter l'historique exhaustif.
 // =============================================================================
 
 import React, { useState, useEffect, useCallback } from 'react'
 import {
   Bell, Smartphone, Send, CheckCircle2, XCircle, AlertTriangle,
-  RefreshCw, ShieldCheck, History, Info, Clock, Check
+  RefreshCw, ShieldCheck, History, Info, Clock, Check, Radio, CheckCheck
 } from 'lucide-react'
 import { adminApiFetch } from '../../store/adminStore'
 
@@ -26,14 +26,26 @@ export const PushNotificationManager: React.FC = () => {
   const [isSupported, setIsSupported] = useState(false)
   const [permission, setPermission] = useState<NotificationPermission>('default')
   const [isSubscribed, setIsSubscribed] = useState(false)
+  const [swActive, setSwActive] = useState(false)
+  const [isServerSynced, setIsServerSynced] = useState(false)
   const [deviceCount, setDeviceCount] = useState(0)
   const [loading, setLoading] = useState(true)
   const [actionLoading, setActionLoading] = useState(false)
   const [testSuccess, setTestSuccess] = useState<string | null>(null)
+  const [localAckReceived, setLocalAckReceived] = useState<{ title: string; time: string } | null>(null)
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [history, setHistory] = useState<any[]>([])
 
-  // Vérification du support navigateur
+  // Détection de l'appareil
+  const deviceType = typeof navigator !== 'undefined'
+    ? (/android/i.test(navigator.userAgent)
+        ? 'Téléphone Android'
+        : /iphone|ipad/i.test(navigator.userAgent)
+        ? 'Appareil iOS (Safari PWA)'
+        : 'Ordinateur / Desktop')
+    : 'Appareil inconnu'
+
+  // Vérification initiale du support navigateur
   useEffect(() => {
     const supported =
       typeof window !== 'undefined' &&
@@ -46,17 +58,27 @@ export const PushNotificationManager: React.FC = () => {
     }
   }, [])
 
-  // Vérifier si l'appareil actuel est déjà souscrit
-  const checkCurrentSubscription = useCallback(async () => {
-    if (!('serviceWorker' in navigator)) return false
-    try {
-      const reg = await navigator.serviceWorker.ready
-      const sub = await reg.pushManager.getSubscription()
-      const active = Boolean(sub)
-      setIsSubscribed(active)
-      return active
-    } catch (_) {
-      return false
+  // Écouteur en direct des messages du Service Worker pour confirmation de réception
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('serviceWorker' in navigator)) return
+
+    const handleSwMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'GESTIO_PUSH_RECEIVED') {
+        const timeStr = new Intl.DateTimeFormat('fr-FR', {
+          timeStyle: 'medium',
+          timeZone: 'Africa/Porto-Novo',
+        }).format(new Date(event.data.timestamp || Date.now()))
+
+        setLocalAckReceived({
+          title: event.data.title || 'Notification reçue',
+          time: timeStr,
+        })
+      }
+    }
+
+    navigator.serviceWorker.addEventListener('message', handleSwMessage)
+    return () => {
+      navigator.serviceWorker.removeEventListener('message', handleSwMessage)
     }
   }, [])
 
@@ -65,27 +87,75 @@ export const PushNotificationManager: React.FC = () => {
     setLoading(true)
     setErrorMsg(null)
     try {
-      await checkCurrentSubscription()
+      let currentEndpoint = ''
+      let localActive = false
 
-      // Charger le statut des appareils
-      const resStatus = await adminApiFetch('/api/admin-push?action=status')
-      const jsonStatus = await resStatus.json()
-      if (jsonStatus.success) {
-        setDeviceCount(jsonStatus.deviceCount || 0)
+      if ('serviceWorker' in navigator && 'PushManager' in window) {
+        // Vérifier l'état du Service Worker
+        const reg = await navigator.serviceWorker.getRegistration()
+        if (reg) {
+          setSwActive(true)
+          const sub = await reg.pushManager.getSubscription()
+          if (sub) {
+            localActive = true
+            currentEndpoint = sub.endpoint
+          }
+        } else {
+          setSwActive(false)
+        }
       }
 
-      // Charger l'historique
+      setIsSubscribed(localActive)
+
+      // Charger le statut des appareils depuis le serveur
+      const urlStatus = currentEndpoint
+        ? `/api/admin-push?action=status&endpoint=${encodeURIComponent(currentEndpoint)}`
+        : '/api/admin-push?action=status'
+
+      const resStatus = await adminApiFetch(urlStatus)
+      const jsonStatus = await resStatus.json()
+
+      if (jsonStatus.success) {
+        setDeviceCount(jsonStatus.deviceCount || 0)
+        const serverRegistered = Boolean(jsonStatus.isCurrentDeviceRegistered)
+        setIsServerSynced(serverRegistered)
+
+        // Si le navigateur a un abonnement local mais qu'il n'est pas encore en base, synchroniser
+        if (localActive && !serverRegistered && currentEndpoint) {
+          try {
+            const reg = await navigator.serviceWorker.ready
+            const sub = await reg.pushManager.getSubscription()
+            if (sub) {
+              const deviceName = /android/i.test(navigator.userAgent)
+                ? 'Téléphone Android du Concepteur'
+                : 'Appareil Super Admin'
+              await adminApiFetch('/api/admin-push?action=subscribe', {
+                method: 'POST',
+                body: JSON.stringify({
+                  action: 'subscribe',
+                  subscription: sub.toJSON(),
+                  deviceName,
+                }),
+              })
+              setIsServerSynced(true)
+              setDeviceCount((prev) => Math.max(prev, 1))
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Charger l'historique des notifications
       const resHistory = await adminApiFetch('/api/admin-push?action=history')
       const jsonHistory = await resHistory.json()
       if (jsonHistory.success) {
         setHistory(jsonHistory.history || [])
       }
     } catch (err: any) {
-      console.warn('[PushManager] Notice chargement:', err)
+      console.warn('[PushManager] Notice chargement statut:', err)
     } finally {
       setLoading(false)
     }
-  }, [checkCurrentSubscription])
+  }, [])
 
   useEffect(() => {
     loadStatusAndHistory()
@@ -95,6 +165,7 @@ export const PushNotificationManager: React.FC = () => {
   const handleSubscribe = async () => {
     setErrorMsg(null)
     setTestSuccess(null)
+    setLocalAckReceived(null)
     setActionLoading(true)
 
     try {
@@ -102,37 +173,54 @@ export const PushNotificationManager: React.FC = () => {
         throw new Error('Votre navigateur ou appareil ne supporte pas les notifications Web Push.')
       }
 
-      // 1. Demander la permission à l'utilisateur
+      // 1. Demande de permission
       const perm = await Notification.requestPermission()
       setPermission(perm)
       if (perm !== 'granted') {
-        throw new Error('Permission refusée par le navigateur. Veuillez autoriser les notifications dans les paramètres de votre navigateur.')
+        throw new Error('Permission non accordée. Pour Android Chrome : ouvrez les paramètres du site (icône cadenas à gauche de l\'URL) > Autorisations > Notifications > Autoriser.')
       }
 
-      // 2. Obtenir la clé publique VAPID
+      // 2. Récupérer la clé publique VAPID
       const vapidRes = await adminApiFetch('/api/admin-push?action=vapid_public_key')
       const vapidJson = await vapidRes.json()
       if (!vapidJson.success || !vapidJson.publicKey) {
         throw new Error(vapidJson.error || 'Impossible de récupérer la clé VAPID.')
       }
 
-      // 3. S'assurer que le Service Worker est actif
-      let reg: ServiceWorkerRegistration
-      try {
+      // 3. Enregistrer et activer le Service Worker
+      let reg = await navigator.serviceWorker.getRegistration()
+      if (!reg) {
         reg = await navigator.serviceWorker.register('/sw.js')
-        await navigator.serviceWorker.ready
-      } catch (swErr: any) {
-        throw new Error(`Erreur d'initialisation du Service Worker : ${swErr.message}`)
+      } else {
+        await reg.update().catch(() => {})
+      }
+      await navigator.serviceWorker.ready
+      setSwActive(true)
+
+      // 4. Souscription Push avec gestion propre des anciennes clés
+      const convertedVapidKey = urlBase64ToUint8Array(vapidJson.publicKey)
+      let subscription: PushSubscription
+
+      try {
+        subscription = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: convertedVapidKey,
+        })
+      } catch (subErr: any) {
+        // En cas de conflit avec une ancienne clé VAPID, désabonner et recréer
+        const existing = await reg.pushManager.getSubscription()
+        if (existing) {
+          await existing.unsubscribe()
+          subscription = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: convertedVapidKey,
+          })
+        } else {
+          throw subErr
+        }
       }
 
-      // 4. Souscrire auprès du PushManager
-      const convertedVapidKey = urlBase64ToUint8Array(vapidJson.publicKey)
-      const subscription = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: convertedVapidKey,
-      })
-
-      // 5. Envoyer la souscription au serveur backend
+      // 5. Enregistrer auprès du serveur
       const deviceName = /android/i.test(navigator.userAgent)
         ? 'Téléphone Android du Concepteur'
         : /iphone|ipad/i.test(navigator.userAgent)
@@ -150,11 +238,12 @@ export const PushNotificationManager: React.FC = () => {
 
       const saveJson = await saveRes.json()
       if (!saveJson.success) {
-        throw new Error(saveJson.error || "Échec de l'enregistrement de l'appareil.")
+        throw new Error(saveJson.error || "Échec de l'enregistrement sur le serveur.")
       }
 
       setIsSubscribed(true)
-      setTestSuccess("Cet appareil est désormais connecté aux alertes push d'inscriptions !")
+      setIsServerSynced(true)
+      setTestSuccess("Cet appareil est désormais connecté avec succès aux alertes d'inscriptions !")
       await loadStatusAndHistory()
     } catch (err: any) {
       setErrorMsg(err.message || 'Erreur lors de l\'activation des notifications.')
@@ -168,6 +257,7 @@ export const PushNotificationManager: React.FC = () => {
     setActionLoading(true)
     setErrorMsg(null)
     setTestSuccess(null)
+    setLocalAckReceived(null)
     try {
       const reg = await navigator.serviceWorker.ready
       const sub = await reg.pushManager.getSubscription()
@@ -180,6 +270,7 @@ export const PushNotificationManager: React.FC = () => {
         })
       }
       setIsSubscribed(false)
+      setIsServerSynced(false)
       setTestSuccess('Notifications désactivées pour cet appareil.')
       await loadStatusAndHistory()
     } catch (err: any) {
@@ -189,11 +280,13 @@ export const PushNotificationManager: React.FC = () => {
     }
   }
 
-  // Déclencher un test push immédiat
+  // Déclencher un test push immédiat avec confirmation de bout en bout
   const handleTestNotification = async () => {
     setActionLoading(true)
     setErrorMsg(null)
     setTestSuccess(null)
+    setLocalAckReceived(null)
+
     try {
       const res = await adminApiFetch('/api/admin-push?action=test', {
         method: 'POST',
@@ -201,10 +294,12 @@ export const PushNotificationManager: React.FC = () => {
       })
       const json = await res.json()
       if (!json.success) {
-        throw new Error(json.error || 'Échec de l\'envoi du test.')
+        throw new Error(json.error || 'Échec de l\'envoi du test par le serveur Push.')
       }
 
-      setTestSuccess(json.message || 'Notification de test transmise avec succès !')
+      setTestSuccess(
+        json.message || `Notification Push de test transmise avec succès au service Push (${json.sentCount || 1} appareil notifié) !`
+      )
       await loadStatusAndHistory()
     } catch (err: any) {
       setErrorMsg(err.message || 'Erreur lors de l\'envoi du test.')
@@ -212,6 +307,8 @@ export const PushNotificationManager: React.FC = () => {
       setActionLoading(false)
     }
   }
+
+  const isFullyConnected = isSubscribed && isServerSynced && permission === 'granted'
 
   return (
     <div className="bg-slate-900 border border-slate-700/80 rounded-2xl p-6 space-y-6 shadow-xl">
@@ -223,27 +320,78 @@ export const PushNotificationManager: React.FC = () => {
             <span>Notifications Push du Concepteur (Nouvelles Inscriptions)</span>
           </h2>
           <p className="text-slate-400 text-xs mt-1">
-            Recevez une alerte instantanée sur votre téléphone chaque fois qu'une nouvelle entreprise s'inscrit.
+            Recevez une alerte sonore et vibrante instantanée sur votre téléphone Android dès qu'une nouvelle entreprise s'inscrit sur GESTIO 229.
           </p>
         </div>
         <div className="flex items-center gap-2">
           <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold border ${
-            isSubscribed
+            isFullyConnected
               ? 'bg-emerald-950/60 text-emerald-300 border-emerald-700'
-              : 'bg-slate-800 text-slate-400 border-slate-700'
+              : 'bg-amber-950/60 text-amber-400 border-amber-800'
           }`}>
-            <span className={`w-2 h-2 rounded-full ${isSubscribed ? 'bg-emerald-400 animate-pulse' : 'bg-slate-500'}`} />
-            <span>{isSubscribed ? 'Cet appareil est connecté' : 'Non connecté sur cet appareil'}</span>
+            <span className={`w-2 h-2 rounded-full ${isFullyConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-500'}`} />
+            <span>{isFullyConnected ? 'Cet appareil est connecté' : 'Configuration incomplète sur cet appareil'}</span>
           </span>
           <button
             type="button"
             onClick={loadStatusAndHistory}
             disabled={loading}
             className="p-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition"
-            title="Rafraîchir"
+            title="Rafraîchir l'état"
           >
             <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-emerald-400' : ''}`} />
           </button>
+        </div>
+      </div>
+
+      {/* Tableau de bord de Diagnostic Réel */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-950/70 border border-slate-800 rounded-xl p-3 text-xs">
+        <div className="space-y-1">
+          <span className="text-slate-400 text-[11px] block">Appareil & Système</span>
+          <div className="font-semibold text-white truncate" title={deviceType}>
+            {deviceType}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <span className="text-slate-400 text-[11px] block">Autorisation Système</span>
+          <div className="flex items-center gap-1.5 font-bold">
+            {permission === 'granted' ? (
+              <span className="text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Accordée
+              </span>
+            ) : permission === 'denied' ? (
+              <span className="text-rose-400 flex items-center gap-1">
+                <XCircle className="w-3.5 h-3.5" /> Bloquée
+              </span>
+            ) : (
+              <span className="text-amber-400 flex items-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> À demander
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <span className="text-slate-400 text-[11px] block">Service Worker (SW)</span>
+          <div className="flex items-center gap-1.5 font-bold">
+            {swActive ? (
+              <span className="text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Actif (/sw.js)
+              </span>
+            ) : (
+              <span className="text-slate-400 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5" /> En attente
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <span className="text-slate-400 text-[11px] block">Appareils Concepteur Actifs</span>
+          <div className="font-mono font-bold text-amber-400">
+            {deviceCount} connecté(s)
+          </div>
         </div>
       </div>
 
@@ -254,6 +402,22 @@ export const PushNotificationManager: React.FC = () => {
           <span>{testSuccess}</span>
         </div>
       )}
+
+      {/* Confirmation locale en direct si le Service Worker a reçu et affiché la notification */}
+      {localAckReceived && (
+        <div className="bg-emerald-900/60 border border-emerald-500 text-emerald-100 text-xs p-3.5 rounded-xl flex items-center gap-2.5 shadow-lg shadow-emerald-950/50 animate-bounce">
+          <CheckCheck className="w-5 h-5 text-emerald-300 shrink-0" />
+          <div>
+            <div className="font-bold text-emerald-200">
+              Notification Push reçue et affichée sur cet appareil à {localAckReceived.time} !
+            </div>
+            <div className="text-[11px] text-emerald-300/90">
+              Titre : {localAckReceived.title}
+            </div>
+          </div>
+        </div>
+      )}
+
       {errorMsg && (
         <div className="bg-rose-950/60 border border-rose-800 text-rose-200 text-xs p-3.5 rounded-xl flex items-center gap-2.5 animate-fadeIn">
           <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -267,14 +431,14 @@ export const PushNotificationManager: React.FC = () => {
         <div className="bg-slate-950/60 border border-slate-800 rounded-xl p-4 space-y-3">
           <div className="flex items-center gap-2 text-slate-200 font-bold text-xs">
             <Smartphone className="w-4 h-4 text-emerald-400" />
-            <span>Enregistrement de l'appareil</span>
+            <span>Enregistrement de cet appareil</span>
           </div>
           <p className="text-slate-400 text-xs leading-relaxed">
-            Pour recevoir les notifications sur votre téléphone Android, ouvrez cette page dans Chrome ou l'application PWA installée, puis cliquez ci-dessous.
+            Pour recevoir les notifications sur votre téléphone Android même écran éteint ou navigateur fermé, ouvrez cette page dans Chrome ou l'application PWA installée, puis cliquez ci-dessous.
           </p>
 
           <div className="pt-1">
-            {!isSubscribed ? (
+            {!isFullyConnected ? (
               <button
                 type="button"
                 onClick={handleSubscribe}
@@ -297,13 +461,13 @@ export const PushNotificationManager: React.FC = () => {
               <div className="flex items-center gap-2">
                 <span className="flex-1 bg-emerald-950/40 border border-emerald-800/80 text-emerald-300 py-2 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5">
                   <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Actif sur cet appareil</span>
+                  <span>Connecté et actif sur cet appareil</span>
                 </span>
                 <button
                   type="button"
                   onClick={handleUnsubscribe}
                   disabled={actionLoading}
-                  className="bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white py-2 px-3 rounded-xl text-xs font-medium transition"
+                  className="bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white py-2 px-3 rounded-xl text-xs font-medium transition cursor-pointer"
                 >
                   Désactiver
                 </button>
@@ -317,14 +481,14 @@ export const PushNotificationManager: React.FC = () => {
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-slate-200 font-bold text-xs">
               <Send className="w-4 h-4 text-amber-400" />
-              <span>Tester la notification Push</span>
+              <span>Tester la notification Push réelle</span>
             </span>
             <span className="text-[11px] text-slate-400 font-mono">
               {deviceCount} appareil(s) actif(s)
             </span>
           </div>
           <p className="text-slate-400 text-xs leading-relaxed">
-            Envoyez une alerte test instantanée pour vérifier la sonnerie, la vibration et l'affichage sur votre téléphone.
+            Envoyez une alerte test instantanée. Elle transitera par les serveurs Google FCM jusqu'à votre téléphone avec sonnerie et vibration.
           </p>
           <div className="pt-1">
             <button
@@ -349,16 +513,18 @@ export const PushNotificationManager: React.FC = () => {
         </div>
       </div>
 
-      {/* Guide Android PWA */}
+      {/* Guide Android PWA & Réception en arrière-plan */}
       <div className="bg-blue-950/30 border border-blue-800/40 rounded-xl p-3.5 text-blue-200 text-xs leading-relaxed flex items-start gap-2.5">
         <Info className="w-4 h-4 text-blue-400 shrink-0 mt-0.5" />
         <div className="space-y-1">
           <p className="font-bold text-blue-300">
-            Fonctionnement garanti en arrière-plan sur téléphone Android :
+            Conditions pour la réception en arrière-plan et écran éteint sur Android :
           </p>
-          <p className="text-blue-200/90 text-[11px]">
-            Pour recevoir les notifications même lorsque le navigateur ou l'écran est fermé : installez GESTIO 229 en application PWA (depuis Chrome sur Android : menu <strong>⋮</strong> &gt; <strong>« Installer l'application »</strong> ou <strong>« Ajouter à l'écran d'accueil »</strong>), puis autorisez les notifications.
-          </p>
+          <ul className="text-blue-200/90 text-[11px] list-disc list-inside space-y-0.5">
+            <li>Installez GESTIO 229 en PWA depuis Chrome (menu <strong>⋮</strong> &gt; <strong>« Installer l'application »</strong>).</li>
+            <li>Assurez-vous que les notifications de Chrome ou de l'application ne sont pas bloquées dans les paramètres Android.</li>
+            <li>Désactivez l'optimisation de batterie agressive pour GESTIO 229 dans les paramètres Android si vous souhaitez une alerte immédiate écran verrouillé.</li>
+          </ul>
         </div>
       </div>
 

@@ -28,6 +28,7 @@ export default defineConfig({
         clientsClaim: true,
         cleanupOutdatedCaches: true,
         globIgnores: ['**/middleware-manifest.json'],
+        importScripts: ['/push-worker.js'],
       },
       includeAssets: ['icon-*.png', 'icons/*.png'],
       manifest: {

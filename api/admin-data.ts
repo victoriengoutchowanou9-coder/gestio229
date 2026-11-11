@@ -126,9 +126,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (action === 'status' && (req.query.channel === 'push' || req.method === 'GET')) {
       const subscriptions = await getCreatorSubscriptions(sb)
+      const checkEndpoint = String(req.query.endpoint || req.body?.endpoint || '').trim()
+      const isCurrentDeviceRegistered = checkEndpoint
+        ? subscriptions.some((s) => s.endpoint === checkEndpoint)
+        : false
+
       return res.status(200).json({
         success: true,
         deviceCount: subscriptions.length,
+        isCurrentDeviceRegistered,
         devices: subscriptions.map((s) => ({
           deviceName: s.device_name,
           createdAt: s.created_at,
