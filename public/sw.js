@@ -107,3 +107,62 @@ self.addEventListener('fetch', (event) => {
     })
   );
 });
+
+// =============================================================================
+// Push Notifications Web (Super Admin & Alertes Inscriptions Temps Réel)
+// Compatible téléphones Android & navigateurs PWA en tâche de fond
+// =============================================================================
+self.addEventListener('push', (event) => {
+  let data = {};
+  if (event.data) {
+    try {
+      data = event.data.json();
+    } catch (e) {
+      data = {
+        title: 'GESTIO 229 ERP',
+        body: event.data.text() || 'Nouvelle notification plateforme'
+      };
+    }
+  }
+
+  const title = data.title || 'GESTIO 229 : Nouvelle entreprise inscrite !';
+  const options = {
+    body: data.body || 'Une nouvelle entreprise a finalisé son inscription sur GESTIO 229.',
+    icon: data.icon || '/icons/icon-192.png',
+    badge: data.badge || '/icons/favicon.png',
+    vibrate: [300, 100, 300, 100, 300],
+    data: data.data || { url: '/admin/companies' },
+    tag: data.tag || `gestio229-reg-${Date.now()}`,
+    renotify: true,
+    requireInteraction: true,
+    actions: [
+      { action: 'open_admin', title: '👁️ Ouvrir Super Admin' }
+    ]
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const targetUrl = event.notification.data?.url || '/admin/companies';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      // Si une fenêtre Super Admin est déjà ouverte, lui donner le focus
+      for (const client of windowClients) {
+        if (client.url && client.url.includes('/admin') && 'focus' in client) {
+          if ('navigate' in client && targetUrl) {
+            client.navigate(targetUrl);
+          }
+          return client.focus();
+        }
+      }
+      // Sinon, ouvrir une nouvelle fenêtre vers l'espace Super Admin
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
+  );
+});
+

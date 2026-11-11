@@ -12,6 +12,7 @@ import {
   Shield, History, ChevronDown, ChevronUp, Lock, Unlock, Trash2, RotateCcw, Copy, Check,
   AlertOctagon, ShieldAlert, Layers, Plus, Ban
 } from 'lucide-react'
+import { HardDeleteModal } from '../../components/admin/HardDeleteModal'
 
 const ALL_AVAILABLE_SECTORS = [
   { id: 'commerce', label: 'Commerce Général & Boutiques' },
@@ -309,10 +310,32 @@ const AdminCompanyDetail: React.FC = () => {
   const [actionError, setActionError] = useState('')
   const [actionLoading, setActionLoading] = useState(false)
   const [copiedId, setCopiedId] = useState(false)
+  const [showHardDeleteModal, setShowHardDeleteModal] = useState(false)
 
   const company = data?.company
   const users = data?.users || []
   const mainAdmin = users.find((u: any) => u.role === 'administrateur' || u.role === 'super_admin') || users[0]
+
+  const handleConfirmHardDelete = async (confirmName: string, reason: string) => {
+    setActionLoading(true)
+    setActionError('')
+    try {
+      const res = await adminApiFetch('/api/admin-subscription', {
+        method: 'POST',
+        body: JSON.stringify({ action: 'delete_hard', company_id: company.id, confirm_name: confirmName, reason })
+      })
+      const json = await res.json()
+      if (!json.success) throw new Error(json.error || 'Erreur lors de la suppression définitive.')
+      setShowHardDeleteModal(false)
+      setSuccessMsg(`L'entreprise « ${company.name} » a été définitivement supprimée. Redirection en cours...`)
+      setTimeout(() => navigate('/admin/companies'), 1500)
+    } catch (e: any) {
+      setActionError(e.message || 'Erreur réseau.')
+      throw e
+    } finally {
+      setActionLoading(false)
+    }
+  }
 
   const handleReactivationSuccess = () => {
     setShowReactivation(false)
@@ -687,14 +710,25 @@ const AdminCompanyDetail: React.FC = () => {
                 )}
 
                 {isSuspended ? (
-                  <button
-                    onClick={handleUnblock}
-                    disabled={actionLoading}
-                    className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
-                  >
-                    <Unlock className="w-3.5 h-3.5" />
-                    DÉBLOQUER L'ACCÈS
-                  </button>
+                  <>
+                    <button
+                      onClick={handleUnblock}
+                      disabled={actionLoading}
+                      className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+                    >
+                      <Unlock className="w-3.5 h-3.5" />
+                      DÉBLOQUER L'ACCÈS
+                    </button>
+                    <button
+                      onClick={() => setShowHardDeleteModal(true)}
+                      disabled={actionLoading}
+                      className="flex items-center gap-1.5 bg-red-950/80 hover:bg-red-900 border border-red-700 disabled:opacity-50 text-red-200 px-3.5 py-2 rounded-xl text-xs font-bold transition shadow-sm"
+                      title="Supprimer définitivement cette entreprise suspendue (action irréversible)"
+                    >
+                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                      SUPPRIMER DÉFINITIVEMENT
+                    </button>
+                  </>
                 ) : (
                   <button
                     onClick={handleBlock}
@@ -1117,6 +1151,14 @@ const AdminCompanyDetail: React.FC = () => {
           </div>
         )}
       </div>
+
+      {showHardDeleteModal && company && (
+        <HardDeleteModal
+          company={company}
+          onClose={() => setShowHardDeleteModal(false)}
+          onConfirm={handleConfirmHardDelete}
+        />
+      )}
     </div>
   )
 }

@@ -8,7 +8,7 @@ import { Link } from 'react-router-dom'
 import { useAdminStats, useAdminFinances } from '../../hooks/useAdminData'
 import {
   Building2, CheckCircle2, XCircle, Clock, AlertTriangle,
-  DollarSign, Users, Store, TrendingUp, Eye, RefreshCw
+  DollarSign, Users, Store, TrendingUp, Eye, RefreshCw, Bell
 } from 'lucide-react'
 
 // ─── Formatage monétaire ─────────────────────────────────────────────────
@@ -113,6 +113,31 @@ const AdminDashboard: React.FC = () => {
           <RefreshCw className="w-4 h-4" />
           Actualiser
         </button>
+      </div>
+
+      {/* Alerte & Raccourci Notifications Push Concepteur */}
+      <div className="bg-gradient-to-r from-slate-900 via-amber-950/30 to-slate-900 border border-amber-500/30 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-lg">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 shrink-0">
+            <Bell className="w-5 h-5 animate-pulse" />
+          </div>
+          <div>
+            <p className="text-white text-xs font-bold flex items-center gap-1.5">
+              <span>Notifications Push Automatiques du Concepteur</span>
+              <span className="bg-amber-500/20 text-amber-300 text-[10px] px-2 py-0.5 rounded-full border border-amber-500/40 font-black">ACTIF</span>
+            </p>
+            <p className="text-slate-400 text-[11px] mt-0.5">
+              Votre téléphone personnel est alerté en temps réel chaque fois qu'une nouvelle entreprise rejoint la plateforme.
+            </p>
+          </div>
+        </div>
+        <Link
+          to="/admin/settings"
+          className="bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs px-3.5 py-2 rounded-xl transition flex items-center justify-center gap-1.5 shrink-0 shadow-md shadow-amber-500/20"
+        >
+          <span>Gérer mes appareils & tests</span>
+          <span>→</span>
+        </Link>
       </div>
 
       {/* Grille statistiques */}

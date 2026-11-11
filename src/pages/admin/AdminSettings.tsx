@@ -12,6 +12,7 @@ import {
   ParametresPaiementManuel,
   DEFAULT_MANUAL_PAYMENT_SETTINGS,
 } from '../../services/abonnementService'
+import { PushNotificationManager } from '../../components/admin/PushNotificationManager'
 
 const AdminSettings: React.FC = () => {
   const [paymentSettings, setPaymentSettings] = useState<ParametresPaiementManuel>(
@@ -228,6 +229,9 @@ const AdminSettings: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Section Notifications Push du Concepteur */}
+      <PushNotificationManager />
 
       {/* Variables d'environnement requises */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4">

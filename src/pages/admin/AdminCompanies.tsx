@@ -12,6 +12,7 @@ import {
   Lock, Unlock, Trash2, RotateCcw, Copy, Check,
   ShieldAlert, AlertTriangle, X, User, ChevronDown
 } from 'lucide-react'
+import { HardDeleteModal } from '../../components/admin/HardDeleteModal'
 
 function formatDate(d: string | null | undefined): string {
   if (!d) return '—'
@@ -611,7 +612,7 @@ const AdminCompanies: React.FC = () => {
 
   // Gestion des modals
   const [activeModal, setActiveModal] = useState<{
-    type: 'block' | 'unblock' | 'delete' | 'restore' | null
+    type: 'block' | 'unblock' | 'delete' | 'restore' | 'hard_delete' | null
     company: any | null
   }>({ type: null, company: null })
 
@@ -1003,14 +1004,24 @@ const AdminCompanies: React.FC = () => {
                             {!isDeleted && (
                               <>
                                 {isSuspended ? (
-                                  <button
-                                    onClick={() => setActiveModal({ type: 'unblock', company: c })}
-                                    className="inline-flex items-center gap-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition"
-                                    title="Débloquer et rétablir l'accès à l'entreprise"
-                                  >
-                                    <Unlock className="w-3.5 h-3.5" />
-                                    <span>Débloquer</span>
-                                  </button>
+                                  <>
+                                    <button
+                                      onClick={() => setActiveModal({ type: 'unblock', company: c })}
+                                      className="inline-flex items-center gap-1 bg-emerald-950/60 hover:bg-emerald-900/80 text-emerald-300 border border-emerald-700 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition"
+                                      title="Débloquer et rétablir l'accès à l'entreprise"
+                                    >
+                                      <Unlock className="w-3.5 h-3.5" />
+                                      <span>Débloquer</span>
+                                    </button>
+                                    <button
+                                      onClick={() => setActiveModal({ type: 'hard_delete', company: c })}
+                                      className="inline-flex items-center gap-1 bg-red-950/70 hover:bg-red-900/90 text-red-200 border border-red-700 px-2.5 py-1.5 rounded-lg text-xs font-bold transition shadow-sm"
+                                      title="Supprimer définitivement cette entreprise suspendue (action irréversible)"
+                                    >
+                                      <Trash2 className="w-3.5 h-3.5 text-red-400" />
+                                      <span>Supprimer définitivement</span>
+                                    </button>
+                                  </>
                                 ) : (
                                   <button
                                     onClick={() => setActiveModal({ type: 'block', company: c })}
@@ -1079,6 +1090,14 @@ const AdminCompanies: React.FC = () => {
           onClose={() => setActiveModal({ type: null, company: null })}
           onSoftDelete={handleConfirmSoftDelete}
           onHardDelete={handleConfirmHardDelete}
+        />
+      )}
+
+      {activeModal.type === 'hard_delete' && activeModal.company && (
+        <HardDeleteModal
+          company={activeModal.company}
+          onClose={() => setActiveModal({ type: null, company: null })}
+          onConfirm={handleConfirmHardDelete}
         />
       )}
 

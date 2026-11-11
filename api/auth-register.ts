@@ -7,6 +7,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import { sendTrackedEmail, buildRegistrationEmailHtml } from './_lib/emailHelper.ts'
 import { generateConfirmationToken } from './_lib/confirmationToken.ts'
+import { sendRegistrationPushToCreator } from './_lib/pushHelper.ts'
 
 const MAX_FREE_TRIAL_SECTORS = 3
 
@@ -493,6 +494,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       clientIp,
       metadata: { companyId, selectedSectors: cleanSectors, tokenNonce: confirmationTokenData.nonce },
     })
+
+    // =========================================================================
+    // ÉTAPE 8 : Notification Push instantanée au Concepteur officiel
+    // Déclenchée automatiquement après validation de l'enregistrement en base
+    // Système anti-doublon strict intégré par companyId
+    // =========================================================================
+    try {
+      await sendRegistrationPushToCreator(sb, {
+        companyId,
+        companyName: company_name.trim(),
+        responsibleName: responsible_name.trim(),
+        email: cleanEmail,
+        phone: phone ? String(phone).trim() : undefined,
+        selectedSectors: cleanSectors,
+      })
+    } catch (pushErr) {
+      console.warn('[AuthRegister] Notice envoi push notification concepteur:', pushErr)
+    }
 
     return res.status(200).json({
       success: true,

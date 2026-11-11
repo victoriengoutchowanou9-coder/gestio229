@@ -456,31 +456,178 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // ── 5. SUPPRESSION DÉFINITIVE (HARD DELETE ULTRA-SÉCURISÉE) ────────────
     if (action === 'delete_hard') {
+      // Règle stricte de sécurité : Seules les entreprises suspendues peuvent être supprimées définitivement
+      const isSuspendedOrInactive = company.subscription_status === 'suspended' || company.is_active === false;
+      if (!isSuspendedOrInactive) {
+        return res.status(400).json({
+          success: false,
+          error: `Opération refusée : L'entreprise « ${company.name} » est active. Seules les entreprises suspendues peuvent faire l'objet d'une suppression définitive.`
+        });
+      }
+
       if (!confirm_name || confirm_name.trim().toLowerCase() !== company.name.trim().toLowerCase()) {
         return res.status(400).json({
           success: false,
           error: `Nom de confirmation incorrect. Saisissez exactement « ${company.name} » pour confirmer.`
-        })
+        });
       }
       if (!reason || !reason.trim()) {
-        return res.status(400).json({ success: false, error: 'Le motif légal/justificatif de suppression définitive est obligatoire.' })
+        return res.status(400).json({ success: false, error: 'Le motif légal/justificatif de suppression définitive est obligatoire.' });
       }
 
+      const deletedSummary: Record<string, number> = {};
+
+      const safeDeleteCompanyData = async (tableName: string, colName: string = 'company_id') => {
+        try {
+          const { count, error } = await sb.from(tableName).delete({ count: 'exact' }).eq(colName, company_id);
+          if (!error && typeof count === 'number') {
+            deletedSummary[tableName] = count;
+          }
+        } catch (_) {}
+      };
+
       try {
-        await sb.from('sales_order_items').delete().eq('company_id', company_id)
-        await sb.from('sales_orders').delete().eq('company_id', company_id)
-        await sb.from('stock_movements').delete().eq('company_id', company_id)
-        await sb.from('expenses').delete().eq('company_id', company_id)
-        await sb.from('cash_sessions').delete().eq('company_id', company_id)
-        await sb.from('products').delete().eq('company_id', company_id)
-        await sb.from('customers').delete().eq('company_id', company_id)
-        await sb.from('suppliers').delete().eq('company_id', company_id)
-        await sb.from('subscription_history').delete().eq('company_id', company_id)
-        await sb.from('subscriptions').delete().eq('company_id', company_id)
-        await sb.from('user_profiles').delete().eq('company_id', company_id)
-        await sb.from('companies').delete().eq('id', company_id)
+        // A. Récupérer et purger les comptes Supabase Auth rattachés exclusivement à cette entreprise
+        const { data: usersToPurge } = await sb
+          .from('user_profiles')
+          .select('id, auth_user_id, email')
+          .eq('company_id', company_id);
+
+        let deletedAuthUsers = 0;
+        if (Array.isArray(usersToPurge) && usersToPurge.length > 0 && (sb.auth as any)?.admin?.deleteUser) {
+          for (const u of usersToPurge) {
+            const authId = u.auth_user_id || u.id;
+            if (authId) {
+              try {
+                await (sb.auth as any).admin.deleteUser(authId);
+                deletedAuthUsers++;
+              } catch (authErr: any) {
+                console.warn(`[HardDelete] Notice suppression Supabase Auth user ${authId}:`, authErr?.message);
+              }
+            }
+          }
+        }
+        deletedSummary['auth_users'] = deletedAuthUsers;
+
+        // B. Nettoyage des documents et fichiers stockés dans Supabase Storage
+        try {
+          if (sb.storage && typeof sb.storage.listBuckets === 'function') {
+            const { data: buckets } = await sb.storage.listBuckets();
+            if (Array.isArray(buckets)) {
+              for (const bucket of buckets) {
+                try {
+                  const { data: files } = await sb.storage.from(bucket.name).list(company_id);
+                  if (Array.isArray(files) && files.length > 0) {
+                    const paths = files.map((f: any) => `${company_id}/${f.name}`);
+                    await sb.storage.from(bucket.name).remove(paths);
+                  }
+                } catch (_) {}
+              }
+            }
+          }
+        } catch (storageErr: any) {
+          console.warn('[HardDelete] Notice nettoyage Storage:', storageErr?.message);
+        }
+
+        // C. Purge ordonnée des tables métier
+        await safeDeleteCompanyData('sales_order_items');
+        await safeDeleteCompanyData('vente_lignes');
+        await safeDeleteCompanyData('avoir_lignes');
+        await safeDeleteCompanyData('factures_avoirs');
+        await safeDeleteCompanyData('sales_orders');
+
+        await safeDeleteCompanyData('stock_movements');
+        await safeDeleteCompanyData('stock_avaries');
+        await safeDeleteCompanyData('poissonnerie_avaries');
+        await safeDeleteCompanyData('products');
+
+        await safeDeleteCompanyData('purchase_orders');
+        await safeDeleteCompanyData('suppliers');
+        await safeDeleteCompanyData('fournisseurs');
+
+        await safeDeleteCompanyData('client_debts');
+        await safeDeleteCompanyData('creances_clients');
+        await safeDeleteCompanyData('client_transactions');
+        await safeDeleteCompanyData('client_emballages_creances');
+        await safeDeleteCompanyData('customers');
+        await safeDeleteCompanyData('clients');
+
+        await safeDeleteCompanyData('expenses');
+        await safeDeleteCompanyData('depenses');
+        await safeDeleteCompanyData('caisse_mouvements');
+        await safeDeleteCompanyData('caisse_clotures');
+        await safeDeleteCompanyData('caisse_journaliere');
+        await safeDeleteCompanyData('caisse_sessions');
+        await safeDeleteCompanyData('caisse_transactions');
+        await safeDeleteCompanyData('cash_sessions');
+        await safeDeleteCompanyData('clotures_caisse');
+        await safeDeleteCompanyData('sessions_caisse');
+        await safeDeleteCompanyData('coffre_fort');
+        await safeDeleteCompanyData('fonds_actuels');
+        await safeDeleteCompanyData('mouvements_tresorerie');
+        await safeDeleteCompanyData('treasury_transfers');
+        await safeDeleteCompanyData('treasury_accounts');
+        await safeDeleteCompanyData('transactions');
+        await safeDeleteCompanyData('caisses');
+        await safeDeleteCompanyData('cash_registers');
+
+        await safeDeleteCompanyData('station_ventes');
+        await safeDeleteCompanyData('station_receptions_carburant');
+        await safeDeleteCompanyData('station_jaugeages');
+        await safeDeleteCompanyData('station_pistolets');
+        await safeDeleteCompanyData('station_cuves');
+        await safeDeleteCompanyData('station_prix_historique');
+        await safeDeleteCompanyData('station_livraisons');
+        await safeDeleteCompanyData('restaurant_commande_lignes');
+        await safeDeleteCompanyData('restaurant_commandes');
+        await safeDeleteCompanyData('restaurant_boissons_confiees');
+        await safeDeleteCompanyData('restaurant_creances_serveuses');
+        await safeDeleteCompanyData('restaurant_destockage_log');
+        await safeDeleteCompanyData('restaurant_fiches_techniques');
+        await safeDeleteCompanyData('restaurant_reglements_serveuses');
+        await safeDeleteCompanyData('restaurant_retours_emballages');
+        await safeDeleteCompanyData('restaurant_sessions_serveurs');
+        await safeDeleteCompanyData('restaurant_tables');
+        await safeDeleteCompanyData('restaurant_versements_serveurs');
+        await safeDeleteCompanyData('hotel_reservations');
+        await safeDeleteCompanyData('hotel_housekeeping');
+        await safeDeleteCompanyData('hotel_chambres');
+        await safeDeleteCompanyData('imprimerie_commandes');
+        await safeDeleteCompanyData('imprimerie_devis');
+        await safeDeleteCompanyData('imprimerie_prestations');
+        await safeDeleteCompanyData('imprimerie_matieres');
+        await safeDeleteCompanyData('imprimerie_audit_logs');
+        await safeDeleteCompanyData('flotte_vehicules');
+        await safeDeleteCompanyData('flotte_conducteurs');
+        await safeDeleteCompanyData('flotte_positions_gps');
+        await safeDeleteCompanyData('flotte_alertes');
+        await safeDeleteCompanyData('location_contrats');
+        await safeDeleteCompanyData('location_biens');
+        await safeDeleteCompanyData('location_echeances');
+        await safeDeleteCompanyData('location_quittances');
+        await safeDeleteCompanyData('brasserie_grilles');
+        await safeDeleteCompanyData('brasserie_emballages');
+
+        await safeDeleteCompanyData('company_activities');
+        await safeDeleteCompanyData('company_sectors');
+        await safeDeleteCompanyData('abonnements_secteurs', 'entreprise_id');
+        await safeDeleteCompanyData('abonnements_global', 'entreprise_id');
+        await safeDeleteCompanyData('subscription_history');
+        await safeDeleteCompanyData('subscription_notifications');
+        await safeDeleteCompanyData('demandes_paiement_abonnement');
+        await safeDeleteCompanyData('subscriptions');
+        await safeDeleteCompanyData('sector_access_requests');
+        await safeDeleteCompanyData('feedbacks');
+        await safeDeleteCompanyData('audit_logs');
+
+        // D. Suppression des profils utilisateurs de cette entreprise
+        await safeDeleteCompanyData('user_profiles');
+
+        // E. Suppression définitive du compte entreprise
+        await sb.from('companies').delete().eq('id', company_id);
+        deletedSummary['companies'] = 1;
       } catch (delErr: any) {
-        console.error('[HardDelete] Erreur suppression dépendances:', delErr.message)
+        console.error('[HardDelete] Erreur purge dépendances:', delErr?.message);
       }
 
       await logAdminAction(sb, 'SUPPRESSION_DEFINITIVE', company_id, company.name, 'success', {
@@ -488,12 +635,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         motif: reason.trim(),
         company_name: company.name,
         hard_deleted: true,
-      }, clientIp)
+        deleted_summary: deletedSummary,
+      }, clientIp);
 
       return res.status(200).json({
         success: true,
-        message: `L'entreprise ${company.name} et ses données associées ont été définitivement supprimées.`
-      })
+        message: `L'entreprise « ${company.name} » et toutes ses données associées ont été définitivement supprimées.`,
+        deletedSummary,
+      });
     }
 
     // ── 6. MISE À JOUR DU STATUT DIRECT ───────────────────────────────────
