@@ -193,8 +193,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Vérification du profil et du rôle
         const { data: profile } = await sb
           .from('user_profiles')
-          .select('company_id, role, email')
-          .eq('id', authenticatedUserId)
+          .select('id, company_id, role, email')
+          .or(`auth_user_id.eq.${authenticatedUserId},id.eq.${authenticatedUserId}${authenticatedUserEmail ? `,email.ilike.${authenticatedUserEmail}` : ''}`)
           .maybeSingle()
 
         if (profile) {
@@ -208,12 +208,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
 
           // Vérification des privilèges d'administration
+          const normRole = String(profile.role || '').toLowerCase().trim()
           const isAllowedRole =
-            profile.role === 'administrateur' ||
-            profile.role === 'admin' ||
-            profile.role === 'owner' ||
-            profile.role === 'super_admin' ||
-            profile.role === 'super_admin_universel'
+            normRole === 'administrateur' ||
+            normRole === 'admin' ||
+            normRole === 'owner' ||
+            normRole === 'propriétaire' ||
+            normRole === 'gerant' ||
+            normRole === 'directeur' ||
+            normRole === 'super_admin' ||
+            normRole === 'super_admin_universel'
 
           if (!isAllowedRole) {
             return res.status(403).json({

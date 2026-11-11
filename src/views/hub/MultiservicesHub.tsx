@@ -147,7 +147,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   onLogout,
   onOpenSubscription,
 }) => {
-  const isAdmin = !userRole || userRole === 'administrateur' || userRole === 'super_admin';
+  const normalizedRole = String(userRole || '').toLowerCase().trim();
+  const isAdmin = !userRole || ['administrateur', 'admin', 'super_admin', 'owner', 'propriétaire', 'proprietaire', 'gerant', 'directeur'].includes(normalizedRole);
   const { darkMode, toggleDarkMode } = useUIStore();
   const navigate = useNavigate();
 
@@ -1741,13 +1742,13 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                                   setClearSectorTarget(act);
                                 }}
                                 title={`Vider les données opérationnelles du secteur ${act.name}`}
-                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-all border ${
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-all border shadow-sm ${
                                   darkMode
-                                    ? 'text-slate-400 hover:text-amber-300 bg-slate-800/80 hover:bg-amber-950/40 border-slate-700/60 hover:border-amber-700/50'
-                                    : 'text-slate-500 hover:text-amber-700 bg-slate-100/90 hover:bg-amber-50 border-slate-200 hover:border-amber-300'
+                                    ? 'text-amber-300 hover:text-amber-200 bg-amber-950/50 hover:bg-amber-900/70 border-amber-700/60'
+                                    : 'text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border-amber-300'
                                 }`}
                               >
-                                <Trash2 size={10} className="shrink-0" />
+                                <Trash2 size={10} className="shrink-0 text-amber-600 dark:text-amber-400" />
                                 <span>Vider le secteur</span>
                               </button>
                             )}
@@ -1915,43 +1916,59 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                     <ExternalLink size={14} />
                   </button>
 
-                  {/* BOUTONS PARAMÈTRES & SUPPRIMER (RÉSERVÉS À L'ADMINISTRATEUR) */}
+                  {/* BOUTONS PARAMÈTRES, VIDER & SUPPRIMER (RÉSERVÉS À L'ADMINISTRATEUR) */}
                   {isAdmin && (
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setForm({
-                            sectorSlug: act.sectorSlug,
-                            name: act.name,
-                            location: act.location,
-                            manager: act.manager,
-                            status: act.status,
-                          });
-                          setFormError('');
-                          setShowSettingsModal(act);
-                        }}
-                        className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                          darkMode
-                            ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700/60'
-                            : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                        }`}
-                      >
-                        <Settings size={13} />
-                        <span>Paramètres</span>
-                      </button>
+                    <div className="space-y-1.5">
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setForm({
+                              sectorSlug: act.sectorSlug,
+                              name: act.name,
+                              location: act.location,
+                              manager: act.manager,
+                              status: act.status,
+                            });
+                            setFormError('');
+                            setShowSettingsModal(act);
+                          }}
+                          className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                            darkMode
+                              ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700/60'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          <Settings size={13} />
+                          <span>Paramètres</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => initiateDelete(act)}
+                          className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                            darkMode
+                              ? 'bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border-slate-700/60 hover:border-rose-800/40'
+                              : 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200'
+                          }`}
+                        >
+                          <Trash2 size={13} />
+                          <span>Supprimer</span>
+                        </button>
+                      </div>
 
                       <button
                         type="button"
-                        onClick={() => initiateDelete(act)}
-                        className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
+                        onClick={() => setClearSectorTarget(act)}
+                        title={`Vider les données opérationnelles du secteur ${act.name}`}
+                        className={`w-full py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all border ${
                           darkMode
-                            ? 'bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border-slate-700/60 hover:border-rose-800/40'
-                            : 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200'
+                            ? 'bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border-amber-700/50'
+                            : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 shadow-sm'
                         }`}
                       >
-                        <Trash2 size={13} />
-                        <span>Supprimer</span>
+                        <Trash2 size={13} className="text-amber-600 dark:text-amber-400" />
+                        <span>Vider le secteur</span>
                       </button>
                     </div>
                   )}

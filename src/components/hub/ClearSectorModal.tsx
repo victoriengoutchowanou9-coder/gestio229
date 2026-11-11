@@ -191,12 +191,21 @@ export const ClearSectorModal: React.FC<ClearSectorModalProps> = ({
 
               {/* Champ de confirmation */}
               <div className="space-y-2 pt-1">
-                <label className="block text-xs font-semibold text-slate-300">
-                  Pour confirmer, tapez le nom du secteur :{' '}
-                  <span className="font-mono font-bold text-amber-400 select-all">
-                    {expectedName}
-                  </span>
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-semibold text-slate-300">
+                    Pour confirmer, tapez :{' '}
+                    <span className="font-mono font-bold text-amber-400 select-all">
+                      {expectedName}
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmationInput(expectedName)}
+                    className="text-[10px] text-amber-400 hover:text-amber-300 underline font-medium"
+                  >
+                    Remplir automatiquement
+                  </button>
+                </div>
                 <input
                   type="text"
                   value={confirmationInput}

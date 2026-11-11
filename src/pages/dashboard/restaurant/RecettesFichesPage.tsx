@@ -133,7 +133,7 @@ export const RecettesFichesPage: React.FC = () => {
   const { toast } = useUIStore()
 
   // Contrôle de rôle administrateur strict
-  const isAdmin = !user?.role || user.role === 'administrateur' || user.role === 'super_admin' || user.role === 'admin' || user.role === 'owner'
+  const isAdmin = !user?.role || user.role === 'administrateur' || user.role === 'super_admin' || user.role === 'admin' || user.role === 'owner' || ['administrateur', 'admin', 'super_admin', 'owner', 'propriétaire', 'proprietaire', 'directeur', 'gerant'].includes(String(user?.role || '').toLowerCase().trim())
 
   // Onglet actif : 'recettes' (Fiches techniques) ou 'portions' (Préparations du jour & stock portions)
   const [activeTab, setActiveTab] = useState<'recettes' | 'portions'>('recettes')
