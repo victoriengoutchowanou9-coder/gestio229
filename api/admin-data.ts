@@ -7,6 +7,14 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node'
 import { createClient } from '@supabase/supabase-js'
 import * as crypto from 'crypto'
+import {
+  VAPID_PUBLIC_KEY,
+  saveCreatorSubscription,
+  removeCreatorSubscription,
+  getCreatorSubscriptions,
+  sendTestPushToCreator,
+  getNotificationHistory,
+} from './_lib/pushHelper.ts'
 
 const ADMIN_SESSION_SECRET = process.env.ADMIN_SESSION_SECRET || process.env.AUTH_SECRET || 'gestio229_admin_secret_change_in_production'
 
@@ -71,9 +79,69 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const sb = getSupabaseAdmin()
   const clientIp = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || 'unknown'
-  const { action } = req.query
+  const action = String(req.query.action || req.body?.action || '').trim()
 
   try {
+    // ── GESTION DES NOTIFICATIONS PUSH CONCEPTEUR (INTÉGRÉE) ───────────────
+    if (action === 'vapid_public_key' || (req.query.channel === 'push' && req.method === 'GET' && !action)) {
+      return res.status(200).json({ success: true, publicKey: VAPID_PUBLIC_KEY })
+    }
+
+    if (action === 'subscribe' && req.method === 'POST') {
+      const { subscription, deviceName } = req.body || {}
+      const userAgent = req.headers['user-agent'] || 'Appareil mobile'
+      const result = await saveCreatorSubscription(sb, subscription, {
+        userAgent,
+        deviceName: deviceName || 'Téléphone Concepteur',
+        ip: clientIp,
+      })
+      if (!result.success) return res.status(400).json(result)
+      return res.status(200).json({
+        success: true,
+        message: 'Appareil enregistré avec succès pour les notifications push.',
+      })
+    }
+
+    if (action === 'unsubscribe' && req.method === 'POST') {
+      const { endpoint } = req.body || {}
+      if (!endpoint) return res.status(400).json({ success: false, error: 'Endpoint obligatoire.' })
+      await removeCreatorSubscription(sb, endpoint)
+      return res.status(200).json({ success: true, message: 'Appareil désabonné avec succès.' })
+    }
+
+    if (action === 'test' && req.method === 'POST') {
+      const testResult = await sendTestPushToCreator(sb)
+      if (!testResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: testResult.error || "Échec de l'envoi du test.",
+        })
+      }
+      return res.status(200).json({
+        success: true,
+        message: `Notification Push de test envoyée avec succès sur ${testResult.sentCount} appareil(s) !`,
+        sentCount: testResult.sentCount,
+      })
+    }
+
+    if (action === 'status' && (req.query.channel === 'push' || req.method === 'GET')) {
+      const subscriptions = await getCreatorSubscriptions(sb)
+      return res.status(200).json({
+        success: true,
+        deviceCount: subscriptions.length,
+        devices: subscriptions.map((s) => ({
+          deviceName: s.device_name,
+          createdAt: s.created_at,
+          userAgent: s.user_agent,
+        })),
+      })
+    }
+
+    if (action === 'history' && (req.query.channel === 'push' || req.method === 'GET')) {
+      const history = await getNotificationHistory(sb, 30)
+      return res.status(200).json({ success: true, history })
+    }
+
     // ── STATISTIQUES GLOBALES ──────────────────────────────────────────────
     if (action === 'stats') {
       const [companiesRes, salesRes, expensesRes, usersRes] = await Promise.all([

@@ -36,6 +36,26 @@
       "destination": "/api/feedback"
     },
     {
+      "source": "/api/admin-push",
+      "destination": "/api/admin-data"
+    },
+    {
+      "source": "/api/test-email",
+      "destination": "/api/send-rapport-pdf?action=test-email"
+    },
+    {
+      "source": "/api/cron-rapport-caisse",
+      "destination": "/api/send-rapport-pdf?action=cron"
+    },
+    {
+      "source": "/api/sector-request",
+      "destination": "/api/company-clear-sector?action=sector-request"
+    },
+    {
+      "source": "/api/verify-access",
+      "destination": "/api/company-clear-sector?action=verify-access"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

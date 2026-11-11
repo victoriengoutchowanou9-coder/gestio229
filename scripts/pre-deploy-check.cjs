@@ -156,6 +156,25 @@ try {
   hasCriticalErrors = true;
 }
 
+// ─── 6. CONTRÔLE DU QUOTA SERVERLESS FUNCTIONS VERCEL (HOBBY LIMIT <= 12) ───
+console.log('\n🔍 [6/6] Contrôle du quota Serverless Functions Vercel (Hobby limit <= 12)...');
+try {
+  const apiDir = path.resolve('api');
+  if (fs.existsSync(apiDir)) {
+    const apiFiles = fs.readdirSync(apiDir).filter((f) => (f.endsWith('.ts') || f.endsWith('.js')) && !f.startsWith('_'));
+    if (apiFiles.length > 12) {
+      console.error(`❌ ERREUR CRITIQUE VERCEL : ${apiFiles.length} fonctions Serverless détectées dans api/ !`);
+      console.error('   Le forfait Vercel Hobby autorise au maximum 12 fonctions Serverless par déploiement.');
+      hasCriticalErrors = true;
+    } else {
+      console.log(`✅ Quota Serverless validé : ${apiFiles.length}/12 fonctions actives (conforme forfait Hobby Vercel).`);
+    }
+  }
+} catch (err) {
+  console.error('❌ Erreur lors du contrôle des fonctions Serverless :', err.message);
+  hasCriticalErrors = true;
+}
+
 // ─── DÉCISION FINALE DE PUBLICATION ──────────────────────────────────────────
 console.log('\n----------------------------------------------------------------');
 if (hasCriticalErrors) {

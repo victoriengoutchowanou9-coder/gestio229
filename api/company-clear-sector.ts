@@ -35,6 +35,109 @@ function canonicalSectorSlug(slug?: string | null): string {
   return clean
 }
 
+
+// ── INTÉGRATION DE SECTOR-REQUEST & VERIFY-ACCESS ────────────────────────────
+async function handleSectorRequest(req: VercelRequest, res: VercelResponse, sb: any) {
+  const {
+    company_id,
+    company_name,
+    user_id,
+    user_email,
+    user_phone,
+    requested_sectors,
+    requested_modules,
+    reason,
+    business_details
+  } = req.body || {}
+
+  if (!company_id) {
+    return res.status(400).json({ success: false, error: 'Identifiant d\’entreprise requis.' })
+  }
+
+  const sectors: string[] = Array.isArray(requested_sectors)
+    ? requested_sectors
+    : typeof requested_sectors === 'string' && requested_sectors
+    ? [requested_sectors]
+    : []
+
+  if (sectors.length === 0) {
+    return res.status(400).json({ success: false, error: 'Veuillez préciser le(s) secteur(s) souhaité(s).' })
+  }
+
+  try {
+    const { data: request, error: reqErr } = await sb
+      .from('sector_access_requests')
+      .insert({
+        company_id,
+        company_name: company_name || 'Entreprise',
+        user_id: user_id || null,
+        user_email: user_email || '',
+        user_phone: user_phone || '',
+        requested_sectors: sectors,
+        requested_modules: Array.isArray(requested_modules) ? requested_modules : [],
+        reason: reason || 'Demande d\’extension multi-activités',
+        business_details: business_details || '',
+        status: 'pending',
+      })
+      .select()
+      .single()
+
+    if (reqErr) throw reqErr
+
+    try {
+      await sb.from('admin_audit_logs').insert({
+        admin_username: 'Système Demandes',
+        action: 'DEMANDE_ACCES_MULTISECTEUR',
+        company_id,
+        company_name: company_name || '',
+        result: 'info',
+        details: { requestId: request?.id, requested_sectors: sectors, email: user_email, reason }
+      })
+    } catch (_) {}
+
+    return res.status(200).json({
+      success: true,
+      message: 'Votre demande d\’accès multi-secteur a été transmise au Super Administrateur.',
+      requestId: request?.id,
+    })
+  } catch (err: any) {
+    console.error('[SectorRequest] Erreur:', err.message)
+    return res.status(500).json({ success: false, error: 'Erreur lors de l\’envoi de votre demande.' })
+  }
+}
+
+async function handleVerifyAccess(req: VercelRequest, res: VercelResponse, sb: any, clientIp: string) {
+  const { userId, userEmail, companyId, targetSector, targetModule } = req.body || {}
+  try {
+    const { data: company, error: compErr } = await sb
+      .from('companies')
+      .select('id, name, subscription_status, is_active')
+      .eq('id', companyId)
+      .maybeSingle()
+
+    if (compErr || !company) {
+      return res.status(403).json({ success: false, code: 'COMPANY_NOT_FOUND', error: 'Entreprise introuvable.' })
+    }
+
+    if (!company.is_active) {
+      return res.status(403).json({ success: false, code: 'COMPANY_SUSPENDED', error: 'Entreprise suspendue.' })
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        companyId: company.id,
+        companyName: company.name,
+        role: 'administrateur',
+        subStatus: company.subscription_status,
+        ip: clientIp,
+      }
+    })
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err.message || 'Erreur serveur.' })
+  }
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   // CORS configuration
   res.setHeader('Access-Control-Allow-Origin', '*')
@@ -51,6 +154,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const clientIp = (req.headers['x-forwarded-for'] as string) || req.socket?.remoteAddress || 'unknown'
   const sb = getSupabaseAdmin()
+  const actionParam = String(req.query?.action || req.body?.action || '').trim()
+  const isSectorRequest = actionParam === 'sector-request' || (req.url && req.url.includes('sector-request'))
+  const isVerifyAccess = actionParam === 'verify-access' || (req.url && req.url.includes('verify-access'))
+
+  if (isSectorRequest) {
+    return handleSectorRequest(req, res, sb)
+  }
+  if (isVerifyAccess) {
+    return handleVerifyAccess(req, res, sb, clientIp)
+  }
+
 
   try {
     const { company_id, activity_id, sector_slug, confirmation_name } = req.body || {}
