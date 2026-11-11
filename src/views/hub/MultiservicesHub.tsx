@@ -30,6 +30,7 @@ import {
   Droplets,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
+import { ClearSectorModal } from '../../components/hub/ClearSectorModal';
 import { supabase } from '../../lib/supabase';
 import { fetchHubFinancialMetrics, HubFinancialTotals, StationSectorFinancials, SectorMetrics } from '../../services/hubFinancialService';
 import { useUIStore } from '../../store/uiStore';
@@ -244,6 +245,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   // Double confirmation suppression
   const [deleteStep1, setDeleteStep1] = useState<ActivityEntry | null>(null);
   const [deleteStep2, setDeleteStep2] = useState<ActivityEntry | null>(null);
+  // Vider les données d'un secteur (remise à zéro propre)
+  const [clearSectorTarget, setClearSectorTarget] = useState<ActivityEntry | null>(null);
 
   // Formulaire add/edit
   const [form, setForm] = useState(EMPTY_FORM);
@@ -1723,12 +1726,32 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
                             </div>
                           </div>
 
-                          {/* Badge de Souscription (Règle 6 : Inclus dans global J-X ou Essai individuel J-X en vert) */}
-                          <span
-                            className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider border shadow-sm ${badgeInfo.badgeClass}`}
-                          >
-                            {badgeInfo.label}
-                          </span>
+                          {/* Coin supérieur droit : Badge de Souscription & Bouton Vider le secteur */}
+                          <div className="flex flex-col items-end gap-1.5 shrink-0">
+                            <span
+                              className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider border shadow-sm ${badgeInfo.badgeClass}`}
+                            >
+                              {badgeInfo.label}
+                            </span>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setClearSectorTarget(act);
+                                }}
+                                title={`Vider les données opérationnelles du secteur ${act.name}`}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-medium transition-all border ${
+                                  darkMode
+                                    ? 'text-slate-400 hover:text-amber-300 bg-slate-800/80 hover:bg-amber-950/40 border-slate-700/60 hover:border-amber-700/50'
+                                    : 'text-slate-500 hover:text-amber-700 bg-slate-100/90 hover:bg-amber-50 border-slate-200 hover:border-amber-300'
+                                }`}
+                              >
+                                <Trash2 size={10} className="shrink-0" />
+                                <span>Vider le secteur</span>
+                              </button>
+                            )}
+                          </div>
                         </div>
 
                         <div className={`text-[11px] mb-4 flex items-center justify-between ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
@@ -2223,6 +2246,21 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           companyId={companyId}
           onClose={() => setActivationModalData(null)}
           onActivated={handleSectorActivated}
+        />
+      )}
+
+      {/* ══ MODAL VIDER LE SECTEUR (REMISE À ZÉRO PROPRE DES DONNÉES) ═══════ */}
+      {clearSectorTarget && (
+        <ClearSectorModal
+          isOpen={Boolean(clearSectorTarget)}
+          activity={clearSectorTarget}
+          companyId={companyId}
+          darkMode={darkMode}
+          onClose={() => setClearSectorTarget(null)}
+          onSuccess={() => {
+            loadFinancialMetrics();
+            loadActivitiesFromSupabase();
+          }}
         />
       )}
 
