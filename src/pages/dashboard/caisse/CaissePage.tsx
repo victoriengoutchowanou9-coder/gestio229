@@ -15,7 +15,7 @@ import {
   Wallet, Plus, X, CheckCircle, Clock, TrendingUp, TrendingDown,
   Lock, Unlock, Shield, ArrowUpRight, Smartphone, RefreshCw, AlertCircle,
   Printer, Send, FileCheck, Check, ArrowRightLeft, FileText, History, Building2, Download, Mail,
-  Receipt, Trash2, Eye, CreditCard, Users
+  Receipt, Trash2, Eye, CreditCard, Users, ShieldAlert
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -41,13 +41,15 @@ import {
   enregistrerMouvementCaisse,
   getFondsActuelsBySector,
   getCaisseJournaliereBySector,
-  cloturerCaisseOfficielle
+  cloturerCaisseOfficielle,
+  checkSectorCaisseStatus
 } from '../../../services/caisseSectorService'
 import ClotureCaisse from './ClotureCaisse'
 import { useAppContext } from '../../../contexts/AppContext'
 import { useSalesCircuitConfig } from '../../../hooks/useSalesCircuitConfig'
 import {
   fetchPendingBons,
+  fetchPendingBonsImprimerie,
   encaisserBonDeCommande,
   annulerBonDeCommande,
   isOrderEligibleForCollection,
@@ -115,7 +117,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const { company, user } = useAuthStore()
   const { toast } = useUIStore()
   const navigate = useNavigate()
-  const { companyId, sectorSlug: tenantSectorSlug, supabaseTenant } = useTenant()
+  const { companyId, sectorSlug: tenantSectorSlug, supabaseTenant, assignedSectorSlug, isAdmin: isTenantAdmin } = useTenant()
   const params = useParams<{ sectorSlug?: string; sectorKey?: string; companyId?: string }>()
   const rawSector = sector_key || sectorKey || params.sectorKey || tenantSectorSlug || params.sectorSlug || getActiveSectorSlug()
   const currentSectorSlug = cleanSectorSlug(rawSector)
@@ -240,7 +242,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   // Droits d'accès d'administration (Rapport par Email & Gestion Destinataires)
   const userRole = ((user?.role || '') as string).toLowerCase()
-  const isAdminOrManager = ['admin', 'administrateur', 'super_admin', 'dirigeant', 'gerant', 'patron'].includes(userRole)
+  const isAdminOrManager = isTenantAdmin || ['admin', 'administrateur', 'super_admin', 'dirigeant', 'gerant', 'patron'].includes(userRole)
+  const isSectorAuthorized = isAdminOrManager || !assignedSectorSlug || assignedSectorSlug === currentSectorSlug
 
   // Saisie ouverture (calculée automatiquement - non modifiable par l'utilisateur)
   const [openInputCash, setOpenInputCash] = useState<number>(0)
@@ -271,116 +274,70 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     caisseStateRef.current = { caisseStatus, openedAt, activeSessionId, cashRegisterId }
   }, [caisseStatus, openedAt, activeSessionId, cashRegisterId])
 
-  // Chargement strict des sessions (détection session antérieure et session du jour)
+  // Chargement strict des sessions (source unique de vérité issue de Supabase)
   const loadSessions = useCallback(async () => {
     const compId = currentCompanyId || company?.id
     if (!compId) return
 
-    const todayStr = new Date().toISOString().split('T')[0]
-    const targetCaisseId = caisseStateRef.current.cashRegisterId || caisseActive?.id
-
-    let anterieure: any = null
-
-    // 1. Chercher session antérieure OUVERTE (date_ouverture < aujourd'hui) dans caisse_sessions
     try {
-      let q2 = supabase
-        .from('caisse_sessions')
-        .select('*')
-        .eq('company_id', compId)
-        .in('statut', ['ouverte', 'open'])
-        .is('date_fermeture', null)
-        .order('date_ouverture', { ascending: false })
-        .limit(10)
+      const todayStr = new Date().toISOString().split('T')[0]
+      const statusRes = await checkSectorCaisseStatus(compId, currentSectorSlug)
 
-      if (targetCaisseId) {
-        q2 = q2.eq('caisse_id', targetCaisseId)
-      } else if (currentSectorSlug) {
-        q2 = q2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
+      if (statusRes.caisse?.id) {
+        setCashRegisterId(statusRes.caisse.id)
       }
 
-      const { data: csList } = await q2
-      if (csList && csList.length > 0) {
-        const found = csList.find((s: any) => {
-          const sDate = (s.date_ouverture || '').split('T')[0]
-          return sDate && sDate < todayStr
-        })
-        if (found) {
-          anterieure = found
+      if (statusRes.statusType === 'ANTERIEURE_OUVERTE' && statusRes.session) {
+        setSessionAnterieureOuverte(statusRes.session)
+        setSessionDuJour(null)
+        setCaisseStatus('OUVERTE')
+        setOpenedAt(statusRes.session.date_ouverture)
+        setOpenedBy(statusRes.ouvertParNom || 'Caissier')
+        setActiveSessionId(statusRes.session.id)
+        setInitialCash(Number(statusRes.session.fond_ouverture_especes) || 0)
+        setInitialMomo(Number(statusRes.session.fond_actuel_momo ?? statusRes.session.fond_ouverture_momo) || 0)
+      } else if (statusRes.statusType === 'OUVERTE_AUJOURDHUI' && statusRes.session) {
+        setSessionAnterieureOuverte(null)
+        setSessionDuJour(statusRes.session)
+        setCaisseStatus('OUVERTE')
+        setOpenedAt(statusRes.session.date_ouverture)
+        setOpenedBy(statusRes.ouvertParNom || 'Caissier')
+        setActiveSessionId(statusRes.session.id)
+        setInitialCash(Number(statusRes.session.fond_ouverture_especes) || 0)
+        setInitialMomo(Number(statusRes.session.fond_actuel_momo ?? statusRes.session.fond_ouverture_momo) || 0)
+      } else {
+        // Caisse fermée
+        setSessionAnterieureOuverte(null)
+        setCaisseStatus('FERMEE')
+        setOpenedAt(null)
+        setActiveSessionId(null)
+
+        // Chercher une clôture du jour archivée si elle existe pour l'historique du jour
+        try {
+          const { data: closedToday } = await supabase
+            .from('caisse_sessions')
+            .select('*')
+            .eq('company_id', compId)
+            .or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
+            .in('statut', ['fermee', 'fermée', 'cloturee', 'closed'])
+            .gte('date_ouverture', todayStr + 'T00:00:00')
+            .order('date_fermeture', { ascending: false })
+            .limit(1)
+            .maybeSingle()
+
+          setSessionDuJour(closedToday || null)
+        } catch (_) {
+          setSessionDuJour(null)
         }
       }
-    } catch (_) {}
-
-    // Fallback dans caisses (si statut encore 'ouverte' avec date_ouverture antérieure)
-    if (!anterieure && targetCaisseId) {
-      try {
-        const { data: cData } = await supabase
-          .from('caisses')
-          .select('*')
-          .eq('id', targetCaisseId)
-          .maybeSingle()
-
-        if (cData && (cData.statut === 'ouverte' || cData.statut === 'open') && !cData.date_fermeture) {
-          const cDate = (cData.date_ouverture || '').split('T')[0]
-          if (cDate && cDate < todayStr) {
-            anterieure = {
-              id: cData.id,
-              caisse_id: cData.id,
-              company_id: compId,
-              date_ouverture: cData.date_ouverture,
-              statut: 'ouverte',
-              ouvert_par_nom: cData.ouvert_par || 'Caissier'
-            }
-          }
-        }
-      } catch (_) {}
+    } catch (err) {
+      console.warn('[CaissePage] Erreur synchronisation loadSessions:', err)
     }
-
-    setSessionAnterieureOuverte(anterieure || null)
-
-    // 2. Chercher session du jour (date_ouverture = aujourd'hui)
-    let duJour: any = null
-    try {
-      let qJ2 = supabase
-        .from('caisse_sessions')
-        .select('*')
-        .eq('company_id', compId)
-        .gte('date_ouverture', todayStr + 'T00:00:00')
-        .order('date_ouverture', { ascending: false })
-        .limit(1)
-
-      if (targetCaisseId) {
-        qJ2 = qJ2.eq('caisse_id', targetCaisseId)
-      } else if (currentSectorSlug) {
-        qJ2 = qJ2.or(`sector_slug.eq.${currentSectorSlug},secteur_slug.eq.${currentSectorSlug}`)
-      }
-
-      const { data: j2 } = await qJ2.maybeSingle()
-      if (j2) {
-        duJour = j2
-      }
-    } catch (_) {}
-
-    const curStatus = caisseStateRef.current.caisseStatus
-    const curOpenedAt = caisseStateRef.current.openedAt
-    const curActiveId = caisseStateRef.current.activeSessionId
-
-    if (!duJour && curStatus === 'OUVERTE' && curOpenedAt && curActiveId) {
-      const opDateStr = curOpenedAt.split('T')[0]
-      if (opDateStr === todayStr && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(curActiveId)) {
-        duJour = {
-          id: curActiveId,
-          statut: 'ouverte',
-          date_ouverture: todayStr
-        }
-      }
-    }
-
-    setSessionDuJour(duJour || null)
-  }, [currentCompanyId, company?.id, caisseActive?.id, secteurActif?.id, currentSectorSlug])
+  }, [currentCompanyId, company?.id, currentSectorSlug])
 
   useEffect(() => {
     loadSessions()
-  }, [secteurActif?.id, caisseActive?.id, currentSectorSlug, loadSessions])
+  }, [loadSessions])
 
   // Vérifier si la session a été ouverte un jour précédent et jamais clôturée
   const isPreviousDaySession = useMemo(() => {
@@ -406,15 +363,24 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     if (!compId) return
     try {
       setLoadingBonsEnAttente(true)
-      const [list, custRes] = await Promise.all([
+      const [list, impList, custRes] = await Promise.all([
         fetchPendingBons(compId, currentSectorSlug),
+        fetchPendingBonsImprimerie(compId, currentSectorSlug),
         supabase
           .from('customers')
           .select('id, code, name, phone, current_debt, credit_limit, credit_authorized, is_active, sector_slug')
           .eq('company_id', compId)
           .order('name')
       ])
-      setBonsEnAttente(list)
+      // Fusionner les bons sales_orders + imprimerie_commandes (dédoublonnés par id)
+      const allBons = [...list]
+      const existingIds = new Set(list.map((b: any) => b.id))
+      for (const impBon of impList) {
+        if (!existingIds.has(impBon.id)) {
+          allBons.push(impBon)
+        }
+      }
+      setBonsEnAttente(allBons)
       if (!custRes.error && custRes.data) {
         const filteredCusts = filterItemsForSector(custRes.data, currentSectorSlug).filter((c: any) => c.is_active !== false)
         setSectorCustomers(filteredCusts)
@@ -620,16 +586,16 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           setCashRegisterId(prev => (prev === sectorCaisse.id ? prev : sectorCaisse.id))
         }
 
-        // Vérifier si une session/caisse est ouverte pour ce secteur
-        const activeCaisse = await getActiveCaisse(currentCompanyId, currentSectorSlug)
-        if (activeCaisse) {
-          setActiveSessionId(prev => (prev === activeCaisse.id ? prev : activeCaisse.id))
+        // Vérifier si une session/caisse est ouverte pour ce secteur (source unique Supabase)
+        const statusRes = await checkSectorCaisseStatus(currentCompanyId, currentSectorSlug)
+        if (statusRes.session && (statusRes.statusType === 'OUVERTE_AUJOURDHUI' || statusRes.statusType === 'ANTERIEURE_OUVERTE')) {
+          setActiveSessionId(prev => (prev === statusRes.session!.id ? prev : statusRes.session!.id))
           setCaisseStatus(prev => (prev === 'OUVERTE' ? prev : 'OUVERTE'))
-          const newOpAt = activeCaisse.date_ouverture || activeCaisse.opened_at
+          const newOpAt = statusRes.session.date_ouverture
           setOpenedAt(prev => (prev === newOpAt ? prev : newOpAt))
-          setOpenedBy(activeCaisse.ouvert_par || user?.full_name || 'Caissier')
-          setInitialCash(Number(activeCaisse.fond_ouverture_especes ?? (activeCaisse as any).opening_cash) || 0)
-          setInitialMomo(Number(activeCaisse.fond_ouverture_momo ?? (activeCaisse as any).opening_momo) || 0)
+          setOpenedBy(statusRes.ouvertParNom || user?.full_name || 'Caissier')
+          setInitialCash(Number(statusRes.session.fond_ouverture_especes) || 0)
+          setInitialMomo(Number(statusRes.session.fond_actuel_momo ?? statusRes.session.fond_ouverture_momo) || 0)
         } else {
           setActiveSessionId(prev => (prev === null ? prev : null))
           setCaisseStatus(prev => (prev === 'FERMEE' ? prev : 'FERMEE'))
@@ -992,6 +958,65 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   useEffect(() => {
     loadCaisseData()
   }, [loadCaisseData])
+
+  // ─── Synchronisation Temps Réel Supabase (Admin <-> Caissier) ──────────────
+  useEffect(() => {
+    const compId = currentCompanyId || company?.id
+    if (!compId) return
+
+    // Nettoyage préventif de toute clé locale non isolée
+    try {
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(`gestio_caisse_active_${currentSectorSlug}`)
+        localStorage.removeItem('active_caisse_session')
+      }
+    } catch (_) {}
+
+    const channelName = `caisse_realtime_${compId}_${currentSectorSlug}`
+    let debounceTimer: any = null
+
+    const triggerSync = (originTable: string) => {
+      console.log(`[REALTIME-CAISSE] Modification détectée sur ${originTable}, synchronisation immédiate...`)
+      if (debounceTimer) clearTimeout(debounceTimer)
+      debounceTimer = setTimeout(() => {
+        loadSessions()
+        loadCaisseData()
+        loadBonsEnAttente()
+        if (typeof refreshFonds === 'function') {
+          refreshFonds().catch(() => {})
+        }
+      }, 250)
+    }
+
+    const channel = supabase
+      .channel(channelName)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'caisse_sessions', filter: `company_id=eq.${compId}` }, () => triggerSync('caisse_sessions'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'caisses', filter: `company_id=eq.${compId}` }, () => triggerSync('caisses'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'caisse_mouvements', filter: `company_id=eq.${compId}` }, () => triggerSync('caisse_mouvements'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_orders', filter: `company_id=eq.${compId}` }, () => triggerSync('sales_orders'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'demandes_retrait', filter: `company_id=eq.${compId}` }, () => triggerSync('demandes_retrait'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'clotures_caisse', filter: `company_id=eq.${compId}` }, () => triggerSync('clotures_caisse'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'caisse_clotures', filter: `company_id=eq.${compId}` }, () => triggerSync('caisse_clotures'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'fonds_actuels', filter: `company_id=eq.${compId}` }, () => triggerSync('fonds_actuels'))
+      .subscribe()
+
+    // Rechargement immédiat lors du retour sur l'onglet ou reconnexion
+    const handleWindowFocus = () => {
+      loadSessions()
+      loadCaisseData()
+      loadBonsEnAttente()
+    }
+
+    window.addEventListener('focus', handleWindowFocus)
+    window.addEventListener('online', handleWindowFocus)
+
+    return () => {
+      if (debounceTimer) clearTimeout(debounceTimer)
+      window.removeEventListener('focus', handleWindowFocus)
+      window.removeEventListener('online', handleWindowFocus)
+      supabase.removeChannel(channel)
+    }
+  }, [currentCompanyId, company?.id, currentSectorSlug, loadSessions, loadCaisseData, loadBonsEnAttente, refreshFonds])
 
   // ─── Indicateurs Spéciaux pour Rapport PDF & Email ──────────────────────────
   const margeBruteJour = useMemo(() => {
@@ -2135,6 +2160,10 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   // ─── Action : Ouvrir la Caisse du Jour ──────────────────────────────────────
   const handleOuvrirCaisseJour = async () => {
+    if (!isSectorAuthorized) {
+      toast.error('Accès refusé', `Votre compte est affecté au secteur ${assignedSectorSlug?.toUpperCase()}. Vous ne pouvez pas ouvrir la caisse du secteur ${currentSectorSlug.toUpperCase()}.`)
+      return
+    }
     if (sessionAnterieureOuverte) {
       toast.error('Session antérieure non clôturée', 'Vous devez d\'abord clôturer la session antérieure.')
       return
@@ -2147,6 +2176,19 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   return (
     <div className="space-y-6 animate-fadeIn">
+      {/* ── ALERTE : CONFINEMENT SECTORIEL (UTILISATEUR ASSIGNÉ À UN AUTRE SECTEUR) ── */}
+      {!isSectorAuthorized && assignedSectorSlug && (
+        <div className="p-4 bg-amber-50 border-2 border-amber-300 rounded-3xl flex items-center gap-3 text-amber-900 shadow-sm animate-in fade-in">
+          <ShieldAlert className="w-6 h-6 text-amber-600 flex-shrink-0" />
+          <div>
+            <p className="font-black text-sm">Confinement Sectoriel Actif &bull; Mode Consultation</p>
+            <p className="text-xs text-amber-800 mt-0.5">
+              Votre compte est affecté au secteur <strong>{assignedSectorSlug.toUpperCase()}</strong>. Vous consultez la caisse du secteur <strong>{currentSectorSlug.toUpperCase()}</strong> en lecture seule. Les opérations de caisse sont verrouillées sur ce secteur.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* ── ALERTE : SESSION DU JOUR PRÉCÉDENT NON CLÔTURÉE (BANDEAU ORANGE) ── */}
       {sessionAnterieureOuverte ? (
         <div className="p-4 bg-orange-50 border-2 border-orange-300 rounded-3xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-orange-900 shadow-sm animate-in fade-in">
@@ -2161,13 +2203,13 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           </div>
           <button
             onClick={handleCloturerHier}
-            disabled={loading}
+            disabled={loading || !isSectorAuthorized}
             className="px-4 py-2 bg-orange-600 hover:bg-orange-700 text-white rounded-xl text-xs font-bold transition flex-shrink-0 shadow-sm flex items-center gap-1.5 disabled:opacity-50"
           >
             <Lock className="w-3.5 h-3.5" /> Clôturer la caisse d'hier
           </button>
         </div>
-      ) : (!sessionDuJour || sessionDuJour.statut === 'fermée' || sessionDuJour.statut === 'fermee' || caisseStatus === 'FERMEE') ? (
+      ) : (caisseStatus === 'FERMEE' && !sessionAnterieureOuverte) ? (
         <div className="bg-white border-2 border-dashed border-emerald-300 rounded-3xl p-6 flex flex-col sm:flex-row items-center justify-between gap-4 shadow-sm bg-gradient-to-r from-emerald-50/50 to-white">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-2xl bg-emerald-500 text-white flex items-center justify-center font-black shadow-md shadow-emerald-200">
@@ -2260,15 +2302,17 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
         {/* Boutons d'actions principaux */}
         <div className="flex flex-wrap items-center gap-2 no-drag" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
-          {/* Ajustement (Admin / Gérant) */}
-          <button
-            onClick={() => setShowAdjustModal(true)}
-            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
-            title="Modifier manuellement les fonds avec motif d'audit"
-          >
-            <Shield className="w-3.5 h-3.5 text-amber-600" />
-            <span>Ajustement</span>
-          </button>
+          {/* Ajustement (Admin / Gérant uniquement) */}
+          {isAdminOrManager && (
+            <button
+              onClick={() => setShowAdjustModal(true)}
+              className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+              title="Modifier manuellement les fonds avec motif d'audit"
+            >
+              <Shield className="w-3.5 h-3.5 text-amber-600" />
+              <span>Ajustement</span>
+            </button>
+          )}
 
           {/* Bons de commande en attente d'encaissement (Mode Séparé) */}
           <button
@@ -2297,7 +2341,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           {/* Envoyer une demande vers Trésorerie */}
           <button
             onClick={() => setShowWithdrawalModal(true)}
-            disabled={caisseStatus !== 'OUVERTE' || isPreviousDaySession}
+            disabled={caisseStatus !== 'OUVERTE' || isPreviousDaySession || !isSectorAuthorized}
             className="px-3.5 py-2.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-xl text-xs font-bold transition flex items-center gap-1.5 disabled:opacity-50"
           >
             <Send className="w-3.5 h-3.5" />
@@ -2305,7 +2349,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           </button>
 
           {/* Bouton d'état : Ouvrir la Caisse */}
-          {caisseStatus === 'FERMEE' && (
+          {caisseStatus === 'FERMEE' && isSectorAuthorized && (
             <button
               onClick={async () => {
                 if (isPreviousDaySession) {
@@ -2331,7 +2375,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           )}
 
           {/* Bouton CLÔTURER CAISSE (Règle M048) : Visible si du jour > 0 ou session ouverte */}
-          {(especesDuJour + momoDuJour > 0 || caisseStatus === 'OUVERTE') && (
+          {(especesDuJour + momoDuJour > 0 || caisseStatus === 'OUVERTE') && isSectorAuthorized && (
             <button
               onClick={() => {
                 setClosingNotes('')

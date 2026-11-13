@@ -853,17 +853,36 @@ export async function getCurrentCashSession(
     console.warn('[CASH-CHECK] Erreur lecture cash_sessions:', sessErr)
   }
 
-  // 4. Fallback ultime sur le stockage local (session active créée côté client)
+  // 4. Nettoyage proactif des clés locales polluées / non isolées (Sécurité Anti-Fuite Multi-Entreprises)
   try {
-    const localSessStr =
-      localStorage.getItem(`gestio_caisse_active_${cleanSlug}_${companyId}`) ||
-      localStorage.getItem(`gestio_caisse_active_${cleanSlug}`) ||
-      '' /* un-isolated key removed */
+    if (typeof localStorage !== 'undefined') {
+      localStorage.removeItem(`gestio_caisse_active_${cleanSlug}`)
+      localStorage.removeItem('active_caisse_session')
+    }
+  } catch (_) {}
+
+  // 5. Fallback ultime sur le stockage local : STRICTEMENT ISOLÉ PAR (company_id + sector_slug)
+  try {
+    const localSessStr = typeof localStorage !== 'undefined'
+      ? localStorage.getItem(`gestio_caisse_active_${cleanSlug}_${companyId}`)
+      : null
     if (localSessStr) {
       const parsed = JSON.parse(localSessStr)
+      // VÉRIFICATION STRICTE D'APPARTENANCE TENANT (COMPANY_ID)
       if (parsed && (parsed.statut === 'ouverte' || parsed.statut === 'open' || parsed.is_open === true)) {
-        const parsedSlug = (parsed.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '');
-        if (parsedSlug && parsedSlug !== cleanSlug) return null;
+        if (parsed.company_id && parsed.company_id !== companyId) {
+          // Rejeter catégoriquement toute session n'appartenant pas à cette entreprise
+          return null
+        }
+        const parsedSlug = (parsed.sector_slug || '').toLowerCase().trim().replace(/^sec-/, '')
+        if (parsedSlug && parsedSlug !== cleanSlug) return null
+
+        // Si l'application est en ligne et que la base de données n'a rien trouvé,
+        // ne JAMAIS ressusciter artificiellement une session obsolète !
+        if (typeof navigator !== 'undefined' && navigator.onLine) {
+          return null
+        }
+
         const openDate = new Date(parsed.date_ouverture || Date.now())
         const isDiffDate =
           openDate.getFullYear() !== now.getFullYear() ||
@@ -873,7 +892,7 @@ export async function getCurrentCashSession(
           ? openDate.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
           : '--:--'
 
-        console.log('[CASH-CHECK] Session active restaurée depuis localStorage pour:', cleanSlug)
+        console.log('[CASH-CHECK] Session active restaurée hors-ligne depuis localStorage isolé pour:', cleanSlug)
         return {
           id: parsed.id || parsed.caisse_id || 'local-sess',
           caisse_id: parsed.caisse_id || parsed.id || 'local-caisse',

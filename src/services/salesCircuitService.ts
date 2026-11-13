@@ -436,6 +436,91 @@ export async function fetchPendingBons(companyId: string, sectorSlug?: string): 
   }
 }
 
+// ─── 3.bis RÉCUPÉRATION DES BONS IMPRIMERIE EN ATTENTE D'ENCAISSEMENT ─────────
+
+/**
+ * Charge les commandes imprimerie non soldées pour le secteur imprimerie/sérigraphie.
+ * Convertit les commandes imprimerie en PendingBon[] pour la CaissePage.
+ */
+export async function fetchPendingBonsImprimerie(companyId: string, sectorSlug: string): Promise<PendingBon[]> {
+  if (!companyId) return []
+  const clean = normalizeCircuitSectorSlug(sectorSlug)
+  if (clean !== 'imprimerie' && clean !== 'serigraphie' && clean !== 'impression') return []
+
+  try {
+    const { data, error } = await supabase
+      .from('imprimerie_commandes')
+      .select('*, lignes:imprimerie_commande_lignes(*)')
+      .eq('company_id', companyId)
+      .eq('sector_slug', clean)
+      .or('statut_paiement.eq.non_paye,statut_paiement.eq.acompte,statut_paiement.eq.credit')
+      .not('statut', 'eq', 'annule')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.error('[salesCircuitService] Erreur fetchPendingBonsImprimerie:', error)
+      return []
+    }
+
+    // Filtrer : ne garder que celles avec un solde > 0
+    const pending = (data || []).filter((cmd: any) => {
+      const solde = Number(cmd.solde_restant ?? (Number(cmd.total_ttc || 0) - Number(cmd.montant_paye || 0)))
+      return solde > 0
+    })
+
+    return pending.map((cmd: any) => {
+      const totalTtc = Number(cmd.total_ttc || 0)
+      const montantPaye = Number(cmd.montant_paye || 0)
+      const soldeRestant = Math.max(0, totalTtc - montantPaye)
+
+      // Construire les items depuis les lignes de commande
+      const items: PendingBonItem[] = (cmd.lignes || []).map((l: any) => ({
+        product_id: l.prestation_id || '',
+        product_code: '',
+        product_name: l.designation || 'Prestation',
+        unit: l.mode_calcul === 'm2' ? 'm²' : 'u',
+        quantity: Number(l.quantite || 1),
+        unit_price: Number(l.prix_unitaire || 0),
+        discount: 0,
+        tva_rate: 0,
+        total_ht: Number(l.montant_ttc || 0),
+        total_ttc: Number(l.montant_ttc || 0),
+        unit_cost: 0,
+        coef: 1,
+        is_recipe: false
+      }))
+
+      return {
+        id: cmd.id,
+        order_number: cmd.numero_commande || 'CMD-IMP',
+        company_id: cmd.company_id,
+        sector_slug: cmd.sector_slug,
+        customer_id: cmd.client_id || null,
+        customer_name: cmd.client_nom || 'Client Comptoir',
+        seller_id: null,
+        seller_name: cmd.titre_travail || 'Imprimerie',
+        created_at: cmd.created_at || cmd.date_commande,
+        subtotal_ht: totalTtc,
+        tva_amount: 0,
+        aib_amount: 0,
+        discount_total: 0,
+        total_amount: totalTtc,
+        paid_amount: montantPaye,
+        credit_amount: 0,
+        remaining_balance: soldeRestant,
+        payment_status: cmd.statut_paiement || 'en_attente',
+        status: 'pending_cashier',
+        notes: { source_module: 'imprimerie', commande_id: cmd.id, statut_commande: cmd.statut },
+        items,
+        stock_already_deducted: ['livre', 'termine', 'en_finition'].includes(cmd.statut)
+      } as PendingBon
+    })
+  } catch (err) {
+    console.error('[salesCircuitService] Exception fetchPendingBonsImprimerie:', err)
+    return []
+  }
+}
+
 // ─── 4. CRÉATION ET TRANSMISSION D'UN BON PAR LE VENDEUR (MODE SÉPARÉ) ────────
 
 export interface TransmitBonParams {

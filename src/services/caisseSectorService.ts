@@ -78,80 +78,96 @@ export function cleanSectorSlug(slug?: string | null): string {
 /**
  * Récupère ou génère automatiquement la caisse dédiée du secteur pour cette entreprise
  */
+// Dduplication en vol pour viter toute condition de concurrence (race condition) crant des caisses doublons
+const inFlightSectorCaisse = new Map<string, Promise<CaisseEntity | null>>()
+
 export async function getOrCreateSectorCaisse(
   companyId: string,
   sectorSlug: string
 ): Promise<CaisseEntity | null> {
   if (!companyId) return null
   const clean = cleanSectorSlug(sectorSlug)
+  const cacheKey = `${companyId}:${clean}`
 
-  const eqSlugs = [clean, sectorSlug.toLowerCase().trim().replace(/^sec-/, '')]
-  if (clean === 'imprimerie' || clean === 'impression') eqSlugs.push('imprimerie', 'impression')
-  if (clean === 'station' || clean === 'station-service') eqSlugs.push('station', 'station-service')
-  if (clean === 'immobilier' || clean === 'location' || clean === 'locatif' || clean === 'locative') eqSlugs.push('immobilier', 'location', 'locatif', 'locative')
-  if (clean === 'agrobusiness' || clean === 'agro') eqSlugs.push('agrobusiness', 'agro')
-  if (clean === 'cosmetiques' || clean === 'cosmetique') eqSlugs.push('cosmetiques', 'cosmetique')
-  const uniqueEq = Array.from(new Set(eqSlugs)).filter(Boolean)
-  const orFilter = uniqueEq.map((s) => `sector_slug.eq.${s},secteur_slug.eq.${s}`).join(',')
+  if (inFlightSectorCaisse.has(cacheKey)) {
+    return inFlightSectorCaisse.get(cacheKey)!
+  }
 
-  try {
-    // 1. Chercher la caisse existante pour ce secteur
-    const { data: existing, error } = await supabase
-      .from('caisses')
-      .select('*')
-      .eq('company_id', companyId)
-      .or(orFilter)
-      .order('created_at', { ascending: true })
-      .limit(1)
+  const promise = (async (): Promise<CaisseEntity | null> => {
+    const eqSlugs = [clean, sectorSlug.toLowerCase().trim().replace(/^sec-/, '')]
+    if (clean === 'imprimerie' || clean === 'impression') eqSlugs.push('imprimerie', 'impression')
+    if (clean === 'station' || clean === 'station-service') eqSlugs.push('station', 'station-service')
+    if (clean === 'immobilier' || clean === 'location' || clean === 'locatif' || clean === 'locative') eqSlugs.push('immobilier', 'location', 'locatif', 'locative')
+    if (clean === 'agrobusiness' || clean === 'agro') eqSlugs.push('agrobusiness', 'agro')
+    if (clean === 'cosmetiques' || clean === 'cosmetique') eqSlugs.push('cosmetiques', 'cosmetique')
+    const uniqueEq = Array.from(new Set(eqSlugs)).filter(Boolean)
+    const orFilter = uniqueEq.map((s) => `sector_slug.eq.${s},secteur_slug.eq.${s}`).join(',')
 
-    if (!error && existing && existing.length > 0) {
-      return existing[0] as CaisseEntity
-    }
-
-    // 2. Si aucune caisse n'existe pour ce secteur, créer la caisse attitrée avec UUID BDD réel
-    const sectorPrefix = clean.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, 'X')
-    const randomSuffix = Math.floor(1000 + Math.random() * 9000)
-    const code = `CS-${sectorPrefix}-${randomSuffix}`
-    const nom = `Caisse ${clean.toUpperCase()}`
-
-    const { data: created, error: createErr } = await supabase
-      .from('caisses')
-      .insert({
-        company_id: companyId,
-        sector_slug: clean,
-        secteur_slug: clean,
-        code,
-        nom,
-        statut: 'fermee',
-        fond_ouverture_especes: 0,
-        fond_ouverture_momo: 0,
-        solde_especes_final: 0,
-      })
-      .select()
-      .maybeSingle()
-
-    if (!createErr && created) {
-      return created as CaisseEntity
-    }
-
-    if (createErr) {
-      console.warn('[CAISSE-SERVICE] Erreur insertion caisse, nouvelle tentative de lecture:', createErr.message)
-      const { data: retryList } = await supabase
+    try {
+      // 1. Chercher la caisse existante pour ce secteur
+      const { data: existing, error } = await supabase
         .from('caisses')
         .select('*')
         .eq('company_id', companyId)
         .or(orFilter)
+        .order('created_at', { ascending: true })
         .limit(1)
 
-      if (retryList && retryList.length > 0) {
-        return retryList[0] as CaisseEntity
+      if (!error && existing && existing.length > 0) {
+        return existing[0] as CaisseEntity
       }
-    }
 
+      // 2. Si aucune caisse n'existe pour ce secteur, créer la caisse attitrée avec UUID BDD réel
+      const sectorPrefix = clean.slice(0, 4).toUpperCase().replace(/[^A-Z]/g, 'X')
+      const randomSuffix = Math.floor(1000 + Math.random() * 9000)
+      const code = `CS-${sectorPrefix}-${randomSuffix}`
+      const nom = `Caisse ${clean.toUpperCase()}`
+
+      const { data: created, error: createErr } = await supabase
+        .from('caisses')
+        .insert({
+          company_id: companyId,
+          sector_slug: clean,
+          secteur_slug: clean,
+          code,
+          nom,
+          statut: 'fermee',
+          fond_ouverture_especes: 0,
+          fond_ouverture_momo: 0,
+          solde_especes_final: 0,
+        })
+        .select()
+        .maybeSingle()
+
+      if (!createErr && created) {
+        return created as CaisseEntity
+      }
+
+      if (createErr) {
+        console.warn('[CAISSE-SERVICE] Erreur insertion caisse, nouvelle tentative de lecture:', createErr.message)
+        const { data: retryList } = await supabase
+          .from('caisses')
+          .select('*')
+          .eq('company_id', companyId)
+          .or(orFilter)
+          .order('created_at', { ascending: true })
+          .limit(1)
+
+        if (retryList && retryList.length > 0) {
+          return retryList[0] as CaisseEntity
+        }
+      }
+    } catch (err) {
+      console.warn('[CAISSE-SERVICE] Exception getOrCreateSectorCaisse:', err)
+    }
     return null
-  } catch (err) {
-    console.warn('[CAISSE-SERVICE] Erreur getOrCreateSectorCaisse:', err)
-    return null
+  })()
+
+  inFlightSectorCaisse.set(cacheKey, promise)
+  try {
+    return await promise
+  } finally {
+    inFlightSectorCaisse.delete(cacheKey)
   }
 }
 
@@ -188,12 +204,13 @@ export async function checkSectorCaisseStatus(
   defaultRes.caisseCode = caisse.code || defaultRes.caisseCode
   defaultRes.caisseNom = caisse.nom || defaultRes.caisseNom
 
-  // 1. Chercher la dernière session ouverte dans caisse_sessions
+  // 1. Chercher la dernière session ouverte dans caisse_sessions (Strictement isolée par company_id et sector_slug)
   try {
     const { data: sessions, error: sessErr } = await supabase
       .from('caisse_sessions')
       .select('*')
-      .eq('caisse_id', caisse.id)
+      .eq('company_id', companyId)
+      .or(`caisse_id.eq.${caisse.id},sector_slug.eq.${clean},secteur_slug.eq.${clean}`)
       .in('statut', ['ouverte', 'open'])
       .is('date_fermeture', null)
       .order('date_ouverture', { ascending: false })
@@ -701,8 +718,8 @@ export async function ouvrirSessionCaisse(
 
     try {
       localStorage.setItem(`gestio_caisse_active_${clean}_${companyId}`, JSON.stringify(newSess))
-      localStorage.setItem(`gestio_caisse_active_${clean}`, JSON.stringify(newSess))
-      /* un-isolated key removed */
+      localStorage.removeItem(`gestio_caisse_active_${clean}`)
+      localStorage.removeItem('active_caisse_session')
     } catch (_) {}
 
     // 3. Mettre à jour l'état de la table caisses (Table maîtresse accessible sans colonnes non reconnues)
