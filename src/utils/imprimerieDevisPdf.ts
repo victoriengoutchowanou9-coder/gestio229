@@ -319,3 +319,245 @@ export function generateDevisPdf(
 
   return { doc, fileName, blobUrl: blobUrl.toString() }
 }
+
+/**
+ * Générateur PDF A4 Professionnel : Facture d'Imprimerie / Bon de Commande Caisse
+ * Imprime proprement la facture avec articles, TVA, acomptes, solde dû sans page blanche.
+ */
+export function generateFactureBonPdf(
+  bon: any,
+  company: DevisCompanyInfo,
+  options?: { action?: 'download' | 'preview' | 'print'; documentTitle?: string }
+): { doc: jsPDF; fileName: string; blobUrl: string } {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  })
+
+  const pageWidth = doc.internal.pageSize.getWidth()
+  const pageHeight = doc.internal.pageSize.getHeight()
+  const margin = 14
+
+  const primaryColor: [number, number, number] = [15, 23, 42]
+  const accentColor: [number, number, number] = [190, 24, 93]
+  const secondaryColor: [number, number, number] = [71, 85, 105]
+  const lightBg: [number, number, number] = [248, 250, 252]
+  const borderColor: [number, number, number] = [226, 232, 240]
+
+  let y = margin
+
+  // Bandeau supérieur accentué
+  doc.setFillColor(...accentColor)
+  doc.rect(margin, y, pageWidth - 2 * margin, 2, 'F')
+  y += 6
+
+  // Nom entreprise
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(16)
+  doc.setTextColor(...primaryColor)
+  const companyName = (company?.name || 'GESTIO 229 IMPRIMERIE').toUpperCase()
+  doc.text(companyName, margin, y + 4)
+
+  // Titre document
+  const docTitle = options?.documentTitle || (Number(bon.paid_amount || 0) >= Number(bon.total_amount || 0) ? 'FACTURE' : 'FACTURE D\'ACOMPTE')
+  doc.setFontSize(18)
+  doc.setTextColor(...accentColor)
+  doc.text(docTitle, pageWidth - margin, y + 4, { align: 'right' })
+
+  y += 10
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.5)
+  doc.setTextColor(...secondaryColor)
+
+  const compDetails: string[] = []
+  if (company?.address || company?.city) compDetails.push(`${company.address || ''} ${company.city || ''}`.trim())
+  if (company?.phone) compDetails.push(`Tél : ${company.phone}`)
+  if (company?.email) compDetails.push(`Email : ${company.email}`)
+  if (company?.ifu) compDetails.push(`N° IFU : ${company.ifu}`)
+  if (company?.rccm) compDetails.push(`RCCM : ${company.rccm}`)
+
+  let leftY = y
+  compDetails.forEach((line) => {
+    doc.text(line, margin, leftY)
+    leftY += 4
+  })
+
+  // Métadonnées bon
+  const orderNum = bon.order_number || bon.numero_commande || 'CMD-IMP'
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(9)
+  doc.setTextColor(...primaryColor)
+  doc.text(`Réf : ${orderNum}`, pageWidth - margin, y, { align: 'right' })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(8.5)
+  doc.setTextColor(...secondaryColor)
+  const dateStr = bon.created_at || bon.date_commande || new Date().toISOString()
+  const formattedDate = new Date(dateStr).toLocaleDateString('fr-BJ', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+  doc.text(`Date : ${formattedDate}`, pageWidth - margin, y + 4.5, { align: 'right' })
+  if (bon.seller_name) {
+    doc.text(`Opérateur : ${bon.seller_name}`, pageWidth - margin, y + 9, { align: 'right' })
+  }
+
+  y = Math.max(leftY, y + 14) + 4
+
+  // Cartouche client
+  const clientBoxY = y
+  const clientBoxHeight = 20
+  doc.setFillColor(...lightBg)
+  doc.setDrawColor(...borderColor)
+  doc.roundedRect(margin, clientBoxY, pageWidth - 2 * margin, clientBoxHeight, 2, 2, 'FD')
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(8)
+  doc.setTextColor(...accentColor)
+  doc.text('CLIENT', margin + 4, clientBoxY + 5)
+
+  doc.setFont('helvetica', 'bold')
+  doc.setFontSize(11)
+  doc.setTextColor(...primaryColor)
+  doc.text(bon.customer_name || bon.client_nom || 'Client Comptoir', margin + 4, clientBoxY + 11)
+
+  if (bon.customer_phone || bon.client_tel) {
+    doc.setFont('helvetica', 'normal')
+    doc.setFontSize(8.5)
+    doc.setTextColor(...secondaryColor)
+    doc.text(`Tél : ${bon.customer_phone || bon.client_tel}`, margin + 4, clientBoxY + 16)
+  }
+
+  y = clientBoxY + clientBoxHeight + 6
+
+  // Tableau des articles
+  const items = Array.isArray(bon.items) && bon.items.length > 0
+    ? bon.items
+    : [{
+        product_name: bon.titre_travail || 'Prestation Imprimerie',
+        quantity: 1,
+        unit_price: Number(bon.total_amount || 0),
+        discount: 0,
+        tva_rate: 0,
+        total_ttc: Number(bon.total_amount || 0)
+      }]
+
+  const tableRows = items.map((item: any, idx: number) => {
+    const qty = Number(item.quantity || 1)
+    const pu = Number(item.unit_price || 0)
+    const remise = Number(item.discount || 0)
+    const totalLigne = Number(item.total_ttc || (qty * pu - remise))
+    return [
+      String(idx + 1),
+      item.product_name || item.designation || 'Prestation',
+      item.unit || 'u',
+      String(qty),
+      formatFCFA(pu).replace(' FCFA', ''),
+      remise > 0 ? formatFCFA(remise).replace(' FCFA', '') : '-',
+      formatFCFA(totalLigne).replace(' FCFA', '')
+    ]
+  })
+
+  autoTable(doc, {
+    startY: y,
+    head: [[
+      '#',
+      'Désignation / Article',
+      'Unité',
+      'Qté',
+      'P.U. (F)',
+      'Remise (F)',
+      'Total TTC (F)'
+    ]],
+    body: tableRows,
+    theme: 'grid',
+    headStyles: {
+      fillColor: primaryColor,
+      textColor: [255, 255, 255],
+      fontStyle: 'bold',
+      fontSize: 8,
+      halign: 'center',
+      cellPadding: 2.5,
+    },
+    styles: {
+      fontSize: 8,
+      textColor: [30, 41, 59],
+      cellPadding: 2.5,
+      valign: 'middle',
+    },
+    columnStyles: {
+      0: { halign: 'center', cellWidth: 8 },
+      1: { halign: 'left', cellWidth: 85 },
+      2: { halign: 'center', cellWidth: 15 },
+      3: { halign: 'center', cellWidth: 15 },
+      4: { halign: 'right', cellWidth: 20 },
+      5: { halign: 'right', cellWidth: 15 },
+      6: { halign: 'right', cellWidth: 24, fontStyle: 'bold' }
+    },
+    margin: { left: margin, right: margin }
+  })
+
+  const finalY = (doc as any).lastAutoTable.finalY + 6
+
+  // Totaux
+  const totalsBoxWidth = 85
+  const totalsBoxX = pageWidth - margin - totalsBoxWidth
+  let curTotalsY = finalY
+
+  const totalAmount = Number(bon.total_amount ?? bon.total_ttc ?? 0)
+  const paidAmount = Number(bon.paid_amount ?? bon.montant_paye ?? 0)
+  const remainingBalance = Number(bon.remaining_balance ?? bon.solde_restant ?? Math.max(0, totalAmount - paidAmount))
+
+  doc.setFillColor(...lightBg)
+  doc.setDrawColor(...borderColor)
+  doc.roundedRect(totalsBoxX, curTotalsY, totalsBoxWidth, 32, 2, 2, 'FD')
+
+  doc.setFontSize(8.5)
+  doc.setTextColor(...secondaryColor)
+  doc.text('Total Général TTC :', totalsBoxX + 4, curTotalsY + 6)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(...primaryColor)
+  doc.text(formatFCFA(totalAmount), pageWidth - margin - 4, curTotalsY + 6, { align: 'right' })
+
+  doc.setFont('helvetica', 'normal')
+  doc.setTextColor(...secondaryColor)
+  doc.text('Montant Déjà Encaissé :', totalsBoxX + 4, curTotalsY + 13)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(16, 185, 129) // Emerald
+  doc.text(formatFCFA(paidAmount), pageWidth - margin - 4, curTotalsY + 13, { align: 'right' })
+
+  doc.setDrawColor(...borderColor)
+  doc.line(totalsBoxX + 2, curTotalsY + 18, pageWidth - margin - 2, curTotalsY + 18)
+
+  doc.setFontSize(9.5)
+  doc.setFont('helvetica', 'bold')
+  doc.setTextColor(...accentColor)
+  doc.text('SOLDE RESTANT DÛ :', totalsBoxX + 4, curTotalsY + 26)
+  doc.text(formatFCFA(remainingBalance), pageWidth - margin - 4, curTotalsY + 26, { align: 'right' })
+
+  // Pied de page
+  const footerY = pageHeight - 8
+  doc.setFont('helvetica', 'normal')
+  doc.setFontSize(7)
+  doc.setTextColor(148, 163, 184)
+  const footerText = `Facture éditée par ${company?.name || 'GESTIO 229'} via GESTIO229 SaaS — www.gestio229.com`
+  doc.text(footerText, margin, footerY)
+  doc.text('Page 1 / 1', pageWidth - margin, footerY, { align: 'right' })
+
+  const fileName = `Facture_${orderNum}_${(bon.customer_name || 'Client').replace(/\s+/g, '_')}.pdf`
+  const blobUrl = doc.output('bloburl')
+
+  if (options?.action === 'download') {
+    doc.save(fileName)
+  } else if (options?.action === 'print') {
+    doc.autoPrint()
+    window.open(blobUrl, '_blank')
+  }
+
+  return { doc, fileName, blobUrl: blobUrl.toString() }
+}
+

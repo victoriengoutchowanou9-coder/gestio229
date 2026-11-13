@@ -448,11 +448,12 @@ export async function fetchPendingBonsImprimerie(companyId: string, sectorSlug: 
   if (clean !== 'imprimerie' && clean !== 'serigraphie' && clean !== 'impression') return []
 
   try {
+    const validSectors = Array.from(new Set(['imprimerie', 'serigraphie', 'impression', clean]))
     const { data, error } = await supabase
       .from('imprimerie_commandes')
       .select('*, lignes:imprimerie_commande_lignes(*)')
       .eq('company_id', companyId)
-      .eq('sector_slug', clean)
+      .in('sector_slug', validSectors)
       .or('statut_paiement.eq.non_paye,statut_paiement.eq.acompte,statut_paiement.eq.credit')
       .not('statut', 'eq', 'annule')
       .order('created_at', { ascending: false })
@@ -473,22 +474,46 @@ export async function fetchPendingBonsImprimerie(companyId: string, sectorSlug: 
       const montantPaye = Number(cmd.montant_paye || 0)
       const soldeRestant = Math.max(0, totalTtc - montantPaye)
 
-      // Construire les items depuis les lignes de commande
-      const items: PendingBonItem[] = (cmd.lignes || []).map((l: any) => ({
-        product_id: l.prestation_id || '',
-        product_code: '',
-        product_name: l.designation || 'Prestation',
-        unit: l.mode_calcul === 'm2' ? 'm²' : 'u',
-        quantity: Number(l.quantite || 1),
-        unit_price: Number(l.prix_unitaire || 0),
-        discount: 0,
-        tva_rate: 0,
-        total_ht: Number(l.montant_ttc || 0),
-        total_ttc: Number(l.montant_ttc || 0),
-        unit_cost: 0,
-        coef: 1,
-        is_recipe: false
-      }))
+      // Construire les items depuis les lignes de commande avec repli sécurisé
+      let items: PendingBonItem[] = []
+      if (Array.isArray(cmd.lignes) && cmd.lignes.length > 0) {
+        items = cmd.lignes.map((l: any) => ({
+          product_id: l.prestation_id || cmd.id,
+          product_code: l.details_json?.code || '',
+          product_name: l.designation || 'Prestation Imprimerie',
+          unit: l.mode_calcul === 'm2' ? 'm²' : 'u',
+          quantity: Number(l.quantite || 1),
+          unit_price: Number(l.prix_unitaire || 0),
+          discount: 0,
+          tva_rate: 0,
+          total_ht: Number(l.montant_ttc || 0),
+          total_ttc: Number(l.montant_ttc || 0),
+          unit_cost: 0,
+          coef: 1,
+          is_recipe: false
+        }))
+      } else {
+        items = [{
+          product_id: cmd.id,
+          product_code: 'IMP',
+          product_name: cmd.titre_travail || 'Travaux d\'impression & sérigraphie',
+          unit: 'u',
+          quantity: 1,
+          unit_price: totalTtc,
+          discount: 0,
+          tva_rate: 0,
+          total_ht: totalTtc,
+          total_ttc: totalTtc,
+          unit_cost: 0,
+          coef: 1,
+          is_recipe: false
+        }]
+      }
+
+      // Identifier le vendeur/graphiste
+      const seller = cmd.graphiste_nom
+        ? `[Graphiste] ${cmd.graphiste_nom}`
+        : (cmd.commercial_nom || cmd.titre_travail || 'Imprimerie')
 
       return {
         id: cmd.id,
@@ -497,8 +522,8 @@ export async function fetchPendingBonsImprimerie(companyId: string, sectorSlug: 
         sector_slug: cmd.sector_slug,
         customer_id: cmd.client_id || null,
         customer_name: cmd.client_nom || 'Client Comptoir',
-        seller_id: null,
-        seller_name: cmd.titre_travail || 'Imprimerie',
+        seller_id: cmd.graphiste_id || null,
+        seller_name: seller,
         created_at: cmd.created_at || cmd.date_commande,
         subtotal_ht: totalTtc,
         tva_amount: 0,
@@ -510,7 +535,13 @@ export async function fetchPendingBonsImprimerie(companyId: string, sectorSlug: 
         remaining_balance: soldeRestant,
         payment_status: cmd.statut_paiement || 'en_attente',
         status: 'pending_cashier',
-        notes: { source_module: 'imprimerie', commande_id: cmd.id, statut_commande: cmd.statut },
+        notes: {
+          source_module: 'imprimerie',
+          commande_id: cmd.id,
+          statut_commande: cmd.statut,
+          graphiste_nom: cmd.graphiste_nom,
+          is_imprimerie_order: true
+        },
         items,
         stock_already_deducted: ['livre', 'termine', 'en_finition'].includes(cmd.statut)
       } as PendingBon
@@ -854,14 +885,76 @@ export async function encaisserBonDeCommande(
     const cleanSector = normalizeCircuitSectorSlug(params.sectorSlug)
 
     // 1. CONTRÔLE DE LA COMMANDE : Existence, appartenance à l'entreprise et au secteur, et statut
-    const { data: currentOrder, error: fetchErr } = await supabase
+    let isImprimerieOrder = false
+    let currentOrder: any = null
+
+    const { data: salesOrder, error: fetchErr } = await supabase
       .from('sales_orders')
       .select('*')
       .eq('id', params.orderId)
       .eq('company_id', params.companyId)
       .maybeSingle()
 
-    if (fetchErr || !currentOrder) {
+    if (salesOrder) {
+      currentOrder = salesOrder
+    } else {
+      // Recherche dans les commandes du secteur imprimerie / sérigraphie
+      const { data: impOrder, error: impErr } = await supabase
+        .from('imprimerie_commandes')
+        .select('*, lignes:imprimerie_commande_lignes(*)')
+        .eq('id', params.orderId)
+        .eq('company_id', params.companyId)
+        .maybeSingle()
+
+      if (impOrder) {
+        isImprimerieOrder = true
+        const tot = Math.round(Number(impOrder.total_ttc || 0))
+        const paye = Math.round(Number(impOrder.montant_paye || 0))
+        currentOrder = {
+          id: impOrder.id,
+          order_number: impOrder.numero_commande || 'CMD-IMP',
+          company_id: impOrder.company_id,
+          sector_slug: impOrder.sector_slug || cleanSector,
+          customer_id: impOrder.client_id || null,
+          customer_name: impOrder.client_nom || 'Client Comptoir',
+          customer_phone: impOrder.client_tel || null,
+          order_date: impOrder.date_commande || impOrder.created_at || new Date().toISOString().split('T')[0],
+          total_amount: tot,
+          paid_amount: paye,
+          credit_amount: 0,
+          status: impOrder.statut,
+          payment_status: impOrder.statut_paiement,
+          payment_method: null,
+          tva_amount: 0,
+          aib_amount: 0,
+          notes: {
+            source_module: 'imprimerie',
+            is_imprimerie_order: true,
+            titre_travail: impOrder.titre_travail,
+            graphiste_nom: impOrder.graphiste_nom,
+            lines: (impOrder.lignes || []).map((l: any) => ({
+              product: {
+                id: l.prestation_id,
+                name: l.designation,
+                cost_price: 0,
+                is_recipe: false
+              },
+              product_id: l.prestation_id,
+              quantity: Number(l.quantite || 1),
+              qty: Number(l.quantite || 1),
+              unit_price: Number(l.prix_unitaire || 0),
+              unitPrice: Number(l.prix_unitaire || 0),
+              largeur: l.largeur,
+              hauteur: l.hauteur,
+              mode_calcul: l.mode_calcul
+            })),
+            stock_already_deducted: ['livre', 'termine', 'en_finition'].includes(impOrder.statut)
+          }
+        }
+      }
+    }
+
+    if (!currentOrder) {
       return {
         success: false,
         error: 'Le bon de commande est introuvable ou n\'appartient pas à votre établissement.'
@@ -1255,26 +1348,99 @@ export async function encaisserBonDeCommande(
 
     console.log('Session caisse utilisée pour encaissement:', finalCashSessionId)
 
-    let { error: updateErr } = await supabase
-      .from('sales_orders')
-      .update({
-        paid_amount: newPaid,
-        credit_amount: newCredit,
-        status: newStatus,
-        payment_status: newPaymentStatus,
-        payment_method: effectivePaymentMethod,
-        cash_session_id: finalCashSessionId,
-        customer_id: effectiveCustomerId || currentOrder.customer_id || null,
-        customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
-        notes: JSON.stringify(updatedNotes)
-      })
-      .eq('id', params.orderId)
-      .eq('company_id', params.companyId)
+    if (isImprimerieOrder) {
+      // 6.a MISE À JOUR COMMANDE IMPRIMERIE & TRACE PAIEMENT
+      const newSolde = Math.max(0, currentTotal - newPaid - newCredit)
+      const finalStatutPaiement = newSolde <= 0 ? 'solde' : newPaid > 0 ? 'acompte' : 'credit'
+      const finalStatutCmd = isSoldOut ? 'termine' : (currentOrder.status || 'en_production')
 
-    // Si violation de clé étrangère sur cash_session_id, repli automatique sur null (la colonne est nullable)
-    if (updateErr && updateErr.message && updateErr.message.includes('sales_orders_cash_session_id_fkey')) {
-      console.warn('[salesCircuitService] FK sales_orders_cash_session_id_fkey détectée, repli sécurisé sur cash_session_id: null')
-      const retry = await supabase
+      const { error: impUpdErr } = await supabase
+        .from('imprimerie_commandes')
+        .update({
+          montant_paye: newPaid,
+          solde_restant: newSolde,
+          statut_paiement: finalStatutPaiement,
+          statut: finalStatutCmd,
+          updated_at: nowIso
+        })
+        .eq('id', params.orderId)
+        .eq('company_id', params.companyId)
+
+      if (impUpdErr) {
+        throw new Error(`Erreur mise à jour commande imprimerie : ${impUpdErr.message}`)
+      }
+
+      // Enregistrer le versement dans imprimerie_paiements
+      try {
+        await supabase.from('imprimerie_paiements').insert({
+          company_id: params.companyId,
+          sector_slug: cleanSector,
+          commande_id: params.orderId,
+          caisse_id: validCaisseId || null,
+          session_caisse_id: finalCashSessionId || null,
+          montant: immediatelyPaid,
+          mode_paiement: breakdown.length > 1 ? 'mixte' : breakdown[0].method,
+          reference_recu: transRef,
+          caissier_id: params.cashierId || null,
+          caissier_nom: params.cashierName || 'Caissier',
+          type_paiement: isSoldOut ? 'solde' : 'acompte'
+        })
+      } catch (payInsErr) {
+        console.warn('[salesCircuitService] Avertissement insertion imprimerie_paiements:', payInsErr)
+      }
+
+      // 6.b SYNCHRONISATION SALES_ORDERS (pour reflet immédiat en caisse journalière)
+      let { error: upsertErr } = await supabase
+        .from('sales_orders')
+        .upsert({
+          id: params.orderId,
+          company_id: params.companyId,
+          sector_slug: cleanSector,
+          order_number: currentOrder.order_number,
+          order_date: currentOrder.order_date || nowIso.split('T')[0],
+          total_amount: currentTotal,
+          subtotal_ht: currentTotal,
+          paid_amount: newPaid,
+          credit_amount: newCredit,
+          status: newStatus,
+          payment_status: newPaymentStatus,
+          payment_method: effectivePaymentMethod,
+          cash_session_id: finalCashSessionId,
+          customer_id: effectiveCustomerId || currentOrder.customer_id || null,
+          customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
+          notes: JSON.stringify(updatedNotes)
+        })
+
+      if (upsertErr && upsertErr.message && upsertErr.message.includes('sales_orders_cash_session_id_fkey')) {
+        const retry = await supabase
+          .from('sales_orders')
+          .upsert({
+            id: params.orderId,
+            company_id: params.companyId,
+            sector_slug: cleanSector,
+            order_number: currentOrder.order_number,
+            order_date: currentOrder.order_date || nowIso.split('T')[0],
+            total_amount: currentTotal,
+            subtotal_ht: currentTotal,
+            paid_amount: newPaid,
+            credit_amount: newCredit,
+            status: newStatus,
+            payment_status: newPaymentStatus,
+            payment_method: effectivePaymentMethod,
+            cash_session_id: null,
+            customer_id: effectiveCustomerId || currentOrder.customer_id || null,
+            customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
+            notes: JSON.stringify(updatedNotes)
+          })
+        upsertErr = retry.error
+      }
+
+      if (upsertErr) {
+        console.warn('[salesCircuitService] Avertissement upsert sales_orders pour bon imprimerie:', upsertErr)
+      }
+      orderUpdated = true
+    } else {
+      let { error: updateErr } = await supabase
         .from('sales_orders')
         .update({
           paid_amount: newPaid,
@@ -1282,26 +1448,47 @@ export async function encaisserBonDeCommande(
           status: newStatus,
           payment_status: newPaymentStatus,
           payment_method: effectivePaymentMethod,
-          cash_session_id: null,
+          cash_session_id: finalCashSessionId,
           customer_id: effectiveCustomerId || currentOrder.customer_id || null,
           customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
           notes: JSON.stringify(updatedNotes)
         })
         .eq('id', params.orderId)
         .eq('company_id', params.companyId)
-      updateErr = retry.error
-    }
 
-    if (updateErr) {
-      throw new Error(`Erreur mise à jour commande : ${updateErr.message}`)
+      // Si violation de clé étrangère sur cash_session_id, repli automatique sur null (la colonne est nullable)
+      if (updateErr && updateErr.message && updateErr.message.includes('sales_orders_cash_session_id_fkey')) {
+        console.warn('[salesCircuitService] FK sales_orders_cash_session_id_fkey détectée, repli sécurisé sur cash_session_id: null')
+        const retry = await supabase
+          .from('sales_orders')
+          .update({
+            paid_amount: newPaid,
+            credit_amount: newCredit,
+            status: newStatus,
+            payment_status: newPaymentStatus,
+            payment_method: effectivePaymentMethod,
+            cash_session_id: null,
+            customer_id: effectiveCustomerId || currentOrder.customer_id || null,
+            customer_name: effectiveCustomerName || currentOrder.customer_name || 'Client Comptoir',
+            notes: JSON.stringify(updatedNotes)
+          })
+          .eq('id', params.orderId)
+          .eq('company_id', params.companyId)
+        updateErr = retry.error
+      }
+
+      if (updateErr) {
+        throw new Error(`Erreur mise à jour commande : ${updateErr.message}`)
+      }
+      orderUpdated = true
     }
-    orderUpdated = true
 
     if (params._simulateFailureAtStep === 'after_order_update') {
       throw new Error('Échec simulé après mise à jour de la commande (Test d\'atomicité)')
     }
 
-    // 7. DÉSTOCKAGE SYNCHRONISÉ (Colonne SQL stock_vente + sector_meta.stock_vente + stock_movements)
+    // 7. DÉSTOCKAGE SYNCHRONISÉ (Articles directs + Matières premières BOM Imprimerie)
+    // RÈGLE D'OR : ZÉRO DOUBLE DÉSTOCKAGE (Idempotence stricte)
     if (productsToDeduct.length > 0) {
       for (const item of productsToDeduct) {
         const newStockVente = Math.max(0, Math.round((item.curStockVente - item.qty) * 1000) / 1000)
@@ -1334,8 +1521,8 @@ export async function encaisserBonDeCommande(
             company_id: params.companyId,
             sector_slug: cleanSector,
             product_id: item.prodId,
-            movement_type: 'VENTE_BON_COMMANDE',
-            reference_type: 'sales_order',
+            movement_type: isImprimerieOrder ? 'CONSOMMATION_IMPRESSION' : 'VENTE_BON_COMMANDE',
+            reference_type: isImprimerieOrder ? 'imprimerie_commande' : 'sales_order',
             reference_id: params.orderId,
             reference_number: currentOrder.order_number,
             quantity: -item.qty,
@@ -1357,6 +1544,107 @@ export async function encaisserBonDeCommande(
       }
 
       invalidateCache('prods_')
+    }
+
+    // 7.b DÉSTOCKAGE DES MATIÈRES PREMIÈRES BOM (Secteur Imprimerie / Sérigraphie)
+    if (isImprimerieOrder && !notesParsed.stock_already_deducted && orderLines.length > 0 && isSoldOut) {
+      const presIds = orderLines.map((l: any) => l.prestation_id || l.product?.id).filter(isValidUUID)
+      if (presIds.length > 0) {
+        const { data: boms } = await supabase
+          .from('imprimerie_prestation_matieres')
+          .select('*, matiere:imprimerie_matieres(id, nom, stock_actuel, cout_moyen)')
+          .in('prestation_id', presIds)
+
+        if (boms && boms.length > 0) {
+          for (const l of orderLines) {
+            const pId = l.prestation_id || l.product?.id
+            const matchingBoms = boms.filter((b: any) => b.prestation_id === pId)
+            const surfaceFactor = (l.mode_calcul === 'm2' && l.largeur && l.hauteur)
+              ? (Number(l.largeur) * Number(l.hauteur))
+              : 1
+            const lineQty = Number(l.qty ?? l.quantity ?? 1)
+
+            for (const bom of matchingBoms) {
+              const qtyConsommee = Math.round(Number(bom.quantite_prevue || 1) * lineQty * surfaceFactor * 1000) / 1000
+              const pu = Number(bom.cout_unitaire_prevu || bom.matiere?.cout_moyen || 0)
+
+              // 1. Tenter déduction sur table products si la matière est un article géré
+              const { data: pMat } = await supabase
+                .from('products')
+                .select('id, name, stock_vente, cost_price, sector_meta')
+                .eq('id', bom.matiere_id)
+                .maybeSingle()
+
+              if (pMat) {
+                const curSt = Number(pMat.stock_vente ?? pMat.sector_meta?.stock_vente ?? 0)
+                const nextSt = Math.max(0, Math.round((curSt - qtyConsommee) * 1000) / 1000)
+                await supabase
+                  .from('products')
+                  .update({
+                    stock_vente: nextSt,
+                    sector_meta: { ...(pMat.sector_meta || {}), stock_vente: nextSt },
+                    updated_at: nowIso
+                  })
+                  .eq('id', pMat.id)
+
+                await supabase.from('stock_movements').insert({
+                  company_id: params.companyId,
+                  sector_slug: cleanSector,
+                  product_id: pMat.id,
+                  movement_type: 'CONSOMMATION_IMPRESSION',
+                  reference_type: 'imprimerie_commande',
+                  reference_id: params.orderId,
+                  reference_number: currentOrder.order_number,
+                  quantity: -qtyConsommee,
+                  previous_stock: curSt,
+                  new_stock: nextSt,
+                  unit_cost: pu || Number(pMat.cost_price || 0),
+                  total_cost: Math.round(qtyConsommee * (pu || Number(pMat.cost_price || 0))),
+                  notes: `Consommation BOM impression Bon ${currentOrder.order_number}`
+                })
+              } else {
+                // 2. Déduction sur table imprimerie_matieres
+                const { data: mMat } = await supabase
+                  .from('imprimerie_matieres')
+                  .select('id, nom, stock_actuel, cout_moyen')
+                  .eq('id', bom.matiere_id)
+                  .maybeSingle()
+
+                if (mMat) {
+                  const curSt = Number(mMat.stock_actuel || 0)
+                  const nextSt = Math.max(0, Math.round((curSt - qtyConsommee) * 1000) / 1000)
+                  await supabase
+                    .from('imprimerie_matieres')
+                    .update({
+                      stock_actuel: nextSt,
+                      valeur_stock: nextSt * Number(mMat.cout_moyen || 0),
+                      updated_at: nowIso
+                    })
+                    .eq('id', mMat.id)
+                }
+              }
+
+              // 3. Consignation dans imprimerie_consommations
+              try {
+                await supabase.from('imprimerie_consommations').insert({
+                  company_id: params.companyId,
+                  sector_slug: cleanSector,
+                  commande_id: params.orderId,
+                  matiere_id: bom.matiere_id,
+                  quantite_prevue: qtyConsommee,
+                  quantite_reelle: qtyConsommee,
+                  ecart_perte: 0,
+                  cout_unitaire: pu,
+                  cout_total: Math.round(qtyConsommee * pu),
+                  motif_perte: 'chute',
+                  est_reimpression: false,
+                  notes: `Déstockage BOM caisse pour bon ${currentOrder.order_number}`
+                })
+              } catch (_) {}
+            }
+          }
+        }
+      }
     }
 
     if (params._simulateFailureAtStep === 'after_stock_update') {

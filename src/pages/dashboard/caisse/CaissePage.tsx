@@ -57,6 +57,8 @@ import {
   EncaissementPaymentMethod,
   MultiPaymentSplitItem
 } from '../../../services/salesCircuitService'
+import { generateFactureBonPdf } from '../../../utils/imprimerieDevisPdf'
+import { imprimerTicketThermique, TicketData } from '../../../utils/thermalPrinter'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -2934,7 +2936,63 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => {
+                  generateFactureBonPdf(bonDetailModal, company || { name: 'GESTIO 229' }, { action: 'print' })
+                }}
+                className="px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl font-bold transition inline-flex items-center gap-1.5 cursor-pointer text-xs"
+                title="Imprimer la facture format A4 (UEMOA / Bénin)"
+              >
+                <FileText className="w-4 h-4" />
+                <span>Facture A4</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ticketData: TicketData = {
+                    company: {
+                      name: company?.name || 'GESTIO 229',
+                      address: company?.address,
+                      phone: company?.phone,
+                      ifu: company?.ifu
+                    },
+                    sale: {
+                      orderNumber: bonDetailModal.order_number,
+                      date: bonDetailModal.created_at,
+                      customerName: bonDetailModal.customer_name,
+                      cashierName: user?.full_name || 'Caissier'
+                    },
+                    lines: bonDetailModal.items.map((it: any) => ({
+                      code: it.product_code,
+                      name: it.product_name,
+                      qty: it.quantity,
+                      unit: it.unit,
+                      unitPrice: it.unit_price,
+                      discount: it.discount,
+                      total: it.total_ttc || (it.quantity * it.unit_price)
+                    })),
+                    totals: {
+                      subtotal: Number(bonDetailModal.subtotal_ht || bonDetailModal.total_amount),
+                      discount: Number(bonDetailModal.discount_total || 0),
+                      tax: Number(bonDetailModal.tva_amount || 0),
+                      totalNet: Number(bonDetailModal.total_amount),
+                      amountReceived: Number(bonDetailModal.paid_amount || 0)
+                    },
+                    payments: [
+                      { method: bonDetailModal.payment_status || 'En attente', amount: Number(bonDetailModal.paid_amount || 0) }
+                    ],
+                    footerMessage: 'GESTIO 229 — Merci de votre confiance'
+                  }
+                  imprimerTicketThermique(ticketData, { width: '80mm', autoPrint: true })
+                }}
+                className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold transition inline-flex items-center gap-1.5 cursor-pointer text-xs"
+                title="Imprimer le ticket de caisse thermique (80mm/58mm)"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Ticket Caisse</span>
+              </button>
               {isOrderEligibleForCollection(bonDetailModal) && (
                 <button
                   type="button"
@@ -2956,7 +3014,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                     setSelectedCreditCustomerId(targetBon.customer_id || '')
                     setNoteEncaissementBon('')
                   }}
-                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition inline-flex items-center gap-1.5 cursor-pointer"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold transition inline-flex items-center gap-1.5 cursor-pointer text-xs"
                 >
                   <Receipt className="w-4 h-4" />
                   <span>Encaisser cette commande</span>
@@ -2965,7 +3023,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               <button
                 type="button"
                 onClick={() => setBonDetailModal(null)}
-                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition cursor-pointer"
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl font-bold transition cursor-pointer text-xs"
               >
                 Fermer
               </button>
@@ -3367,19 +3425,80 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
+            <div className="flex flex-wrap justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5"
+                onClick={() => {
+                  generateFactureBonPdf(
+                    {
+                      order_number: receiptSuccessBon.order_number,
+                      created_at: receiptSuccessBon.date,
+                      customer_name: receiptSuccessBon.customer_name,
+                      seller_name: receiptSuccessBon.seller_name,
+                      total_amount: (receiptSuccessBon.amount_paid || 0) + (receiptSuccessBon.credit_amount || 0) + (receiptSuccessBon.remaining_balance || 0),
+                      paid_amount: receiptSuccessBon.amount_paid,
+                      remaining_balance: receiptSuccessBon.remaining_balance,
+                      items: receiptSuccessBon.items
+                    },
+                    company || { name: 'GESTIO 229' },
+                    { action: 'print' }
+                  )
+                }}
+                className="px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                title="Imprimer la facture A4 officielle"
+              >
+                <FileText className="w-4 h-4" />
+                <span>Facture A4</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const ticketData: TicketData = {
+                    company: {
+                      name: company?.name || 'GESTIO 229',
+                      address: company?.address,
+                      phone: company?.phone,
+                      ifu: company?.ifu
+                    },
+                    sale: {
+                      orderNumber: receiptSuccessBon.order_number,
+                      date: receiptSuccessBon.date,
+                      customerName: receiptSuccessBon.customer_name,
+                      cashierName: receiptSuccessBon.cashier_name
+                    },
+                    lines: (receiptSuccessBon.items || []).map((it: any) => ({
+                      code: it.product_code,
+                      name: it.product_name,
+                      qty: it.quantity,
+                      unit: it.unit,
+                      unitPrice: it.unit_price,
+                      discount: it.discount,
+                      total: it.total_ttc || (it.quantity * it.unit_price)
+                    })),
+                    totals: {
+                      subtotal: receiptSuccessBon.amount_paid + receiptSuccessBon.remaining_balance,
+                      discount: 0,
+                      totalNet: receiptSuccessBon.amount_paid + receiptSuccessBon.remaining_balance,
+                      amountReceived: receiptSuccessBon.amount_paid,
+                      changeGiven: 0
+                    },
+                    payments: [
+                      { method: receiptSuccessBon.payment_method || 'Espèces', amount: receiptSuccessBon.amount_paid }
+                    ],
+                    footerMessage: `Réf: ${receiptSuccessBon.transaction_ref} • Merci de votre confiance !`
+                  }
+                  imprimerTicketThermique(ticketData, { width: '80mm', autoPrint: true })
+                }}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl transition flex items-center gap-1.5 cursor-pointer"
+                title="Imprimer le ticket de caisse thermique (80mm/58mm sans page blanche)"
               >
                 <Printer className="w-4 h-4" />
-                <span>Imprimer le reçu</span>
+                <span>Imprimer Ticket Thermique</span>
               </button>
               <button
                 type="button"
                 onClick={() => setReceiptSuccessBon(null)}
-                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition"
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl transition cursor-pointer"
               >
                 Fermer
               </button>

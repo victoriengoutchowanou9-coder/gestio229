@@ -518,8 +518,29 @@ export const imprimerieService = {
           stock_vente: newVente,
           stock_magasin: newMag,
           sector_meta: updatedMeta,
+          updated_at: new Date().toISOString()
         })
         .eq('id', matiereId)
+
+      // Traçabilité obligatoire dans stock_movements (Mouvement temps réel)
+      try {
+        const uCost = Number(prod.cost_price || 0)
+        await supabase.from('stock_movements').insert({
+          company_id: prod.company_id,
+          sector_slug: prod.sector_slug || 'imprimerie',
+          product_id: matiereId,
+          movement_type: operation === 'sortie' ? 'CONSOMMATION_IMPRESSION' : 'ENTREE_STOCK',
+          reference_type: 'imprimerie_prestation',
+          quantity: operation === 'sortie' ? -deltaStock : deltaStock,
+          previous_stock: currentVente,
+          new_stock: newVente,
+          unit_cost: uCost,
+          total_cost: Math.round(deltaStock * uCost),
+          notes: notes || `Mouvement matière impression : ${operation} ${deltaStock} (${prod.name})`
+        })
+      } catch (smErr) {
+        console.warn('[imprimerieService] Avertissement stock_movements:', smErr)
+      }
 
       return
     }
@@ -527,12 +548,13 @@ export const imprimerieService = {
     // 2. Fallback sur table legacy imprimerie_matieres
     const { data: current } = await supabase
       .from('imprimerie_matieres')
-      .select('stock_actuel, cout_moyen')
+      .select('stock_actuel, cout_moyen, nom, company_id, sector_slug')
       .eq('id', matiereId)
       .maybeSingle()
 
     if (!current) return
-    const newStock = Math.max(0, Number(current.stock_actuel || 0) + (operation === 'entree' ? deltaStock : -deltaStock))
+    const prevStock = Number(current.stock_actuel || 0)
+    const newStock = Math.max(0, prevStock + (operation === 'entree' ? deltaStock : -deltaStock))
     const valeur = newStock * Number(current.cout_moyen || 0)
 
     await supabase
@@ -990,6 +1012,10 @@ export const imprimerieService = {
       details: { devis_id: devis.id, devis_numero: devis.numero_devis, total_ttc: devis.total_ttc },
     })
 
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gestio:bon_transmitted', { detail: { commandeId: newCmd.id, orderNumber: cmdNum } }))
+    }
+
     return newCmd
   },
 
@@ -1222,6 +1248,37 @@ export const imprimerieService = {
     } catch (caisseErr) {
       console.warn('Erreur synchronisation caisse imprimerie:', caisseErr)
     }
+
+    // Reflet immédiat dans sales_orders pour calculs journaliers Caisse
+    try {
+      await supabase.from('sales_orders').upsert({
+        id: cmd.id,
+        company_id: paiement.company_id,
+        sector_slug: paiement.sector_slug || 'imprimerie',
+        order_number: cmd.numero_commande,
+        order_date: cmd.date_commande || new Date().toISOString().split('T')[0],
+        total_amount: totalTtc,
+        subtotal_ht: totalTtc,
+        paid_amount: nouveauPaye,
+        credit_amount: nouveauSolde,
+        status: nouveauSolde <= 0 ? 'COMPLET' : 'partiellement_paye',
+        payment_status: nouveauSolde <= 0 ? (paiement.mode_paiement === 'especes' ? 'espece' : paiement.mode_paiement) : 'partiel',
+        payment_method: paiement.mode_paiement,
+        customer_name: cmd.client_nom || 'Client Comptoir',
+        notes: JSON.stringify({
+          source_module: 'imprimerie',
+          is_imprimerie_order: true,
+          payments: [{ method: paiement.mode_paiement, amount: montantVerse }]
+        })
+      })
+    } catch (soErr) {
+      console.warn('Erreur synchronisation sales_orders enregistrerPaiement:', soErr)
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gestio:bon_encaisse', { detail: { orderId: cmd.id, transactionRef: refRecu } }))
+      window.dispatchEvent(new CustomEvent('gestio:transaction_created'))
+    }
   },
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -1255,6 +1312,48 @@ export const imprimerieService = {
     const soldeRestant = Math.max(0, totalTtc - montantPaye)
     const statutPaiement = isAttente ? 'non_paye' : soldeRestant === 0 ? 'solde' : montantPaye > 0 ? 'acompte' : 'credit'
     const statutCmd: StatutCommande = isAttente ? 'nouveau' : 'livre'
+
+    // Contrôle préalable de disponibilité des matières premières BOM (Condition bloquante)
+    if (!isAttente) {
+      for (const it of params.items) {
+        if (it.prestation.matieres_bom && it.prestation.matieres_bom.length > 0) {
+          for (const bom of it.prestation.matieres_bom) {
+            const surfaceFactor = (it.largeur && it.hauteur && it.prestation.mode_calcul === 'm2')
+              ? (it.largeur * it.hauteur)
+              : 1
+            const qtyNeeded = Math.round(Number(bom.quantite_prevue || 1) * it.quantite * surfaceFactor * 1000) / 1000
+
+            // Vérifier table products
+            const { data: pCheck } = await supabase
+              .from('products')
+              .select('id, name, stock_vente, sector_meta')
+              .eq('id', bom.matiere_id)
+              .maybeSingle()
+
+            if (pCheck) {
+              const curDispo = Number(pCheck.stock_vente ?? pCheck.sector_meta?.stock_vente ?? 0)
+              if (curDispo < qtyNeeded) {
+                throw new Error(`Stock insuffisant pour la matière "${pCheck.name}" : requis ${qtyNeeded}, disponible ${curDispo}.`)
+              }
+            } else {
+              // Vérifier table imprimerie_matieres
+              const { data: mCheck } = await supabase
+                .from('imprimerie_matieres')
+                .select('id, nom, stock_actuel')
+                .eq('id', bom.matiere_id)
+                .maybeSingle()
+
+              if (mCheck) {
+                const curDispo = Number(mCheck.stock_actuel || 0)
+                if (curDispo < qtyNeeded) {
+                  throw new Error(`Stock insuffisant pour la matière "${mCheck.nom}" : requis ${qtyNeeded}, disponible ${curDispo}.`)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
 
     // Coût théorique cumulé des matières
     let coutMatieresTotal = 0
@@ -1343,6 +1442,44 @@ export const imprimerieService = {
       } catch (caisseErr) {
         console.warn('Erreur synchro caisse vente express:', caisseErr)
       }
+
+      // Synchronisation sales_orders pour reflet immédiat en caisse
+      try {
+        await supabase.from('sales_orders').upsert({
+          id: cmd.id,
+          company_id: companyId,
+          sector_slug: sectorSlug,
+          order_number: cmdNum,
+          order_date: new Date().toISOString().split('T')[0],
+          total_amount: totalTtc,
+          subtotal_ht: totalTtc,
+          paid_amount: montantPaye,
+          credit_amount: soldeRestant,
+          status: 'COMPLET',
+          payment_status: statutPaiement === 'solde' ? (params.modePaiement === 'especes' ? 'espece' : params.modePaiement) : statutPaiement,
+          payment_method: params.modePaiement,
+          customer_name: params.clientNom || 'Client Comptoir',
+          notes: JSON.stringify({
+            source_module: 'imprimerie',
+            is_imprimerie_order: true,
+            stock_already_deducted: true,
+            payments: [{ method: params.modePaiement, amount: montantPaye }]
+          })
+        })
+
+        const orderItemsPayload = params.items.map((it) => ({
+          order_id: cmd.id,
+          product_id: it.prestation.id,
+          product_name: it.prestation.nom,
+          quantity: it.quantite,
+          unit_price: it.prixUnitaire,
+          total_price: it.totalLigne,
+          total_cost: Number(it.prestation.cout_revient_theorique || 0) * it.quantite
+        }))
+        await supabase.from('sales_order_items').insert(orderItemsPayload)
+      } catch (soErr) {
+        console.warn('Erreur synchronisation sales_orders vente express:', soErr)
+      }
     }
 
     // 4. Déduire automatiquement les matières premières BOM et tracer dans imprimerie_consommations si validé
@@ -1396,6 +1533,16 @@ export const imprimerieService = {
             taux_marge_reel: Number(tauxMarge.toFixed(2)),
           })
           .eq('id', cmd.id)
+      }
+    }
+
+    // 5. Déclenchement des événements temps réel
+    if (typeof window !== 'undefined') {
+      if (isAttente) {
+        window.dispatchEvent(new CustomEvent('gestio:bon_transmitted', { detail: { commandeId: cmd.id, orderNumber: cmdNum } }))
+      } else {
+        window.dispatchEvent(new CustomEvent('gestio:transaction_created'))
+        window.dispatchEvent(new CustomEvent('gestio:bon_encaisse', { detail: { orderId: cmd.id, transactionRef: recuRef } }))
       }
     }
 
@@ -1804,6 +1951,67 @@ export const imprimerieService = {
       console.warn('Notice mise à jour validation distante (conservée localement):', e)
     }
 
+    // 2.b Synchronisation automatique dans imprimerie_commandes pour visibilité immédiate en Caisse
+    try {
+      const graphisteNom = graphisteUser?.full_name || graphisteUser?.name || 'Graphiste'
+      const cmdNum = item.reference || `CMD-GRA-${Date.now().toString().slice(-6)}`
+
+      const { data: existingCmd } = await supabase
+        .from('imprimerie_commandes')
+        .select('id')
+        .eq('company_id', companyId)
+        .eq('numero_commande', cmdNum)
+        .maybeSingle()
+
+      if (!existingCmd) {
+        const { data: newCmd } = await supabase
+          .from('imprimerie_commandes')
+          .insert({
+            company_id: companyId,
+            sector_slug: item.sector_slug || 'imprimerie',
+            numero_commande: cmdNum,
+            client_nom: item.client_nom || 'Client Comptoir',
+            client_tel: item.client_tel || null,
+            titre_travail: `[Graphiste: ${graphisteNom}] ${item.designation}`,
+            date_commande: new Date().toISOString().split('T')[0],
+            priorite: 'haute',
+            statut: 'maquette_validee',
+            total_ttc: Number(item.prix_vente || 0),
+            montant_acompte: 0,
+            montant_paye: 0,
+            solde_restant: Number(item.prix_vente || 0),
+            statut_paiement: 'non_paye',
+            cout_matieres_prevu: Number(item.cout_realisation || 0),
+            cout_revient_total: Number(item.cout_realisation || 0),
+            marge_reelle: Number(item.marge_brute || 0),
+            taux_marge_reel: Number(item.prix_vente) > 0 ? (Number(item.marge_brute) / Number(item.prix_vente)) * 100 : 0,
+          })
+          .select('id')
+          .single()
+
+        if (newCmd?.id) {
+          await supabase.from('imprimerie_commande_lignes').insert({
+            company_id: companyId,
+            sector_slug: item.sector_slug || 'imprimerie',
+            commande_id: newCmd.id,
+            designation: item.designation,
+            mode_calcul: 'forfait',
+            quantite: 1,
+            prix_unitaire: Number(item.prix_vente || 0),
+            montant_ttc: Number(item.prix_vente || 0),
+            details_json: {
+              graphiste_id: graphisteUser?.id,
+              graphiste_nom: graphisteNom,
+              note: item.note,
+              mode_realisation: item.mode_realisation
+            }
+          })
+        }
+      }
+    } catch (cmdSyncErr) {
+      console.warn('Erreur synchronisation commande graphiste:', cmdSyncErr)
+    }
+
     // 3. Journal d'audit
     await this.logAudit({
       company_id: companyId,
@@ -1820,6 +2028,10 @@ export const imprimerieService = {
         transmise_caisse: true,
       },
     })
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gestio:bon_transmitted', { detail: { reference: item.reference } }))
+    }
 
     return updated
   },
@@ -1874,6 +2086,66 @@ export const imprimerieService = {
       console.warn('Notice mise à jour encaissement distant:', e)
     }
 
+    // 2.b Mettre à jour imprimerie_commandes & sales_orders si existante
+    try {
+      const { data: cmdMatch } = await supabase
+        .from('imprimerie_commandes')
+        .select('id, statut, total_ttc')
+        .eq('company_id', companyId)
+        .eq('numero_commande', item.reference)
+        .maybeSingle()
+
+      if (cmdMatch?.id) {
+        await supabase
+          .from('imprimerie_commandes')
+          .update({
+            montant_paye: nouveauTotalPaye,
+            solde_restant: nouveauSolde,
+            statut_paiement: isTotal ? 'solde' : 'acompte',
+            statut: isTotal ? 'termine' : 'en_production',
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', cmdMatch.id)
+
+        // Traçabilité paiement
+        await supabase.from('imprimerie_paiements').insert({
+          company_id: companyId,
+          sector_slug: item.sector_slug || 'imprimerie',
+          commande_id: cmdMatch.id,
+          montant: montantRecu,
+          mode_paiement: modePaiement,
+          reference_recu: refRecu,
+          caissier_id: caissiereUser?.id || null,
+          caissier_nom: caissiereUser?.full_name || 'Caissière',
+          type_paiement: isTotal ? 'solde' : 'acompte'
+        })
+
+        // Reflet sales_orders
+        await supabase.from('sales_orders').upsert({
+          id: cmdMatch.id,
+          company_id: companyId,
+          sector_slug: item.sector_slug || 'imprimerie',
+          order_number: item.reference,
+          order_date: new Date().toISOString().split('T')[0],
+          total_amount: Number(item.prix_vente || 0),
+          subtotal_ht: Number(item.prix_vente || 0),
+          paid_amount: nouveauTotalPaye,
+          credit_amount: nouveauSolde,
+          status: isTotal ? 'COMPLET' : 'partiellement_paye',
+          payment_status: isTotal ? (modePaiement === 'especes' ? 'espece' : modePaiement) : 'partiel',
+          payment_method: modePaiement,
+          customer_name: item.client_nom || 'Client Comptoir',
+          notes: JSON.stringify({
+            is_imprimerie_order: true,
+            source_module: 'imprimerie_variable',
+            payments: [{ method: modePaiement, amount: montantRecu }]
+          })
+        })
+      }
+    } catch (soSyncErr) {
+      console.warn('Erreur synchro sales_orders prestation variable:', soSyncErr)
+    }
+
     // 3. Écriture réelle dans la caisse opérationnelle GESTIO 229
     try {
       await enregistrerMouvementCaisse({
@@ -1910,6 +2182,11 @@ export const imprimerieService = {
         mode_paiement: modePaiement,
       },
     })
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gestio:bon_encaisse', { detail: { reference: item.reference, transactionRef: refRecu } }))
+      window.dispatchEvent(new CustomEvent('gestio:transaction_created'))
+    }
 
     return { prestation: updated, referenceRecu: refRecu }
   },
