@@ -70,8 +70,9 @@ export const ImprimerieSousTraitancePage: React.FC = () => {
       setSousTraitances(stList)
       setCommandes(cmdList)
     } catch (err) {
-      console.error('Erreur sous-traitance:', err)
-      notify('error', 'Erreur de chargement.')
+      console.warn('Avertissement chargement sous-traitance:', err)
+      setSousTraitances([])
+      setCommandes([])
     } finally {
       setLoading(false)
     }

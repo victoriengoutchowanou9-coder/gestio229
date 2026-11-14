@@ -102,8 +102,9 @@ export const ImprimeriePrestationsPage: React.FC = () => {
       setPrestations(presList)
       setMatieres(matsList)
     } catch (err) {
-      console.error('Erreur chargement prestations:', err)
-      notify('error', 'Erreur de chargement des prestations.')
+      console.warn('Avertissement chargement prestations:', err)
+      setPrestations([])
+      setMatieres([])
     } finally {
       setLoading(false)
     }

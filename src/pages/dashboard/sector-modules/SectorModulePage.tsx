@@ -94,15 +94,58 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
     if (!config || !companyId || !sectorSlug) return
     setLoading(true)
     try {
-      const { data, error } = await supabase
+      // Étape 1 : Requête avec tri configuré ou created_at
+      let res = await supabase
         .from(config.table)
         .select('*')
         .eq('company_id', companyId)
         .eq('sector_slug', sectorSlug)
         .order(config.orderBy || 'created_at', { ascending: false })
         .limit(1000)
-      if (error) throw error
-      setRows(data || [])
+
+      // Étape 2 : Si la colonne de tri n'existe pas en base (PostgreSQL 42703)
+      if (res.error && (res.error.code === '42703' || /does not exist|column/i.test(res.error.message))) {
+        // Repli sur created_at
+        res = await supabase
+          .from(config.table)
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('sector_slug', sectorSlug)
+          .order('created_at', { ascending: false })
+          .limit(1000)
+
+        // Si created_at n'existe pas non plus, requête sans tri
+        if (res.error && (res.error.code === '42703' || /does not exist|column/i.test(res.error.message))) {
+          res = await supabase
+            .from(config.table)
+            .select('*')
+            .eq('company_id', companyId)
+            .eq('sector_slug', sectorSlug)
+            .limit(1000)
+        }
+      }
+
+      // Étape 3 : Si sector_slug n'existe pas dans la table
+      if (res.error && (res.error.code === '42703' || /sector_slug/i.test(res.error.message))) {
+        res = await supabase
+          .from(config.table)
+          .select('*')
+          .eq('company_id', companyId)
+          .limit(1000)
+      }
+
+      // Étape 4 : Si company_id n'existe pas (ex: tenant_id)
+      if (res.error && (res.error.code === '42703' || /company_id/i.test(res.error.message))) {
+        res = await supabase
+          .from(config.table)
+          .select('*')
+          .eq('tenant_id', companyId)
+          .limit(1000)
+      }
+
+      if (res.error) throw res.error
+
+      setRows(res.data || [])
       setTableMissing((wasMissing) => {
         if (wasMissing) {
           notify('success', 'Module activé avec succès !')
@@ -111,8 +154,11 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
       })
     } catch (err: any) {
       console.error(`[${config.table}]`, err)
-      if (isMissingTable(err)) setTableMissing(true)
-      else notify('error', `Erreur de chargement : ${err?.message || err}`)
+      if (isMissingTable(err)) {
+        setTableMissing(true)
+      } else {
+        console.warn(`[SectorModulePage] Avertissement chargement ${config.table}:`, err?.message || err)
+      }
       setRows([])
     } finally {
       setLoading(false)
@@ -172,19 +218,26 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
       let payload: any = normalize(config.compute ? config.compute({ ...form }) : form)
       if (editing) {
         payload = { ...payload }
-        const { error } = await supabase
+        let updRes = await supabase
           .from(config.table)
           .update(payload)
           .eq('id', editing.id)
           .eq('company_id', companyId)
           .eq('sector_slug', sectorSlug)
-        if (error) throw error
+
+        if (updRes.error && /sector_slug/i.test(updRes.error.message)) {
+          updRes = await supabase
+            .from(config.table)
+            .update(payload)
+            .eq('id', editing.id)
+            .eq('company_id', companyId)
+        }
+        if (updRes.error) throw updRes.error
         notify('success', 'Modification enregistrée')
       } else {
-        const fullPayload = {
+        const fullPayload: any = {
           ...payload,
           company_id: companyId,
-          tenant_id: companyId,
           sector_slug: sectorSlug,
         }
         let insertErr: any = null
@@ -192,7 +245,16 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
           const res = await safeStationInsert(supabase, config.table, fullPayload)
           insertErr = res.error
         } else {
-          const res = await supabase.from(config.table).insert(fullPayload)
+          let res = await supabase.from(config.table).insert(fullPayload)
+          if (res.error && (res.error.code === '42703' || /sector_slug/i.test(res.error.message))) {
+            delete fullPayload.sector_slug
+            res = await supabase.from(config.table).insert(fullPayload)
+          }
+          if (res.error && (res.error.code === '42703' || /tenant_id/i.test(res.error.message))) {
+            fullPayload.tenant_id = companyId
+            delete fullPayload.company_id
+            res = await supabase.from(config.table).insert(fullPayload)
+          }
           insertErr = res.error
         }
         if (insertErr) throw insertErr
@@ -212,12 +274,20 @@ export const SectorModulePage: React.FC<{ moduleId: string }> = ({ moduleId }) =
   const handleDelete = async (row: any) => {
     const ok = await showConfirm('Supprimer définitivement cet enregistrement ?', 'Suppression')
     if (!ok) return
-    const { error } = await supabase
+    let { error } = await supabase
       .from(config.table)
       .delete()
       .eq('id', row.id)
       .eq('company_id', companyId)
       .eq('sector_slug', sectorSlug)
+    if (error && /sector_slug/i.test(error.message)) {
+      const retry = await supabase
+        .from(config.table)
+        .delete()
+        .eq('id', row.id)
+        .eq('company_id', companyId)
+      error = retry.error
+    }
     if (error) return notify('error', `Suppression impossible : ${error.message}`)
     notify('success', 'Supprimé')
     load()
