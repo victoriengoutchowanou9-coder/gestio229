@@ -30,6 +30,7 @@ import {
   Droplets,
   Layers,
   AlertCircle,
+  ArrowRightLeft,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { ClearSectorModal } from '../../components/hub/ClearSectorModal';
