@@ -10,8 +10,9 @@ interface AttachSectorModalProps {
   isOpen: boolean;
   onClose: () => void;
   targetSite: CompanySite | null;
+  availableSites?: CompanySite[];
   allActivities: any[];
-  onAttachExistingSector: (activityId: string) => Promise<void>;
+  onAttachExistingSector: (activityId: string, customTargetSite?: CompanySite) => Promise<void>;
   onCreateNewSector: () => void;
   darkMode: boolean;
 }
@@ -20,22 +21,36 @@ export const AttachSectorModal: React.FC<AttachSectorModalProps> = ({
   isOpen,
   onClose,
   targetSite,
+  availableSites = [],
   allActivities,
   onAttachExistingSector,
   onCreateNewSector,
   darkMode,
 }) => {
+  const [selectedSiteId, setSelectedSiteId] = useState<string>(targetSite?.id || '');
   const [selectedActivityId, setSelectedActivityId] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
-  if (!isOpen || !targetSite) return null;
+  // Synchroniser le site cible lorsque le modal s'ouvre ou que targetSite change
+  React.useEffect(() => {
+    if (targetSite?.id) {
+      setSelectedSiteId(targetSite.id);
+    } else if (availableSites.length > 0) {
+      const defaultSite = availableSites.find((s) => s.is_main) || availableSites[0];
+      setSelectedSiteId(defaultSite.id);
+    }
+  }, [targetSite, availableSites, isOpen]);
+
+  const activeSite = availableSites.find((s) => s.id === selectedSiteId) || targetSite;
+
+  if (!isOpen || !activeSite) return null;
 
   // Secteurs qui ne sont PAS encore rattachés à ce site
   const otherActivities = allActivities.filter((act) => {
     const sId = act.settings?.site_id || act.site_id;
-    if (sId) return sId !== targetSite.id;
-    return !targetSite.is_main;
+    if (sId) return sId !== activeSite.id;
+    return !activeSite.is_main;
   });
 
   const handleAttach = async () => {
@@ -46,7 +61,7 @@ export const AttachSectorModal: React.FC<AttachSectorModalProps> = ({
     setLoading(true);
     setError('');
     try {
-      await onAttachExistingSector(selectedActivityId);
+      await onAttachExistingSector(selectedActivityId, activeSite);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Erreur lors du rattachement.');
@@ -73,7 +88,7 @@ export const AttachSectorModal: React.FC<AttachSectorModalProps> = ({
                 Ajouter un Secteur au Site
               </h3>
               <p className={`text-xs ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                Rattacher un secteur existant ou créer une nouvelle activité sur <strong className="text-emerald-500">{targetSite.name}</strong>
+                Rattacher un secteur existant ou créer une nouvelle activité sur <strong className="text-emerald-500">{activeSite.name}</strong>
               </p>
             </div>
           </div>
@@ -90,6 +105,32 @@ export const AttachSectorModal: React.FC<AttachSectorModalProps> = ({
           {error && (
             <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-500 text-xs font-semibold">
               {error}
+            </div>
+          )}
+
+          {/* Choix du site si plusieurs sites sont disponibles */}
+          {availableSites.length > 1 && (
+            <div className="space-y-1.5">
+              <label className={`text-xs font-bold flex items-center gap-1.5 ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                <Building2 size={13} className="text-emerald-500" />
+                <span>Site d'exploitation récepteur :</span>
+              </label>
+              <select
+                value={selectedSiteId}
+                onChange={(e) => {
+                  setSelectedSiteId(e.target.value);
+                  setSelectedActivityId('');
+                }}
+                className={`w-full px-3 py-2 rounded-xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500/30 ${
+                  darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+                }`}
+              >
+                {availableSites.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name} ({s.city}) {s.is_main ? '★ Site principal' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
           )}
 

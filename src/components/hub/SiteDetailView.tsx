@@ -663,6 +663,22 @@ export const SiteDetailView: React.FC<SiteDetailViewProps> = ({
                           <Trash2 size={12} />
                           <span>Suppr.</span>
                         </button>
+
+                        {onClearSector && (
+                          <button
+                            type="button"
+                            onClick={() => onClearSector(act)}
+                            title={`Vider les données opérationnelles du secteur ${act.name}`}
+                            className={`col-span-2 py-1.5 px-2 rounded-lg text-[11px] font-bold flex items-center justify-center gap-1 transition-all border ${
+                              darkMode
+                                ? 'bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border-amber-700/50'
+                                : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 shadow-sm'
+                            }`}
+                          >
+                            <Trash2 size={12} className="text-amber-600 dark:text-amber-400" />
+                            <span>Vider le secteur</span>
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

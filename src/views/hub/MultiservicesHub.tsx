@@ -252,6 +252,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     sectorMetricsRef.current = sectorMetricsMap;
   }, [sectorMetricsMap]);
 
+  const activitiesRef = useRef<ActivityEntry[]>(activities);
+  useEffect(() => {
+    activitiesRef.current = activities;
+  }, [activities]);
+
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
 
@@ -282,6 +287,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const [showMoveSectorModal, setShowMoveSectorModal] = useState(false);
   const [sectorToMove, setSectorToMove] = useState<ActivityEntry | null>(null);
   const [showAttachSectorModal, setShowAttachSectorModal] = useState(false);
+  const [targetSiteForAttach, setTargetSiteForAttach] = useState<CompanySite | null>(null);
 
   // Recherche & filtres Niveau 1
   const [siteSearchQuery, setSiteSearchQuery] = useState('');
@@ -295,14 +301,18 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   const loadSites = useCallback(async (currentActs?: ActivityEntry[]) => {
     if (!companyId) return;
-    const actsToUse = currentActs || activities;
+    const actsToUse = currentActs || activitiesRef.current;
     const loaded = await loadCompanySites(companyId, company?.city, actsToUse);
-    setSites(loaded);
-  }, [companyId, company?.city, activities]);
-
-  useEffect(() => {
-    loadSites();
-  }, [loadSites]);
+    setSites((prev) => {
+      if (
+        prev.length === loaded.length &&
+        prev.every((p, i) => p.id === loaded[i]?.id && p.updated_at === loaded[i]?.updated_at && p.name === loaded[i]?.name)
+      ) {
+        return prev;
+      }
+      return loaded;
+    });
+  }, [companyId, company?.city]);
 
   const siteFinancialsMap = useMemo(() => {
     const map: Record<string, SiteFinancials> = {};
@@ -415,10 +425,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     await loadSites();
   };
 
-  const handleAttachExistingSectorToSite = async (activityId: string) => {
-    const currentSite = sites.find((s) => s.id === selectedSiteId);
+  const handleAttachExistingSectorToSite = async (activityId: string, customTargetSite?: CompanySite) => {
+    const currentSite = customTargetSite || targetSiteForAttach || sites.find((s) => s.id === selectedSiteId) || sites.find((s) => s.is_main) || sites[0];
     if (!currentSite) return;
     await handleConfirmMoveSector(activityId, currentSite);
+    setTargetSiteForAttach(null);
   };
 
   const handleCustomDateChange = async (startDate: string, endDate: string) => {
@@ -653,12 +664,20 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   }, []);
 
   // ── Métriques financières réelles consolidées (Règle d'or Hub : Fuseau Africa/Porto-Novo) ──
+  const isFetchingMetricsRef = useRef(false);
   const loadFinancialMetrics = useCallback(async () => {
-    if (!companyId) return;
+    if (!companyId || isFetchingMetricsRef.current) return;
+    isFetchingMetricsRef.current = true;
     try {
       const result = await fetchHubFinancialMetrics(companyId);
       if (result?.totals) {
-        setHubTotals(result.totals);
+        setHubTotals((prev) => {
+          // Préserver les totaux non-nuls pour éviter les passages intempestifs à 0
+          if ((!result.totals.ca_mois || result.totals.ca_mois === 0) && prev && prev.ca_mois && prev.ca_mois > 0) {
+            return prev;
+          }
+          return result.totals;
+        });
       }
       if (result?.sectors) {
         sectorMetricsRef.current = result.sectors;
@@ -668,34 +687,49 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         } catch (_) {}
 
         setActivities((prev) => {
+          let hasChanged = false;
           const updated = prev.map((act) => {
             const normSlug = (act.sectorSlug || '').toLowerCase().trim().replace(/^sec-/, '');
             const card = result.sectors[normSlug] || result.sectors[act.sectorSlug];
             if (!card) return act;
             // Mois calendaire strict — jamais de fallback sur totalRevenue
-            const rev = card.monthRevenue ?? 0;
-            const exp = card.monthExpenses ?? 0;
-            const net = card.monthNetMargin ?? 0;
+            const rev = card.monthRevenue ?? act.revenue ?? 0;
+            const exp = card.monthExpenses ?? act.expenses ?? 0;
+            const net = card.monthNetMargin ?? act.netMargin ?? 0;
+
+            if (
+              act.revenue === rev &&
+              act.monthRevenue === (card.monthRevenue ?? 0) &&
+              act.expenses === exp &&
+              act.netMargin === net &&
+              act.dayRevenue === (card.dayRevenue ?? 0)
+            ) {
+              return act;
+            }
+
+            hasChanged = true;
             return {
               ...act,
-              dayRevenue: card.dayRevenue,
-              dayRevenueHT: card.dayRevenueHT,
-              dayCogsHT: card.dayCogsHT,
-              dayGrossMargin: card.dayGrossMargin,
-              dayExpenses: card.dayExpenses,
-              dayNetMargin: card.dayNetMargin,
-              monthRevenue: card.monthRevenue,
-              monthRevenueHT: card.monthRevenueHT,
-              monthCogsHT: card.monthCogsHT,
-              monthGrossMargin: card.monthGrossMargin,
-              monthExpenses: card.monthExpenses,
-              monthNetMargin: card.monthNetMargin,
+              dayRevenue: card.dayRevenue ?? act.dayRevenue ?? 0,
+              dayRevenueHT: card.dayRevenueHT ?? act.dayRevenueHT ?? 0,
+              dayCogsHT: card.dayCogsHT ?? act.dayCogsHT ?? 0,
+              dayGrossMargin: card.dayGrossMargin ?? act.dayGrossMargin ?? 0,
+              dayExpenses: card.dayExpenses ?? act.dayExpenses ?? 0,
+              dayNetMargin: card.dayNetMargin ?? act.dayNetMargin ?? 0,
+              monthRevenue: card.monthRevenue ?? act.monthRevenue ?? 0,
+              monthRevenueHT: card.monthRevenueHT ?? act.monthRevenueHT ?? 0,
+              monthCogsHT: card.monthCogsHT ?? act.monthCogsHT ?? 0,
+              monthGrossMargin: card.monthGrossMargin ?? act.monthGrossMargin ?? 0,
+              monthExpenses: card.monthExpenses ?? act.monthExpenses ?? 0,
+              monthNetMargin: card.monthNetMargin ?? act.monthNetMargin ?? 0,
               revenue: rev,
               expenses: exp,
               netMargin: net,
-              stationFinancials: card.stationFinancials,
+              stationFinancials: card.stationFinancials || act.stationFinancials,
             };
           });
+
+          if (!hasChanged) return prev;
           try {
             localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(updated));
           } catch (_) {}
@@ -704,12 +738,16 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       }
     } catch (e) {
       console.warn('[Hub] Erreur métriques financières consolidées:', e);
+    } finally {
+      isFetchingMetricsRef.current = false;
     }
   }, [companyId]);
 
   // ── Synchronisation Supabase company_activities ─────────────────────────────
+  const isFetchingActivitiesRef = useRef(false);
   const loadActivitiesFromSupabase = useCallback(async () => {
-    if (!companyId) return;
+    if (!companyId || isFetchingActivitiesRef.current) return;
+    isFetchingActivitiesRef.current = true;
     try {
       // 1. Récupération de l'entreprise si les secteurs ne sont pas fournis dans les props
       let comp = company;
@@ -906,22 +944,52 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         setActivities((prev) => {
           const prevMap = new Map(prev.map((p) => [p.id, p]));
           const merged = finalUnique.map((item) => {
-            return item;
+            const existing = prevMap.get(item.id);
+            // PRÉSERVATION ABSOLUE DES CHIFFRES : Ne jamais réinitialiser à 0 !
+            return {
+              ...item,
+              revenue: (item.revenue && item.revenue > 0) ? item.revenue : (existing?.revenue ?? 0),
+              monthRevenue: (item.monthRevenue && item.monthRevenue > 0) ? item.monthRevenue : (existing?.monthRevenue ?? 0),
+              monthGrossMargin: (item.monthGrossMargin && item.monthGrossMargin > 0) ? item.monthGrossMargin : (existing?.monthGrossMargin ?? 0),
+              grossMargin: (item.grossMargin && item.grossMargin > 0) ? item.grossMargin : (existing?.grossMargin ?? 0),
+              expenses: (item.expenses && item.expenses > 0) ? item.expenses : (existing?.expenses ?? 0),
+              monthExpenses: (item.monthExpenses && item.monthExpenses > 0) ? item.monthExpenses : (existing?.monthExpenses ?? 0),
+              netMargin: (item.netMargin && item.netMargin !== 0) ? item.netMargin : (existing?.netMargin ?? 0),
+              monthNetMargin: (item.monthNetMargin && item.monthNetMargin !== 0) ? item.monthNetMargin : (existing?.monthNetMargin ?? 0),
+              dayRevenue: (item.dayRevenue && item.dayRevenue > 0) ? item.dayRevenue : (existing?.dayRevenue ?? 0),
+              dayRevenueHT: (item.dayRevenueHT && item.dayRevenueHT > 0) ? item.dayRevenueHT : (existing?.dayRevenueHT ?? 0),
+              dayCogsHT: (item.dayCogsHT && item.dayCogsHT > 0) ? item.dayCogsHT : (existing?.dayCogsHT ?? 0),
+              dayGrossMargin: (item.dayGrossMargin && item.dayGrossMargin > 0) ? item.dayGrossMargin : (existing?.dayGrossMargin ?? 0),
+              dayExpenses: (item.dayExpenses && item.dayExpenses > 0) ? item.dayExpenses : (existing?.dayExpenses ?? 0),
+              dayNetMargin: (item.dayNetMargin && item.dayNetMargin !== 0) ? item.dayNetMargin : (existing?.dayNetMargin ?? 0),
+              stationFinancials: item.stationFinancials || existing?.stationFinancials,
+            };
           });
+
+          // Si aucune modification structurelle, ne pas déclencher de re-render
+          const isSame = prev.length === merged.length && prev.every((p, i) =>
+            p.id === merged[i]?.id &&
+            p.name === merged[i]?.name &&
+            p.status === merged[i]?.status &&
+            p.monthRevenue === merged[i]?.monthRevenue &&
+            (p.settings?.site_id || p.site_id) === (merged[i]?.settings?.site_id || merged[i]?.site_id)
+          );
+          if (isSame) return prev;
+
           try {
             localStorage.setItem(`gestio229_activities_${companyId}`, JSON.stringify(merged));
           } catch (_) {}
           return merged;
         });
 
-        // Synchroniser immédiatement les métriques financières réelles
-        loadFinancialMetrics();
         loadSites(finalUnique);
       }
     } catch (err) {
       console.error('[Hub] Erreur sync Supabase:', err);
+    } finally {
+      isFetchingActivitiesRef.current = false;
     }
-  }, [companyId, company, companyName, loadFinancialMetrics, loadSites]);
+  }, [companyId, company?.city, loadSites]);
 
   // Synchronisation immédiate si company est disponible et activities est vide
   useEffect(() => {
@@ -976,11 +1044,17 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     }
   }, [company, companyId, companyName, activities.length]);
 
-  // Chargement initial depuis Supabase uniquement
+  // Chargement initial stable (une seule fois par companyId)
+  const initialLoadedRef = useRef(false);
   useEffect(() => {
-    loadActivitiesFromSupabase();
-    loadFinancialMetrics();
-  }, [companyId, loadActivitiesFromSupabase, loadFinancialMetrics]);
+    if (!companyId) return;
+    if (!initialLoadedRef.current) {
+      initialLoadedRef.current = true;
+      loadActivitiesFromSupabase();
+      loadFinancialMetrics();
+      loadSites();
+    }
+  }, [companyId, loadActivitiesFromSupabase, loadFinancialMetrics, loadSites]);
 
   // Synchronisation Realtime Supabase multi-appareils (Ventes, Dépenses, Caisses, Activités)
   useEffect(() => {
@@ -991,7 +1065,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         loadFinancialMetrics();
-      }, 100);
+      }, 500);
     };
 
     const channel = supabase
@@ -1047,15 +1121,10 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       )
       .subscribe();
 
-    const handleFocus = () => {
-      loadActivitiesFromSupabase();
-      debouncedRefresh();
-    };
     const handleTransaction = () => {
       debouncedRefresh();
     };
 
-    window.addEventListener('focus', handleFocus);
     window.addEventListener('gestio:transaction_created', handleTransaction);
     window.addEventListener('gestio:sale_created', handleTransaction);
     window.addEventListener('gestio:depense_created', handleTransaction);
@@ -1063,20 +1132,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
     return () => {
       clearTimeout(debounceTimer);
       supabase.removeChannel(channel);
-      window.removeEventListener('focus', handleFocus);
       window.removeEventListener('gestio:transaction_created', handleTransaction);
       window.removeEventListener('gestio:sale_created', handleTransaction);
       window.removeEventListener('gestio:depense_created', handleTransaction);
     };
   }, [companyId, loadActivitiesFromSupabase, loadFinancialMetrics]);
-
-  useEffect(() => {
-    // Peinture instantanée du Hub à 0ms puis calcul des métriques en arrière-plan
-    const t = setTimeout(() => {
-      loadFinancialMetrics();
-    }, 50);
-    return () => clearTimeout(t);
-  }, [loadFinancialMetrics, activities.length]);
 
   const persist = useCallback(
     (data: ActivityEntry[]) => {
@@ -1109,6 +1169,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
   const archivedActivities = useMemo(
     () => visibleActivities.filter((a) => a.status === 'ARCHIVEE'),
     [visibleActivities]
+  );
+
+  const unattachedActivities = useMemo(
+    () => activeActivities.filter((a) => !a.settings?.site_id && !a.site_id),
+    [activeActivities]
   );
 
   // ── CALCULS CONSOLIDÉS DU JOUR (PARTIE 3) & DU MOIS (PARTIE 4) ─────────────
@@ -2052,21 +2117,86 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
               </button>
             </div>
 
-            {isAdmin && (
+            {archivedActivities.length > 0 && (
               <button
                 type="button"
-                onClick={() => {
-                  setSiteToEdit(null);
-                  setShowSiteModal(true);
-                }}
-                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
+                onClick={() => setShowArchived(!showArchived)}
+                className={`text-xs flex items-center gap-1.5 px-3 py-2 rounded-xl border transition-colors ${
+                  darkMode
+                    ? 'border-slate-800 text-slate-400 hover:text-white bg-slate-900/60'
+                    : 'border-slate-200 text-slate-600 hover:text-slate-900 bg-white'
+                }`}
               >
-                <Plus size={14} />
-                <span>Nouveau site</span>
+                <Archive size={14} />
+                <span>{showArchived ? 'Masquer' : 'Voir'} archives ({archivedActivities.length})</span>
               </button>
+            )}
+
+            {isAdmin && (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTargetSiteForAttach(sites.find((s) => s.is_main) || sites[0] || null);
+                    setShowAttachSectorModal(true);
+                  }}
+                  className={`flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold transition-all border shadow-sm ${
+                    darkMode
+                      ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700'
+                      : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200'
+                  }`}
+                  title="Rattacher une activité existante à un site"
+                >
+                  <ArrowRightLeft size={14} className="text-emerald-500" />
+                  <span>Rattacher une activité</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSiteToEdit(null);
+                    setShowSiteModal(true);
+                  }}
+                  className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
+                >
+                  <Plus size={14} />
+                  <span>Nouveau site</span>
+                </button>
+              </div>
             )}
           </div>
         </div>
+
+        {/* Bannière d'information pour les entreprises existantes ayant des activités non rattachées */}
+        {unattachedActivities.length > 0 && (
+          <div className={`p-4 rounded-2xl border mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-sm ${
+            darkMode ? 'bg-amber-950/30 border-amber-800/60 text-amber-300' : 'bg-amber-50 border-amber-200 text-amber-900'
+          }`}>
+            <div className="flex items-center gap-3">
+              <div className="p-2 rounded-xl bg-amber-500/20 text-amber-500 shrink-0">
+                <AlertCircle size={20} />
+              </div>
+              <div>
+                <h4 className="text-xs font-bold uppercase tracking-wider">
+                  {unattachedActivities.length} activité(s) antérieure(s) à rattacher
+                </h4>
+                <p className={`text-xs mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                  Rattachez vos activités existantes à un site d'exploitation pour organiser vos points de vente et accéder à leurs espaces métiers.
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setTargetSiteForAttach(sites.find((s) => s.is_main) || sites[0] || null);
+                setShowAttachSectorModal(true);
+              }}
+              className="px-4 py-2 bg-amber-600 hover:bg-amber-500 text-white rounded-xl text-xs font-bold shrink-0 transition-all shadow-sm shadow-amber-600/20 active:scale-95 cursor-pointer"
+            >
+              Rattacher une activité
+            </button>
+          </div>
+        )}
 
         {/* Grille des cartes des sites */}
         {filteredSites.length === 0 ? (
@@ -2146,332 +2276,7 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         )}
       </div>
 
-      {/* ══ ÉTAT VIDE (AUCUNE ACTIVITÉ ENREGISTRÉE) ══════════════════════════ */}
-      {activeActivities.length === 0 && (
-        <div className="w-full max-w-none px-3 lg:px-4 mb-10">
-          <div className={`border border-dashed rounded-2xl p-12 text-center ${
-            darkMode ? 'bg-slate-900/50 border-slate-700' : 'bg-white border-slate-300'
-          }`}>
-            <div className={`w-16 h-16 rounded-2xl border flex items-center justify-center mx-auto mb-4 ${
-              darkMode ? 'bg-slate-800 border-slate-700 text-slate-500' : 'bg-slate-100 border-slate-200 text-slate-400'
-            }`}>
-              <Building2 size={32} />
-            </div>
-            <h3 className={`text-lg font-bold mb-2 ${darkMode ? 'text-slate-400' : 'text-slate-700'}`}>Aucune activité active</h3>
-            <p className={`text-sm max-w-md mx-auto mb-6 ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-              Renseignez vos établissements pour afficher leurs cartes et accéder à leurs espaces métiers dédiés.
-            </p>
-            <div className="flex items-center justify-center gap-3 flex-wrap">
-              <button
-                onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}
-                className="flex items-center gap-2 px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-sm font-bold text-white transition-colors"
-              >
-                <Plus size={16} /> Ajouter une activité
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* ══ PARTIE 5 — CARTE DE CHAQUE ACTIVITÉ ═════════════════════════════ */}
-      {activeActivities.length > 0 && (
-        <div className="w-full max-w-none px-3 lg:px-4 mb-12">
-          <div className="flex items-center justify-between mb-6">
-            <div>
-              <h3 className={`text-xl font-bold tracking-tight flex items-center gap-2 ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                <span>Établissements & Activités ({activeActivities.length})</span>
-              </h3>
-              <p className={`text-xs mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Accès direct aux applications métiers autonomes</p>
-            </div>
-            {archivedActivities.length > 0 && (
-              <button
-                onClick={() => setShowArchived(!showArchived)}
-                className={`text-xs flex items-center gap-1.5 transition-colors ${darkMode ? 'text-slate-400 hover:text-white' : 'text-slate-500 hover:text-slate-900'}`}
-              >
-                <Archive size={14} />
-                <span>{showArchived ? 'Masquer' : 'Voir'} archives ({archivedActivities.length})</span>
-              </button>
-            )}
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {activeActivities.map((act) => (
-              <div
-                key={act.id}
-                className={`rounded-2xl p-6 flex flex-col justify-between shadow-xl transition-all relative overflow-hidden border ${
-                  darkMode
-                    ? 'bg-slate-900 border-slate-800 hover:border-slate-700'
-                    : 'bg-white border-slate-200 hover:border-slate-300 shadow-md'
-                }`}
-              >
-                {/* 5.1 En-tête de la carte : Nom de l'activité, Lieu & Badge Abonnement (Règle 6 CDC) */}
-                <div>
-                  {(() => {
-                    const badgeInfo = getSectorBadgeInfo(act.sectorSlug);
-                    return (
-                      <>
-                        <div className="flex items-start justify-between gap-3 mb-2">
-                          <div className="flex-1 min-w-0">
-                            <h4 className={`text-base font-black uppercase tracking-tight leading-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                              {act.name}
-                            </h4>
-                            <div className={`text-xs flex items-center gap-1 mt-1 font-medium ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                              <MapPin size={12} className={darkMode ? "text-slate-500 shrink-0" : "text-slate-400 shrink-0"} />
-                              <span>{act.location || 'Lieu non spécifié'}</span>
-                            </div>
-                          </div>
-
-                          {/* Coin supérieur droit : Badge de Souscription & Bouton Vider le secteur */}
-                          <div className="flex flex-col items-end gap-1.5 shrink-0">
-                            <span
-                              className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider border shadow-sm ${badgeInfo.badgeClass}`}
-                            >
-                              {badgeInfo.label}
-                            </span>
-                            {isAdmin && (
-                              <button
-                                type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  setClearSectorTarget(act);
-                                }}
-                                title={`Vider les données opérationnelles du secteur ${act.name}`}
-                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-bold transition-all border shadow-sm ${
-                                  darkMode
-                                    ? 'text-amber-300 hover:text-amber-200 bg-amber-950/50 hover:bg-amber-900/70 border-amber-700/60'
-                                    : 'text-amber-800 hover:text-amber-900 bg-amber-50 hover:bg-amber-100 border-amber-300'
-                                }`}
-                              >
-                                <Trash2 size={10} className="shrink-0 text-amber-600 dark:text-amber-400" />
-                                <span>Vider le secteur</span>
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className={`text-[11px] mb-4 flex items-center justify-between ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                          <span>{act.sectorLabel}</span>
-                          <span className="text-[10px] opacity-85 font-semibold">{(badgeInfo as any).expirationText || act.status}</span>
-                        </div>
-                      </>
-                    );
-                  })()}
-
-                  {/* 5.1 Corps financier : Standard pour tous secteurs, Spécialisé 6 KPI pour Station-Service */}
-                  {(() => {
-                    const normSlug = (act.sectorSlug || '').toLowerCase().replace(/^sec-/, '');
-                    const isStation = normSlug === 'station-service' || normSlug === 'station';
-                    const cardMetric = sectorMetricsMap[normSlug] || sectorMetricsMap[act.sectorSlug];
-                    const sf = cardMetric?.stationFinancials || act.stationFinancials;
-
-                    if (isStation && sf) {
-                      // ═══ CARTE STATION-SERVICE — 6 INDICATEURS FINANCIERS (DURÉE 1 MOIS) ═══
-                      return (
-                        <div className={`rounded-xl p-4 space-y-1.5 mb-6 border ${
-                          darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
-                        }`}>
-                          {/* Titre section */}
-                          <div className={`flex items-center justify-between gap-1.5 mb-2 pb-1.5 border-b ${
-                            darkMode ? 'border-slate-800' : 'border-slate-200'
-                          }`}>
-                            <span className="flex items-center gap-1.5">
-                              <Fuel size={13} className="text-amber-500" />
-                              <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                                darkMode ? 'text-amber-400/80' : 'text-amber-700'
-                              }`}>Données du mois</span>
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-semibold lowercase">
-                              ({currentMonthLabel})
-                            </span>
-                          </div>
-
-                          {/* 1. Marge brute des carburants */}
-                          <div className="flex items-center justify-between text-xs">
-                            <span className={`flex items-center gap-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                              <Fuel size={11} className="text-amber-500 shrink-0" />
-                              Marge brute carburants :
-                            </span>
-                            <span className={`font-mono font-bold ${sf.margeBruteCarburants >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                              {fmt(sf.margeBruteCarburants)} F
-                            </span>
-                          </div>
-
-                          {/* 2. Marge brute des ventes générales et lubrifiants */}
-                          <div className="flex items-center justify-between text-xs">
-                            <span className={`flex items-center gap-1 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                              <Droplets size={11} className="text-blue-500 shrink-0" />
-                              Marge brute lubrifiants :
-                            </span>
-                            <span className={`font-mono font-bold ${sf.margeBruteGeneraleLubrifiants >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                              {fmt(sf.margeBruteGeneraleLubrifiants)} F
-                            </span>
-                          </div>
-
-                          {/* 3. Marge brute globale */}
-                          <div className={`flex items-center justify-between text-xs pt-1 border-t ${
-                            darkMode ? 'border-slate-800/60' : 'border-slate-200/80'
-                          }`}>
-                            <span className={`font-semibold ${darkMode ? 'text-slate-300' : 'text-slate-700'}`}>
-                              Marge brute globale :
-                            </span>
-                            <span className={`font-mono font-black ${sf.margeBruteGlobale >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                              {fmt(sf.margeBruteGlobale)} F
-                            </span>
-                          </div>
-
-                          {/* 4. Chiffre d'affaires global */}
-                          <div className="flex items-center justify-between text-xs">
-                            <span className={darkMode ? 'text-slate-400' : 'text-slate-500'}>CA global :</span>
-                            <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>
-                              {fmt(sf.caGlobal)} F
-                            </span>
-                          </div>
-
-                          {/* 5. Dépenses globales */}
-                          <div className="flex items-center justify-between text-xs">
-                            <span className={darkMode ? 'text-slate-400' : 'text-slate-500'}>Dépenses globales :</span>
-                            <span className="font-mono font-bold text-rose-500">
-                              {fmt(sf.depensesGlobales)} F
-                            </span>
-                          </div>
-
-                          {/* 6. Marge nette globale */}
-                          <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
-                            darkMode ? 'border-slate-800/80' : 'border-slate-200'
-                          }`}>
-                            <span className={`font-semibold ${sf.margeNetteGlobale >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                              Marge nette globale :
-                            </span>
-                            <span className={`font-mono font-black ${sf.margeNetteGlobale >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                              {fmt(sf.margeNetteGlobale)} F {sf.margeNetteGlobale < 0 ? '(Déficit)' : ''}
-                            </span>
-                          </div>
-                        </div>
-                      );
-                    }
-
-                    // ═══ CARTE STANDARD (Tous les autres secteurs) — INDICATEURS POUR UNE DURÉE DE 1 MOIS ═══
-                    const caVal = cardMetric
-                      ? (cardMetric.monthRevenue ?? 0)
-                      : (act.monthRevenue ?? act.revenue ?? 0);
-                    const depVal = cardMetric
-                      ? (cardMetric.monthExpenses ?? 0)
-                      : (act.monthExpenses ?? act.expenses ?? 0);
-                    const netMarginVal = cardMetric
-                      ? (cardMetric.monthNetMargin ?? 0)
-                      : (act.monthNetMargin ?? act.netMargin ?? 0);
-
-                    return (
-                      <div className={`rounded-xl p-4 space-y-2 mb-6 border ${
-                        darkMode ? 'bg-slate-950/70 border-slate-800/80' : 'bg-slate-50 border-slate-200'
-                      }`}>
-                        {/* En-tête de période : Durée 1 mois */}
-                        <div className={`flex items-center justify-between text-[11px] font-bold uppercase tracking-wider mb-2 pb-1.5 border-b ${
-                          darkMode ? 'text-indigo-400/90 border-slate-800' : 'text-indigo-600 border-slate-200'
-                        }`}>
-                          <span className="flex items-center gap-1.5">
-                            <Calendar size={12} className="text-indigo-500 shrink-0" />
-                            Données du mois
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-semibold lowercase">
-                            ({currentMonthLabel})
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className={darkMode ? "text-slate-400" : "text-slate-500"}>CA :</span>
-                          <span className={`font-mono font-bold ${darkMode ? 'text-white' : 'text-slate-900'}`}>{fmt(caVal)} F CFA</span>
-                        </div>
-                        <div className="flex items-center justify-between text-xs">
-                          <span className={darkMode ? "text-slate-400" : "text-slate-500"}>Dépenses :</span>
-                          <span className="font-mono font-bold text-rose-500">{fmt(depVal)} F CFA</span>
-                        </div>
-                        <div className={`flex items-center justify-between text-xs pt-1.5 border-t ${
-                          darkMode ? 'border-slate-800/80' : 'border-slate-200'
-                        }`}>
-                          <span className={`font-semibold ${netMarginVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>Marge nette :</span>
-                          <span className={`font-mono font-black ${netMarginVal >= 0 ? 'text-emerald-500' : 'text-rose-500'}`}>
-                            {fmt(netMarginVal)} F CFA {netMarginVal < 0 ? '(Déficit)' : ''}
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })()}
-                </div>
-
-                {/* 5.1 Boutons obligatoires : OUVRIR, Paramètres, Supprimer */}
-                <div className="space-y-2.5">
-                  {/* BOUTON OUVRIR (PARTIE 8) */}
-                  <button
-                    type="button"
-                    onClick={() => handleOpenActivity(act)}
-                    className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-black uppercase tracking-wider flex items-center justify-center gap-2 transition-all shadow-md shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
-                  >
-                    <span>OUVRIR</span>
-                    <ExternalLink size={14} />
-                  </button>
-
-                  {/* BOUTONS PARAMÈTRES, VIDER & SUPPRIMER (RÉSERVÉS À L'ADMINISTRATEUR) */}
-                  {isAdmin && (
-                    <div className="space-y-1.5">
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setForm({
-                              sectorSlug: act.sectorSlug,
-                              name: act.name,
-                              location: act.location,
-                              manager: act.manager,
-                              status: act.status,
-                            });
-                            setFormError('');
-                            setShowSettingsModal(act);
-                          }}
-                          className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                            darkMode
-                              ? 'bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border-slate-700/60'
-                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
-                          }`}
-                        >
-                          <Settings size={13} />
-                          <span>Paramètres</span>
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => initiateDelete(act)}
-                          className={`py-2 px-3 rounded-xl text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors border ${
-                            darkMode
-                              ? 'bg-slate-800 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 border-slate-700/60 hover:border-rose-800/40'
-                              : 'bg-rose-50 hover:bg-rose-100 text-rose-600 border-rose-200'
-                          }`}
-                        >
-                          <Trash2 size={13} />
-                          <span>Supprimer</span>
-                        </button>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => setClearSectorTarget(act)}
-                        title={`Vider les données opérationnelles du secteur ${act.name}`}
-                        className={`w-full py-2 px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-all border ${
-                          darkMode
-                            ? 'bg-amber-950/40 hover:bg-amber-900/60 text-amber-300 border-amber-700/50'
-                            : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border-amber-300 shadow-sm'
-                        }`}
-                      >
-                        <Trash2 size={13} className="text-amber-600 dark:text-amber-400" />
-                        <span>Vider le secteur</span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* ══ SECTION ACTIVITÉS ARCHIVÉES (PARTIE 9 — CONSERVATION DES DONNÉES) ═ */}
       {showArchived && archivedActivities.length > 0 && (
@@ -2624,6 +2429,26 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           </div>
 
           {formError && <p className="text-rose-400 text-xs mt-2 font-medium">{formError}</p>}
+
+          {isAdmin && (
+            <div className="mt-4 pt-4 border-t border-slate-800 flex justify-between items-center">
+              <div>
+                <p className="text-xs font-bold text-slate-300">Zone d'administration</p>
+                <p className="text-[11px] text-slate-500">Vider les données opérationnelles tout en conservant les factures</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setClearSectorTarget(showSettingsModal);
+                  setShowSettingsModal(null);
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-amber-400 bg-amber-950/40 border border-amber-700/60 hover:bg-amber-900/60 transition-colors cursor-pointer"
+              >
+                <Trash2 size={13} className="text-amber-500" />
+                <span>Vider le secteur</span>
+              </button>
+            </div>
+          )}
 
           <div className="flex gap-2 mt-6 justify-end">
             <button
@@ -2813,8 +2638,18 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       {/* ══ MODAL RATTACHEMENT DE SECTEUR AU SITE SÉLECTIONNÉ ═══════════════ */}
       <AttachSectorModal
         isOpen={showAttachSectorModal}
-        onClose={() => setShowAttachSectorModal(false)}
-        targetSite={sites.find((s) => s.id === selectedSiteId) || null}
+        onClose={() => {
+          setShowAttachSectorModal(false);
+          setTargetSiteForAttach(null);
+        }}
+        targetSite={
+          targetSiteForAttach ||
+          sites.find((s) => s.id === selectedSiteId) ||
+          sites.find((s) => s.is_main) ||
+          sites[0] ||
+          null
+        }
+        availableSites={sites}
         allActivities={activities}
         onAttachExistingSector={handleAttachExistingSectorToSite}
         onCreateNewSector={() => {
