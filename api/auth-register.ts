@@ -138,6 +138,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     country,
     city,
     selected_sectors,
+    sites,
+    sector_sites,
     plan_slug,
     plan_name,
     billing_cycle,
@@ -458,17 +460,48 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // =========================================================================
     // ÉTAPE 6 : Initialiser `company_activities` (STRICTEMENT les secteurs choisis)
     // =========================================================================
-    const activityRows = cleanSectors.map((slug, idx) => ({
-      company_id: companyId,
-      sector_slug: slug,
-      sector_code: toSecteurCode(slug),
-      activity_name: `${company_name.trim()} — ${slug.toUpperCase()}`,
-      pos_location: city || 'Siège',
-      manager_name: responsible_name.trim(),
-      status: idx < MAX_FREE_TRIAL_SECTORS ? 'ACTIVE' : 'SUSPENDUE',
-      is_active: true,
-      created_at: now.toISOString(),
-    }))
+    const sitesList: any[] = Array.isArray(sites) && sites.length > 0
+      ? sites.map((s: any, idx: number) => ({
+          ...s,
+          company_id: companyId,
+          is_main: idx === 0 || !!s.is_main,
+        }))
+      : [
+          {
+            id: `site-${companyId}-main`,
+            company_id: companyId,
+            name: `Site Principal — ${city || 'Cotonou'}`,
+            city: city || 'Cotonou',
+            address: `Siège d'exploitation (${city || 'Cotonou'})`,
+            is_main: true,
+            created_at: now.toISOString(),
+          },
+        ]
+
+    const sectorSiteMapping: Record<string, string> =
+      sector_sites && typeof sector_sites === 'object' ? sector_sites : {}
+
+    const activityRows = cleanSectors.map((slug, idx) => {
+      const assignedSiteId = sectorSiteMapping[slug]
+      const siteObj = sitesList.find((s: any) => s.id === assignedSiteId) || sitesList[0]
+      return {
+        company_id: companyId,
+        sector_slug: slug,
+        sector_code: toSecteurCode(slug),
+        activity_name: `${company_name.trim()} — ${slug.toUpperCase()}`,
+        pos_location: siteObj ? `${siteObj.name} (${siteObj.city})` : (city || 'Siège'),
+        manager_name: responsible_name.trim(),
+        status: idx < MAX_FREE_TRIAL_SECTORS ? 'ACTIVE' : 'SUSPENDUE',
+        is_active: true,
+        settings: {
+          site_id: siteObj?.id || `site-${companyId}-main`,
+          site_name: siteObj?.name || `Site Principal — ${city || 'Cotonou'}`,
+          site_city: siteObj?.city || (city || 'Cotonou'),
+          site_address: siteObj?.address || '',
+        },
+        created_at: now.toISOString(),
+      }
+    })
 
     await sb.from('company_activities').insert(activityRows)
 
@@ -524,6 +557,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         email: cleanEmail,
         primarySector,
         selectedSectors: cleanSectors,
+        sites: sitesList,
         freeTrialSectors,
         pendingPaidSectors,
         subscriptionStatus: 'trial',

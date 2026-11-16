@@ -32,7 +32,21 @@ import {
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { ClearSectorModal } from '../../components/hub/ClearSectorModal';
 import { supabase } from '../../lib/supabase';
-import { fetchHubFinancialMetrics, HubFinancialTotals, StationSectorFinancials, SectorMetrics } from '../../services/hubFinancialService';
+import { fetchHubFinancialMetrics, HubFinancialTotals, StationSectorFinancials, SectorMetrics, computeSiteFinancials, fetchCustomPeriodMetrics } from '../../services/hubFinancialService';
+import {
+  CompanySite,
+  SiteFinancials,
+  loadCompanySites,
+  saveCompanySite,
+  deleteCompanySite,
+  moveSectorToSite,
+} from '../../services/multisiteService';
+import { SiteCard } from '../../components/hub/SiteCard';
+import { SiteDetailView, PeriodFilterType } from '../../components/hub/SiteDetailView';
+import { SiteModal } from '../../components/hub/SiteModal';
+import { MoveSectorModal } from '../../components/hub/MoveSectorModal';
+import { AttachSectorModal } from '../../components/hub/AttachSectorModal';
+import { HubGlobalCharts } from '../../components/hub/HubGlobalCharts';
 import { useUIStore } from '../../store/uiStore';
 import { formatNumber, formatFCFA } from '../../utils/formatters';
 import {
@@ -65,6 +79,8 @@ export interface ActivityEntry {
   manager: string;             // Responsable du point de vente
   status: ActivityStatus;      // PARTIE 9 : ACTIVE | SUSPENDUE | ARCHIVEE
   isConfigured: boolean;
+  settings?: any;              // Paramètres étendus (site_id, etc.)
+  site_id?: string;            // Site d'exploitation rattaché
   // PARTIE 3 : Métriques du Jour (F CFA)
   dayRevenue?: number;         // CA DU JOUR
   dayRevenueHT?: number;
@@ -255,6 +271,166 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
   // Totaux financiers réels consolidés
   const [hubTotals, setHubTotals] = useState<HubFinancialTotals | null>(null);
+
+  // ── Multisite Management (Niveaux 1, 2, 3) ──────────────────────────────
+  const [sites, setSites] = useState<CompanySite[]>([]);
+  const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
+  const [showSiteModal, setShowSiteModal] = useState(false);
+  const [siteToEdit, setSiteToEdit] = useState<CompanySite | null>(null);
+  const [showMoveSectorModal, setShowMoveSectorModal] = useState(false);
+  const [sectorToMove, setSectorToMove] = useState<ActivityEntry | null>(null);
+  const [showAttachSectorModal, setShowAttachSectorModal] = useState(false);
+
+  // Recherche & filtres Niveau 1
+  const [siteSearchQuery, setSiteSearchQuery] = useState('');
+  const [siteFilterMode, setSiteFilterMode] = useState<'ALL' | 'PROFITABLE' | 'DEFICIT'>('ALL');
+
+  // Période Niveau 2
+  const [sitePeriodFilter, setSitePeriodFilter] = useState<PeriodFilterType>('month');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+  const [customPeriodStats, setCustomPeriodStats] = useState<Record<string, any>>({});
+
+  const loadSites = useCallback(async (currentActs?: ActivityEntry[]) => {
+    if (!companyId) return;
+    const actsToUse = currentActs || activities;
+    const loaded = await loadCompanySites(companyId, company?.city, actsToUse);
+    setSites(loaded);
+  }, [companyId, company?.city, activities]);
+
+  useEffect(() => {
+    loadSites();
+  }, [loadSites]);
+
+  const siteFinancialsMap = useMemo(() => {
+    const map: Record<string, SiteFinancials> = {};
+    sites.forEach((site) => {
+      const siteActs = activities.filter((act) => {
+        const sId = act.settings?.site_id || act.site_id;
+        if (sId) return sId === site.id;
+        return site.is_main;
+      });
+      map[site.id] = computeSiteFinancials(site, siteActs, sectorMetricsMap, customPeriodStats);
+    });
+
+    let bestSiteId = '';
+    let maxRevenue = -1;
+    let mostProfitableSiteId = '';
+    let maxRate = -1;
+
+    sites.forEach((site) => {
+      const fin = map[site.id];
+      if (fin) {
+        if (fin.monthRevenue > maxRevenue && fin.monthRevenue > 0) {
+          maxRevenue = fin.monthRevenue;
+          bestSiteId = site.id;
+        }
+        if (fin.profitabilityRate > maxRate && fin.monthRevenue > 0) {
+          maxRate = fin.profitabilityRate;
+          mostProfitableSiteId = site.id;
+        }
+      }
+    });
+
+    if (bestSiteId && map[bestSiteId]) {
+      map[bestSiteId].isBestSite = true;
+    }
+    if (mostProfitableSiteId && map[mostProfitableSiteId]) {
+      map[mostProfitableSiteId].isMostProfitable = true;
+    }
+
+    return map;
+  }, [sites, activities, sectorMetricsMap, customPeriodStats]);
+
+  const filteredSites = useMemo(() => {
+    return sites.filter((site) => {
+      const fin = siteFinancialsMap[site.id];
+      const matchSearch =
+        !siteSearchQuery.trim() ||
+        site.name.toLowerCase().includes(siteSearchQuery.toLowerCase()) ||
+        site.city.toLowerCase().includes(siteSearchQuery.toLowerCase());
+
+      if (!matchSearch) return false;
+
+      if (siteFilterMode === 'PROFITABLE') {
+        return (fin?.monthNetMargin || 0) > 0;
+      }
+      if (siteFilterMode === 'DEFICIT') {
+        return (fin?.monthNetMargin || 0) < 0;
+      }
+      return true;
+    });
+  }, [sites, siteFinancialsMap, siteSearchQuery, siteFilterMode]);
+
+  const handleSaveSite = async (siteData: Partial<CompanySite> & { name: string; city: string }) => {
+    if (!companyId) return;
+    await saveCompanySite(companyId, siteData);
+    await loadSites();
+    setShowSiteModal(false);
+    setSiteToEdit(null);
+  };
+
+  const handleDeleteSite = async (site: CompanySite) => {
+    if (!companyId) return;
+    const res = await deleteCompanySite(companyId, site.id, activities);
+    if (!res.success) {
+      alert(res.error || 'Impossible de supprimer ce site.');
+      return;
+    }
+    await loadSites();
+    if (selectedSiteId === site.id) {
+      setSelectedSiteId(null);
+    }
+  };
+
+  const handleConfirmMoveSector = async (activityId: string, targetSite: CompanySite) => {
+    if (!companyId) return;
+    const res = await moveSectorToSite(companyId, activityId, targetSite);
+    if (!res.success) {
+      throw new Error(res.error || 'Erreur lors du déplacement du secteur.');
+    }
+
+    setActivities((prev) =>
+      prev.map((act) => {
+        if (act.id === activityId) {
+          return {
+            ...act,
+            location: targetSite.city || targetSite.name,
+            settings: {
+              ...(act.settings || {}),
+              site_id: targetSite.id,
+              site_name: targetSite.name,
+              site_city: targetSite.city,
+            },
+            site_id: targetSite.id,
+          };
+        }
+        return act;
+      })
+    );
+
+    await loadActivitiesFromSupabase();
+    await loadSites();
+  };
+
+  const handleAttachExistingSectorToSite = async (activityId: string) => {
+    const currentSite = sites.find((s) => s.id === selectedSiteId);
+    if (!currentSite) return;
+    await handleConfirmMoveSector(activityId, currentSite);
+  };
+
+  const handleCustomDateChange = async (startDate: string, endDate: string) => {
+    setCustomStartDate(startDate);
+    setCustomEndDate(endDate);
+    if (companyId && startDate && endDate) {
+      try {
+        const stats = await fetchCustomPeriodMetrics(companyId, startDate, endDate);
+        setCustomPeriodStats(stats);
+      } catch (err) {
+        console.warn('[Hub] Erreur chargement période personnalisée:', err);
+      }
+    }
+  };
 
   // ── Abonnements Global + Par Secteur (Règles Métier CDC) ──────────────────
   const [globalSub, setGlobalSub] = useState<AbonnementGlobal | null>(null);
@@ -622,6 +798,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             manager: row.manager_name || comp?.responsible_name || '',
             status: row.status as ActivityStatus,
             isConfigured: true,
+            settings: row.settings || {},
+            site_id: row.settings?.site_id,
             revenue: rev,
             grossMargin: card ? (card.monthGrossMargin ?? 0) : 0,
             expenses: exp,
@@ -736,11 +914,12 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
         // Synchroniser immédiatement les métriques financières réelles
         loadFinancialMetrics();
+        loadSites(finalUnique);
       }
     } catch (err) {
       console.error('[Hub] Erreur sync Supabase:', err);
     }
-  }, [companyId, company, companyName, loadFinancialMetrics]);
+  }, [companyId, company, companyName, loadFinancialMetrics, loadSites]);
 
   // Synchronisation immédiate si company est disponible et activities est vide
   useEffect(() => {
@@ -1046,6 +1225,11 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
 
     try {
       let createdId = generateId();
+      const targetSite = selectedSiteId ? sites.find((s) => s.id === selectedSiteId) : sites.find((s) => s.is_main) || sites[0];
+      const initialSettings = targetSite
+        ? { site_id: targetSite.id, site_name: targetSite.name, site_city: targetSite.city }
+        : {};
+
       if (companyId) {
         const { data: newRow, error: insertErr } = await supabase
           .from('company_activities')
@@ -1054,11 +1238,12 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             sector_slug: meta.slug,
             sector_code: meta.slug.toUpperCase(),
             activity_name: form.name.trim().toUpperCase(),
-            pos_location: form.location.trim(),
+            pos_location: form.location.trim() || targetSite?.city || 'Bénin',
             manager_name: form.manager.trim(),
             status: 'ACTIVE',
             is_active: true,
             color: meta.color,
+            settings: initialSettings,
           })
           .select()
           .single();
@@ -1102,10 +1287,12 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         sectorIcon: meta.emoji || '🏢',
         sectorColor: meta.color,
         name: form.name.trim().toUpperCase(),
-        location: form.location.trim(),
+        location: form.location.trim() || targetSite?.city || 'Bénin',
         manager: form.manager.trim(),
         status: 'ACTIVE',
         isConfigured: true,
+        settings: initialSettings,
+        site_id: targetSite?.id,
         revenue: 0,
         grossMargin: 0,
         expenses: 0,
@@ -1445,6 +1632,82 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
         </div>
       </div>
 
+      {/* ══ GESTION MULTISITE — NIVEAU 2 : VUE DÉTAILLÉE D'UN SITE ═════════ */}
+      {selectedSiteId && (() => {
+        const selectedSite = sites.find((s) => s.id === selectedSiteId) || sites[0];
+        if (!selectedSite) return null;
+        const currentSiteFin = siteFinancialsMap[selectedSite.id] || {
+          siteId: selectedSite.id,
+          dayRevenue: 0,
+          dayGrossMargin: 0,
+          dayExpenses: 0,
+          dayNetMargin: 0,
+          monthRevenue: 0,
+          monthGrossMargin: 0,
+          monthExpenses: 0,
+          monthNetMargin: 0,
+          yearRevenue: 0,
+          yearGrossMargin: 0,
+          yearExpenses: 0,
+          yearNetMargin: 0,
+          periodRevenue: 0,
+          periodGrossMargin: 0,
+          periodExpenses: 0,
+          periodNetMargin: 0,
+          creances: 0,
+          profitabilityRate: 0,
+          sectorsCount: 0,
+        };
+
+        return (
+          <div className="w-full max-w-none px-3 lg:px-4 mb-10">
+            <SiteDetailView
+              site={selectedSite}
+              companyName={companyName}
+              activities={visibleActivities}
+              financials={currentSiteFin}
+              sectorMetricsMap={sectorMetricsMap}
+              darkMode={darkMode}
+              isAdmin={isAdmin}
+              currentMonthLabel={currentMonthLabel}
+              onBack={() => setSelectedSiteId(null)}
+              onEditSite={(s) => {
+                setSiteToEdit(s);
+                setShowSiteModal(true);
+              }}
+              onOpenSector={handleOpenActivity}
+              onEditSectorSettings={(act) => {
+                setForm({
+                  sectorSlug: act.sectorSlug,
+                  name: act.name,
+                  location: act.location,
+                  manager: act.manager,
+                  status: act.status,
+                });
+                setFormError('');
+                setShowSettingsModal(act);
+              }}
+              onMoveSector={(act) => {
+                setSectorToMove(act);
+                setShowMoveSectorModal(true);
+              }}
+              onDeleteSector={(act) => initiateDelete(act)}
+              onClearSector={(act) => setClearSectorTarget(act)}
+              onAddSectorToSite={() => setShowAttachSectorModal(true)}
+              periodFilter={sitePeriodFilter}
+              onPeriodFilterChange={setSitePeriodFilter}
+              customStartDate={customStartDate}
+              customEndDate={customEndDate}
+              onCustomDateChange={handleCustomDateChange}
+              customPeriodStats={customPeriodStats}
+            />
+          </div>
+        );
+      })()}
+
+      {/* ══ NIVEAU 1 : TABLEAU DE BORD GLOBAL & SITES D'EXPLOITATION ════════ */}
+      {!selectedSiteId && (
+        <>
       {/* ══ GRILLE KPI DU JOUR & DU MOIS ════════════════════════════════════ */}
       <div className="w-full max-w-none px-3 lg:px-4 grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
 
@@ -1650,6 +1913,235 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ── BANDEAU SYNTHÈSE GLOBALE & CUMUL ANNUEL (PARTIE 7) ─────────────── */}
+      <div className="w-full max-w-none px-3 lg:px-4 mb-8">
+        <div className={`p-4 rounded-2xl border shadow-md flex items-center justify-between flex-wrap gap-4 ${
+          darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+        }`}>
+          <div className="flex items-center gap-4 flex-wrap text-xs font-semibold">
+            <span className="flex items-center gap-1.5 text-emerald-500 font-bold">
+              <Building2 size={16} />
+              <span>{sites.length} Site{sites.length > 1 ? 's' : ''} d'exploitation</span>
+            </span>
+            <span className="text-slate-400">•</span>
+            <span className="flex items-center gap-1.5 text-indigo-400 font-bold">
+              <Layers size={16} />
+              <span>{activeActivities.length} Secteur{activeActivities.length > 1 ? 's' : ''} actif{activeActivities.length > 1 ? 's' : ''}</span>
+            </span>
+            {(hubTotals?.creances_totales || 0) > 0 && (
+              <>
+                <span className="text-slate-400">•</span>
+                <span className="flex items-center gap-1.5 text-amber-500">
+                  <AlertCircle size={15} />
+                  <span>Créances clients en attente : <strong>{fmt(hubTotals?.creances_totales || 0)} F CFA</strong></span>
+                </span>
+              </>
+            )}
+          </div>
+
+          <div className="flex items-center gap-3 text-xs font-mono">
+            <span className={darkMode ? 'text-slate-400' : 'text-slate-500'}>
+              Cumul annuel : CA <strong className={darkMode ? 'text-indigo-300' : 'text-indigo-700'}>{fmt(hubTotals?.ca_annee || monthTotals.totalRevenue)} F</strong>
+            </span>
+            <span className="text-slate-400">•</span>
+            <span className={(hubTotals?.marge_annee || monthTotals.totalNetMargin) >= 0 ? 'text-emerald-500 font-bold' : 'text-rose-500 font-bold'}>
+              Marge nette <strong className="font-black">{fmt(hubTotals?.marge_annee || monthTotals.totalNetMargin)} F CFA</strong>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* ── 2. GRAPHIQUES CONSOLIDÉS & ANALYSES VISUELLES ─────────────────── */}
+      <div className="w-full max-w-none px-3 lg:px-4">
+        <HubGlobalCharts
+          totals={
+            hubTotals || {
+              ca_jour: dayTotals.totalRevenue,
+              depenses_jour: dayTotals.totalExpenses,
+              marge_jour: dayTotals.totalNetMargin,
+              ca_mois: monthTotals.totalRevenue,
+              depenses_mois: monthTotals.totalExpenses,
+              marge_mois: monthTotals.totalNetMargin,
+              ca_annee: monthTotals.totalRevenue,
+              depenses_annee: monthTotals.totalExpenses,
+              marge_annee: monthTotals.totalNetMargin,
+              creances_totales: 0,
+              date: '',
+              mois_debut: '',
+              mois_fin: '',
+              annee_debut: '',
+              annee_fin: '',
+            }
+          }
+          sites={sites}
+          siteFinancialsMap={siteFinancialsMap}
+          sectorMetricsMap={sectorMetricsMap}
+          activities={activeActivities}
+          darkMode={darkMode}
+        />
+      </div>
+
+      {/* ── 3. MES SITES D'EXPLOITATION (GRILLE NIVEAU 1) ───────────────── */}
+      <div className="w-full max-w-none px-3 lg:px-4 mb-12">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
+          <div>
+            <h2 className={`text-xl font-black uppercase tracking-tight flex items-center gap-2 ${darkMode ? 'text-white' : 'text-slate-900'}`}>
+              <Building2 size={22} className="text-emerald-500" />
+              <span>Mes Sites d'Exploitation ({sites.length})</span>
+            </h2>
+            <p className={`text-xs mt-0.5 ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              Visualisez la rentabilité de chaque site. Cliquez sur « VOIR LE DÉTAIL » pour gérer les secteurs rattachés.
+            </p>
+          </div>
+
+          {/* Recherche, filtres & Nouveau site */}
+          <div className="flex items-center gap-2.5 flex-wrap">
+            <input
+              type="text"
+              placeholder="Rechercher un site..."
+              value={siteSearchQuery}
+              onChange={(e) => setSiteSearchQuery(e.target.value)}
+              className={`px-3 py-2 rounded-xl text-xs border focus:outline-none focus:ring-2 focus:ring-emerald-500/30 w-44 sm:w-56 ${
+                darkMode ? 'bg-slate-900 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-900'
+              }`}
+            />
+
+            <div className="flex items-center gap-1 p-0.5 rounded-xl border bg-slate-100 dark:bg-slate-900 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSiteFilterMode('ALL')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  siteFilterMode === 'ALL'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : darkMode
+                    ? 'text-slate-400 hover:text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Tous
+              </button>
+              <button
+                type="button"
+                onClick={() => setSiteFilterMode('PROFITABLE')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  siteFilterMode === 'PROFITABLE'
+                    ? 'bg-emerald-600 text-white shadow-sm'
+                    : darkMode
+                    ? 'text-slate-400 hover:text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Rentables
+              </button>
+              <button
+                type="button"
+                onClick={() => setSiteFilterMode('DEFICIT')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  siteFilterMode === 'DEFICIT'
+                    ? 'bg-rose-600 text-white shadow-sm'
+                    : darkMode
+                    ? 'text-slate-400 hover:text-white'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Déficitaires
+              </button>
+            </div>
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSiteToEdit(null);
+                  setShowSiteModal(true);
+                }}
+                className="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all shadow-md shadow-emerald-500/20 active:scale-[0.99] cursor-pointer"
+              >
+                <Plus size={14} />
+                <span>Nouveau site</span>
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Grille des cartes des sites */}
+        {filteredSites.length === 0 ? (
+          <div
+            className={`rounded-2xl p-10 border text-center space-y-3 ${
+              darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'
+            }`}
+          >
+            <div className="p-4 rounded-full bg-emerald-500/10 text-emerald-500 w-16 h-16 mx-auto flex items-center justify-center">
+              <Building2 size={30} />
+            </div>
+            <h3 className={`text-base font-bold ${darkMode ? 'text-white' : 'text-slate-800'}`}>
+              Aucun site d'exploitation trouvé
+            </h3>
+            <p className={`text-xs max-w-md mx-auto ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+              {siteSearchQuery || siteFilterMode !== 'ALL'
+                ? 'Aucun site ne correspond aux critères de recherche actuels.'
+                : 'Créez votre premier site pour organiser vos points de vente et vos secteurs.'}
+            </p>
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSiteToEdit(null);
+                  setShowSiteModal(true);
+                }}
+                className="mt-2 inline-flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all"
+              >
+                <Plus size={14} />
+                <span>Créer un site</span>
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {filteredSites.map((site) => {
+              const fin = siteFinancialsMap[site.id] || {
+                siteId: site.id,
+                dayRevenue: 0,
+                dayGrossMargin: 0,
+                dayExpenses: 0,
+                dayNetMargin: 0,
+                monthRevenue: 0,
+                monthGrossMargin: 0,
+                monthExpenses: 0,
+                monthNetMargin: 0,
+                yearRevenue: 0,
+                yearGrossMargin: 0,
+                yearExpenses: 0,
+                yearNetMargin: 0,
+                periodRevenue: 0,
+                periodGrossMargin: 0,
+                periodExpenses: 0,
+                periodNetMargin: 0,
+                creances: 0,
+                profitabilityRate: 0,
+                sectorsCount: 0,
+              };
+
+              return (
+                <SiteCard
+                  key={site.id}
+                  site={site}
+                  financials={fin}
+                  darkMode={darkMode}
+                  isAdmin={isAdmin}
+                  onViewDetail={(s) => setSelectedSiteId(s.id)}
+                  onEditSite={(s) => {
+                    setSiteToEdit(s);
+                    setShowSiteModal(true);
+                  }}
+                  onDeleteSite={handleDeleteSite}
+                />
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* ══ ÉTAT VIDE (AUCUNE ACTIVITÉ ENREGISTRÉE) ══════════════════════════ */}
@@ -2014,6 +2506,8 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           </div>
         </div>
       )}
+      </>
+      )}
 
       {/* ══ MODAL PARTIE 6 — AJOUTER UNE ACTIVITÉ ═══════════════════════════ */}
       {showAddModal && (
@@ -2280,6 +2774,54 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
           }}
         />
       )}
+
+      {/* ══ MODAL SITE D'EXPLOITATION (CRÉATION / MODIFICATION) ══════════════ */}
+      <SiteModal
+        isOpen={showSiteModal}
+        onClose={() => {
+          setShowSiteModal(false);
+          setSiteToEdit(null);
+        }}
+        onSave={handleSaveSite}
+        siteToEdit={siteToEdit}
+        darkMode={darkMode}
+      />
+
+      {/* ══ MODAL DÉPLACEMENT D'UN SECTEUR VERS UN AUTRE SITE ═══════════════ */}
+      <MoveSectorModal
+        isOpen={showMoveSectorModal}
+        onClose={() => {
+          setShowMoveSectorModal(false);
+          setSectorToMove(null);
+        }}
+        sector={sectorToMove}
+        currentSite={
+          sites.find(
+            (s) => s.id === (sectorToMove?.settings?.site_id || sectorToMove?.site_id)
+          ) ||
+          sites.find((s) => s.is_main) ||
+          sites[0] ||
+          null
+        }
+        availableSites={sites}
+        onConfirmMove={handleConfirmMoveSector}
+        darkMode={darkMode}
+      />
+
+      {/* ══ MODAL RATTACHEMENT DE SECTEUR AU SITE SÉLECTIONNÉ ═══════════════ */}
+      <AttachSectorModal
+        isOpen={showAttachSectorModal}
+        onClose={() => setShowAttachSectorModal(false)}
+        targetSite={sites.find((s) => s.id === selectedSiteId) || null}
+        allActivities={activities}
+        onAttachExistingSector={handleAttachExistingSectorToSite}
+        onCreateNewSector={() => {
+          setForm(EMPTY_FORM);
+          setFormError('');
+          setShowAddModal(true);
+        }}
+        darkMode={darkMode}
+      />
 
     </div>
   );

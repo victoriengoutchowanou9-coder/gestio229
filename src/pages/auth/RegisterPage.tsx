@@ -16,10 +16,12 @@ import {
   Building2, User, Phone, Mail, Lock, MapPin, Hash,
   ArrowRight, ArrowLeft, CheckCircle2, AlertCircle,
   Loader2, Sparkles, ShieldCheck, Eye, EyeOff, Gift, CreditCard,
-  RefreshCw, AlertTriangle, Calendar, Check
+  RefreshCw, AlertTriangle, Calendar, Check, Plus, Trash2, Edit2
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
+import { useAuthStore } from '../../store/authStore'
 import { SectorSelector, SECTORS_LIST } from '../../components/auth/SectorSelector'
+import { RegisterSiteModal, RegisterSiteData } from '../../components/auth/RegisterSiteModal'
 import {
   MAX_FREE_TRIAL_SECTORS,
   calculateRegistrationTrialSummary,
@@ -64,6 +66,13 @@ export const RegisterPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null)
   const [showPassword, setShowPassword] = useState(false)
   const [showSummaryConfirmModal, setShowSummaryConfirmModal] = useState(false)
+
+  // Gestion Multisite à l'Inscription (Niveau 2 CDC)
+  const [sites, setSites] = useState<RegisterSiteData[]>([])
+  const [sectorSiteMap, setSectorSiteMap] = useState<Record<string, string>>({})
+  const [isSiteModalOpen, setIsSiteModalOpen] = useState(false)
+  const [editingSite, setEditingSite] = useState<RegisterSiteData | null>(null)
+  const [siteDeleteWarning, setSiteDeleteWarning] = useState<string | null>(null)
 
   // État de succès après inscription (Écran de vérification d'email)
   const [isSuccess, setIsSuccess] = useState(false)
@@ -120,6 +129,117 @@ export const RegisterPage: React.FC = () => {
   const handleSectorChange = (sectors: string[]) => {
     const clean = Array.from(new Set(sectors.map((s) => canonicalSectorSlug(s)).filter(Boolean)))
     updateField('selected_sectors', clean)
+
+    // Assurer que tout nouveau secteur est associé au premier site par défaut
+    setSectorSiteMap((prev) => {
+      const updated = { ...prev }
+      const fallbackSiteId = sites[0]?.id || ''
+      clean.forEach((slug) => {
+        if (!updated[slug] && fallbackSiteId) {
+          updated[slug] = fallbackSiteId
+        }
+      })
+      // Supprimer les secteurs désélectionnés
+      Object.keys(updated).forEach((slug) => {
+        if (!clean.includes(slug)) {
+          delete updated[slug]
+        }
+      })
+      return updated
+    })
+  }
+
+  const handleSectorSiteChange = (sectorSlug: string, siteId: string) => {
+    setSectorSiteMap((prev) => ({
+      ...prev,
+      [sectorSlug]: siteId,
+    }))
+  }
+
+  // Actions de gestion des sites d'exploitation
+  const handleOpenAddSite = () => {
+    setEditingSite(null)
+    setIsSiteModalOpen(true)
+    setSiteDeleteWarning(null)
+  }
+
+  const handleOpenEditSite = (site: RegisterSiteData) => {
+    setEditingSite(site)
+    setIsSiteModalOpen(true)
+    setSiteDeleteWarning(null)
+  }
+
+  const handleSaveSite = (siteData: RegisterSiteData) => {
+    if (editingSite && editingSite.id) {
+      setSites((prev) =>
+        prev.map((s) => (s.id === editingSite.id ? { ...s, ...siteData } : s))
+      )
+    } else {
+      const newId = `site-reg-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+      const isFirst = sites.length === 0
+      const newSite: RegisterSiteData = {
+        ...siteData,
+        id: newId,
+        is_main: isFirst,
+      }
+      setSites((prev) => [...prev, newSite])
+
+      // Si c'est le premier site, y rattacher automatiquement les secteurs déjà cochés
+      if (isFirst && form.selected_sectors.length > 0) {
+        setSectorSiteMap((prev) => {
+          const map: Record<string, string> = { ...prev }
+          form.selected_sectors.forEach((slug) => {
+            if (!map[slug]) map[slug] = newId
+          })
+          return map
+        })
+      }
+    }
+  }
+
+  const handleRequestDeleteSite = (site: RegisterSiteData) => {
+    const attachedSectors = form.selected_sectors.filter((slug) => {
+      const assigned = sectorSiteMap[slug] || sites[0]?.id
+      return assigned === site.id
+    })
+
+    if (attachedSectors.length > 0) {
+      const names = attachedSectors.map((slug) => {
+        const sec = SECTORS_LIST.find((s) => s.slug === slug)
+        return sec?.name || slug
+      })
+      setSiteDeleteWarning(
+        `Impossible de supprimer le site « ${site.name} » : ${attachedSectors.length} secteur(s) y sont rattachés (${names.join(', ')}). Veuillez d'abord réassigner ces secteurs à un autre site ou les désélectionner.`
+      )
+      return
+    }
+
+    if (sites.length <= 1) {
+      setSiteDeleteWarning(
+        `Vous devez conserver au moins un site d'exploitation pour pouvoir héberger vos secteurs d'activité.`
+      )
+      return
+    }
+
+    const updated = sites.filter((s) => s.id !== site.id)
+    if (site.is_main && updated.length > 0) {
+      updated[0].is_main = true
+    }
+    setSites(updated)
+    setSiteDeleteWarning(null)
+  }
+
+  const handleQuickCreateMainSite = () => {
+    const defaultCity = form.city?.trim() || 'Cotonou'
+    const newSite: RegisterSiteData = {
+      id: `site-reg-${Date.now()}-main`,
+      name: `Site Principal — ${defaultCity}`,
+      city: defaultCity,
+      address: `Siège d'exploitation (${defaultCity})`,
+      is_main: true,
+    }
+    setSites([newSite])
+    setSiteDeleteWarning(null)
   }
 
   const validateStep1 = (): boolean => {
@@ -153,6 +273,18 @@ export const RegisterPage: React.FC = () => {
   const handleNextStep = (e: React.FormEvent) => {
     e.preventDefault()
     if (validateStep1()) {
+      if (sites.length === 0) {
+        const defaultCity = form.city?.trim() || 'Cotonou'
+        setSites([
+          {
+            id: `site-reg-${Date.now()}-1`,
+            name: `Site Principal — ${defaultCity}`,
+            city: defaultCity,
+            address: `Siège d'exploitation (${defaultCity})`,
+            is_main: true,
+          },
+        ])
+      }
       setStep(2)
       window.scrollTo({ top: 0, behavior: 'smooth' })
     }
@@ -201,6 +333,8 @@ export const RegisterPage: React.FC = () => {
             country: form.country,
             city: form.city,
             selected_sectors: cleanSectors,
+            sites: sites,
+            sector_sites: sectorSiteMap,
             plan_slug: planSummary.planSlug,
             plan_name: planSummary.planName,
             billing_cycle: form.billingCycle,
@@ -344,16 +478,24 @@ export const RegisterPage: React.FC = () => {
             const slug = cleanSectors[i]
             const isFreeTrial = i < MAX_FREE_TRIAL_SECTORS
             const secMeta = SECTORS_LIST.find((s) => s.slug === slug)
+            const assignedSiteId = sectorSiteMap[slug] || sites[0]?.id
+            const siteObj = sites.find((s) => s.id === assignedSiteId) || sites[0]
             try {
               await supabase.from('company_activities').insert({
                 company_id: companyId,
                 sector_slug: slug,
                 sector_code: toSecteurCode(slug),
                 activity_name: `${form.company_name.trim()} — ${secMeta?.name || slug.toUpperCase()}`,
-                pos_location: form.city || 'Siège',
+                pos_location: siteObj ? `${siteObj.name} (${siteObj.city})` : (form.city || 'Siège'),
                 manager_name: form.responsible_name.trim(),
                 status: isFreeTrial ? 'ACTIVE' : 'PENDING_PAYMENT',
                 is_active: true,
+                settings: {
+                  site_id: siteObj?.id || `site-${companyId}-main`,
+                  site_name: siteObj?.name || `Site Principal — ${form.city || 'Cotonou'}`,
+                  site_city: siteObj?.city || (form.city || 'Cotonou'),
+                  site_address: siteObj?.address || '',
+                },
               })
             } catch (_) {}
           }
@@ -392,7 +534,29 @@ export const RegisterPage: React.FC = () => {
         }
       }
 
-      // RÈGLE CRITIQUE BUG 1 : Assurer la déconnexion complète côté client
+      // Sauvegarder les sites créés pour affichage immédiat dans le Hub
+      if (companyId) {
+        const sitesToStore = sites.map((s, idx) => ({
+          ...s,
+          company_id: companyId,
+          is_main: idx === 0 || !!s.is_main,
+          created_at: new Date().toISOString(),
+        }))
+        try {
+          localStorage.setItem(`gestio229_sites_${companyId}`, JSON.stringify(sitesToStore))
+        } catch (_) {}
+      }
+
+      // Tentative de connexion immédiate et redirection directe vers le Hub
+      try {
+        const loginAttempt = await useAuthStore.getState().login(cleanEmail, form.password)
+        if (loginAttempt.success) {
+          navigate('/hub', { replace: true })
+          return
+        }
+      } catch (_) {}
+
+      // RÈGLE CRITIQUE BUG 1 : Assurer la déconnexion si confirmation d'email obligatoire
       await supabase.auth.signOut().catch(() => {})
 
       // RÈGLE CRITIQUE BUG 1 & BUG 2 : Afficher l'Écran de Succès personnalisé
@@ -837,20 +1001,177 @@ export const RegisterPage: React.FC = () => {
             </form>
           ) : (
             <form onSubmit={handleSubmit} className="space-y-6">
-              <div>
-                <h2 className="text-base font-semibold text-white">
-                  Sélectionnez vos secteurs d'activité
-                </h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Votre essai gratuit unique de <strong className="text-emerald-400">30 jours</strong> couvre jusqu'à{' '}
-                  <strong className="text-white">3 secteurs d'activité</strong>.
-                </p>
+              {/* ═════════════════════════════════════════════════════════════════ */}
+              {/* PARTIE A : MES SITES D'EXPLOITATION                               */}
+              {/* ═════════════════════════════════════════════════════════════════ */}
+              <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-5 space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
+                  <div>
+                    <h2 className="text-base font-bold text-white flex items-center gap-2">
+                      <Building2 className="w-5 h-5 text-emerald-400" />
+                      Créez vos sites d'exploitation
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      Définissez vos points de vente, boutiques, dépôts ou agences ({sites.length} site(s) créé(s)).
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleOpenAddSite}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-500/20 transition-all self-start sm:self-auto"
+                  >
+                    <Plus className="w-4 h-4" />
+                    + AJOUTER UN SITE
+                  </button>
+                </div>
+
+                {/* Message d'avertissement suppression */}
+                {siteDeleteWarning && (
+                  <div className="p-3 bg-amber-500/15 border border-amber-500/30 rounded-xl text-amber-200 text-xs flex items-start gap-2.5">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="font-semibold">{siteDeleteWarning}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setSiteDeleteWarning(null)}
+                      className="text-amber-400 hover:text-white text-xs font-bold"
+                    >
+                      ×
+                    </button>
+                  </div>
+                )}
+
+                {/* Liste des sites créés */}
+                {sites.length === 0 ? (
+                  <div className="p-4 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-300 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                      <div>
+                        <p className="font-bold">Création d'au moins un site obligatoire</p>
+                        <p className="text-slate-300 text-[11px] mt-0.5">
+                          Vous devez créer au moins un site d'exploitation avant de pouvoir sélectionner vos secteurs d'activité.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleQuickCreateMainSite}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 text-xs font-semibold border border-emerald-500/40 transition-colors whitespace-nowrap self-start sm:self-auto"
+                    >
+                      <Sparkles className="w-3.5 h-3.5" />
+                      Créer le site principal ({form.city || 'Cotonou'})
+                    </button>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {sites.map((site) => {
+                      const attachedCount = form.selected_sectors.filter((slug) => {
+                        const assigned = sectorSiteMap[slug] || sites[0]?.id
+                        return assigned === site.id
+                      }).length
+
+                      return (
+                        <div
+                          key={site.id}
+                          className="bg-slate-900/80 border border-slate-800 hover:border-slate-700 rounded-xl p-3.5 flex flex-col justify-between transition-all"
+                        >
+                          <div>
+                            <div className="flex items-start justify-between gap-2 mb-1.5">
+                              <span className="text-xs font-bold text-white truncate">
+                                {site.name}
+                              </span>
+                              {site.is_main && (
+                                <span className="text-[10px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 shrink-0">
+                                  Principal
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex items-center gap-1 text-[11px] text-slate-400 mb-1">
+                              <MapPin className="w-3 h-3 text-emerald-400 shrink-0" />
+                              <span className="truncate">{site.city}</span>
+                            </div>
+
+                            {site.address && (
+                              <p className="text-[10px] text-slate-500 line-clamp-1 mb-2">
+                                {site.address}
+                              </p>
+                            )}
+                          </div>
+
+                          <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs">
+                            <span className="text-[10px] font-bold text-slate-400">
+                              {attachedCount > 0 ? (
+                                <span className="text-emerald-400 font-semibold">
+                                  {attachedCount} secteur(s) rattaché(s)
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">Aucun secteur</span>
+                              )}
+                            </span>
+
+                            <div className="flex items-center gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditSite(site)}
+                                className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors"
+                                title="Modifier ce site"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleRequestDeleteSite(site)}
+                                className="p-1 text-slate-400 hover:text-rose-400 rounded hover:bg-slate-800 transition-colors"
+                                title="Supprimer ce site"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
               </div>
 
-              <SectorSelector
-                selectedSectors={form.selected_sectors}
-                onChange={handleSectorChange}
-              />
+              {/* ═════════════════════════════════════════════════════════════════ */}
+              {/* PARTIE B : SÉLECTION DES SECTEURS D'ACTIVITÉ                     */}
+              {/* ═════════════════════════════════════════════════════════════════ */}
+              {sites.length === 0 ? (
+                <div className="p-6 bg-slate-950/40 border border-dashed border-slate-800 rounded-2xl text-center text-slate-500 text-xs">
+                  <Lock className="w-6 h-6 mx-auto mb-2 text-slate-600" />
+                  <p className="font-semibold text-slate-400">
+                    PARTIE B : SÉLECTION DES SECTEURS D'ACTIVITÉ (VERROUILLÉE)
+                  </p>
+                  <p className="mt-1">
+                    Veuillez d'abord créer au moins un site d'exploitation ci-dessus pour débloquer la sélection de vos secteurs.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                    <h2 className="text-base font-semibold text-white">
+                      Sélectionnez vos secteurs d'activité
+                    </h2>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Votre essai gratuit unique de <strong className="text-emerald-400">30 jours</strong> couvre jusqu'à{' '}
+                      <strong className="text-white">3 secteurs d'activité</strong> (répartissables librement entre tous vos sites).
+                    </p>
+                  </div>
+
+                  <SectorSelector
+                    selectedSectors={form.selected_sectors}
+                    onChange={handleSectorChange}
+                    availableSites={sites}
+                    sectorSiteMap={sectorSiteMap}
+                    onSectorSiteChange={handleSectorSiteChange}
+                  />
+                </div>
+              )}
 
               {/* CHOIX DE LA FORMULE & CYCLE DE FACTURATION (BUG 2) */}
               {form.selected_sectors.length > 0 && (
@@ -1084,13 +1405,23 @@ export const RegisterPage: React.FC = () => {
               <div className="p-2.5 rounded-lg bg-emerald-950/40 border border-emerald-500/30 text-emerald-200">
                 <strong>Secteurs en essai gratuit (30 jours) :</strong>{' '}
                 {registrationSummary.freeTrialSectorSlugs
-                  .map((slug) => SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase())
+                  .map((slug) => {
+                    const secName = SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase()
+                    const siteId = sectorSiteMap[slug] || sites[0]?.id
+                    const siteObj = sites.find((s) => s.id === siteId) || sites[0]
+                    return `${secName} (${siteObj?.name || 'Site'})`
+                  })
                   .join(', ')}
               </div>
               <div className="p-2.5 rounded-lg bg-amber-950/40 border border-amber-500/30 text-amber-200">
                 <strong>Secteurs supplémentaires :</strong>{' '}
                 {registrationSummary.paidExtraSectorSlugs
-                  .map((slug) => SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase())
+                  .map((slug) => {
+                    const secName = SECTORS_LIST.find((s) => s.slug === slug)?.name || slug.toUpperCase()
+                    const siteId = sectorSiteMap[slug] || sites[0]?.id
+                    const siteObj = sites.find((s) => s.id === siteId) || sites[0]
+                    return `${secName} (${siteObj?.name || 'Site'})`
+                  })
                   .join(', ')}
               </div>
             </div>
@@ -1116,6 +1447,15 @@ export const RegisterPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Modale d'ajout & modification de site d'exploitation (Niveau 2 Inscription) */}
+      <RegisterSiteModal
+        isOpen={isSiteModalOpen}
+        onClose={() => setIsSiteModalOpen(false)}
+        onSave={handleSaveSite}
+        initialData={editingSite}
+        defaultCity={form.city || 'Cotonou'}
+      />
     </div>
   )
 }
