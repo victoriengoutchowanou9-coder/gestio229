@@ -7,7 +7,7 @@ import {
   Building2, Save, ShieldCheck, Users, Plus, KeyRound, Check,
   X, AlertCircle, Lock, UserCheck, Shield, ToggleLeft, ToggleRight,
   Briefcase, Store, Printer, Sparkles, Layers, Wrench, Truck, ArrowRightLeft, CheckCircle,
-  GraduationCap, Award, BookOpen
+  GraduationCap, Award, BookOpen, Fuel, Percent, History
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -28,6 +28,12 @@ import { useEcoleConfig } from '../../../hooks/useEcoleConfig'
 import { EcoleTypeEtablissement } from '../../../services/ecoleService'
 import { useSalesCircuitConfig } from '../../../hooks/useSalesCircuitConfig'
 import { SalesCircuitMode } from '../../../services/salesCircuitService'
+import {
+  getStationExonerationConfig,
+  saveStationExonerationConfig,
+  calculateFuelExonerationTax,
+  StationExonerationConfig
+} from '../../../services/stationFuelService'
 
 // ─── MAPPING DES MODULES & PERMISSIONS DYNAMIQUES PAR SECTEUR ────────────────
 const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> = {
@@ -247,7 +253,7 @@ export const ConfigPage: React.FC = () => {
   // Sécurisation anti-collision : unifie sectorMeta et secteurMeta
   const secteurMeta = sectorMeta
 
-  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'circuit_ventes' | 'imprimerie' | 'garage' | 'ecole'>('etablissement')
+  const [activeTab, setActiveTab] = useState<'etablissement' | 'fiscalite' | 'notifications' | 'utilisateurs' | 'circuit_ventes' | 'imprimerie' | 'garage' | 'ecole' | 'station'>('etablissement')
 
   // ─── Configuration Organisation des Ventes & Encaissements (Par Secteur) ───
   const {
@@ -528,6 +534,63 @@ export const ConfigPage: React.FC = () => {
       toast.error('Erreur de mise à jour', err?.message || 'Une anomalie est survenue lors de la mise à jour.')
     } finally {
       setSwitchingEcole(false)
+    }
+  }
+
+  // ─── Configuration Métier : Station-Service & Exonération TVA ──────────────
+  const isStationService = React.useMemo(() => {
+    const slug = currentSectorSlug ? normalizeSectorSlug(currentSectorSlug) : ''
+    return slug === 'station-service' || slug === 'station' || slug === 'hydrocarbures'
+  }, [currentSectorSlug])
+
+  const [stationExoCfg, setStationExoCfg] = useState<StationExonerationConfig>({
+    is_active: false,
+    taux_exoneration_pct: 0,
+    history: []
+  })
+  const [savingStationExo, setSavingStationExo] = useState(false)
+  const [loadingStationExo, setLoadingStationExo] = useState(false)
+
+  useEffect(() => {
+    if (company?.id && isStationService) {
+      setLoadingStationExo(true)
+      getStationExonerationConfig(company.id)
+        .then((cfg) => {
+          if (cfg) setStationExoCfg(cfg)
+        })
+        .finally(() => setLoadingStationExo(false))
+    }
+  }, [company?.id, isStationService])
+
+  const handleSaveStationExoneration = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!company?.id) return
+    setSavingStationExo(true)
+    try {
+      const res = await saveStationExonerationConfig(
+        company.id,
+        {
+          is_active: stationExoCfg.is_active,
+          taux_exoneration_pct: stationExoCfg.taux_exoneration_pct
+        },
+        undefined,
+        { id: user?.id, name: user?.full_name || user?.email }
+      )
+      if (res.success && res.data) {
+        setStationExoCfg(res.data)
+        toast.success(
+          'Paramétrage d\'exonération TVA enregistré !',
+          stationExoCfg.is_active
+            ? `Exonération active à ${stationExoCfg.taux_exoneration_pct}%. Ce taux s'appliquera automatiquement à chaque vente.`
+            : 'Exonération désactivée. Les prochaines ventes seront calculées au taux de TVA standard.'
+        )
+      } else {
+        toast.error('Erreur', res.error || 'Impossible d\'enregistrer')
+      }
+    } catch (err: any) {
+      toast.error('Erreur', err?.message || 'Erreur lors de l\'enregistrement')
+    } finally {
+      setSavingStationExo(false)
     }
   }
 
@@ -943,6 +1006,19 @@ export const ConfigPage: React.FC = () => {
             >
               <GraduationCap className="w-4 h-4 text-lime-600" />
               <span>Profil École & Formation</span>
+            </button>
+          )}
+          {isStationService && (
+            <button
+              onClick={() => setActiveTab('station')}
+              className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                activeTab === 'station'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Fuel className="w-4 h-4 text-amber-500" />
+              <span>Station-Service</span>
             </button>
           )}
         </div>
@@ -2358,6 +2434,235 @@ export const ConfigPage: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* ONGLET MÉTIER : PARAMÈTRES DU SECTEUR STATION-SERVICE                */}
+      {/* PARAMÈTRE D'EXONÉRATION DE TVA PERMANENT                           */}
+      {/* =================================================================== */}
+      {activeTab === 'station' && isStationService && (
+        <div className="space-y-6 animate-fadeIn">
+          {/* Card principale de configuration de l'exonération */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 shadow-sm space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-950/80 text-amber-600 flex items-center justify-center font-black">
+                  <Fuel className="w-6 h-6" />
+                </div>
+                <div>
+                  <h3 className="font-black text-slate-900 dark:text-white text-lg">
+                    PARAMÈTRE D'EXONÉRATION DE TVA
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Secteur Station-Service & Hydrocarbures — Pourcentage d'exonération permanent applicable automatiquement à chaque vente
+                  </p>
+                </div>
+              </div>
+              <span className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-black ${
+                stationExoCfg.is_active
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                  : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400'
+              }`}>
+                <span className={`w-2 h-2 rounded-full ${stationExoCfg.is_active ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
+                {stationExoCfg.is_active ? `Exonération active (${stationExoCfg.taux_exoneration_pct}%)` : 'Exonération désactivée'}
+              </span>
+            </div>
+
+            <form onSubmit={handleSaveStationExoneration} className="space-y-6">
+              {/* Toggle Activation / Désactivation */}
+              <div className="p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700/60 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <label className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <span>Statut de l'exonération de TVA</span>
+                  </label>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xl">
+                    Lorsqu'elle est activée, GESTIO 229 applique automatiquement ce pourcentage sur chaque vente de carburant à la pompe sans que l'utilisateur n'ait à le renseigner à chaque fois.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setStationExoCfg(prev => ({ ...prev, is_active: !prev.is_active }))}
+                  className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-xs font-black transition shrink-0 ${
+                    stationExoCfg.is_active
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-md shadow-emerald-600/20'
+                      : 'bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  {stationExoCfg.is_active ? (
+                    <>
+                      <ToggleRight className="w-5 h-5" />
+                      <span>Exonération ACTIVÉE</span>
+                    </>
+                  ) : (
+                    <>
+                      <ToggleLeft className="w-5 h-5 text-slate-400" />
+                      <span>Exonération DÉSACTIVÉE</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {/* Saisie du pourcentage d'exonération */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+                <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 space-y-3">
+                  <label className="block text-xs font-black text-slate-800 dark:text-slate-200 flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <Percent className="w-4 h-4 text-amber-500" />
+                      <span>Pourcentage d'exonération (%)</span>
+                    </span>
+                    <span className="text-base font-black text-amber-600">
+                      {stationExoCfg.taux_exoneration_pct}%
+                    </span>
+                  </label>
+
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    disabled={!stationExoCfg.is_active}
+                    value={stationExoCfg.taux_exoneration_pct}
+                    onChange={(e) => {
+                      const val = Math.min(100, Math.max(0, parseFloat(e.target.value) || 0))
+                      setStationExoCfg(prev => ({ ...prev, taux_exoneration_pct: val }))
+                    }}
+                    placeholder="Ex: 50 pour 50%"
+                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-xl text-lg font-black text-slate-900 dark:text-white disabled:opacity-50 disabled:cursor-not-allowed focus:ring-2 focus:ring-amber-500 focus:border-amber-500 transition"
+                  />
+
+                  {/* Curseur de réglage rapide */}
+                  <div className="pt-2">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      step="1"
+                      disabled={!stationExoCfg.is_active}
+                      value={stationExoCfg.taux_exoneration_pct}
+                      onChange={(e) => {
+                        const val = Number(e.target.value) || 0
+                        setStationExoCfg(prev => ({ ...prev, taux_exoneration_pct: val }))
+                      }}
+                      className="w-full accent-amber-500 cursor-pointer disabled:opacity-40"
+                    />
+                    <div className="flex justify-between text-[10px] text-slate-400 font-bold pt-1">
+                      <span>0% (Taxable)</span>
+                      <span>25%</span>
+                      <span>50%</span>
+                      <span>75%</span>
+                      <span>100% (Totalement exonéré)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Simulation fiscale en temps réel */}
+                <div className="p-5 rounded-2xl bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/40 space-y-3">
+                  <div className="flex items-center justify-between text-xs font-black text-amber-900 dark:text-amber-200">
+                    <span className="flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-amber-500" />
+                      <span>Exemple de calcul automatique (Vente 10 000 FCFA TTC)</span>
+                    </span>
+                    <span className="px-2 py-0.5 rounded-md bg-amber-200/60 dark:bg-amber-900 text-amber-900 dark:text-amber-100 text-[10px]">
+                      TVA standard 18%
+                    </span>
+                  </div>
+
+                  {(() => {
+                    const sim = calculateFuelExonerationTax(10000, stationExoCfg, 18)
+                    return (
+                      <div className="space-y-1.5 text-xs text-slate-700 dark:text-slate-300">
+                        <div className="flex justify-between">
+                          <span>Montant Total TTC :</span>
+                          <span className="font-bold">10 000 FCFA</span>
+                        </div>
+                        <div className="flex justify-between text-emerald-700 dark:text-emerald-400 font-semibold">
+                          <span>Montant exonéré :</span>
+                          <span>{sim.montantExonere.toLocaleString('fr-FR')} FCFA</span>
+                        </div>
+                        <div className="flex justify-between text-slate-600 dark:text-slate-400">
+                          <span>Montant net HT taxable :</span>
+                          <span className="font-bold">{sim.montantTaxableHT.toLocaleString('fr-FR')} FCFA</span>
+                        </div>
+                        <div className="flex justify-between text-amber-700 dark:text-amber-400 font-semibold">
+                          <span>TVA (18%) :</span>
+                          <span>{sim.montantTVA.toLocaleString('fr-FR')} FCFA</span>
+                        </div>
+                        <div className="pt-2 border-t border-amber-200 dark:border-amber-800/40 text-[11px] text-slate-500 dark:text-slate-400 italic">
+                          NB: Conformément à la réglementation fiscale, le ticket client affichera le montant net HT taxable, la TVA, le montant exonéré et le total TTC, sans mentionner le pourcentage.
+                        </div>
+                      </div>
+                    )
+                  })()}
+                </div>
+              </div>
+
+              {/* Bouton d'enregistrement */}
+              <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+                <button
+                  type="submit"
+                  disabled={savingStationExo}
+                  className="px-6 py-3 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-black rounded-xl shadow-lg shadow-amber-500/20 transition flex items-center gap-2 disabled:opacity-50"
+                >
+                  {savingStationExo ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                      <span>Enregistrement en cours...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>Enregistrer le paramètre</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+
+            {/* Historique des modifications */}
+            {stationExoCfg.history && stationExoCfg.history.length > 0 && (
+              <div className="pt-6 border-t border-slate-200 dark:border-slate-800 space-y-3">
+                <h4 className="text-xs font-black text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                  <History className="w-4 h-4 text-slate-500" />
+                  <span>Historique des modifications du pourcentage d'exonération</span>
+                </h4>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase font-bold text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 rounded-l-lg">Date & Heure</th>
+                        <th className="px-3 py-2">Ancien taux</th>
+                        <th className="px-3 py-2">Nouveau taux</th>
+                        <th className="px-3 py-2">Statut</th>
+                        <th className="px-3 py-2 rounded-r-lg">Modifié par</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {stationExoCfg.history.map((h, idx) => (
+                        <tr key={idx} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/50">
+                          <td className="px-3 py-2 font-mono text-[11px]">
+                            {new Date(h.date_modification).toLocaleString('fr-FR')}
+                          </td>
+                          <td className="px-3 py-2 font-bold">{h.ancien_taux_pct}%</td>
+                          <td className="px-3 py-2 font-bold text-amber-600">{h.nouveau_taux_pct}%</td>
+                          <td className="px-3 py-2">
+                            <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              h.is_active ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'
+                            }`}>
+                              {h.is_active ? 'Actif' : 'Inactif'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-slate-500">{h.user_name || 'Administrateur'}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

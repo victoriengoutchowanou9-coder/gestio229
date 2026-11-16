@@ -15,7 +15,13 @@ import { useUIStore } from '../../../store/uiStore'
 import { formatFCFA, calculateTaxFromTTC } from '../../../utils/tax'
 import { supabase } from '../../../lib/supabase'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus } from '../../../services/caisseSectorService'
-import { loadFuelCommercialConfigs, FuelCommercialConfig } from '../../../services/stationFuelService'
+import {
+  loadFuelCommercialConfigs,
+  FuelCommercialConfig,
+  getStationExonerationConfig,
+  calculateFuelExonerationTax,
+  StationExonerationConfig
+} from '../../../services/stationFuelService'
 import {
   DEFAULT_STATION_FUELS,
   FuelPumpItem,
@@ -37,6 +43,7 @@ export const VenteDistributeurPage: React.FC = () => {
   // Données de configuration station
   const [pistolets, setPistolets] = useState<FuelPumpItem[]>([])
   const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
+  const [stationExoneration, setStationExoneration] = useState<StationExonerationConfig | null>(null)
   const [pompistes, setPompistes] = useState<any[]>([])
   const [cuves, setCuves] = useState<any[]>([])
   const [flotteVehicules, setFlotteVehicules] = useState<any[]>([])
@@ -64,9 +71,13 @@ export const VenteDistributeurPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      // 1. Paramètres commerciaux et fiscaux officiels des carburants
-      const loadedConfigs = await loadFuelCommercialConfigs(companyId, company?.regime_fiscal, company?.tva_default_rate)
+      // 1. Paramètres commerciaux et fiscaux officiels des carburants & Exonération permanente
+      const [loadedConfigs, loadedExoConfig] = await Promise.all([
+        loadFuelCommercialConfigs(companyId, company?.regime_fiscal, company?.tva_default_rate),
+        getStationExonerationConfig(companyId)
+      ])
       setFuelConfigs(loadedConfigs)
+      setStationExoneration(loadedExoConfig)
 
       const getOfficialPrice = (productName: string, fallbackPrice: number) => {
         const pLower = (productName || '').toLowerCase()
@@ -245,13 +256,39 @@ export const VenteDistributeurPage: React.FC = () => {
 
   const unitPrice = activeFuelConfig?.prix_vente || Number(currentPistolet?.prix_actuel) || 680
 
-  // Décomposition fiscale en direct
+  // Décomposition fiscale en direct avec exonération automatique
   const currentLiveTax = useMemo(() => {
     const m = parseFloat(inputMontant) || 0
     const isTaxable = activeFuelConfig ? activeFuelConfig.is_tva_applicable : true
     const rate = activeFuelConfig ? activeFuelConfig.taux_tva : (company?.tva_default_rate ?? 18)
-    return calculateTaxFromTTC(m, isTaxable, rate)
-  }, [inputMontant, activeFuelConfig, company])
+
+    if (!isTaxable) {
+      return {
+        htPrice: m,
+        vatAmount: 0,
+        vatRate: 0,
+        ttcPrice: m,
+        isVatSubject: false,
+        montantExonere: m,
+        montantTaxableHT: 0,
+        montantTaxableTTC: 0,
+        tauxExonerationPct: 100
+      }
+    }
+
+    const exo = calculateFuelExonerationTax(m, stationExoneration, rate)
+    return {
+      htPrice: exo.montantTaxableHT,
+      vatAmount: exo.montantTVA,
+      vatRate: exo.vatRate,
+      ttcPrice: exo.montantTotalTTC,
+      isVatSubject: exo.montantTVA > 0,
+      montantExonere: exo.montantExonere,
+      montantTaxableHT: exo.montantTaxableHT,
+      montantTaxableTTC: exo.montantTaxableTTC,
+      tauxExonerationPct: exo.tauxExonerationPct
+    }
+  }, [inputMontant, activeFuelConfig, stationExoneration, company])
 
   // Synchronisation Montant <-> Volume (cohérence stricte prix / montant / volume)
   useEffect(() => {
@@ -350,10 +387,22 @@ export const VenteDistributeurPage: React.FC = () => {
       // Calcul du nouveau stock (garanti >= 0)
       const newStock = Math.max(0, Math.round((stockDispo - vol) * 100) / 100)
 
-      // Calcul de la décomposition fiscale selon le statut du carburant et de l'entreprise
+      // Calcul de la décomposition fiscale selon le statut du carburant, l'exonération permanente et l'entreprise
       const isTaxable = activeFuelConfig ? activeFuelConfig.is_tva_applicable : true
       const vatRate = activeFuelConfig ? activeFuelConfig.taux_tva : (company?.tva_default_rate ?? 18)
-      const taxResult = calculateTaxFromTTC(mnt, isTaxable, vatRate)
+      
+      const taxResult = isTaxable
+        ? calculateFuelExonerationTax(mnt, stationExoneration, vatRate)
+        : {
+            tauxExonerationPct: 100,
+            isExonereActive: true,
+            montantTotalTTC: mnt,
+            montantExonere: mnt,
+            montantTaxableTTC: 0,
+            montantTaxableHT: 0,
+            montantTVA: 0,
+            vatRate: 0
+          }
 
       // 1. Enregistrement dans sales_orders
       const salePayload: any = {
@@ -365,9 +414,9 @@ export const VenteDistributeurPage: React.FC = () => {
         status: 'COMPLETED',
         total_amount: mnt,
         paid_amount: mnt,
-        subtotal_ht: taxResult.htPrice,
-        total_ht: taxResult.htPrice,
-        total_tax: taxResult.vatAmount,
+        subtotal_ht: taxResult.montantTaxableHT,
+        total_ht: taxResult.montantTaxableHT,
+        total_tax: taxResult.montantTVA,
         payment_method: paymentMethod,
         payment_status: paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID',
         notes: saleNotes,
@@ -379,11 +428,16 @@ export const VenteDistributeurPage: React.FC = () => {
           code_pistolet: currentPistolet.code_pistolet,
           prix_litre: unitPrice,
           volume_litres: vol,
-          subtotal_ht: taxResult.htPrice,
-          total_tax: taxResult.vatAmount,
+          subtotal_ht: taxResult.montantTaxableHT,
+          total_tax: taxResult.montantTVA,
+          montant_net_ht_taxable: taxResult.montantTaxableHT,
+          montant_taxable_ttc: taxResult.montantTaxableTTC,
+          montant_exonere: taxResult.montantExonere,
+          taux_exoneration_applique: taxResult.tauxExonerationPct,
+          is_exoneration_active: taxResult.isExonereActive,
           tva_rate: taxResult.vatRate,
-          is_tva_applicable: taxResult.isVatSubject,
-          statut_fiscal: activeFuelConfig?.statut_fiscal || (taxResult.isVatSubject ? `TVA ${taxResult.vatRate}%` : 'Exonéré / TPS'),
+          is_tva_applicable: isTaxable,
+          statut_fiscal: activeFuelConfig?.statut_fiscal || (taxResult.montantTVA > 0 ? `TVA ${taxResult.vatRate}%` : 'Exonéré / TPS'),
           pompiste_id: selectedPompisteId || null,
           pompiste_nom: pompisteNom,
           immatriculation: selectedVeh?.immatriculation || null,
@@ -480,11 +534,13 @@ export const VenteDistributeurPage: React.FC = () => {
         volume: vol,
         prixLitre: unitPrice,
         montantTotal: mnt,
-        montantHT: taxResult.htPrice,
-        montantTVA: taxResult.vatAmount,
+        montantHTTaxable: taxResult.montantTaxableHT,
+        montantHT: taxResult.montantTaxableHT,
+        montantTVA: taxResult.montantTVA,
+        montantExonere: taxResult.montantExonere,
         tauxTVA: taxResult.vatRate,
-        isVatSubject: taxResult.isVatSubject,
-        mentionFiscale: activeFuelConfig?.statut_fiscal || (taxResult.isVatSubject ? `TVA ${taxResult.vatRate}% comprise` : 'Régime de la TPS — TVA non applicable (Art. 1084 CGI)'),
+        isVatSubject: isTaxable && taxResult.montantTVA > 0,
+        mentionFiscale: activeFuelConfig?.statut_fiscal || (taxResult.montantTVA > 0 ? `TVA ${taxResult.vatRate}% comprise` : 'Régime fiscal exonéré / TPS (CGI)'),
         modePaiement: paymentMethod,
         vehicule: selectedVeh?.immatriculation || null,
         client: clientNom,
@@ -967,7 +1023,7 @@ export const VenteDistributeurPage: React.FC = () => {
               </div>
 
               {/* Décomposition fiscale en direct */}
-              <div className="pt-2 border-t border-slate-850 grid grid-cols-3 gap-2 text-center text-[10px] bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+              <div className={`pt-2 border-t border-slate-850 grid ${currentLiveTax.montantExonere > 0 ? 'grid-cols-4' : 'grid-cols-3'} gap-2 text-center text-[10px] bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80`}>
                 <div>
                   <span className="text-slate-400 block font-semibold uppercase">Net HT</span>
                   <span className="font-mono font-bold text-slate-200">{formatFCFA(currentLiveTax.htPrice)}</span>
@@ -977,16 +1033,24 @@ export const VenteDistributeurPage: React.FC = () => {
                     {currentLiveTax.isVatSubject ? `TVA (${currentLiveTax.vatRate}%)` : 'TVA'}
                   </span>
                   <span className={`font-mono font-bold ${currentLiveTax.isVatSubject ? 'text-amber-400' : 'text-slate-400'}`}>
-                    {currentLiveTax.isVatSubject ? formatFCFA(currentLiveTax.vatAmount) : 'Exonéré'}
+                    {currentLiveTax.isVatSubject ? formatFCFA(currentLiveTax.vatAmount) : '0 FCFA'}
                   </span>
                 </div>
+                {currentLiveTax.montantExonere > 0 && (
+                  <div>
+                    <span className="text-slate-400 block font-semibold uppercase">Exonéré</span>
+                    <span className="font-mono font-bold text-slate-300">{formatFCFA(currentLiveTax.montantExonere)}</span>
+                  </div>
+                )}
                 <div>
                   <span className="text-slate-400 block font-semibold uppercase">TTC</span>
                   <span className="font-mono font-black text-emerald-400">{formatFCFA(currentLiveTax.ttcPrice)}</span>
                 </div>
               </div>
               <div className="text-[10px] text-slate-400 italic text-center">
-                {activeFuelConfig?.statut_fiscal || (currentLiveTax.isVatSubject ? `Assujetti TVA ${currentLiveTax.vatRate}%` : 'Régime fiscal exonéré / TPS')}
+                {currentLiveTax.montantExonere > 0
+                  ? `Exonération permanente appliquée (${currentLiveTax.tauxExonerationPct}%) — Conforme CGI`
+                  : (activeFuelConfig?.statut_fiscal || (currentLiveTax.isVatSubject ? `Assujetti TVA ${currentLiveTax.vatRate}%` : 'Régime fiscal exonéré / TPS'))}
               </div>
             </div>
 
@@ -1143,20 +1207,20 @@ export const VenteDistributeurPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Décomposition Fiscale & Paiement */}
-              <div className="space-y-1 pt-1 border-b border-dashed border-slate-300 pb-2">
+              {/* Décomposition Fiscale & Paiement — Conforme Règle Absolue CGI */}
+              <div className="space-y-1.5 pt-1 border-b border-dashed border-slate-300 pb-2">
                 <div className="flex justify-between text-xs text-slate-700">
-                  <span>Montant Net HT :</span>
-                  <span className="font-bold text-slate-900">{formatFCFA(lastTicket.montantHT || lastTicket.montantTotal)}</span>
+                  <span>Montant net HT taxable :</span>
+                  <span className="font-bold text-slate-900">{formatFCFA(lastTicket.montantHTTaxable ?? lastTicket.montantHT ?? 0)}</span>
                 </div>
-                {lastTicket.isVatSubject ? (
-                  <div className="flex justify-between text-xs text-slate-700">
-                    <span>TVA ({lastTicket.tauxTVA || 18}%) :</span>
-                    <span className="font-bold text-slate-900">{formatFCFA(lastTicket.montantTVA || 0)}</span>
-                  </div>
-                ) : (
-                  <div className="text-[10px] text-slate-500 italic py-0.5">
-                    {lastTicket.mentionFiscale || 'Régime fiscal exonéré / TPS'}
+                <div className="flex justify-between text-xs text-slate-700">
+                  <span>TVA (18%) :</span>
+                  <span className="font-bold text-slate-900">{formatFCFA(lastTicket.montantTVA || 0)}</span>
+                </div>
+                {Number(lastTicket.montantExonere) > 0 && (
+                  <div className="flex justify-between text-xs text-slate-800 font-semibold">
+                    <span>Montant exonéré :</span>
+                    <span className="font-bold">{formatFCFA(lastTicket.montantExonere)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm font-black pt-1 border-t border-slate-200">
@@ -1164,7 +1228,7 @@ export const VenteDistributeurPage: React.FC = () => {
                   <span className="text-slate-950">{formatFCFA(lastTicket.montantTotal)}</span>
                 </div>
                 <div className="flex justify-between text-[11px] text-slate-600 pt-0.5">
-                  <span>Mode paiement :</span>
+                  <span>Mode de paiement :</span>
                   <span className="font-bold">{lastTicket.modePaiement}</span>
                 </div>
               </div>

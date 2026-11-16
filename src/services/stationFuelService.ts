@@ -911,3 +911,262 @@ export async function getDailyFuelSheet(
     return []
   }
 }
+
+// =============================================================================
+// GESTIO 229 — PARAMÉTRAGE PERMANENT DU POURCENTAGE D'EXONÉRATION DE TVA
+// Spécifique Secteur Station-Service (CGI Bénin & UEMOA)
+// =============================================================================
+
+export interface StationExonerationHistoryItem {
+  ancien_taux_pct: number
+  nouveau_taux_pct: number
+  is_active: boolean
+  date_modification: string
+  user_id?: string
+  user_name?: string
+}
+
+export interface StationExonerationConfig {
+  is_active: boolean
+  taux_exoneration_pct: number // Entre 0 et 100
+  updated_at?: string
+  updated_by_id?: string
+  updated_by_name?: string
+  history?: StationExonerationHistoryItem[]
+}
+
+const DEFAULT_STATION_EXONERATION_CONFIG: StationExonerationConfig = {
+  is_active: false,
+  taux_exoneration_pct: 0,
+  history: []
+}
+
+/**
+ * Clé de stockage locale pour isolation multisite & multi-entreprise
+ */
+function getExonerationStorageKey(companyId: string, siteId?: string): string {
+  const safeSite = siteId && siteId !== 'all' ? siteId : 'default'
+  return `gestio229_station_exoneration_${companyId}_${safeSite}`
+}
+
+/**
+ * Récupère le paramétrage permanent d'exonération TVA pour la Station-Service
+ */
+export async function getStationExonerationConfig(
+  companyId: string,
+  siteId?: string
+): Promise<StationExonerationConfig> {
+  if (!companyId) return { ...DEFAULT_STATION_EXONERATION_CONFIG }
+
+  const storageKey = getExonerationStorageKey(companyId, siteId)
+
+  // 1. Essai de lecture depuis Supabase (companies.settings ou sector_meta)
+  try {
+    const { data, error } = await supabase
+      .from('companies')
+      .select('settings')
+      .eq('id', companyId)
+      .maybeSingle()
+
+    if (!error && data?.settings) {
+      const settings = typeof data.settings === 'string' ? JSON.parse(data.settings) : data.settings
+      const siteKey = siteId && siteId !== 'all' ? `station_exoneration_${siteId}` : 'station_exoneration'
+      const cfg = settings[siteKey] || settings.station_exoneration
+
+      if (cfg) {
+        const loaded: StationExonerationConfig = {
+          is_active: Boolean(cfg.is_active),
+          taux_exoneration_pct: Math.min(100, Math.max(0, Number(cfg.taux_exoneration_pct) || 0)),
+          updated_at: cfg.updated_at,
+          updated_by_id: cfg.updated_by_id,
+          updated_by_name: cfg.updated_by_name,
+          history: Array.isArray(cfg.history) ? cfg.history : []
+        }
+        // Cache local pour résilience offline / ultra-rapide
+        try {
+          localStorage.setItem(storageKey, JSON.stringify(loaded))
+        } catch (_) {}
+        return loaded
+      }
+    }
+  } catch (err) {
+    console.warn('[stationFuelService] Notice chargement distant exoneration config:', err)
+  }
+
+  // 2. Fallback localStorage
+  try {
+    const cached = localStorage.getItem(storageKey)
+    if (cached) {
+      const parsed = JSON.parse(cached)
+      return {
+        is_active: Boolean(parsed.is_active),
+        taux_exoneration_pct: Math.min(100, Math.max(0, Number(parsed.taux_exoneration_pct) || 0)),
+        updated_at: parsed.updated_at,
+        updated_by_id: parsed.updated_by_id,
+        updated_by_name: parsed.updated_by_name,
+        history: Array.isArray(parsed.history) ? parsed.history : []
+      }
+    }
+  } catch (_) {}
+
+  return { ...DEFAULT_STATION_EXONERATION_CONFIG }
+}
+
+/**
+ * Enregistre de manière permanente le paramétrage d'exonération de TVA avec historique d'audit
+ */
+export async function saveStationExonerationConfig(
+  companyId: string,
+  newConfig: { is_active: boolean; taux_exoneration_pct: number },
+  siteId?: string,
+  user?: { id?: string; name?: string }
+): Promise<{ success: boolean; data?: StationExonerationConfig; error?: string }> {
+  if (!companyId) {
+    return { success: false, error: 'Identifiant entreprise manquant' }
+  }
+
+  try {
+    const current = await getStationExonerationConfig(companyId, siteId)
+    const nowIso = new Date().toISOString()
+    const sanitizedTaux = Math.min(100, Math.max(0, Number(newConfig.taux_exoneration_pct) || 0))
+
+    const historyItem: StationExonerationHistoryItem = {
+      ancien_taux_pct: current.taux_exoneration_pct,
+      nouveau_taux_pct: sanitizedTaux,
+      is_active: newConfig.is_active,
+      date_modification: nowIso,
+      user_id: user?.id,
+      user_name: user?.name || 'Administrateur'
+    }
+
+    const updatedHistory = [historyItem, ...(current.history || [])].slice(0, 50)
+
+    const updatedConfig: StationExonerationConfig = {
+      is_active: Boolean(newConfig.is_active),
+      taux_exoneration_pct: sanitizedTaux,
+      updated_at: nowIso,
+      updated_by_id: user?.id,
+      updated_by_name: user?.name,
+      history: updatedHistory
+    }
+
+    // 1. Sauvegarde localStorage
+    const storageKey = getExonerationStorageKey(companyId, siteId)
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(updatedConfig))
+      // Sauvegarder aussi la clé globale par défaut pour synchronisation fluide
+      localStorage.setItem(`gestio229_station_exoneration_${companyId}_default`, JSON.stringify(updatedConfig))
+    } catch (_) {}
+
+    // 2. Sauvegarde Supabase dans companies.settings
+    try {
+      const { data: compData } = await supabase
+        .from('companies')
+        .select('settings')
+        .eq('id', companyId)
+        .maybeSingle()
+
+      const prevSettings = compData?.settings
+        ? (typeof compData.settings === 'string' ? JSON.parse(compData.settings) : compData.settings)
+        : {}
+
+      const siteKey = siteId && siteId !== 'all' ? `station_exoneration_${siteId}` : 'station_exoneration'
+
+      const mergedSettings = {
+        ...prevSettings,
+        [siteKey]: updatedConfig,
+        station_exoneration: updatedConfig // Référence permanente
+      }
+
+      await supabase
+        .from('companies')
+        .update({
+          settings: mergedSettings,
+          updated_at: nowIso
+        })
+        .eq('id', companyId)
+    } catch (dbErr) {
+      console.warn('[stationFuelService] Notice persistence Supabase exoneration config (sauvegarde locale maintenue):', dbErr)
+    }
+
+    return { success: true, data: updatedConfig }
+  } catch (err: any) {
+    console.error('[stationFuelService] Erreur saveStationExonerationConfig:', err)
+    return { success: false, error: err?.message || 'Erreur lors de l\'enregistrement' }
+  }
+}
+
+export interface FuelTaxExonerationResult {
+  tauxExonerationPct: number
+  isExonereActive: boolean
+  montantTotalTTC: number
+  montantExonere: number
+  montantTaxableTTC: number
+  montantTaxableHT: number
+  montantTVA: number
+  vatRate: number
+}
+
+/**
+ * Calcul automatique de la décomposition fiscale carburant avec exonération partielle/totale permanente
+ *
+ * Formules conformes CGI :
+ * 1. Montant exonéré = Montant total TTC × Pourcentage d'exonération
+ * 2. Montant taxable TTC = Montant total TTC - Montant exonéré
+ * 3. Montant net HT taxable = Montant taxable TTC / (1 + Taux TVA / 100)
+ * 4. Montant TVA (18%) = Montant taxable TTC - Montant net HT taxable
+ * 5. Total TTC = Montant exonéré + Montant taxable TTC
+ */
+export function calculateFuelExonerationTax(
+  totalTTC: number,
+  exonerationConfig?: StationExonerationConfig | null,
+  vatRate: number = 18
+): FuelTaxExonerationResult {
+  const mntTTC = Math.max(0, Math.round(Number(totalTTC) || 0))
+  const rate = Math.max(0, Number(vatRate) || 18)
+
+  const isActive = Boolean(exonerationConfig?.is_active)
+  const tauxPct = isActive ? Math.min(100, Math.max(0, Number(exonerationConfig?.taux_exoneration_pct) || 0)) : 0
+
+  if (!isActive || tauxPct <= 0) {
+    // Aucune exonération : 100% taxable
+    const ht = rate > 0 ? Math.round((mntTTC / (1 + rate / 100)) * 100) / 100 : mntTTC
+    const tva = Math.round((mntTTC - ht) * 100) / 100
+    return {
+      tauxExonerationPct: 0,
+      isExonereActive: false,
+      montantTotalTTC: mntTTC,
+      montantExonere: 0,
+      montantTaxableTTC: mntTTC,
+      montantTaxableHT: ht,
+      montantTVA: tva,
+      vatRate: rate
+    }
+  }
+
+  // Calcul avec exonération active
+  // 1. Montant exonéré = Montant total TTC × Pourcentage d'exonération
+  const montantExonere = Math.round(mntTTC * (tauxPct / 100))
+
+  // 2. Montant taxable TTC = Montant total TTC - Montant exonéré
+  const montantTaxableTTC = Math.max(0, mntTTC - montantExonere)
+
+  // 3. Montant net HT taxable = Montant taxable TTC / (1 + Taux TVA / 100)
+  const montantTaxableHT = (rate > 0 && montantTaxableTTC > 0)
+    ? Math.round((montantTaxableTTC / (1 + rate / 100)) * 100) / 100
+    : montantTaxableTTC
+
+  // 4. Montant TVA (18%) = Montant taxable TTC - Montant net HT taxable
+  const montantTVA = Math.round((montantTaxableTTC - montantTaxableHT) * 100) / 100
+
+  return {
+    tauxExonerationPct: tauxPct,
+    isExonereActive: true,
+    montantTotalTTC: mntTTC,
+    montantExonere,
+    montantTaxableTTC,
+    montantTaxableHT,
+    montantTVA,
+    vatRate: rate
+  }
+}
