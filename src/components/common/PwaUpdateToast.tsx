@@ -4,6 +4,7 @@ import { RotateCcw, X } from 'lucide-react'
 export const PwaUpdateToast: React.FC = () => {
   const [show, setShow] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
+  const [countdown, setCountdown] = useState(5)
 
   useEffect(() => {
     const handleUpdateAvailable = () => {
@@ -26,6 +27,35 @@ export const PwaUpdateToast: React.FC = () => {
       window.removeEventListener('gestio-pwa-update-available', handleUpdateAvailable)
     }
   }, [])
+
+  // Auto-reload après 5 secondes, sauf si l'utilisateur est dans un formulaire
+  useEffect(() => {
+    if (!show) return
+    
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) {
+          // Vérifier si l'utilisateur est dans un champ de saisie
+          const activeEl = document.activeElement
+          const isInForm = activeEl && (
+            activeEl.tagName === 'INPUT' || 
+            activeEl.tagName === 'TEXTAREA' || 
+            activeEl.tagName === 'SELECT' ||
+            (activeEl as HTMLElement).isContentEditable
+          )
+          if (isInForm) {
+            // Reporter de 10 secondes si l'utilisateur saisit
+            return 10
+          }
+          handleApplyUpdate()
+          return 0
+        }
+        return prev - 1
+      })
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [show])
 
   const handleApplyUpdate = async () => {
     setIsUpdating(true)
@@ -53,7 +83,7 @@ export const PwaUpdateToast: React.FC = () => {
         </div>
         <div className="min-w-0">
           <p className="text-xs font-bold text-slate-100">Mise à jour disponible</p>
-          <p className="text-[11px] text-slate-400 truncate">Une nouvelle version est prête</p>
+          <p className="text-[11px] text-slate-400 truncate">Actualisation auto dans {countdown}s</p>
         </div>
       </div>
 

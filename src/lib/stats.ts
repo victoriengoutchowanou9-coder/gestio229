@@ -176,7 +176,7 @@ function itemMatchesSite(item: any, siteId: string, sectorSlug: string): boolean
   return true;
 }
 
-interface RawCompanyData {
+export interface RawCompanyData {
   sales: any[];
   expenses: any[];
   avoirs: FactureAvoirRecord[];
@@ -186,7 +186,7 @@ interface RawCompanyData {
 /**
  * Charge les données brutes Supabase de l'entreprise (requête consolidée en parallèle)
  */
-async function fetchCompanyRawData(companyId: string): Promise<RawCompanyData> {
+export async function fetchCompanyRawData(companyId: string): Promise<RawCompanyData> {
   const salesPromise = supabase
     .from('sales_orders')
     .select(
@@ -507,7 +507,8 @@ export async function getStatsToutesActivites(
   companyId: string,
   dateDebut?: string,
   dateFin?: string,
-  activitiesList?: Array<{ id: string; sectorSlug: string }>
+  activitiesList?: Array<{ id: string; sectorSlug: string }>,
+  preloadedRawData?: RawCompanyData
 ): Promise<Record<string, ActivityStats>> {
   const defPeriod = getDefaultMonthPeriod();
   const startStr = (dateDebut || defPeriod.dateDebut).slice(0, 10);
@@ -515,7 +516,7 @@ export async function getStatsToutesActivites(
 
   if (!companyId) return {};
 
-  const rawData = await fetchCompanyRawData(companyId);
+  const rawData = preloadedRawData || await fetchCompanyRawData(companyId);
   const result: Record<string, ActivityStats> = {};
 
   if (Array.isArray(activitiesList) && activitiesList.length > 0) {
@@ -553,4 +554,5 @@ export default {
   getDefaultMonthPeriod,
   extractCotonouDate,
   resolveSectorSlug,
+  fetchCompanyRawData,
 };

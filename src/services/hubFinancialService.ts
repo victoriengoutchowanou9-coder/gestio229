@@ -19,7 +19,7 @@ import {
   safeNum,
 } from '../lib/financialCalcul';
 import { OFFICIAL_STATION_FUELS } from './stationFuelService';
-import { getStatsToutesActivites, ActivityStats } from '../lib/stats';
+import { getStatsToutesActivites, ActivityStats, fetchCompanyRawData, RawCompanyData } from '../lib/stats';
 import { CompanySite, SiteFinancials } from './multisiteService';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -286,10 +286,12 @@ export async function fetchHubFinancialMetrics(
 ): Promise<HubFinancialResult> {
   const { todayStr, monthStartStr, monthEndStr, yearStartStr, yearEndStr } = getCotonouDates(targetDateStr);
 
+  const rawData = await fetchCompanyRawData(companyId);
+
   const [monthStatsMap, dayStatsMap, yearStatsMap, creancesMap] = await Promise.all([
-    getStatsToutesActivites(companyId, monthStartStr, todayStr),
-    getStatsToutesActivites(companyId, todayStr, todayStr),
-    getStatsToutesActivites(companyId, yearStartStr, todayStr),
+    getStatsToutesActivites(companyId, monthStartStr, todayStr, undefined, rawData),
+    getStatsToutesActivites(companyId, todayStr, todayStr, undefined, rawData),
+    getStatsToutesActivites(companyId, yearStartStr, todayStr, undefined, rawData),
     fetchCompanyCreances(companyId),
   ]);
 

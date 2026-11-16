@@ -89,6 +89,10 @@ if (typeof window !== 'undefined') {
     } catch (_) {}
   }
 
+  // ── 2b. Vérification périodique des mises à jour (toutes les 30s) ─────────
+  setTimeout(checkForNewVersion, 5000)
+  setInterval(checkForNewVersion, 30 * 1000)
+
   // ── 3. Filet de sécurité global : chunk error + TDZ error ────────────────
   const isAutoReloadableError = (msg: string) =>
     msg.includes('dynamically imported module') ||
