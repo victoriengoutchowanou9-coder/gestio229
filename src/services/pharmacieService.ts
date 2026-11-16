@@ -82,6 +82,7 @@ export interface PharmacieLot {
 }
 
 export interface LigneVentePharmacie {
+  lineId?: string
   produit_id: string
   lot_id: string
   numero_lot: string
@@ -637,6 +638,7 @@ export const pharmacieService = {
     const allLots = await this.getLots(companyId)
 
     // Validation préalable stricte : aucun lot périmé ou bloqué ne peut être vendu
+    const lotTotals = new Map<string, number>()
     for (const ligne of venteData.lignes) {
       const lot = allLots.find((l) => l.id === ligne.lot_id)
       if (!lot) {
@@ -652,9 +654,14 @@ export const pharmacieService = {
           `Vente interdite (SÉCURITÉ SANTÉ) : Le lot ${lot.numero_lot} (${lot.produit_nom}) est périmé depuis le ${lot.date_peremption} !`
         )
       }
-      if (lot.quantite_actuelle < ligne.quantite) {
+      lotTotals.set(lot.id, (lotTotals.get(lot.id) || 0) + ligne.quantite)
+    }
+
+    for (const [lotId, totalDemande] of lotTotals) {
+      const lot = allLots.find((l) => l.id === lotId)!
+      if (lot.quantite_actuelle < totalDemande) {
         throw new Error(
-          `Stock insuffisant sur le lot ${lot.numero_lot} : disponible ${lot.quantite_actuelle}, demandé ${ligne.quantite}.`
+          `Stock insuffisant sur le lot ${lot.numero_lot} : disponible ${lot.quantite_actuelle}, total demandé ${totalDemande}.`
         )
       }
     }

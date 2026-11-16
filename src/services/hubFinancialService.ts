@@ -376,7 +376,7 @@ export async function fetchHubFinancialMetrics(
       totalExpenses: y.depenses,
       totalNetMargin: y.margeNette,
       hasKnownCost: true,
-      stationFinancials: m.stationFinancials || y.stationFinancials,
+      stationFinancials: (m as any).stationFinancials || (y as any).stationFinancials,
     };
 
     totalCaJour += d.caNet;

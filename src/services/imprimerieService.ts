@@ -1315,6 +1315,7 @@ export const imprimerieService = {
 
     // Contrôle préalable de disponibilité des matières premières BOM (Condition bloquante)
     if (!isAttente) {
+      const bomTotals = new Map<string, number>()
       for (const it of params.items) {
         if (it.prestation.matieres_bom && it.prestation.matieres_bom.length > 0) {
           for (const bom of it.prestation.matieres_bom) {
@@ -1322,33 +1323,36 @@ export const imprimerieService = {
               ? (it.largeur * it.hauteur)
               : 1
             const qtyNeeded = Math.round(Number(bom.quantite_prevue || 1) * it.quantite * surfaceFactor * 1000) / 1000
+            bomTotals.set(bom.matiere_id, (bomTotals.get(bom.matiere_id) || 0) + qtyNeeded)
+          }
+        }
+      }
 
-            // Vérifier table products
-            const { data: pCheck } = await supabase
-              .from('products')
-              .select('id, name, stock_vente, sector_meta')
-              .eq('id', bom.matiere_id)
-              .maybeSingle()
+      for (const [matiereId, totalQtyNeeded] of bomTotals) {
+        // Vérifier table products
+        const { data: pCheck } = await supabase
+          .from('products')
+          .select('id, name, stock_vente, sector_meta')
+          .eq('id', matiereId)
+          .maybeSingle()
 
-            if (pCheck) {
-              const curDispo = Number(pCheck.stock_vente ?? pCheck.sector_meta?.stock_vente ?? 0)
-              if (curDispo < qtyNeeded) {
-                throw new Error(`Stock insuffisant pour la matière "${pCheck.name}" : requis ${qtyNeeded}, disponible ${curDispo}.`)
-              }
-            } else {
-              // Vérifier table imprimerie_matieres
-              const { data: mCheck } = await supabase
-                .from('imprimerie_matieres')
-                .select('id, nom, stock_actuel')
-                .eq('id', bom.matiere_id)
-                .maybeSingle()
+        if (pCheck) {
+          const curDispo = Number(pCheck.stock_vente ?? pCheck.sector_meta?.stock_vente ?? 0)
+          if (curDispo < totalQtyNeeded) {
+            throw new Error(`Stock insuffisant pour la matière "${pCheck.name}" : requis ${totalQtyNeeded}, disponible ${curDispo}.`)
+          }
+        } else {
+          // Vérifier table imprimerie_matieres
+          const { data: mCheck } = await supabase
+            .from('imprimerie_matieres')
+            .select('id, nom, stock_actuel')
+            .eq('id', matiereId)
+            .maybeSingle()
 
-              if (mCheck) {
-                const curDispo = Number(mCheck.stock_actuel || 0)
-                if (curDispo < qtyNeeded) {
-                  throw new Error(`Stock insuffisant pour la matière "${mCheck.nom}" : requis ${qtyNeeded}, disponible ${curDispo}.`)
-                }
-              }
+          if (mCheck) {
+            const curDispo = Number(mCheck.stock_actuel || 0)
+            if (curDispo < totalQtyNeeded) {
+              throw new Error(`Stock insuffisant pour la matière "${mCheck.nom}" : requis ${totalQtyNeeded}, disponible ${curDispo}.`)
             }
           }
         }

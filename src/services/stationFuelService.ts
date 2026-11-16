@@ -701,7 +701,7 @@ export async function generateFuelProfitabilityReport(
       quantiteVendueLitres: volVendu,
       prixVenteUnitaireMoyen: puVenteTTC,
       prixVenteUnitaireHT: puVenteHT,
-      coutAchatUnitaireRetenu: coutUnitaire,
+      coutAchatUnitaireRetenu: coutUnitaireHT,
       hasCoutAchat: costInfo.hasKnownCost,
       chiffreAffairesTTC: caTTC,
       chiffreAffairesNetHT: caNetHT,

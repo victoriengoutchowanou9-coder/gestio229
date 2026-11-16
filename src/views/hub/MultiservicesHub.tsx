@@ -28,6 +28,8 @@ import {
   Moon,
   Fuel,
   Droplets,
+  Layers,
+  AlertCircle,
 } from 'lucide-react';
 import { ALL_SECTORS_CATALOG, SectorDefinition } from '../../core/modules/moduleRegistry';
 import { ClearSectorModal } from '../../components/hub/ClearSectorModal';

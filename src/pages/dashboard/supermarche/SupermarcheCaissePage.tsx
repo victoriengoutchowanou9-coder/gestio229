@@ -42,6 +42,7 @@ export interface SupermarcheProduct {
 }
 
 export interface CartLine {
+  lineId?: string
   product: SupermarcheProduct
   qty: number
   unitPrice: number
@@ -175,47 +176,33 @@ export const SupermarcheCaissePage: React.FC = () => {
   const ajouterAuPanier = useCallback(
     (product: SupermarcheProduct, qtyToAdd: number = 1) => {
       setCart((prev) => {
-        const existingIndex = prev.findIndex((item) => item.product.id === product.id)
-        if (existingIndex > -1) {
-          const updated = [...prev]
-          const existing = updated[existingIndex]
-          const newQty = existing.qty + qtyToAdd
+        const totalAlreadyInCart = prev
+          .filter((item) => item.product.id === product.id)
+          .reduce((sum, item) => sum + item.qty, 0)
+        const totalAfterAdd = totalAlreadyInCart + qtyToAdd
 
-          // Vérification avertissement de stock (sans bloquer la vente si autorisé)
-          if (newQty > product.current_stock) {
-            toast.warning(
-              `Stock faible pour ${product.name}`,
-              `Disponible : ${product.current_stock} ${product.unit}. Total demandé : ${newQty}.`
-            )
-          }
+        // Vérification avertissement de stock (sans bloquer la vente si autorisé)
+        if (totalAfterAdd > product.current_stock) {
+          toast.warning(
+            `Stock faible pour ${product.name}`,
+            `Disponible : ${product.current_stock} ${product.unit}. Total demandé (toutes lignes) : ${totalAfterAdd}.`
+          )
+        }
 
-          const lineTotal = newQty * existing.unitPrice * (1 - existing.discountPct / 100)
-          updated[existingIndex] = {
-            ...existing,
-            qty: newQty,
+        const lineTotal = qtyToAdd * product.selling_price
+        const newLineId = `sm-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
+        return [
+          ...prev,
+          {
+            lineId: newLineId,
+            product,
+            qty: qtyToAdd,
+            unitPrice: product.selling_price,
+            discountPct: 0,
             totalLine: lineTotal
           }
-          return updated
-        } else {
-          if (qtyToAdd > product.current_stock) {
-            toast.warning(
-              `Stock faible pour ${product.name}`,
-              `Disponible : ${product.current_stock} ${product.unit}.`
-            )
-          }
-
-          const lineTotal = qtyToAdd * product.selling_price
-          return [
-            ...prev,
-            {
-              product,
-              qty: qtyToAdd,
-              unitPrice: product.selling_price,
-              discountPct: 0,
-              totalLine: lineTotal
-            }
-          ]
-        }
+        ]
       })
 
       refocaliserScanner()
@@ -253,11 +240,11 @@ export const SupermarcheCaissePage: React.FC = () => {
   }
 
   // ─── 4. Modification de ligne de panier ─────────────────────────────────────
-  const modifierQuantite = (productId: string, delta: number) => {
+  const modifierQuantite = (lineIdentifier: string, delta: number) => {
     setCart((prev) =>
       prev
         .map((line) => {
-          if (line.product.id !== productId) return line
+          if ((line.lineId || line.product.id) !== lineIdentifier) return line
           const newQty = Math.max(0, line.qty + delta)
           if (newQty === 0) return null
           return {
@@ -271,8 +258,8 @@ export const SupermarcheCaissePage: React.FC = () => {
     refocaliserScanner()
   }
 
-  const supprimerLigne = (productId: string) => {
-    setCart((prev) => prev.filter((line) => line.product.id !== productId))
+  const supprimerLigne = (lineIdentifier: string) => {
+    setCart((prev) => prev.filter((line) => (line.lineId || line.product.id) !== lineIdentifier))
     refocaliserScanner()
   }
 
@@ -442,8 +429,18 @@ export const SupermarcheCaissePage: React.FC = () => {
         total_price: line.totalLine
       }))
 
-      const productUpdates = cart.map(line => {
-        const nouveauStockVente = Math.max(0, line.product.current_stock - line.qty)
+      const productTotalsMap = new Map<string, { product: SupermarcheProduct; totalQty: number }>()
+      for (const line of cart) {
+        const existing = productTotalsMap.get(line.product.id)
+        if (existing) {
+          existing.totalQty = Math.round((existing.totalQty + line.qty) * 1000) / 1000
+        } else {
+          productTotalsMap.set(line.product.id, { product: line.product, totalQty: line.qty })
+        }
+      }
+
+      const productUpdates = Array.from(productTotalsMap.values()).map(({ product, totalQty }) => {
+        const nouveauStockVente = Math.max(0, product.current_stock - totalQty)
         return supabase
           .from('products')
           .update({
@@ -451,7 +448,7 @@ export const SupermarcheCaissePage: React.FC = () => {
             stock_vente: nouveauStockVente,
             updated_at: dateNow
           })
-          .eq('id', line.product.id)
+          .eq('id', product.id)
       })
 
       const caisseOps: Promise<any>[] = []
@@ -488,9 +485,11 @@ export const SupermarcheCaissePage: React.FC = () => {
 
       // Mise à jour locale du stock sans recharger toute la base
       setProducts(prev => prev.map(p => {
-        const match = cart.find(l => l.product.id === p.id)
-        if (!match) return p
-        const ns = Math.max(0, p.current_stock - match.qty)
+        const totalSold = cart
+          .filter(l => l.product.id === p.id)
+          .reduce((sum, l) => sum + l.qty, 0)
+        if (totalSold <= 0) return p
+        const ns = Math.max(0, p.current_stock - totalSold)
         return { ...p, current_stock: ns, stock_vente: ns }
       }))
 
@@ -787,48 +786,51 @@ export const SupermarcheCaissePage: React.FC = () => {
               Panier vide. Scannez un article pour commencer.
             </div>
           ) : (
-            cart.map((line) => (
-              <div
-                key={line.product.id}
-                className="flex items-center justify-between p-2 bg-slate-900/80 rounded-xl border border-slate-700/60 text-xs hover:border-slate-600 transition"
-              >
-                <div className="flex-1 mr-2 min-w-0">
-                  <div className="font-bold text-slate-200 truncate">{line.product.name}</div>
-                  <div className="text-[10px] text-slate-400 font-mono">
-                    {line.qty} {line.product.unit} x {fmt(line.unitPrice)}
+            cart.map((line, idx) => {
+              const lineKey = line.lineId || `${line.product.id}-${idx}`
+              return (
+                <div
+                  key={lineKey}
+                  className="flex items-center justify-between p-2 bg-slate-900/80 rounded-xl border border-slate-700/60 text-xs hover:border-slate-600 transition"
+                >
+                  <div className="flex-1 mr-2 min-w-0">
+                    <div className="font-bold text-slate-200 truncate">{line.product.name}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">
+                      {line.qty} {line.product.unit} x {fmt(line.unitPrice)}
+                    </div>
+                  </div>
+
+                  {/* Contrôles de quantité */}
+                  <div className="flex items-center gap-1 mr-2 shrink-0">
+                    <button
+                      onClick={() => modifierQuantite(lineKey, -1)}
+                      className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold"
+                    >
+                      <Minus className="w-3 h-3" />
+                    </button>
+                    <span className="w-7 text-center font-bold text-emerald-400 font-mono text-xs">
+                      {line.qty}
+                    </span>
+                    <button
+                      onClick={() => modifierQuantite(lineKey, 1)}
+                      className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold"
+                    >
+                      <Plus className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  <div className="text-right shrink-0">
+                    <div className="font-black text-slate-100">{fmt(line.totalLine)}</div>
+                    <button
+                      onClick={() => supprimerLigne(lineKey)}
+                      className="text-[10px] text-rose-400 hover:text-rose-300"
+                    >
+                      Supprimer
+                    </button>
                   </div>
                 </div>
-
-                {/* Contrôles de quantité */}
-                <div className="flex items-center gap-1 mr-2 shrink-0">
-                  <button
-                    onClick={() => modifierQuantite(line.product.id, -1)}
-                    className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold"
-                  >
-                    <Minus className="w-3 h-3" />
-                  </button>
-                  <span className="w-7 text-center font-bold text-emerald-400 font-mono text-xs">
-                    {line.qty}
-                  </span>
-                  <button
-                    onClick={() => modifierQuantite(line.product.id, 1)}
-                    className="w-5 h-5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 flex items-center justify-center font-bold"
-                  >
-                    <Plus className="w-3 h-3" />
-                  </button>
-                </div>
-
-                <div className="text-right shrink-0">
-                  <div className="font-black text-slate-100">{fmt(line.totalLine)}</div>
-                  <button
-                    onClick={() => supprimerLigne(line.product.id)}
-                    className="text-[10px] text-rose-400 hover:text-rose-300"
-                  >
-                    Supprimer
-                  </button>
-                </div>
-              </div>
-            ))
+              )
+            })
           )}
         </div>
 

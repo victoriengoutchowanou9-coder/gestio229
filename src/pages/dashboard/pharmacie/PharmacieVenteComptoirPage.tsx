@@ -173,21 +173,19 @@ export default function PharmacieVenteComptoirPage() {
       necessite_ordonnance: selectedProduit.necessite_ordonnance,
     }
 
-    // Vérifier si même lot déjà dans panier
-    const existingIdx = panier.findIndex((p) => p.lot_id === lotChoisi.id)
-    if (existingIdx >= 0) {
-      const newPanier = [...panier]
-      const totalQte = newPanier[existingIdx].quantite + quantiteInput
-      if (totalQte > lotChoisi.quantite_actuelle) {
-        alert(`Quantité totale demandée (${totalQte}) dépasse le stock du lot (${lotChoisi.quantite_actuelle}).`)
-        return
-      }
-      newPanier[existingIdx].quantite = totalQte
-      newPanier[existingIdx].total_ligne = totalQte * newPanier[existingIdx].prix_unitaire
-      setPanier(newPanier)
-    } else {
-      setPanier([...panier, ligne])
+    // Vérifier si la quantité totale demandée sur ce lot dépasse le stock disponible
+    const alreadyInPanier = panier
+      .filter((p) => p.lot_id === lotChoisi.id)
+      .reduce((sum, p) => sum + p.quantite, 0)
+    const totalQte = alreadyInPanier + quantiteInput
+
+    if (totalQte > lotChoisi.quantite_actuelle) {
+      alert(`Quantité totale demandée (${totalQte}) dépasse le stock du lot (${lotChoisi.quantite_actuelle}). Déjà au panier : ${alreadyInPanier}.`)
+      return
     }
+
+    const newLineId = `ph-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+    setPanier([...panier, { ...ligne, lineId: newLineId }])
 
     // Reset sélection
     setSelectedProduit(null)
@@ -195,8 +193,8 @@ export default function PharmacieVenteComptoirPage() {
     if (searchInputRef.current) searchInputRef.current.focus()
   }
 
-  const handleSupprimerLigne = (lotId: string) => {
-    setPanier(panier.filter((l) => l.lot_id !== lotId))
+  const handleSupprimerLigne = (lineIdentifier: string) => {
+    setPanier(panier.filter((l) => (l.lineId || l.lot_id) !== lineIdentifier))
   }
 
   // Calculs totaux
@@ -561,36 +559,39 @@ export default function PharmacieVenteComptoirPage() {
                   Le panier est vide. Utilisez la recherche à gauche pour ajouter des médicaments.
                 </div>
               ) : (
-                panier.map((ligne) => (
-                  <div
-                    key={ligne.lot_id}
-                    className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl flex items-center justify-between text-xs"
-                  >
-                    <div className="space-y-0.5">
-                      <div className="font-bold text-slate-900 dark:text-white">
-                        {ligne.nom_commercial}
+                panier.map((ligne, idx) => {
+                  const lineKey = ligne.lineId || `${ligne.lot_id}-${idx}`
+                  return (
+                    <div
+                      key={lineKey}
+                      className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-xl flex items-center justify-between text-xs"
+                    >
+                      <div className="space-y-0.5">
+                        <div className="font-bold text-slate-900 dark:text-white">
+                          {ligne.nom_commercial}
+                        </div>
+                        <div className="text-[11px] text-slate-500">
+                          Lot : <span className="font-mono font-semibold">{ligne.numero_lot}</span> (Exp: {ligne.date_peremption})
+                        </div>
+                        <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                          {ligne.quantite} × {fmt(ligne.prix_unitaire)} F
+                        </div>
                       </div>
-                      <div className="text-[11px] text-slate-500">
-                        Lot : <span className="font-mono font-semibold">{ligne.numero_lot}</span> (Exp: {ligne.date_peremption})
-                      </div>
-                      <div className="text-[11px] text-slate-600 dark:text-slate-400">
-                        {ligne.quantite} × {fmt(ligne.prix_unitaire)} F
-                      </div>
-                    </div>
 
-                    <div className="flex items-center gap-3">
-                      <div className="font-mono font-black text-slate-900 dark:text-white text-sm">
-                        {fmt(ligne.total_ligne)} F
+                      <div className="flex items-center gap-3">
+                        <div className="font-mono font-black text-slate-900 dark:text-white text-sm">
+                          {fmt(ligne.total_ligne)} F
+                        </div>
+                        <button
+                          onClick={() => handleSupprimerLigne(lineKey)}
+                          className="p-1 text-slate-400 hover:text-rose-600 transition"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
                       </div>
-                      <button
-                        onClick={() => handleSupprimerLigne(ligne.lot_id)}
-                        className="p-1 text-slate-400 hover:text-rose-600 transition"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
                     </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
 

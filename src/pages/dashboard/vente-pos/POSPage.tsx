@@ -113,6 +113,7 @@ interface Product {
   is_aib_subject?: boolean
   aib_rate?: number
   category?: { name: string }
+  category_name?: string
   batch_pricing?: BatchPricingConfig
   sector_meta?: any
   is_recipe?: boolean
@@ -134,6 +135,7 @@ interface Customer {
 }
 
 interface CartItem {
+  lineId?: string
   product: Product
   qty: number
   unitPrice: number // TTC
@@ -1047,13 +1049,14 @@ export const POSPage: React.FC = () => {
     } else {
       const stockVente = Number(selectedProductForDetail.stock_vente ?? selectedProductForDetail.sector_meta?.stock_vente ?? 0)
       const unitVente = selectedProductForDetail.uv || selectedProductForDetail.sector_meta?.uv || selectedProductForDetail.unit || 'Pièce'
-      const existing = cart.find((i) => i.product.id === selectedProductForDetail.id)
-      const currentInCart = existing ? existing.qty : 0
+      const currentInCart = cart
+        .filter((i) => i.product.id === selectedProductForDetail.id)
+        .reduce((sum, i) => sum + i.qty, 0)
 
       if (currentInCart + qty > stockVente) {
         toast.error(
           'Stock vente insuffisant',
-          `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + qty} ${unitVente}. Veuillez effectuer un transfert depuis le magasin.`
+          `Stock disponible en vente : ${stockVente} ${unitVente}. Déjà au panier : ${currentInCart} ${unitVente}. Demandé : ${qty} ${unitVente}. Veuillez effectuer un transfert depuis le magasin.`
         )
         return
       }
@@ -1066,113 +1069,56 @@ export const POSPage: React.FC = () => {
       selectedProductForDetail.selling_price
     )
 
-    setCart((prev) => {
-      const existing = prev.find((i) => i.product.id === selectedProductForDetail.id)
-      if (existing) {
-        const combinedQty = Math.round((existing.qty + qty) * 1000) / 1000
-        const combinedMatch = calculateBatchLinePrice(
-          combinedQty,
-          selectedProductForDetail.batch_pricing,
-          selectedProductForDetail.selling_price
-        )
+    let effPrice = match.effectiveUnitPriceTtc
+    let pricingSource: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD' = 'STANDARD'
+    let appliedGridName: string | null = null
+    let appliedGridId: string | null = null
+    let standardPrice = selectedProductForDetail.selling_price
+    let unitCostPrice = selectedProductForDetail.cost_price || 0
+    let unitSaving = 0
 
-        let effPrice = combinedMatch.effectiveUnitPriceTtc
-        let pricingSource: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD' = 'STANDARD'
-        let appliedGridName: string | null = null
-        let appliedGridId: string | null = null
-        let standardPrice = selectedProductForDetail.selling_price
-        let unitCostPrice = selectedProductForDetail.cost_price || 0
-        let unitSaving = 0
+    if (isBrasserie) {
+      const nextTotal = (totalBrasserieQuantity || 0) + qty
+      const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
+      const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
+      const pr = calculateLinePricing({
+        product: selectedProductForDetail,
+        qteLigne: qty,
+        qteTotaleVente: nextTotal,
+        clientId: selectedCustomerId || null,
+        grilleApplicable: nextGrid,
+        grillePrixMap: gridPrices,
+        clientPrixMap: brasserieClientPrixMap,
+      })
+      effPrice = pr.prix_applique
+      pricingSource = pr.source_prix
+      appliedGridName = pr.grille_utilisee || null
+      appliedGridId = pr.grille_id || null
+      standardPrice = pr.prix_standard
+      unitCostPrice = pr.prix_achat
+      unitSaving = pr.economie_unitaire
+    }
 
-        if (isBrasserie) {
-          const nextTotal = (totalBrasserieQuantity || 0) + qty
-          const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
-          const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
-          const pr = calculateLinePricing({
-            product: selectedProductForDetail,
-            qteLigne: combinedQty,
-            qteTotaleVente: nextTotal,
-            clientId: selectedCustomerId || null,
-            grilleApplicable: nextGrid,
-            grillePrixMap: gridPrices,
-            clientPrixMap: brasserieClientPrixMap,
-          })
-          effPrice = pr.prix_applique
-          pricingSource = pr.source_prix
-          appliedGridName = pr.grille_utilisee || null
-          appliedGridId = pr.grille_id || null
-          standardPrice = pr.prix_standard
-          unitCostPrice = pr.prix_achat
-          unitSaving = pr.economie_unitaire
-        }
+    const newLineId = `pos-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
-        return prev.map((i) =>
-          i.product.id === selectedProductForDetail.id
-            ? {
-                ...i,
-                qty: combinedQty,
-                unitPrice: effPrice,
-                batchTierLabel: combinedMatch.matchedTierLabel,
-                isBatchTier: combinedMatch.isMatched,
-                pricingSource,
-                appliedGridName,
-                appliedGridId,
-                standardPrice,
-                unitCostPrice,
-                unitSaving,
-              }
-            : i
-        )
+    setCart((prev) => [
+      ...prev,
+      {
+        lineId: newLineId,
+        product: selectedProductForDetail,
+        qty,
+        unitPrice: effPrice,
+        discount: 0,
+        batchTierLabel: match.matchedTierLabel,
+        isBatchTier: match.isMatched,
+        pricingSource,
+        appliedGridName,
+        appliedGridId,
+        standardPrice,
+        unitCostPrice,
+        unitSaving,
       }
-
-      let effPrice = match.effectiveUnitPriceTtc
-      let pricingSource: 'PRIX_PERSONNALISE' | 'GRILLE' | 'STANDARD' = 'STANDARD'
-      let appliedGridName: string | null = null
-      let appliedGridId: string | null = null
-      let standardPrice = selectedProductForDetail.selling_price
-      let unitCostPrice = selectedProductForDetail.cost_price || 0
-      let unitSaving = 0
-
-      if (isBrasserie) {
-        const nextTotal = (totalBrasserieQuantity || 0) + qty
-        const nextGrid = findApplicableGrille(brasserieGrilles, nextTotal)
-        const gridPrices = nextGrid ? (brasserieGrillesPrixCache[nextGrid.id] || {}) : {}
-        const pr = calculateLinePricing({
-          product: selectedProductForDetail,
-          qteLigne: qty,
-          qteTotaleVente: nextTotal,
-          clientId: selectedCustomerId || null,
-          grilleApplicable: nextGrid,
-          grillePrixMap: gridPrices,
-          clientPrixMap: brasserieClientPrixMap,
-        })
-        effPrice = pr.prix_applique
-        pricingSource = pr.source_prix
-        appliedGridName = pr.grille_utilisee || null
-        appliedGridId = pr.grille_id || null
-        standardPrice = pr.prix_standard
-        unitCostPrice = pr.prix_achat
-        unitSaving = pr.economie_unitaire
-      }
-
-      return [
-        ...prev,
-        {
-          product: selectedProductForDetail,
-          qty,
-          unitPrice: effPrice,
-          discount: 0,
-          batchTierLabel: match.matchedTierLabel,
-          isBatchTier: match.isMatched,
-          pricingSource,
-          appliedGridName,
-          appliedGridId,
-          standardPrice,
-          unitCostPrice,
-          unitSaving,
-        }
-      ]
-    })
+    ])
 
     setSelectedProductForDetail(null)
     setDetailQty(1)
@@ -1212,13 +1158,14 @@ export const POSPage: React.FC = () => {
         return
       }
 
-      const existing = cart.find((i) => i.product.id === item.product.id)
-      const currentInCart = existing ? existing.qty : 0
+      const currentInCart = cart
+        .filter((i) => i.product.id === item.product.id)
+        .reduce((sum, i) => sum + i.qty, 0)
 
       if (currentInCart + item.qty > stockVente) {
         toast.error(
           'Stock vente insuffisant',
-          `Stock disponible en vente : ${stockVente} ${unitVente}. Demandé : ${currentInCart + item.qty} ${unitVente}.`
+          `Stock disponible en vente : ${stockVente} ${unitVente}. Déjà au panier : ${currentInCart} ${unitVente}. Demandé : ${item.qty} ${unitVente}.`
         )
         return
       }
@@ -1255,9 +1202,12 @@ export const POSPage: React.FC = () => {
       unitSaving = pr.economie_unitaire
     }
 
+    const newLineId = `pos-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
     setCart((prev) => [
       ...prev,
       {
+        lineId: newLineId,
         product: item.product,
         qty: item.qty,
         unitPrice: effPrice,
@@ -1273,19 +1223,22 @@ export const POSPage: React.FC = () => {
     setIsCartVisible(true)
   }
 
-  const updateCartItemQty = (productId: string, newQty: number) => {
+  const updateCartItemQty = (lineIdentifier: string, newQty: number) => {
     if (newQty <= 0) {
-      removeFromCart(productId)
+      removeFromCart(lineIdentifier)
       return
     }
-    const item = cart.find(i => i.product.id === productId)
-    if (item) {
-      const stockVente = Number(item.product.stock_vente ?? item.product.sector_meta?.stock_vente ?? 0)
-      const unitVente = item.product.uv || item.product.sector_meta?.uv || item.product.unit || 'Pièce'
-      if (newQty > stockVente) {
+    const targetItem = cart.find(i => (i.lineId || i.product.id) === lineIdentifier)
+    if (targetItem && !targetItem.product.is_recipe) {
+      const stockVente = Number(targetItem.product.stock_vente ?? targetItem.product.sector_meta?.stock_vente ?? 0)
+      const unitVente = targetItem.product.uv || targetItem.product.sector_meta?.uv || targetItem.product.unit || 'Pièce'
+      const otherLinesQty = cart
+        .filter(i => (i.lineId || i.product.id) !== lineIdentifier && i.product.id === targetItem.product.id)
+        .reduce((sum, i) => sum + i.qty, 0)
+      if (otherLinesQty + newQty > stockVente) {
         toast.error(
           'Stock vente insuffisant',
-          `Disponible en vente : ${stockVente} ${unitVente}. Vous ne pouvez pas dépasser le stock.`
+          `Disponible en vente : ${stockVente} ${unitVente}. Déjà réservé sur d'autres lignes : ${otherLinesQty} ${unitVente}.`
         )
         return
       }
@@ -1295,7 +1248,7 @@ export const POSPage: React.FC = () => {
 
     setCart((prev) =>
       prev.map((i) => {
-        if (i.product.id !== productId) return i
+        if ((i.lineId || i.product.id) !== lineIdentifier) return i
         const match = calculateBatchLinePrice(
           safeQty,
           i.product.batch_pricing,
@@ -1368,8 +1321,8 @@ export const POSPage: React.FC = () => {
   }
 
 
-  const removeFromCart = (productId: string) => {
-    setCart((prev) => prev.filter((i) => i.product.id !== productId))
+  const removeFromCart = (lineIdentifier: string) => {
+    setCart((prev) => prev.filter((i) => (i.lineId || i.product.id) !== lineIdentifier))
   }
 
   const clearCart = () => {
@@ -2205,9 +2158,12 @@ export const POSPage: React.FC = () => {
 
     // Déstockage local React immédiat
     setProducts((prev) => prev.map((p) => {
-      const item = cartSnapshot.find((c) => c.product.id === p.id)
-      if (!item) return p
-      const newVente = Math.max(0, Math.round((Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0) - item.qty) * 1000) / 1000)
+      const totalQtySold = cartSnapshot
+        .filter((c) => c.product.id === p.id)
+        .reduce((sum, c) => sum + c.qty, 0)
+      if (totalQtySold <= 0) return p
+      const currentVente = Number(p.stock_vente ?? p.sector_meta?.stock_vente ?? 0)
+      const newVente = Math.max(0, Math.round((currentVente - totalQtySold) * 1000) / 1000)
       return { ...p, stock_vente: newVente, sector_meta: { ...(p.sector_meta || {}), stock_vente: newVente } }
     }))
 
@@ -2339,18 +2295,28 @@ export const POSPage: React.FC = () => {
           }
         })
 
-        // Mises à jour des produits physiques en stock (sector_meta)
-        const productUpdates = physicalCartItems.map(async (line) => {
-          const currentStockVente = Number(line.product.stock_vente ?? line.product.sector_meta?.stock_vente ?? 0)
-          const newStockVente = Math.max(0, Math.round((currentStockVente - line.qty) * 1000) / 1000)
-          const currentMeta = line.product.sector_meta || {}
+        // Mises à jour des produits physiques en stock (sector_meta) - groupés par produit pour déduire la quantité totale cumulée sans race condition
+        const productTotalsMap = new Map<string, { product: Product; totalQty: number }>()
+        for (const line of physicalCartItems) {
+          const existing = productTotalsMap.get(line.product.id)
+          if (existing) {
+            existing.totalQty = Math.round((existing.totalQty + line.qty) * 1000) / 1000
+          } else {
+            productTotalsMap.set(line.product.id, { product: line.product, totalQty: line.qty })
+          }
+        }
+
+        const productUpdates = Array.from(productTotalsMap.values()).map(async ({ product, totalQty }) => {
+          const currentStockVente = Number(product.stock_vente ?? product.sector_meta?.stock_vente ?? 0)
+          const newStockVente = Math.max(0, Math.round((currentStockVente - totalQty) * 1000) / 1000)
+          const currentMeta = product.sector_meta || {}
           const updatedMeta = { ...currentMeta, stock_vente: newStockVente }
           const res = await supabase
             .from('products')
             .update({ stock_vente: newStockVente, sector_meta: updatedMeta, updated_at: new Date().toISOString() })
-            .eq('id', line.product.id)
+            .eq('id', product.id)
           if (res.error) {
-            console.error('[POSPage] Erreur mise à jour stock produit:', line.product.id, res.error)
+            console.error('[POSPage] Erreur mise à jour stock produit:', product.id, res.error)
           }
           return res
         })
@@ -3602,10 +3568,11 @@ export const POSPage: React.FC = () => {
                     </div>
                   ) : (
                     <div className="divide-y divide-slate-100 max-h-40 overflow-y-auto pr-1">
-                      {cart.map((item) => {
+                      {cart.map((item, idx) => {
+                        const lineKey = item.lineId || `${item.product.id}-${idx}`
                         const lineTotal = item.qty * item.unitPrice - item.qty * item.discount
                         return (
-                          <div key={item.product.id} className="py-2 first:pt-0 flex items-center justify-between gap-2">
+                          <div key={lineKey} className="py-2 first:pt-0 flex items-center justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <p className="font-bold text-xs text-slate-800 truncate">{item.product.name}</p>
                               <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
@@ -3643,7 +3610,7 @@ export const POSPage: React.FC = () => {
                             <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-xl">
                               <button
                                 type="button"
-                                onClick={() => updateCartItemQty(item.product.id, item.qty - 1)}
+                                onClick={() => updateCartItemQty(lineKey, item.qty - 1)}
                                 className="w-5 h-5 bg-white rounded-lg flex items-center justify-center font-bold text-slate-700 hover:bg-slate-200 transition"
                               >
                                 <Minus className="w-2.5 h-2.5" />
@@ -3652,12 +3619,12 @@ export const POSPage: React.FC = () => {
                                 type="number"
                                 step="any"
                                 value={item.qty}
-                                onChange={(e) => updateCartItemQty(item.product.id, Number(e.target.value))}
+                                onChange={(e) => updateCartItemQty(lineKey, Number(e.target.value))}
                                 className="w-10 text-center text-xs font-mono font-bold bg-transparent border-0 focus:ring-0 p-0"
                               />
                               <button
                                 type="button"
-                                onClick={() => updateCartItemQty(item.product.id, item.qty + 1)}
+                                onClick={() => updateCartItemQty(lineKey, item.qty + 1)}
                                 className="w-5 h-5 bg-white rounded-lg flex items-center justify-center font-bold text-slate-700 hover:bg-slate-200 transition"
                               >
                                 <Plus className="w-2.5 h-2.5" />
@@ -3668,7 +3635,7 @@ export const POSPage: React.FC = () => {
                               <p className="font-bold text-xs text-slate-900 font-mono">{fmt(lineTotal)}</p>
                               <button
                                 type="button"
-                                onClick={() => removeFromCart(item.product.id)}
+                                onClick={() => removeFromCart(lineKey)}
                                 className="text-[10px] text-rose-500 hover:text-rose-700 font-semibold"
                               >
                                 Retirer
@@ -5062,8 +5029,8 @@ export const POSPage: React.FC = () => {
         currentSectorSlug={currentSectorSlug}
         caisseStatus={{
           isTodayOpen: activeCaisse ? !activeCaisse.is_previous_day : false,
-          fond_actuel_especes: Number(activeCaisse?.fond_actuel_especes ?? 0),
-          fond_actuel_momo: Number(activeCaisse?.fond_actuel_momo ?? 0)
+          fond_actuel_especes: Number((activeCaisse as any)?.fond_actuel_especes ?? 0),
+          fond_actuel_momo: Number((activeCaisse as any)?.fond_actuel_momo ?? 0)
         }}
         salesList={salesHistory}
         productsList={products}

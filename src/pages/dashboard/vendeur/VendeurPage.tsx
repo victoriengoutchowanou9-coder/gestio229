@@ -46,6 +46,7 @@ interface ProductItem {
 }
 
 interface CartItem {
+  lineId?: string
   product: ProductItem
   qty: number
   unitPrice: number
@@ -222,8 +223,9 @@ export const VendeurPage: React.FC = () => {
       return
     }
 
-    const existingInCart = cart.find(ci => ci.product.id === product.id)
-    const alreadyInCartQty = existingInCart ? existingInCart.qty : 0
+    const alreadyInCartQty = cart
+      .filter(ci => ci.product.id === product.id)
+      .reduce((sum, ci) => sum + ci.qty, 0)
     const remainingAddable = product.is_recipe ? 999999 : Math.max(0, product.stock_vente - alreadyInCartQty)
 
     if (!product.is_recipe && remainingAddable <= 0) {
@@ -247,8 +249,9 @@ export const VendeurPage: React.FC = () => {
   const maxAddableForModal = useMemo(() => {
     if (!addingProduct) return 0
     if (addingProduct.is_recipe) return 999999
-    const existing = cart.find(ci => ci.product.id === addingProduct.id)
-    const inCartQty = existing ? existing.qty : 0
+    const inCartQty = cart
+      .filter(ci => ci.product.id === addingProduct.id)
+      .reduce((sum, ci) => sum + ci.qty, 0)
     return Math.max(0, Math.round((addingProduct.stock_vente - inCartQty) * 1000) / 1000)
   }, [addingProduct, cart])
 
@@ -294,32 +297,19 @@ export const VendeurPage: React.FC = () => {
       return
     }
 
-    setCart(prev => {
-      const existing = prev.find(item => item.product.id === addingProduct.id)
-      if (existing) {
-        const updatedQty = Math.round((existing.qty + qty) * 1000) / 1000
-        return prev.map(item =>
-          item.product.id === addingProduct.id
-            ? {
-                ...item,
-                qty: updatedQty,
-                total_ttc: Math.max(0, Math.round(updatedQty * item.unitPrice - item.discount))
-              }
-            : item
-        )
-      }
+    const newLineId = `vendeur-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
-      return [
-        ...prev,
-        {
-          product: addingProduct,
-          qty,
-          unitPrice: addingProduct.selling_price,
-          discount: 0,
-          total_ttc: Math.round(qty * addingProduct.selling_price)
-        }
-      ]
-    })
+    setCart(prev => [
+      ...prev,
+      {
+        lineId: newLineId,
+        product: addingProduct,
+        qty,
+        unitPrice: addingProduct.selling_price,
+        discount: 0,
+        total_ttc: Math.round(qty * addingProduct.selling_price)
+      }
+    ])
 
     toast.success(
       'Article ajouté',
@@ -330,25 +320,33 @@ export const VendeurPage: React.FC = () => {
     setAddingQtyError('')
   }
 
-  const updateQuantity = (productId: string, newQty: number) => {
-    const prod = products.find(p => p.id === productId)
-    if (!prod) return
+  const updateQuantity = (lineIdentifier: string, newQty: number) => {
+    const targetItem = cart.find(ci => (ci.lineId || ci.product.id) === lineIdentifier)
+    if (!targetItem) return
+    const prod = targetItem.product
 
     if (isNaN(newQty) || newQty <= 0) {
       toast.error('Quantité invalide', 'La quantité doit être strictement positive.')
       return
     }
 
-    if (!prod.is_recipe && newQty > prod.stock_vente) {
-      toast.error('Stock vente insuffisant', `Quantité limitée au stock vente disponible (${prod.stock_vente}).`)
-      newQty = prod.stock_vente
+    if (!prod.is_recipe) {
+      const otherQty = cart
+        .filter(ci => (ci.lineId || ci.product.id) !== lineIdentifier && ci.product.id === prod.id)
+        .reduce((sum, ci) => sum + ci.qty, 0)
+      if (otherQty + newQty > prod.stock_vente) {
+        const maxForThisLine = Math.max(0, prod.stock_vente - otherQty)
+        toast.error('Stock vente insuffisant', `Quantité limitée par le stock disponible (${prod.stock_vente} total, ${otherQty} sur d'autres lignes).`)
+        newQty = maxForThisLine
+        if (newQty <= 0) return
+      }
     }
 
     const roundedQty = Math.round(newQty * 1000) / 1000
 
     setCart(prev =>
       prev.map(item =>
-        item.product.id === productId
+        (item.lineId || item.product.id) === lineIdentifier
           ? {
               ...item,
               qty: roundedQty,
@@ -359,8 +357,8 @@ export const VendeurPage: React.FC = () => {
     )
   }
 
-  const removeFromCart = (productId: string) => {
-    setCart(prev => prev.filter(item => item.product.id !== productId))
+  const removeFromCart = (lineIdentifier: string) => {
+    setCart(prev => prev.filter(item => (item.lineId || item.product.id) !== lineIdentifier))
   }
 
   const clearCart = () => {
@@ -381,16 +379,31 @@ export const VendeurPage: React.FC = () => {
       return
     }
 
-    // Vérification locale des quantités et des stocks disponibles
+    // Vérification locale des quantités et des stocks disponibles cumulés
+    const productTotals = new Map<string, { name: string; is_recipe: boolean; stock_vente: number; totalQty: number }>()
     for (const item of cart) {
       if (isNaN(item.qty) || item.qty <= 0) {
         toast.error('Quantité invalide', `La quantité pour "${item.product.name}" doit être strictement positive.`)
         return
       }
-      if (!item.product.is_recipe && item.qty > item.product.stock_vente) {
+      const existing = productTotals.get(item.product.id)
+      if (existing) {
+        existing.totalQty = Math.round((existing.totalQty + item.qty) * 1000) / 1000
+      } else {
+        productTotals.set(item.product.id, {
+          name: item.product.name,
+          is_recipe: Boolean(item.product.is_recipe),
+          stock_vente: Number(item.product.stock_vente || 0),
+          totalQty: item.qty
+        })
+      }
+    }
+
+    for (const [, info] of productTotals) {
+      if (!info.is_recipe && info.totalQty > info.stock_vente) {
         toast.error(
           'Stock vente insuffisant',
-          `La quantité de "${item.product.name}" (${item.qty}) dépasse le stock vente disponible (${item.product.stock_vente}).`
+          `La quantité totale commandée de "${info.name}" (${info.totalQty}) dépasse le stock vente disponible (${info.stock_vente}).`
         )
         return
       }
@@ -772,88 +785,91 @@ export const VendeurPage: React.FC = () => {
                   <p className="text-[11px] text-slate-400 mt-0.5">Cliquez sur « Ajouter » sur un article pour choisir la quantité.</p>
                 </div>
               ) : (
-                cart.map(item => (
-                  <div
-                    key={item.product.id}
-                    className="p-3 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2.5 text-xs"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="font-bold text-slate-900 dark:text-white truncate">
-                        {item.product.name}
-                      </p>
-                      <p className="text-[10px] text-slate-400 font-mono">
-                        {item.product.code ? `[${item.product.code}] ` : ''}{formatFCFA(item.unitPrice)} / {item.product.unit || 'u'}
-                      </p>
-                      {!item.product.is_recipe && (
-                        <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
-                          Dispo vente : {formatStockWithUnit(item.product.stock_vente, item.product.unit)}
+                cart.map((item, idx) => {
+                  const lineKey = item.lineId || `${item.product.id}-${idx}`
+                  return (
+                    <div
+                      key={lineKey}
+                      className="p-3 bg-slate-50 dark:bg-slate-950 rounded-2xl border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2.5 text-xs"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="font-bold text-slate-900 dark:text-white truncate">
+                          {item.product.name}
                         </p>
-                      )}
-                    </div>
-
-                    {/* Contrôles Quantité : bouton −, champ numérique direct, bouton + */}
-                    <div className="flex items-center gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
-                      <button
-                        type="button"
-                        disabled={item.qty <= 1}
-                        onClick={() => updateQuantity(item.product.id, Math.max(1, item.qty - 1))}
-                        className={clsx(
-                          'w-6 h-6 rounded-lg flex items-center justify-center transition',
-                          item.qty <= 1
-                            ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed'
-                            : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                        <p className="text-[10px] text-slate-400 font-mono">
+                          {item.product.code ? `[${item.product.code}] ` : ''}{formatFCFA(item.unitPrice)} / {item.product.unit || 'u'}
+                        </p>
+                        {!item.product.is_recipe && (
+                          <p className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold">
+                            Dispo vente : {formatStockWithUnit(item.product.stock_vente, item.product.unit)}
+                          </p>
                         )}
-                        title="Diminuer la quantité"
-                      >
-                        <Minus className="w-3 h-3" />
-                      </button>
+                      </div>
 
-                      <input
-                        type="number"
-                        min={1}
-                        max={item.product.is_recipe ? undefined : item.product.stock_vente}
-                        step="any"
-                        value={item.qty}
-                        onChange={(e) => {
-                          const val = Number(e.target.value)
-                          if (!isNaN(val) && val > 0) {
-                            updateQuantity(item.product.id, val)
-                          }
-                        }}
-                        className="w-12 text-center text-xs font-black font-mono bg-transparent text-slate-900 dark:text-white focus:outline-none"
-                      />
+                      {/* Contrôles Quantité : bouton −, champ numérique direct, bouton + */}
+                      <div className="flex items-center gap-1 bg-white dark:bg-slate-900 p-1 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xs">
+                        <button
+                          type="button"
+                          disabled={item.qty <= 1}
+                          onClick={() => updateQuantity(lineKey, Math.max(1, item.qty - 1))}
+                          className={clsx(
+                            'w-6 h-6 rounded-lg flex items-center justify-center transition',
+                            item.qty <= 1
+                              ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          )}
+                          title="Diminuer la quantité"
+                        >
+                          <Minus className="w-3 h-3" />
+                        </button>
 
-                      <button
-                        type="button"
-                        disabled={!item.product.is_recipe && item.qty >= item.product.stock_vente}
-                        onClick={() => updateQuantity(item.product.id, item.qty + 1)}
-                        className={clsx(
-                          'w-6 h-6 rounded-lg flex items-center justify-center transition',
-                          !item.product.is_recipe && item.qty >= item.product.stock_vente
-                            ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed'
-                            : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                        )}
-                        title="Augmenter la quantité"
-                      >
-                        <Plus className="w-3 h-3" />
-                      </button>
+                        <input
+                          type="number"
+                          min={1}
+                          max={item.product.is_recipe ? undefined : item.product.stock_vente}
+                          step="any"
+                          value={item.qty}
+                          onChange={(e) => {
+                            const val = Number(e.target.value)
+                            if (!isNaN(val) && val > 0) {
+                              updateQuantity(lineKey, val)
+                            }
+                          }}
+                          className="w-12 text-center text-xs font-black font-mono bg-transparent text-slate-900 dark:text-white focus:outline-none"
+                        />
+
+                        <button
+                          type="button"
+                          disabled={!item.product.is_recipe && item.qty >= item.product.stock_vente}
+                          onClick={() => updateQuantity(lineKey, item.qty + 1)}
+                          className={clsx(
+                            'w-6 h-6 rounded-lg flex items-center justify-center transition',
+                            !item.product.is_recipe && item.qty >= item.product.stock_vente
+                              ? 'text-slate-300 dark:text-slate-700 cursor-not-allowed'
+                              : 'text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                          )}
+                          title="Augmenter la quantité"
+                        >
+                          <Plus className="w-3 h-3" />
+                        </button>
+                      </div>
+
+                      <div className="text-right">
+                        <span className="font-black font-mono text-slate-900 dark:text-white block">
+                          {formatFCFA(item.total_ttc)}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removeFromCart(lineKey)}
+                          className="text-slate-400 hover:text-rose-500 p-0.5 inline-block"
+                          title="Retirer l'article"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
                     </div>
-
-                    <div className="text-right">
-                      <span className="font-black font-mono text-slate-900 dark:text-white block">
-                        {formatFCFA(item.total_ttc)}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => removeFromCart(item.product.id)}
-                        className="text-slate-400 hover:text-rose-500 p-0.5 inline-block"
-                        title="Retirer l'article"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))
+                  )
+                })
               )}
             </div>
 

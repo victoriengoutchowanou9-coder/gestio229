@@ -37,6 +37,7 @@ import { showModal } from '../../../components/modals/CustomModalGestio'
 import { getSecteurTheme } from '../../../styles/secteursTheme'
 
 interface CartItem {
+  lineId?: string
   prestation: PrestationImprimerie
   quantite: number
   largeur: number
@@ -222,32 +223,21 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
       return
     }
 
-    setPanier((prev) => {
-      const existing = prev.find((item) => item.prestation.id === pres.id)
-      if (existing) {
-        return prev.map((item) =>
-          item.prestation.id === pres.id
-            ? {
-                ...item,
-                quantite: item.quantite + 1,
-                totalLigne: (item.quantite + 1) * item.prixUnitaire,
-              }
-            : item
-        )
-      }
-      const pu = Number(pres.prix_vente || 0)
-      return [
-        ...prev,
-        {
-          prestation: pres,
-          quantite: 1,
-          largeur: 0,
-          hauteur: 0,
-          prixUnitaire: pu,
-          totalLigne: pu,
-        },
-      ]
-    })
+    const pu = Number(pres.prix_vente || 0)
+    const newLineId = `imp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
+    setPanier((prev) => [
+      ...prev,
+      {
+        lineId: newLineId,
+        prestation: pres,
+        quantite: 1,
+        largeur: 0,
+        hauteur: 0,
+        prixUnitaire: pu,
+        totalLigne: pu,
+      },
+    ])
   }
 
   // ── Validation dimensions au m² ──
@@ -261,10 +251,12 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
     const surfaceTotale = Number((l * h).toFixed(3))
     const pu = Number(dimModalItem.prix_vente || 0)
     const total = Math.round(surfaceTotale * q * pu)
+    const newLineId = `imp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
     setPanier((prev) => [
       ...prev,
       {
+        lineId: newLineId,
         prestation: dimModalItem,
         quantite: q,
         largeur: l,
@@ -963,7 +955,7 @@ export const ImprimerieVenteRapidePage: React.FC = () => {
                 ) : (
                   <div className="divide-y divide-slate-100 max-h-60 overflow-y-auto pr-1">
                     {panier.map((item, index) => (
-                      <div key={index} className="py-2.5 flex items-center justify-between gap-2 text-xs">
+                      <div key={item.lineId || index} className="py-2.5 flex items-center justify-between gap-2 text-xs">
                         <div className="flex-1 min-w-0">
                           <p className="font-bold text-slate-900 truncate">{item.prestation.nom}</p>
                           <p className="text-[10px] text-slate-400">
