@@ -20,7 +20,12 @@ import {
   FuelCommercialConfig,
   getStationExonerationConfig,
   calculateFuelExonerationTax,
-  StationExonerationConfig
+  StationExonerationConfig,
+  loadOperationalCuves,
+  getActiveShiftForPompiste,
+  getOpenShifts,
+  StationShiftRecord,
+  StationCuve
 } from '../../../services/stationFuelService'
 import {
   DEFAULT_STATION_FUELS,
@@ -45,7 +50,9 @@ export const VenteDistributeurPage: React.FC = () => {
   const [fuelConfigs, setFuelConfigs] = useState<FuelCommercialConfig[]>([])
   const [stationExoneration, setStationExoneration] = useState<StationExonerationConfig | null>(null)
   const [pompistes, setPompistes] = useState<any[]>([])
-  const [cuves, setCuves] = useState<any[]>([])
+  const [cuves, setCuves] = useState<StationCuve[]>([])
+  const [openShifts, setOpenShifts] = useState<StationShiftRecord[]>([])
+  const [activeShift, setActiveShift] = useState<StationShiftRecord | null>(null)
   const [flotteVehicules, setFlotteVehicules] = useState<any[]>([])
   const [activeCaisse, setActiveCaisse] = useState<any>(null)
   const [loading, setLoading] = useState<boolean>(true)
@@ -95,13 +102,13 @@ export const VenteDistributeurPage: React.FC = () => {
       const caisseStatus = await checkSectorCaisseStatus(companyId, cleanSectorSlug)
       setActiveCaisse(caisseStatus?.session || null)
 
-      // 3. Cuves réelles (seules sources valides de stock de carburant)
-      const { data: cuveData } = await supabaseTenant('station_cuves')
-        .select('*')
-        .order('nom')
-      
-      const activeCuves = (cuveData || []).filter((c: any) => !c.statut || c.statut === 'ACTIF')
+      // 3. Cuves opérationnelles unifiées (source de vérité unique partagée)
+      const activeCuves = await loadOperationalCuves(companyId, cleanSectorSlug)
       setCuves(activeCuves)
+
+      // 3b. Shifts pompistes ouverts en piste
+      const loadedShifts = await getOpenShifts(companyId, cleanSectorSlug)
+      setOpenShifts(loadedShifts)
 
       // 4. Pompes / Pistolets
       const { data: pistData } = await supabaseTenant('station_pistolets')
@@ -183,7 +190,7 @@ export const VenteDistributeurPage: React.FC = () => {
             statut: 'ACTIF',
             cuve_id: linkedCuve?.id || undefined,
             cuve_nom: linkedCuve?.nom || undefined,
-            stock_disponible: realStock, // Strictement 0 L si aucune cuve enregistrée !
+            stock_disponible: realStock,
           }
         })
       }
@@ -215,7 +222,7 @@ export const VenteDistributeurPage: React.FC = () => {
       const fallbackPistolets = DEFAULT_STATION_FUELS.map(df => ({
         ...df,
         statut: 'ACTIF',
-        stock_disponible: 0, // Strictement 0 en cas de fallback
+        stock_disponible: 0,
       }))
       setPistolets(fallbackPistolets)
       if (!selectedPistoletId) setSelectedPistoletId(fallbackPistolets[0].id)
@@ -223,6 +230,20 @@ export const VenteDistributeurPage: React.FC = () => {
       setLoading(false)
     }
   }, [companyId, cleanSectorSlug, supabaseTenant, selectedPistoletId, selectedPompisteId])
+
+  // Synchronisation du shift pompiste actif
+  useEffect(() => {
+    if (selectedPompisteId) {
+      const found = openShifts.find(s => s.pompiste_id === selectedPompisteId) || null
+      setActiveShift(found)
+      if (found && found.pompe_id) {
+        const matchedPist = pistolets.find(p => p.id === found.pompe_id || p.numero_pompe === found.pompe_numero)
+        if (matchedPist) setSelectedPistoletId(matchedPist.id)
+      }
+    } else {
+      setActiveShift(null)
+    }
+  }, [selectedPompisteId, openShifts, pistolets])
 
   useEffect(() => {
     loadStationData()
@@ -348,6 +369,20 @@ export const VenteDistributeurPage: React.FC = () => {
       return
     }
 
+    // Contrôle d'affectation obligatoire du pompiste et ouverture du shift
+    if (!selectedPompisteId) {
+      toast.error('Pompiste requis', 'Veuillez sélectionner le pompiste responsable avant de distribuer du carburant.')
+      return
+    }
+
+    if (!activeShift) {
+      toast.error(
+        'Vente bloquée : Aucun shift ouvert',
+        `Le pompiste sélectionné n'a pas de shift ouvert. Veuillez d'abord ouvrir son shift dans "Postes Pompistes" avec affectation de pompe et d'index.`
+      )
+      return
+    }
+
     // 1. Contrôle strict de disponibilité du carburant (pas de vente si 0 cuve ou stock vide)
     if (stockDispo <= 0) {
       toast.error(
@@ -414,9 +449,9 @@ export const VenteDistributeurPage: React.FC = () => {
         status: 'COMPLETED',
         total_amount: mnt,
         paid_amount: mnt,
-        subtotal_ht: taxResult.montantTaxableHT,
+        subtotal_ht: taxResult.montantTaxableHT ?? (taxResult as any).htPrice, // subtotal_ht: taxResult.htPrice
         total_ht: taxResult.montantTaxableHT,
-        total_tax: taxResult.montantTVA,
+        total_tax: taxResult.montantTVA ?? (taxResult as any).vatAmount, // total_tax: taxResult.vatAmount
         payment_method: paymentMethod,
         payment_status: paymentMethod === 'CREDIT' ? 'PENDING' : 'PAID',
         notes: saleNotes,
@@ -440,6 +475,10 @@ export const VenteDistributeurPage: React.FC = () => {
           statut_fiscal: activeFuelConfig?.statut_fiscal || (taxResult.montantTVA > 0 ? `TVA ${taxResult.vatRate}%` : 'Exonéré / TPS'),
           pompiste_id: selectedPompisteId || null,
           pompiste_nom: pompisteNom,
+          shift_id: activeShift?.id || null,
+          shift_reference: activeShift?.reference || null,
+          pompe_id: currentPistolet.id || null,
+          pompe_numero: currentPistolet.numero_pompe || null,
           immatriculation: selectedVeh?.immatriculation || null,
           cuve_id: targetCuveId || null,
           stock_avant: stockDispo,
@@ -485,6 +524,23 @@ export const VenteDistributeurPage: React.FC = () => {
             .eq('id', targetCuveId)
         } catch (cuveEx) {
           console.warn('[VenteDistributeur] Notice mise à jour cuve:', cuveEx)
+        }
+      }
+
+      // 3b. Actualisation du compteur / index actuel de la pompe
+      if (currentPistolet.id) {
+        try {
+          const { data: curPmp } = await supabase
+            .from('station_pompes')
+            .select('index_actuel')
+            .eq('id', currentPistolet.id)
+            .single()
+          if (curPmp) {
+            const nextIdx = Math.round((Number(curPmp.index_actuel || 0) + vol) * 1000) / 1000
+            await supabase.from('station_pompes').update({ index_actuel: nextIdx }).eq('id', currentPistolet.id)
+          }
+        } catch (pmpEx) {
+          console.warn('[VenteDistributeur] Notice mise à jour index pompe:', pmpEx)
         }
       }
 
@@ -671,7 +727,7 @@ export const VenteDistributeurPage: React.FC = () => {
                 </div>
                 <button
                   type="button"
-                  onClick={() => navigate(`/app/${cleanSectorSlug}/pompes-cuves`)}
+                  onClick={() => navigate(`/app/${cleanSectorSlug}/cuves`)}
                   className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white font-bold rounded-lg text-[11px] whitespace-nowrap transition self-start sm:self-auto"
                 >
                   Gérer les cuves
@@ -801,6 +857,44 @@ export const VenteDistributeurPage: React.FC = () => {
                 </select>
               </div>
             </div>
+
+            {/* État du Shift Pompiste & Contrôle d'affectation obligatoire */}
+            {selectedPompisteId && (
+              <div className="pt-2 border-t border-slate-800">
+                {activeShift ? (
+                  <div className="bg-emerald-500/10 border border-emerald-500/30 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-emerald-300">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <div>
+                        <p className="font-bold text-white">Shift Actif : {activeShift.reference}</p>
+                        <p className="text-[11px] text-emerald-400">
+                          Pompe : {activeShift.pompe_numero} • {activeShift.produit} • Cuve : {activeShift.cuve_nom || 'Cuve Affectée'} (Index départ : {activeShift.index_debut})
+                        </p>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 bg-emerald-500/20 text-emerald-300 rounded-lg font-mono text-[10px] font-bold uppercase tracking-wider self-start sm:self-auto">
+                      Shift Ouvert
+                    </span>
+                  </div>
+                ) : (
+                  <div className="bg-amber-500/10 border border-amber-500/30 rounded-2xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-300">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        <strong>Aucun shift ouvert pour ce pompiste :</strong> L'ouverture du shift avec affectation de pompe et d'index de départ est obligatoire avant toute distribution.
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => navigate(`/app/${cleanSectorSlug}/postes`)}
+                      className="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded-lg text-[11px] whitespace-nowrap transition self-start sm:self-auto"
+                    >
+                      Ouvrir un Shift
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1231,6 +1325,12 @@ export const VenteDistributeurPage: React.FC = () => {
                   <span>Mode de paiement :</span>
                   <span className="font-bold">{lastTicket.modePaiement}</span>
                 </div>
+                {lastTicket.mentionFiscale && (
+                  <div className="text-[10px] text-slate-500 italic text-center pt-1">
+                    {lastTicket.mentionFiscale}
+                    {lastTicket.isVatSubject ? '' : ''}
+                  </div>
+                )}
               </div>
 
               <div className="text-center pt-2 text-[10px] text-slate-500 border-t border-dashed border-slate-300">

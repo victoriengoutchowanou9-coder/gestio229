@@ -10,6 +10,8 @@
 import { supabase } from '../lib/supabase'
 import { safeStationInsert, safeStationUpdate } from '../utils/stationFuelHelper'
 import { calculateTaxFromTTC } from '../utils/tax'
+import { canonicalSectorSlug } from '../lib/sectorClient'
+import { enregistrerMouvementCaisse, getOrCreateSectorCaisse } from './caisseSectorService'
 
 export interface FuelProductDefinition {
   code: string
@@ -1170,3 +1172,612 @@ export function calculateFuelExonerationTax(
     vatRate: rate
   }
 }
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 12. GESTION UNIFIÉE DES CUVES, DÉDUPLICATION & SOURCE DE VÉRITÉ UNIQUE
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface StationCuve {
+  id: string
+  company_id: string
+  sector_slug: string
+  code: string
+  nom: string
+  produit: string
+  capacite: number
+  stock_actuel: number
+  stock_theorique: number
+  niveau_min: number
+  niveau_max?: number
+  unite?: string
+  statut: string
+  emplacement?: string
+  updated_at?: string
+}
+
+/**
+ * Charge les cuves opérationnelles réelles de l'entreprise avec déduplication stricte.
+ * Source de vérité unique partagée entre le module Gestion des Cuves et le module Vente Distributeur.
+ */
+export async function loadOperationalCuves(
+  companyId: string,
+  sectorSlug?: string
+): Promise<StationCuve[]> {
+  if (!companyId) return []
+  const clean = canonicalSectorSlug(sectorSlug || 'station-service')
+
+  try {
+    const { data, error } = await supabase
+      .from('station_cuves')
+      .select('*')
+      .eq('company_id', companyId)
+      .in('sector_slug', [clean, 'station-service', 'station'])
+      .order('created_at', { ascending: false })
+
+    if (error || !data) {
+      console.warn('[loadOperationalCuves] Erreur chargement cuves:', error)
+      return []
+    }
+
+    const seenIds = new Set<string>()
+    const seenBusinessKeys = new Set<string>()
+    const deduplicated: StationCuve[] = []
+
+    for (const raw of data) {
+      if (seenIds.has(raw.id)) continue
+      seenIds.add(raw.id)
+
+      const normCode = String(raw.code || '').trim().toUpperCase()
+      const normNom = String(raw.nom || '').trim().toUpperCase()
+      const normProd = String(raw.produit || raw.fuel_type || '').trim().toUpperCase()
+      const businessKey = `${normCode}|${normNom}|${normProd}`
+
+      if (businessKey && businessKey !== '||' && seenBusinessKeys.has(businessKey)) {
+        // Doublon accidentel détecté (ex: deux cartes avec le même code et nom)
+        // Conserver celui qui a le stock le plus pertinent ou le plus récent
+        const existingIdx = deduplicated.findIndex(
+          x => `${String(x.code).trim().toUpperCase()}|${String(x.nom).trim().toUpperCase()}|${String(x.produit).trim().toUpperCase()}` === businessKey
+        )
+        if (existingIdx >= 0) {
+          const existingStock = Number(deduplicated[existingIdx].stock_actuel || 0)
+          const currentStock = Number(raw.stock_actuel || 0)
+          if (currentStock > existingStock) {
+            deduplicated[existingIdx] = {
+              ...raw,
+              capacite: Number(raw.capacite ?? raw.capacite_totale ?? raw.capacity_liters ?? 30000),
+              stock_actuel: currentStock,
+              stock_theorique: Number(raw.stock_theorique ?? currentStock),
+              niveau_min: Number(raw.niveau_min ?? raw.min_alert_liters ?? 2000),
+            }
+          }
+        }
+        continue
+      }
+
+      if (businessKey && businessKey !== '||') {
+        seenBusinessKeys.add(businessKey)
+      }
+
+      const cap = Number(raw.capacite ?? raw.capacite_totale ?? raw.capacity_liters ?? 30000)
+      const stActuel = Number(raw.stock_actuel ?? raw.current_volume_liters ?? 0)
+      const stTheo = Number(raw.stock_theorique ?? stActuel)
+      const nMin = Number(raw.niveau_min ?? raw.min_alert_liters ?? 2000)
+
+      deduplicated.push({
+        id: raw.id,
+        company_id: raw.company_id,
+        sector_slug: raw.sector_slug || clean,
+        code: raw.code || `CV-${deduplicated.length + 1}`,
+        nom: raw.nom || `Cuve ${deduplicated.length + 1}`,
+        produit: raw.produit || raw.fuel_type || 'Essence Super',
+        capacite: cap,
+        stock_actuel: Math.max(0, stActuel),
+        stock_theorique: Math.max(0, stTheo),
+        niveau_min: nMin,
+        niveau_max: Number(raw.niveau_max || cap),
+        unite: raw.unite || 'L',
+        statut: raw.statut || 'ACTIF',
+        emplacement: raw.emplacement,
+        updated_at: raw.updated_at,
+      })
+    }
+
+    // Filtrer les cuves opérationnelles (non supprimées / actives)
+    return deduplicated.filter(c => {
+      const st = String(c.statut || '').toUpperCase().trim()
+      return !st || st === 'ACTIF' || st === 'ACTIVE' || st === 'NORMAL' || st === 'OPERATIONNEL'
+    })
+  } catch (err) {
+    console.error('[loadOperationalCuves] Exception:', err)
+    return []
+  }
+}
+
+/**
+ * Vérifie si une cuve avec le même code ou nom existe déjà dans l'entreprise pour éviter les doublons accidentels.
+ */
+export async function checkDuplicateCuve(
+  companyId: string,
+  code: string,
+  nom: string,
+  sectorSlug?: string
+): Promise<{ exists: boolean; existingCuve?: StationCuve }> {
+  const cuves = await loadOperationalCuves(companyId, sectorSlug)
+  const normCode = String(code || '').trim().toUpperCase()
+  const normNom = String(nom || '').trim().toUpperCase()
+
+  const match = cuves.find(
+    c => (normCode && String(c.code).trim().toUpperCase() === normCode) ||
+         (normNom && String(c.nom).trim().toUpperCase() === normNom)
+  )
+
+  return { exists: Boolean(match), existingCuve: match }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// 13. CIRCUIT DES SHIFTS POMPISTES : OUVERTURE, AFFECTATION, VENTES & CLÔTURE
+// ══════════════════════════════════════════════════════════════════════════════
+
+export interface StationShiftRecord {
+  id: string
+  reference: string
+  company_id: string
+  sector_slug: string
+  date: string
+  heure_ouverture?: string
+  heure_cloture?: string
+  type_shift: string
+  pompiste_id: string
+  pompiste_nom: string
+  pompe_id: string
+  pompe_numero: string
+  cuve_id?: string
+  cuve_nom?: string
+  produit: string
+  index_debut: number
+  index_fin: number
+  volume_distribue: number
+  prix_litre: number
+  montant_theorique: number
+  montant_verse: number
+  montant_especes: number
+  montant_momo: number
+  montant_credit: number
+  ecart: number
+  motif_ecart?: string
+  valide_par?: string
+  statut: 'OUVERT' | 'EN_COURS' | 'CLOTURE' | 'VALIDE' | 'VALIDE_AVEC_ECART'
+  caisse_integree?: boolean
+  created_at: string
+}
+
+export interface OpenShiftParams {
+  companyId: string
+  sectorSlug?: string
+  pompisteId: string
+  pompisteNom: string
+  pompeId: string
+  pompeNumero: string
+  cuveId?: string
+  cuveNom?: string
+  produit: string
+  typeShift?: string
+  indexDebut: number
+  date?: string
+  heureOuverture?: string
+  ouvertPar?: string
+}
+
+/**
+ * Ouvre un nouveau shift pompiste avec affectation obligatoire de la pompe et de la cuve.
+ * Enregistre le shift dans la base avec le statut 'OUVERT' (ou 'EN_COURS').
+ */
+export async function openPompisteShift(
+  params: OpenShiftParams
+): Promise<{ success: boolean; shift?: StationShiftRecord; error?: string }> {
+  const { companyId, pompisteId, pompeId, cuveId, indexDebut } = params
+  if (!companyId) return { success: false, error: 'Identifiant entreprise manquant' }
+  if (!pompisteId) return { success: false, error: 'Veuillez sélectionner le pompiste concerné' }
+  if (!pompeId) return { success: false, error: 'Veuillez sélectionner la pompe de travail' }
+
+  const cleanSlug = canonicalSectorSlug(params.sectorSlug || 'station-service')
+
+  // 1. Contrôle anti-conflit : le pompiste ne doit pas avoir un shift déjà ouvert
+  const activeShift = await getActiveShiftForPompiste(companyId, pompisteId, cleanSlug)
+  if (activeShift) {
+    return {
+      success: false,
+      error: `Le pompiste ${params.pompisteNom} a déjà un shift en cours (${activeShift.reference}). Clôturez d'abord le shift précédent.`
+    }
+  }
+
+  // 2. Contrôle anti-conflit pompe : la pompe ne doit pas être utilisée sur un autre shift ouvert
+  const openShifts = await getOpenShifts(companyId, cleanSlug)
+  const conflictingPompe = openShifts.find(s => s.pompe_id === pompeId && s.pompiste_id !== pompisteId)
+  if (conflictingPompe) {
+    return {
+      success: false,
+      error: `La pompe ${params.pompeNumero} est déjà affectée au shift actif de ${conflictingPompe.pompiste_nom} (${conflictingPompe.reference}).`
+    }
+  }
+
+  const now = new Date()
+  const dateStr = params.date || now.toISOString().slice(0, 10)
+  const heureStr = params.heureOuverture || now.toTimeString().slice(0, 5)
+  const refNum = `SHF-${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}-${String(Math.floor(1000 + Math.random() * 9000))}`
+
+  const payload: any = {
+    company_id: companyId,
+    sector_slug: cleanSlug,
+    reference: refNum,
+    date: dateStr,
+    type_shift: params.typeShift || 'Matin',
+    pompiste_id: pompisteId,
+    pompiste_nom: params.pompisteNom,
+    pompe_id: pompeId,
+    pompe_numero: params.pompeNumero,
+    cuve_id: cuveId || null,
+    cuve_nom: params.cuveNom || null,
+    produit: params.produit || 'Essence Super',
+    index_debut: Number(indexDebut) || 0,
+    index_fin: Number(indexDebut) || 0,
+    volume_distribue: 0,
+    prix_litre: 0,
+    montant_theorique: 0,
+    montant_verse: 0,
+    montant_especes: 0,
+    montant_momo: 0,
+    montant_credit: 0,
+    ecart: 0,
+    valide_par: params.ouvertPar || 'Chef de piste',
+    statut: 'OUVERT',
+    created_at: now.toISOString(),
+  }
+
+  try {
+    // Tentative d'insertion avec 'OUVERT'
+    let { data, error } = await safeStationInsert(supabase, 'station_shifts_clotures', {
+      ...payload,
+      tenant_id: companyId,
+    })
+
+    // Repli sur 'EN_COURS' si la contrainte CHECK SQL restreint à EN_COURS
+    if (error && (String(error.message).includes('check') || String(error.message).includes('statut'))) {
+      payload.statut = 'EN_COURS'
+      const retry = await safeStationInsert(supabase, 'station_shifts_clotures', {
+        ...payload,
+        tenant_id: companyId,
+      })
+      data = retry.data
+      error = retry.error
+    }
+
+    if (error) {
+      console.error('[openPompisteShift] Erreur insertion shift:', error)
+      return { success: false, error: error.message || "Erreur lors de l'enregistrement du shift" }
+    }
+
+    return {
+      success: true,
+      shift: { ...payload, id: data?.id || refNum }
+    }
+  } catch (err: any) {
+    return { success: false, error: err.message || "Exception lors de l'ouverture du shift" }
+  }
+}
+
+/**
+ * Récupère le shift actuellement ouvert / en cours pour un pompiste donné.
+ */
+export async function getActiveShiftForPompiste(
+  companyId: string,
+  pompisteId: string,
+  sectorSlug?: string
+): Promise<StationShiftRecord | null> {
+  if (!companyId || !pompisteId) return null
+  const cleanSlug = canonicalSectorSlug(sectorSlug || 'station-service')
+
+  try {
+    const { data, error } = await supabase
+      .from('station_shifts_clotures')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('pompiste_id', pompisteId)
+      .in('statut', ['OUVERT', 'EN_COURS', 'ouvert', 'en_cours'])
+      .order('created_at', { ascending: false })
+      .limit(1)
+
+    if (error || !data || data.length === 0) return null
+    return data[0] as StationShiftRecord
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Récupère tous les shifts actuellement ouverts de la station.
+ */
+export async function getOpenShifts(
+  companyId: string,
+  sectorSlug?: string
+): Promise<StationShiftRecord[]> {
+  if (!companyId) return []
+  const cleanSlug = canonicalSectorSlug(sectorSlug || 'station-service')
+
+  try {
+    const { data, error } = await supabase
+      .from('station_shifts_clotures')
+      .select('*')
+      .eq('company_id', companyId)
+      .in('sector_slug', [cleanSlug, 'station-service', 'station'])
+      .in('statut', ['OUVERT', 'EN_COURS', 'ouvert', 'en_cours'])
+      .order('created_at', { ascending: false })
+
+    if (error || !data) return []
+    return data as StationShiftRecord[]
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Calcule le récapitulatif réel des ventes associées à un shift depuis sales_orders.
+ */
+export async function getShiftSalesSummary(
+  companyId: string,
+  shiftId: string,
+  pompisteId?: string,
+  dateStr?: string
+): Promise<{
+  volumeTotal: number
+  caTheorique: number
+  montantEspeces: number
+  montantMoMo: number
+  montantCredit: number
+  nbVentes: number
+  sales: any[]
+}> {
+  if (!companyId) {
+    return { volumeTotal: 0, caTheorique: 0, montantEspeces: 0, montantMoMo: 0, montantCredit: 0, nbVentes: 0, sales: [] }
+  }
+
+  try {
+    // 1. Rechercher par shift_id dans metadata
+    let query = supabase
+      .from('sales_orders')
+      .select('id, order_number, total_amount, payment_method, metadata, created_at')
+      .eq('company_id', companyId)
+      .not('status', 'in', '("CANCELLED","annule","annulée")')
+
+    const { data: allSales } = await query
+
+    const shiftSales = (allSales || []).filter((s: any) => {
+      const meta = s.metadata || {}
+      if (meta.shift_id && meta.shift_id === shiftId) return true
+      if (shiftId && meta.shift_reference && meta.shift_reference === shiftId) return true
+      // Repli si shift_id non encore injecté : filtrer par pompiste_id et date
+      if (pompisteId && meta.pompiste_id === pompisteId && dateStr) {
+        return String(s.created_at || '').startsWith(dateStr)
+      }
+      return false
+    })
+
+    let volumeTotal = 0
+    let caTheorique = 0
+    let montantEspeces = 0
+    let montantMoMo = 0
+    let montantCredit = 0
+
+    for (const s of shiftSales) {
+      const meta = s.metadata || {}
+      const vol = Number(meta.volume_litres) || 0
+      const total = Number(s.total_amount) || 0
+      const pay = String(s.payment_method || '').toUpperCase()
+
+      volumeTotal += vol
+      caTheorique += total
+
+      if (pay === 'CASH' || pay === 'ESPECES') {
+        montantEspeces += total
+      } else if (pay === 'MOMO' || pay === 'MOBILE_MONEY' || pay === 'FLOOZ' || pay === 'MTN') {
+        montantMoMo += total
+      } else {
+        montantCredit += total
+      }
+    }
+
+    return {
+      volumeTotal: Math.round(volumeTotal * 100) / 100,
+      caTheorique: Math.round(caTheorique),
+      montantEspeces: Math.round(montantEspeces),
+      montantMoMo: Math.round(montantMoMo),
+      montantCredit: Math.round(montantCredit),
+      nbVentes: shiftSales.length,
+      sales: shiftSales,
+    }
+  } catch (err) {
+    console.warn('[getShiftSalesSummary] Erreur calcul ventes shift:', err)
+    return { volumeTotal: 0, caTheorique: 0, montantEspeces: 0, montantMoMo: 0, montantCredit: 0, nbVentes: 0, sales: [] }
+  }
+}
+
+export interface ClotureShiftParams {
+  companyId: string
+  shiftId: string
+  sectorSlug?: string
+  indexFin: number
+  montantEspecesRemis: number
+  montantMoMoConfirme: number
+  montantCredit?: number
+  motifEcart?: string
+  validePar?: string
+  caisseId?: string
+  caisseSessionId?: string | null
+}
+
+/**
+ * Clôture définitivement un shift avec réconciliation séparée des espèces et du Mobile Money
+ * et intégration automatique dans la caisse de la station (idempotence stricte).
+ */
+export async function cloturerPompisteShift(
+  params: ClotureShiftParams
+): Promise<{ success: boolean; error?: string; shift?: any }> {
+  const { companyId, shiftId, indexFin, montantEspecesRemis, montantMoMoConfirme } = params
+  if (!companyId || !shiftId) {
+    return { success: false, error: 'Identifiant entreprise ou shift manquant' }
+  }
+
+  const cleanSlug = canonicalSectorSlug(params.sectorSlug || 'station-service')
+
+  try {
+    // 1. Charger le shift en cours
+    const { data: shiftData, error: sErr } = await supabase
+      .from('station_shifts_clotures')
+      .select('*')
+      .eq('id', shiftId)
+      .single()
+
+    if (sErr || !shiftData) {
+      return { success: false, error: 'Shift introuvable en base de données' }
+    }
+
+    const idxDebut = Number(shiftData.index_debut) || 0
+    const idxFin = Number(indexFin)
+    if (idxFin < idxDebut) {
+      return { success: false, error: `L'index de fin (${idxFin}) ne peut pas être inférieur à l'index de départ (${idxDebut})` }
+    }
+
+    const volDistribue = Math.round((idxFin - idxDebut) * 100) / 100
+    const pu = Number(shiftData.prix_litre) || 680
+    const caTheorique = Math.round(volDistribue * pu)
+
+    const espRemis = Math.round(Number(montantEspecesRemis) || 0)
+    const momoConfirme = Math.round(Number(montantMoMoConfirme) || 0)
+    const credit = Math.round(Number(params.montantCredit) || 0)
+    const totalVerse = espRemis + momoConfirme + credit
+    const ecart = totalVerse - caTheorique // Négatif = manquant
+
+    const nowIso = new Date().toISOString()
+    const statutCloture = ecart < 0 ? 'VALIDE_AVEC_ECART' : 'CLOTURE'
+
+    // 2. Mettre à jour le shift
+    const { error: updErr } = await supabase
+      .from('station_shifts_clotures')
+      .update({
+        index_fin: idxFin,
+        volume_distribue: volDistribue,
+        montant_theorique: caTheorique,
+        montant_verse: totalVerse,
+        montant_especes: espRemis,
+        montant_momo: momoConfirme,
+        montant_credit: credit,
+        ecart: ecart,
+        motif_ecart: params.motifEcart || null,
+        valide_par: params.validePar || 'Chef de piste',
+        statut: statutCloture,
+        caisse_integree: true,
+        updated_at: nowIso,
+      })
+      .eq('id', shiftId)
+
+    if (updErr) {
+      console.error('[cloturerPompisteShift] Erreur mise à jour shift:', updErr)
+      return { success: false, error: updErr.message || 'Erreur lors de la clôture du shift' }
+    }
+
+    // 3. Mettre à jour l'index actuel de la pompe
+    if (shiftData.pompe_id) {
+      await supabase
+        .from('station_pompes')
+        .update({ index_actuel: idxFin, updated_at: nowIso })
+        .eq('id', shiftData.pompe_id)
+    }
+
+    // 4. Intégration en caisse (Séparation stricte ESPÈCES et MOBILE MONEY)
+    // Garantir l'idempotence absolue : ne jamais insérer deux fois si déjà présent
+    const sourceEspeces = `${shiftId}_especes`
+    const sourceMoMo = `${shiftId}_momo`
+
+    // A. Enregistrement ESPÈCES
+    if (espRemis > 0) {
+      try {
+        const { data: existingEsp } = await supabase
+          .from('caisse_mouvements')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('source_module', 'station_shift_cloture')
+          .eq('source_id', sourceEspeces)
+          .limit(1)
+
+        if (!existingEsp || existingEsp.length === 0) {
+          await enregistrerMouvementCaisse({
+            company_id: companyId,
+            sector_slug: cleanSlug,
+            caisse_id: params.caisseId,
+            caisse_session_id: params.caisseSessionId || null,
+            type: 'vente_carburant_shift',
+            sens: 'entree',
+            montant_especes: espRemis,
+            montant_momo: 0,
+            source_module: 'station_shift_cloture',
+            source_id: sourceEspeces,
+            motif: `Clôture Shift ${shiftData.reference} - Pompiste ${shiftData.pompiste_nom} (Remise Espèces)`,
+            user_name: params.validePar || 'Chef de piste',
+          })
+        }
+      } catch (caisseEspErr) {
+        console.warn('[cloturerPompisteShift] Notice intégration caisse espèces:', caisseEspErr)
+      }
+    }
+
+    // B. Enregistrement MOBILE MONEY
+    if (momoConfirme > 0) {
+      try {
+        const { data: existingMoMo } = await supabase
+          .from('caisse_mouvements')
+          .select('id')
+          .eq('company_id', companyId)
+          .eq('source_module', 'station_shift_cloture')
+          .eq('source_id', sourceMoMo)
+          .limit(1)
+
+        if (!existingMoMo || existingMoMo.length === 0) {
+          await enregistrerMouvementCaisse({
+            company_id: companyId,
+            sector_slug: cleanSlug,
+            caisse_id: params.caisseId,
+            caisse_session_id: params.caisseSessionId || null,
+            type: 'vente_carburant_shift',
+            sens: 'entree',
+            montant_especes: 0,
+            montant_momo: momoConfirme,
+            source_module: 'station_shift_cloture',
+            source_id: sourceMoMo,
+            motif: `Clôture Shift ${shiftData.reference} - Pompiste ${shiftData.pompiste_nom} (Rapprochement MoMo)`,
+            user_name: params.validePar || 'Chef de piste',
+          })
+        }
+      } catch (caisseMoMoErr) {
+        console.warn('[cloturerPompisteShift] Notice intégration caisse MoMo:', caisseMoMoErr)
+      }
+    }
+
+    return {
+      success: true,
+      shift: {
+        ...shiftData,
+        statut: statutCloture,
+        index_fin: idxFin,
+        volume_distribue: volDistribue,
+        montant_theorique: caTheorique,
+        montant_verse: totalVerse,
+        montant_especes: espRemis,
+        montant_momo: momoConfirme,
+        ecart: ecart,
+      }
+    }
+  } catch (err: any) {
+    return { success: false, error: err.message || 'Exception lors de la clôture' }
+  }
+}
+

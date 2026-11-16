@@ -102,6 +102,20 @@ export const TABLES_WITH_PHYSICAL_SECTOR_SLUG = new Set<string>([
   'brasserie_mouvements_emballages',
   'brasserie_inventaires_emballages',
   'brasserie_inventaire_lignes',
+  // Tables M031 Station-Service & Hydrocarbures
+  'station_cuves',
+  'station_pompes',
+  'station_pistolets',
+  'station_pompistes',
+  'station_shifts_clotures',
+  'station_jaugeages',
+  'station_receptions_carburant',
+  'station_vehicules_flotte',
+  'station_ventes',
+  'station_livraisons',
+  'station_lubrifiants',
+  'station_services_annexes',
+  'station_mouvements_cuves',
 ])
 
 // Tables dont la colonne physique 'notes' existe dans Supabase

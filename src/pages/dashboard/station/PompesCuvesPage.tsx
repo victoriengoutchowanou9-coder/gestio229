@@ -17,7 +17,13 @@ import { showModal, showPrompt } from '../../../components/modals/CustomModalGes
 import { safeStationInsert, safeStationUpdate } from '../../../utils/stationFuelHelper'
 import { StationFuelPricingTab } from '../../../components/station/StationFuelPricingTab'
 import { StationDailyFuelSheetModal } from '../../../components/station/StationDailyFuelSheetModal'
-import { loadFuelCommercialConfigs, FuelCommercialConfig } from '../../../services/stationFuelService'
+import {
+  loadFuelCommercialConfigs,
+  FuelCommercialConfig,
+  loadOperationalCuves,
+  checkDuplicateCuve,
+  StationCuve
+} from '../../../services/stationFuelService'
 
 interface Cuve {
   id: string
@@ -173,13 +179,8 @@ export const PompesCuvesPage: React.FC = () => {
     try {
       const cleanSlug = sectorSlug || 'station-service'
 
-      // 1. Cuves
-      const { data: cData } = await supabase
-        .from('station_cuves')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('sector_slug', cleanSlug)
-        .order('nom')
+      // 1. Cuves opérationnelles unifiées (source de vérité unique, sans doublons)
+      const cData = await loadOperationalCuves(companyId, cleanSlug)
       setCuves(cData || [])
 
       // 2. Pompes
@@ -246,6 +247,15 @@ export const PompesCuvesPage: React.FC = () => {
     if (!cuveForm.nom) return notify('error', 'Le nom de la cuve est requis')
     try {
       const cleanSlug = sectorSlug || 'station-service'
+      const targetCode = (cuveForm.code || `CUVE-${cuves.length + 1}`).trim()
+      const targetNom = cuveForm.nom.trim()
+
+      // Contrôle anti-doublon strict (interdire doublons accidentels de code ou nom)
+      const dupCheck = await checkDuplicateCuve(companyId || '', targetCode, targetNom, cleanSlug)
+      if (dupCheck.exists) {
+        return notify('error', `Une cuve existe déjà avec le code "${targetCode}" ou le nom "${targetNom}". Veuillez utiliser une référence unique.`)
+      }
+
       const capVal = Number(cuveForm.capacite) || 30000
       const stockVal = Number(cuveForm.stock_actuel) || 0
       const minVal = Number(cuveForm.niveau_min) || 2000
@@ -253,8 +263,8 @@ export const PompesCuvesPage: React.FC = () => {
         tenant_id: companyId,
         company_id: companyId,
         sector_slug: cleanSlug,
-        code: cuveForm.code || `CUVE-${cuves.length + 1}`,
-        nom: cuveForm.nom,
+        code: targetCode,
+        nom: targetNom,
         produit: cuveForm.produit,
         fuel_type: cuveForm.produit,
         capacite: capVal,
