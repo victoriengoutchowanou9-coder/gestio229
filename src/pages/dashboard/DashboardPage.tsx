@@ -8,9 +8,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
-  LayoutDashboard, TrendingUp, DollarSign, Wallet, CreditCard,
+  LayoutDashboard, TrendingUp, Wallet, CreditCard,
   Package, ShoppingCart, ArrowUpRight, Clock, Store, RefreshCw,
-  Users, ChevronRight, CheckCircle, AlertCircle, ArrowRight
+  ChevronRight, CheckCircle, AlertCircle
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuthStore } from '../../store/authStore'
@@ -322,7 +322,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Indicateurs Principaux avec Marge Brute Silo (v_resume_activite) ─────────────── */}
+      {/* ── Indicateurs Principaux du Secteur ───────────────────────────────────── */}
       {/* ── WIDGETS FACTURES D'AVOIRS (CONFORME ÉTAPE 8 DU PROMPT) ── */}
       <div className="bg-gradient-to-r from-rose-900/90 via-slate-900 to-amber-950 text-white rounded-3xl p-5 border border-rose-800/40 shadow-sm space-y-3">
         <div className="flex items-center justify-between border-b border-white/10 pb-2">
@@ -362,7 +362,7 @@ export const DashboardPage: React.FC = () => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         {/* 1. CA du Jour */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-emerald-200 transition">
           <div className="flex items-center justify-between mb-3">
@@ -382,28 +382,7 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 2. Marge Brute Silo (Source unique v_resume_activite) */}
-        <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-teal-200 transition">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-              Marge Brute Silo
-            </span>
-            <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center">
-              <DollarSign className="w-5 h-5" />
-            </div>
-          </div>
-          <p className={`text-xl font-black font-mono ${resumeActivite.marge_brute >= 0 ? 'text-teal-700' : 'text-rose-600'}`}>
-            {fmt(resumeActivite.marge_brute)}
-          </p>
-          <div className="mt-2 text-[11px] text-slate-500 flex items-center justify-between border-t border-slate-100 pt-2">
-            <span>CA HT Silo :</span>
-            <span className="text-slate-700 font-mono font-bold">
-              {fmt(resumeActivite.ca_ht)}
-            </span>
-          </div>
-        </div>
-
-        {/* 3. Espèces du Jour */}
+        {/* 2. Espèces du Jour */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-emerald-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -424,7 +403,7 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 4. Créances Clients */}
+        {/* 3. Créances Clients */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-rose-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -445,7 +424,7 @@ export const DashboardPage: React.FC = () => {
           </div>
         </div>
 
-        {/* 5. Produits Actifs */}
+        {/* 4. Produits Actifs */}
         <div className="bg-white rounded-3xl border border-slate-200 p-5 shadow-sm hover:border-indigo-200 transition">
           <div className="flex items-center justify-between mb-3">
             <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
@@ -463,65 +442,6 @@ export const DashboardPage: React.FC = () => {
             <span className="font-mono text-indigo-700 font-bold">{fmt(totalProductsValue)}</span>
           </div>
         </div>
-      </div>
-
-      {/* ── Raccourcis Métiers Opérationnels ──────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Link
-          to={`/app/${currentSectorSlug}/vente-pos`}
-          className="p-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl shadow-sm transition flex flex-col justify-between group"
-        >
-          <div className="flex items-center justify-between">
-            <ShoppingCart className="w-5 h-5 text-emerald-200 group-hover:scale-110 transition" />
-            <ArrowRight className="w-4 h-4 text-emerald-300 opacity-60 group-hover:opacity-100 group-hover:translate-x-1 transition" />
-          </div>
-          <div className="mt-3">
-            <p className="text-xs font-bold">Vente & POS</p>
-            <p className="text-[10px] text-emerald-100 mt-0.5">Encaisser un client</p>
-          </div>
-        </Link>
-
-        <Link
-          to={`/app/${currentSectorSlug}/stocks`}
-          className="p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl shadow-sm transition flex flex-col justify-between group"
-        >
-          <div className="flex items-center justify-between">
-            <Package className="w-5 h-5 text-indigo-600 group-hover:scale-110 transition" />
-            <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition" />
-          </div>
-          <div className="mt-3">
-            <p className="text-xs font-bold text-slate-800">Stocks & Dépôts</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Inventaires & Réappro</p>
-          </div>
-        </Link>
-
-        <Link
-          to={`/app/${currentSectorSlug}/caisse`}
-          className="p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl shadow-sm transition flex flex-col justify-between group"
-        >
-          <div className="flex items-center justify-between">
-            <Wallet className="w-5 h-5 text-amber-600 group-hover:scale-110 transition" />
-            <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition" />
-          </div>
-          <div className="mt-3">
-            <p className="text-xs font-bold text-slate-800">Caisse du Secteur</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Sessions & Clôtures</p>
-          </div>
-        </Link>
-
-        <Link
-          to={`/app/${currentSectorSlug}/clients`}
-          className="p-4 bg-white hover:bg-slate-50 border border-slate-200 rounded-2xl shadow-sm transition flex flex-col justify-between group"
-        >
-          <div className="flex items-center justify-between">
-            <Users className="w-5 h-5 text-blue-600 group-hover:scale-110 transition" />
-            <ArrowRight className="w-4 h-4 text-slate-400 group-hover:translate-x-1 transition" />
-          </div>
-          <div className="mt-3">
-            <p className="text-xs font-bold text-slate-800">Clients & Créances</p>
-            <p className="text-[10px] text-slate-400 mt-0.5">Suivi des recouvrements</p>
-          </div>
-        </Link>
       </div>
 
       {/* ── Tableau des Ventes Réelles Enregistrées Aujourd'hui ──────────────── */}
