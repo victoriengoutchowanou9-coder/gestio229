@@ -7,8 +7,10 @@ import {
   Building2, Save, ShieldCheck, Users, Plus, KeyRound, Check,
   X, AlertCircle, Lock, UserCheck, Shield, ToggleLeft, ToggleRight,
   Briefcase, Store, Printer, Sparkles, Layers, Wrench, Truck, ArrowRightLeft, CheckCircle,
-  GraduationCap, Award, BookOpen, Fuel, Percent, History
+  GraduationCap, Award, BookOpen, Fuel, Percent, History,
+  Eye, Edit3, Trash2, CheckSquare, DollarSign, CheckCircle2, Sliders
 } from 'lucide-react'
+import { logAuditEvent } from '../../../services/auditService'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
@@ -655,6 +657,26 @@ export const ConfigPage: React.FC = () => {
   const [resetPasswordVal, setResetPasswordVal] = useState('')
   const [savingReset, setSavingReset] = useState(false)
 
+  // ─── Modal Modification Permissions Utilisateur Interne Existant ──
+  const [editPermissionsUser, setEditPermissionsUser] = useState<any | null>(null)
+  const [editPermissionsSectors, setEditPermissionsSectors] = useState<Record<string, {
+    access: boolean
+    role: string
+    role_label: string
+    permissions: {
+      view: boolean
+      create: boolean
+      edit: boolean
+      delete: boolean
+      validate: boolean
+      encaissement: boolean
+    }
+    modules: Record<string, boolean>
+  }>>({})
+  const [selectedEditSector, setSelectedEditSector] = useState<string>('')
+  const [savingPermissions, setSavingPermissions] = useState(false)
+  const [editPermissionsError, setEditPermissionsError] = useState('')
+
   // Charger les informations entreprise
   useEffect(() => {
     if (company) {
@@ -893,6 +915,269 @@ export const ConfigPage: React.FC = () => {
       toast.error('Erreur', err.message)
     } finally {
       setSavingReset(false)
+    }
+  }
+
+  // ─── Gestion de la Modification des Accès & Permissions Utilisateurs ────────
+  const handleOpenEditPermissions = (targetUser: any) => {
+    const isCurrentUserAdmin = user?.role === 'administrateur' || user?.role === 'super_admin'
+    if (!isCurrentUserAdmin) {
+      toast.error('Accès refusé', 'Seuls les administrateurs peuvent modifier les accès.')
+      return
+    }
+
+    const perm = (typeof targetUser.permissions === 'object' && targetUser.permissions) ? targetUser.permissions : {}
+    const currentPrimarySector = normalizeSectorSlug(
+      perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || targetUser.sector_id || subscribedSectors[0]?.slug || 'boutique'
+    )
+
+    const initialSectorsConfig: Record<string, any> = {}
+
+    // Pour chaque secteur de l'entreprise
+    subscribedSectors.forEach((sec) => {
+      const secSlug = normalizeSectorSlug(sec.slug)
+      const secRoles = getRolesForSector(secSlug)
+      const defaultRoleDef = secRoles[0]
+      const defaultRoleId = defaultRoleDef?.id || 'caissier'
+
+      // Récupérer la configuration existante si déjà personnalisée
+      const existingSecConf = perm.sectors?.[secSlug]
+
+      if (existingSecConf) {
+        initialSectorsConfig[secSlug] = {
+          access: Boolean(existingSecConf.access),
+          role: existingSecConf.role || defaultRoleId,
+          role_label: existingSecConf.role_label || secRoles.find(r => r.id === existingSecConf.role)?.label || defaultRoleDef?.label || defaultRoleId,
+          permissions: {
+            view: existingSecConf.permissions?.view ?? true,
+            create: existingSecConf.permissions?.create ?? (defaultRoleId !== 'auditeur'),
+            edit: existingSecConf.permissions?.edit ?? false,
+            delete: existingSecConf.permissions?.delete ?? false,
+            validate: existingSecConf.permissions?.validate ?? false,
+            encaissement: existingSecConf.permissions?.encaissement ?? (defaultRoleId === 'caissier' || defaultRoleId === 'vendeur'),
+          },
+          modules: existingSecConf.modules || {}
+        }
+      } else {
+        // Déterminer si l'utilisateur a accès par défaut
+        const isPrimary = (secSlug === currentPrimarySector)
+        const inAllowed = Array.isArray(perm.allowed_sectors) && perm.allowed_sectors.map(normalizeSectorSlug).includes(secSlug)
+        const hasAccess = isPrimary || inAllowed
+
+        const assignedRole = isPrimary ? (targetUser.role || defaultRoleId) : defaultRoleId
+        const roleMeta = secRoles.find(r => r.id === assignedRole) || defaultRoleDef
+        const defP = roleMeta?.defaultPermissions || {}
+
+        // Résoudre les modules disponibles pour ce secteur
+        const availableSecList = SectorLoader.getAvailableModulesForSector(secSlug, company)
+        const modsList = availableSecList.length > 0
+          ? availableSecList
+          : (MODULES_PAR_SECTEUR[secSlug] || MODULES_PAR_SECTEUR['default'])
+
+        const initialMods: Record<string, boolean> = {}
+        modsList.forEach((m) => {
+          if (isPrimary && perm[m.id] !== undefined) {
+            initialMods[m.id] = Boolean(perm[m.id])
+          } else {
+            initialMods[m.id] = Boolean((defP as any)[m.id])
+          }
+        })
+
+        initialSectorsConfig[secSlug] = {
+          access: hasAccess,
+          role: assignedRole,
+          role_label: roleMeta?.label || assignedRole,
+          permissions: {
+            view: perm.can_view ?? true,
+            create: perm.can_create ?? !!defP.ventes,
+            edit: perm.can_edit ?? false,
+            delete: perm.can_delete ?? false,
+            validate: perm.can_validate ?? false,
+            encaissement: perm.can_encaissement ?? (assignedRole === 'caissier' || assignedRole === 'vendeur' || !!defP.caisse),
+          },
+          modules: initialMods
+        }
+      }
+    })
+
+    setEditPermissionsUser(targetUser)
+    setEditPermissionsSectors(initialSectorsConfig)
+    setSelectedEditSector(currentPrimarySector || subscribedSectors[0]?.slug || '')
+    setEditPermissionsError('')
+  }
+
+  const handleEditSectorRoleChange = (sectorSlug: string, newRole: string) => {
+    const rolesForSec = getRolesForSector(sectorSlug)
+    const roleMeta = rolesForSec.find(r => r.id === newRole)
+    const defP = roleMeta?.defaultPermissions || {}
+
+    // Résoudre modules disponibles
+    const availableSecList = SectorLoader.getAvailableModulesForSector(sectorSlug, company)
+    const modsList = availableSecList.length > 0
+      ? availableSecList
+      : (MODULES_PAR_SECTEUR[sectorSlug] || MODULES_PAR_SECTEUR['default'])
+
+    const updatedMods: Record<string, boolean> = {}
+    modsList.forEach((m) => {
+      updatedMods[m.id] = Boolean((defP as any)[m.id])
+    })
+
+    setEditPermissionsSectors(prev => ({
+      ...prev,
+      [sectorSlug]: {
+        ...prev[sectorSlug],
+        role: newRole,
+        role_label: roleMeta?.label || newRole,
+        permissions: {
+          view: true,
+          create: !!defP.ventes || newRole === 'caissier' || newRole === 'vendeur',
+          edit: !!defP.stock || !!defP.admin,
+          delete: !!defP.admin,
+          validate: !!defP.finances || !!defP.syscohada || !!defP.admin,
+          encaissement: newRole === 'caissier' || newRole === 'vendeur' || !!defP.caisse,
+        },
+        modules: updatedMods
+      }
+    }))
+  }
+
+  const handleToggleSectorAccess = (sectorSlug: string) => {
+    setEditPermissionsSectors(prev => {
+      const current = prev[sectorSlug]
+      if (!current) return prev
+      const newAccess = !current.access
+      return {
+        ...prev,
+        [sectorSlug]: {
+          ...current,
+          access: newAccess
+        }
+      }
+    })
+  }
+
+  const handleSaveUserPermissions = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editPermissionsUser) return
+
+    const isCurrentUserAdmin = user?.role === 'administrateur' || user?.role === 'super_admin'
+    if (!isCurrentUserAdmin) {
+      setEditPermissionsError('Action non autorisée. Seuls les administrateurs peuvent modifier les accès.')
+      return
+    }
+
+    setSavingPermissions(true)
+    setEditPermissionsError('')
+
+    try {
+      const allowedSectors = Object.keys(editPermissionsSectors).filter(
+        s => editPermissionsSectors[s].access
+      )
+
+      // Déterminer le secteur principal
+      const primarySector = editPermissionsSectors[selectedEditSector]?.access
+        ? selectedEditSector
+        : (allowedSectors[0] || selectedEditSector || 'boutique')
+
+      const primaryConfig = editPermissionsSectors[primarySector] || {
+        role: 'caissier',
+        role_label: 'Caissier',
+        permissions: { view: true, create: true, edit: false, delete: false, validate: false, encaissement: true },
+        modules: {}
+      }
+
+      const existingPerm = (typeof editPermissionsUser.permissions === 'object' && editPermissionsUser.permissions)
+        ? editPermissionsUser.permissions
+        : {}
+
+      const updatedPermissionsPayload = {
+        ...existingPerm,
+        is_internal_user: true,
+        allowed_sectors: allowedSectors,
+        sectors: editPermissionsSectors,
+        // Compatibilité descendante absolue
+        sector: primarySector,
+        sector_slug: primarySector,
+        assigned_sector: primarySector,
+        sector_id: primarySector,
+        role_label: primaryConfig.role_label,
+        // Permissions d'actions globales
+        can_view: primaryConfig.permissions.view,
+        can_create: primaryConfig.permissions.create,
+        can_edit: primaryConfig.permissions.edit,
+        can_delete: primaryConfig.permissions.delete,
+        can_validate: primaryConfig.permissions.validate,
+        can_encaissement: primaryConfig.permissions.encaissement,
+        // Drapeaux canoniques pour les modules
+        ventes: !!primaryConfig.modules['ventes'] || !!primaryConfig.modules['ventes_pos'] || !!primaryConfig.permissions.create,
+        ventes_pos: !!primaryConfig.modules['ventes_pos'] || !!primaryConfig.modules['ventes'],
+        caisse: !!primaryConfig.modules['caisse'] || !!primaryConfig.permissions.encaissement,
+        stock: !!primaryConfig.modules['stock'] || !!primaryConfig.modules['stocks_inventaires'],
+        stocks_inventaires: !!primaryConfig.modules['stocks_inventaires'] || !!primaryConfig.modules['stock'],
+        clients: !!primaryConfig.modules['clients'],
+        fournisseurs: !!primaryConfig.modules['fournisseurs'] || !!primaryConfig.modules['fournisseurs_achats'],
+        fournisseurs_achats: !!primaryConfig.modules['fournisseurs_achats'] || !!primaryConfig.modules['fournisseurs'],
+        depenses: !!primaryConfig.modules['depenses'],
+        reporting: !!primaryConfig.modules['reporting'] || !!primaryConfig.modules['reporting_rapports'],
+        reporting_rapports: !!primaryConfig.modules['reporting_rapports'] || !!primaryConfig.modules['reporting'],
+        finances: !!primaryConfig.modules['finances'] || !!primaryConfig.modules['tresorerie_banques'],
+        tresorerie_banques: !!primaryConfig.modules['tresorerie_banques'] || !!primaryConfig.modules['finances'],
+        syscohada: !!primaryConfig.modules['syscohada'] || !!primaryConfig.modules['comptabilite_syscohada'],
+        comptabilite_syscohada: !!primaryConfig.modules['comptabilite_syscohada'] || !!primaryConfig.modules['syscohada'],
+        // Modules personnalisés
+        ...primaryConfig.modules
+      }
+
+      const { error: updateErr } = await supabase
+        .from('user_profiles')
+        .update({
+          role: primaryConfig.role,
+          sector_id: primarySector,
+          sector_slug: primarySector,
+          permissions: updatedPermissionsPayload,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', editPermissionsUser.id)
+
+      if (updateErr) throw updateErr
+
+      // Enregistrer l'événement d'audit
+      try {
+        await logAuditEvent({
+          companyId: company?.id,
+          userId: user?.id,
+          userName: user?.full_name || 'Administrateur',
+          module: 'utilisateurs',
+          action: 'MODIFIER_ACCES_UTILISATEUR',
+          description: `Mise à jour des accès et permissions pour l'utilisateur ${editPermissionsUser.full_name} (${editPermissionsUser.username})`,
+          entityName: 'user_profiles',
+          entityId: editPermissionsUser.id,
+          details: {
+            username: editPermissionsUser.username,
+            allowed_sectors: allowedSectors,
+            primary_sector: primarySector,
+            primary_role: primaryConfig.role,
+            sectors_summary: Object.keys(editPermissionsSectors).map(slug => ({
+              slug,
+              access: editPermissionsSectors[slug].access,
+              role: editPermissionsSectors[slug].role
+            }))
+          }
+        })
+      } catch (auditErr) {
+        console.warn('Erreur non bloquante logAuditEvent:', auditErr)
+      }
+
+      toast.success(`Accès et permissions de ${editPermissionsUser.full_name} mis à jour avec succès !`)
+      setEditPermissionsUser(null)
+      await fetchUsers()
+      if (editPermissionsUser.id === user?.id) {
+        await refreshTenantContext()
+      }
+    } catch (err: any) {
+      setEditPermissionsError(err.message || 'Erreur lors de la mise à jour des permissions.')
+    } finally {
+      setSavingPermissions(false)
     }
   }
 
@@ -1608,6 +1893,16 @@ export const ConfigPage: React.FC = () => {
 
                           {!isAdmin && (
                             <>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenEditPermissions(item)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-emerald-800 bg-slate-100 hover:bg-emerald-50 border border-slate-200 hover:border-emerald-300 rounded-xl transition shadow-xs"
+                                title="Modifier les accès"
+                              >
+                                <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                                <span className="hidden sm:inline">Modifier les accès</span>
+                              </button>
+
                               <button
                                 onClick={() => { setResetModalUser(item); setResetPasswordVal(''); }}
                                 className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition"
@@ -3015,6 +3310,486 @@ export const ConfigPage: React.FC = () => {
                   className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-md transition disabled:opacity-50"
                 >
                   {savingReset ? 'Mise à jour...' : 'Confirmer le nouveau mot de passe'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* =================================================================== */}
+      {/* MODAL : MODIFIER LES ACCÈS & PERMISSIONS UTILISATEUR                */}
+      {/* =================================================================== */}
+      {editPermissionsUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-slate-100 overflow-hidden flex flex-col max-h-[92vh]">
+            {/* En-tête */}
+            <div className="p-6 bg-slate-900 text-white flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-emerald-500/20 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base leading-snug flex items-center gap-2">
+                    <span>Modifier les accès :</span>
+                    <span className="text-emerald-400">{editPermissionsUser.full_name}</span>
+                  </h3>
+                  <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                    <span>Identifiant : <strong className="text-slate-200 font-mono">{editPermissionsUser.username}</strong></span>
+                    <span>•</span>
+                    <span className={editPermissionsUser.is_active !== false ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>
+                      {editPermissionsUser.is_active !== false ? 'Compte Actif' : 'Compte Désactivé'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => setEditPermissionsUser(null)}
+                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Corps du formulaire */}
+            <form onSubmit={handleSaveUserPermissions} className="p-6 overflow-y-auto space-y-6 flex-1">
+              {editPermissionsError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 font-semibold flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>{editPermissionsError}</span>
+                </div>
+              )}
+
+              {/* Sélection du secteur à configurer */}
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">
+                  Gestion des accès par secteur d'activité ({subscribedSectors.length} secteur(s))
+                </label>
+                <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                  {subscribedSectors.map((sec) => {
+                    const secSlug = normalizeSectorSlug(sec.slug)
+                    const conf = editPermissionsSectors[secSlug]
+                    const hasAccess = conf?.access ?? false
+                    const isSelected = (selectedEditSector === secSlug)
+
+                    return (
+                      <button
+                        key={sec.slug}
+                        type="button"
+                        onClick={() => setSelectedEditSector(secSlug)}
+                        className={`p-3 rounded-2xl text-left border transition shrink-0 flex flex-col justify-between gap-1.5 min-w-[170px] ${
+                          isSelected
+                            ? 'border-emerald-500 bg-emerald-50/50 shadow-sm ring-2 ring-emerald-500/20'
+                            : 'border-slate-200 bg-white hover:bg-slate-50'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-lg">{sec.emoji}</span>
+                          <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                            hasAccess
+                              ? 'bg-emerald-100 text-emerald-800'
+                              : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            {hasAccess ? 'Accès Actif' : 'Aucun accès'}
+                          </span>
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold text-slate-800 truncate">{sec.name}</p>
+                          <p className="text-[11px] text-slate-500 truncate mt-0.5 font-medium">
+                            {hasAccess ? (conf?.role_label || conf?.role || 'Autorisé') : 'Désactivé'}
+                          </p>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              {/* Configuration détaillée du secteur sélectionné */}
+              {(() => {
+                const currentSec = subscribedSectors.find(s => normalizeSectorSlug(s.slug) === selectedEditSector) || subscribedSectors[0]
+                const curSlug = normalizeSectorSlug(currentSec?.slug || selectedEditSector)
+                const curConf = editPermissionsSectors[curSlug] || {
+                  access: false,
+                  role: 'caissier',
+                  role_label: 'Caissier',
+                  permissions: { view: true, create: true, edit: false, delete: false, validate: false, encaissement: true },
+                  modules: {}
+                }
+                const rolesList = getRolesForSector(curSlug)
+                const availableMods = SectorLoader.getAvailableModulesForSector(curSlug, company)
+                const displayedMods = availableMods.length > 0
+                  ? availableMods
+                  : (MODULES_PAR_SECTEUR[curSlug] || MODULES_PAR_SECTEUR['default'])
+
+                return (
+                  <div className="space-y-4">
+                    {/* Carte 1 : Activation / Révocation de l'accès au secteur */}
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xl">{currentSec?.emoji}</span>
+                          <h4 className="text-sm font-black text-slate-800">
+                            Autorisation pour : {currentSec?.name || curSlug}
+                          </h4>
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {curConf.access
+                            ? `L'utilisateur a accès au secteur ${currentSec?.name}. Vous pouvez ajuster son rôle et ses droits ci-dessous.`
+                            : `Aucun accès configuré. L'utilisateur ne pourra pas accéder à ${currentSec?.name}.`}
+                        </p>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => handleToggleSectorAccess(curSlug)}
+                        className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-2 shrink-0 ${
+                          curConf.access
+                            ? 'bg-rose-100 hover:bg-rose-200 text-rose-700'
+                            : 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm'
+                        }`}
+                      >
+                        {curConf.access ? (
+                          <>
+                            <X className="w-4 h-4" />
+                            <span>Révoquer l'accès</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-4 h-4" />
+                            <span>Autoriser l'accès à ce secteur</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Si l'accès est actif : Rôle, permissions et modules */}
+                    {curConf.access ? (
+                      <div className="space-y-4">
+                        {/* 1. Rôle et responsabilités */}
+                        <div className="p-4 bg-white border border-slate-200 rounded-2xl space-y-2">
+                          <label className="block text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                            <Briefcase className="w-4 h-4 text-emerald-600" />
+                            <span>Rôle métier & Responsabilité ({currentSec?.name})</span>
+                          </label>
+                          <select
+                            value={curConf.role}
+                            onChange={(e) => handleEditSectorRoleChange(curSlug, e.target.value)}
+                            className="w-full px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800"
+                          >
+                            {rolesList.map((r) => (
+                              <option key={r.id} value={r.id}>
+                                {r.label} — {r.description}
+                              </option>
+                            ))}
+                          </select>
+                          <p className="text-[11px] text-slate-400">
+                            Changer le rôle pré-configure automatiquement les permissions adaptées à ce métier.
+                          </p>
+                        </div>
+
+                        {/* 2. Matrice des Permissions d'Action */}
+                        <div className="p-4 bg-white border border-slate-200 rounded-2xl space-y-3">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <div>
+                              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                                <Shield className="w-4 h-4 text-emerald-600" />
+                                <span>Permissions d'action sur le secteur</span>
+                              </h5>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                Définissez les opérations permises à l'utilisateur dans ce secteur.
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { view: true, create: true, edit: true, delete: true, validate: true, encaissement: true }
+                                    }
+                                  }))
+                                }}
+                                className="px-2 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition"
+                              >
+                                Tout autoriser
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { view: true, create: false, edit: false, delete: false, validate: false, encaissement: false }
+                                    }
+                                  }))
+                                }}
+                                className="px-2 py-1 text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                              >
+                                Lecture seule
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                            {/* Consultation */}
+                            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white cursor-pointer transition select-none">
+                              <input
+                                type="checkbox"
+                                checked={curConf.permissions.view}
+                                onChange={(e) => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { ...prev[curSlug].permissions, view: e.target.checked }
+                                    }
+                                  }))
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded"
+                              />
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">👁️ Consultation</span>
+                                <span className="text-[10px] text-slate-500">Consulter les données et tableaux de bord</span>
+                              </div>
+                            </label>
+
+                            {/* Création */}
+                            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white cursor-pointer transition select-none">
+                              <input
+                                type="checkbox"
+                                checked={curConf.permissions.create}
+                                onChange={(e) => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { ...prev[curSlug].permissions, create: e.target.checked }
+                                    }
+                                  }))
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded"
+                              />
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">➕ Création</span>
+                                <span className="text-[10px] text-slate-500">Enregistrer des opérations et ventes</span>
+                              </div>
+                            </label>
+
+                            {/* Modification */}
+                            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white cursor-pointer transition select-none">
+                              <input
+                                type="checkbox"
+                                checked={curConf.permissions.edit}
+                                onChange={(e) => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { ...prev[curSlug].permissions, edit: e.target.checked }
+                                    }
+                                  }))
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded"
+                              />
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">✏️ Modification</span>
+                                <span className="text-[10px] text-slate-500">Mettre à jour les informations existantes</span>
+                              </div>
+                            </label>
+
+                            {/* Suppression */}
+                            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white cursor-pointer transition select-none">
+                              <input
+                                type="checkbox"
+                                checked={curConf.permissions.delete}
+                                onChange={(e) => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { ...prev[curSlug].permissions, delete: e.target.checked }
+                                    }
+                                  }))
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded"
+                              />
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">🗑️ Suppression</span>
+                                <span className="text-[10px] text-slate-500">Supprimer des données ou écritures</span>
+                              </div>
+                            </label>
+
+                            {/* Validation */}
+                            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white cursor-pointer transition select-none">
+                              <input
+                                type="checkbox"
+                                checked={curConf.permissions.validate}
+                                onChange={(e) => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { ...prev[curSlug].permissions, validate: e.target.checked }
+                                    }
+                                  }))
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded"
+                              />
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">✅ Validation</span>
+                                <span className="text-[10px] text-slate-500">Valider les commandes, dépenses ou régularisations</span>
+                              </div>
+                            </label>
+
+                            {/* Encaissement */}
+                            <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 bg-slate-50/50 hover:bg-white cursor-pointer transition select-none">
+                              <input
+                                type="checkbox"
+                                checked={curConf.permissions.encaissement}
+                                onChange={(e) => {
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: {
+                                      ...prev[curSlug],
+                                      permissions: { ...prev[curSlug].permissions, encaissement: e.target.checked }
+                                    }
+                                  }))
+                                }}
+                                className="w-4 h-4 mt-0.5 accent-emerald-600 rounded"
+                              />
+                              <div>
+                                <span className="text-xs font-bold text-slate-800 block">💵 Encaissement</span>
+                                <span className="text-[10px] text-slate-500">Encaisser les règlements (espèces / MoMo)</span>
+                              </div>
+                            </label>
+                          </div>
+                        </div>
+
+                        {/* 3. Modules Accessibles pour ce Secteur */}
+                        <div className="p-4 bg-white border border-slate-200 rounded-2xl space-y-3">
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100">
+                            <div>
+                              <h5 className="text-xs font-bold uppercase tracking-wider text-slate-800 flex items-center gap-1.5">
+                                <Layers className="w-4 h-4 text-emerald-600" />
+                                <span>Modules accessibles ({displayedMods.length} modules)</span>
+                              </h5>
+                              <p className="text-[11px] text-slate-500 mt-0.5">
+                                {displayedMods.filter(m => Boolean(curConf.modules[m.id])).length} / {displayedMods.length} module(s) activé(s)
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const allM: Record<string, boolean> = {}
+                                  displayedMods.forEach(m => { allM[m.id] = true })
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: { ...prev[curSlug], modules: allM }
+                                  }))
+                                }}
+                                className="px-2 py-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition"
+                              >
+                                Tout cocher
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const noM: Record<string, boolean> = {}
+                                  displayedMods.forEach(m => { noM[m.id] = false })
+                                  setEditPermissionsSectors(prev => ({
+                                    ...prev,
+                                    [curSlug]: { ...prev[curSlug], modules: noM }
+                                  }))
+                                }}
+                                className="px-2 py-1 text-[11px] font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg transition"
+                              >
+                                Tout décocher
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto pr-1">
+                            {displayedMods.map((mod) => {
+                              const isChecked = Boolean(curConf.modules[mod.id])
+                              return (
+                                <label
+                                  key={mod.id}
+                                  className={`flex items-center gap-2 p-2.5 rounded-xl border transition cursor-pointer select-none ${
+                                    isChecked
+                                      ? 'bg-emerald-50/70 border-emerald-300 text-slate-900 font-semibold'
+                                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-white'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={isChecked}
+                                    onChange={(e) => {
+                                      setEditPermissionsSectors(prev => ({
+                                        ...prev,
+                                        [curSlug]: {
+                                          ...prev[curSlug],
+                                          modules: {
+                                            ...prev[curSlug].modules,
+                                            [mod.id]: e.target.checked
+                                          }
+                                        }
+                                      }))
+                                    }}
+                                    className="w-4 h-4 accent-emerald-600 rounded cursor-pointer"
+                                  />
+                                  <span className="text-xs truncate" title={mod.label}>{mod.label}</span>
+                                </label>
+                              )
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      /* Si l'accès est désactivé */
+                      <div className="p-8 text-center bg-slate-50 border border-slate-200 rounded-2xl space-y-2">
+                        <Lock className="w-8 h-8 text-slate-400 mx-auto" />
+                        <h5 className="text-sm font-bold text-slate-700">
+                          Aucun accès au secteur {currentSec?.name || curSlug}
+                        </h5>
+                        <p className="text-xs text-slate-500 max-w-md mx-auto">
+                          Cet utilisateur n'a aucun accès aux modules, données ni encaissements de ce secteur. Cliquez sur « Autoriser l'accès à ce secteur » ci-dessus si vous souhaitez lui attribuer un rôle et des droits.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Boutons d'action : ANNULER & ENREGISTRER LES MODIFICATIONS */}
+              <div className="pt-4 border-t border-slate-100 flex items-center justify-end gap-3 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setEditPermissionsUser(null)}
+                  className="px-5 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 border border-slate-200 rounded-xl transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingPermissions}
+                  className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-black rounded-xl shadow-md transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {savingPermissions ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      <span>Enregistrement...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Enregistrer les modifications</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

@@ -107,6 +107,55 @@ export const SectorGuard: React.FC<SectorGuardProps> = ({ children }) => {
     return <>{children}</>
   }
 
+  // 3.5. Contrôle d'accès sectoriel pour les utilisateurs internes (rôle != admin)
+  const isInternalUser = Boolean(user && user.role !== 'administrateur' && user.role !== 'super_admin')
+  if (isInternalUser) {
+    const perm = (typeof user?.permissions === 'object' && user?.permissions) ? user.permissions : {}
+    let isSectorAuthorized = true
+
+    if (Array.isArray(perm.allowed_sectors) && perm.allowed_sectors.length > 0) {
+      isSectorAuthorized = perm.allowed_sectors.map((s: string) => canonicalSectorSlug(s)).includes(cleanSlug)
+    } else if (perm.sectors && typeof perm.sectors === 'object') {
+      const secConf = perm.sectors[cleanSlug]
+      if (secConf !== undefined) {
+        isSectorAuthorized = Boolean(secConf.access)
+      } else {
+        const primarySec = canonicalSectorSlug(perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || user?.sector_id || '')
+        isSectorAuthorized = primarySec ? (primarySec === cleanSlug) : true
+      }
+    } else {
+      const primarySec = canonicalSectorSlug(perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || user?.sector_id || '')
+      if (primarySec && primarySec !== cleanSlug) {
+        isSectorAuthorized = false
+      }
+    }
+
+    if (!isSectorAuthorized) {
+      const primarySec = canonicalSectorSlug(perm.sector_slug || perm.sector || perm.assigned_sector || perm.sector_id || user?.sector_id || '') || 'boutique'
+      return (
+        <div className="min-h-[75vh] flex items-center justify-center p-6">
+          <div className="max-w-lg w-full bg-slate-900/95 border border-rose-500/40 rounded-2xl p-8 text-center shadow-2xl">
+            <div className="w-16 h-16 rounded-2xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center mx-auto mb-5">
+              <Lock className="w-8 h-8 text-rose-400" />
+            </div>
+            <h2 className="text-xl font-bold text-white mb-2">Accès Secteur Non Autorisé</h2>
+            <p className="text-sm text-slate-300 mb-6">
+              Votre compte utilisateur n'a pas été autorisé à accéder au secteur d'activité « {cleanSlug} ».
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate(`/app/${primarySec}/vente-pos`)}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-semibold transition shadow-lg shadow-emerald-500/20"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              Retour à mon espace assigné
+            </button>
+          </div>
+        </div>
+      )
+    }
+  }
+
   // Si le secteur est ajouté à l'entreprise (ou trouvé dans abonnements_secteurs) :
   // - Si l'abonnement du secteur est actif (`accessState.autorise === true`), tous les modules sont autorisés.
   // - Si l'abonnement du secteur est inactif (`en_attente_paiement` ou `expire`),
