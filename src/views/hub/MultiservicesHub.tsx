@@ -1582,123 +1582,125 @@ export const MultiservicesHub: React.FC<MultiservicesHubProps> = ({
       darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
     }`}>
 
-      {/* ══ HEADER ══════════════════════════════════════════════════════════ */}
-      <div className="w-full max-w-none px-3 lg:px-4 mb-8">
-        <div className={`flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 pb-6 border-b ${
-          darkMode ? 'border-slate-800' : 'border-slate-200'
-        }`}>
-          <div className="flex-1">
-            <div className="flex items-center gap-2.5 flex-wrap">
-              <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-500 border border-emerald-500/30">
-                HUB CENTRAL MULTISERVICES — GESTIO 229
-              </span>
-              {/* Badge global en haut : Essai J-23 (Règle 6 CDC) */}
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 shadow-sm">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                <span>{globalBadgeText}</span>
-              </span>
-              <span className={`text-xs font-mono ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Bénin • UEMOA (FCFA)</span>
+      {/* ══ HEADER (Masqué lors de la consultation détaillée d'un site) ════ */}
+      {!selectedSiteId && (
+        <div className="w-full max-w-none px-3 lg:px-4 mb-8">
+          <div className={`flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4 pb-6 border-b ${
+            darkMode ? 'border-slate-800' : 'border-slate-200'
+          }`}>
+            <div className="flex-1">
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-bold bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-500 border border-emerald-500/30">
+                  HUB CENTRAL MULTISERVICES — GESTIO 229
+                </span>
+                {/* Badge global en haut : Essai J-23 (Règle 6 CDC) */}
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-black bg-emerald-500/15 text-emerald-500 border border-emerald-500/30 shadow-sm">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  <span>{globalBadgeText}</span>
+                </span>
+                <span className={`text-xs font-mono ${darkMode ? 'text-slate-400' : 'text-slate-500'}`}>Bénin • UEMOA (FCFA)</span>
+              </div>
+
+              {companyName ? (
+                <h1 className={`text-2xl sm:text-3xl font-black mt-2 tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>{companyName}</h1>
+              ) : (
+                <h1 className={`text-2xl sm:text-3xl font-black mt-2 tracking-tight italic ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
+                  — Nom de l'entreprise non configuré —
+                </h1>
+              )}
+
+              <p className={`text-xs sm:text-sm mt-1 flex items-center gap-2 flex-wrap ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                {companyIfu && (
+                  <>
+                    <span>N° IFU : <strong className={`font-mono ${darkMode ? 'text-slate-300' : 'text-slate-800'}`}>{companyIfu}</strong></span>
+                    <span>•</span>
+                  </>
+                )}
+                <span>Régime : <strong className={darkMode ? 'text-slate-300' : 'text-slate-800'}>{companyRegime}</strong></span>
+                <span>•</span>
+                <span className="text-emerald-500 font-medium">{activeActivities.length} Activité(s) active(s)</span>
+                {archivedActivities.length > 0 && (
+                  <>
+                    <span>•</span>
+                    <span className={darkMode ? 'text-slate-500' : 'text-slate-400'}>{archivedActivities.length} archivée(s)</span>
+                  </>
+                )}
+              </p>
             </div>
 
-            {companyName ? (
-              <h1 className={`text-2xl sm:text-3xl font-black mt-2 tracking-tight ${darkMode ? 'text-white' : 'text-slate-900'}`}>{companyName}</h1>
-            ) : (
-              <h1 className={`text-2xl sm:text-3xl font-black mt-2 tracking-tight italic ${darkMode ? 'text-slate-500' : 'text-slate-400'}`}>
-                — Nom de l'entreprise non configuré —
-              </h1>
-            )}
-
-            <p className={`text-xs sm:text-sm mt-1 flex items-center gap-2 flex-wrap ${darkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-              {companyIfu && (
-                <>
-                  <span>N° IFU : <strong className={`font-mono ${darkMode ? 'text-slate-300' : 'text-slate-800'}`}>{companyIfu}</strong></span>
-                  <span>•</span>
-                </>
-              )}
-              <span>Régime : <strong className={darkMode ? 'text-slate-300' : 'text-slate-800'}>{companyRegime}</strong></span>
-              <span>•</span>
-              <span className="text-emerald-500 font-medium">{activeActivities.length} Activité(s) active(s)</span>
-              {archivedActivities.length > 0 && (
-                <>
-                  <span>•</span>
-                  <span className={darkMode ? 'text-slate-500' : 'text-slate-400'}>{archivedActivities.length} archivée(s)</span>
-                </>
-              )}
-            </p>
-          </div>
-
-          {/* Actions globales (réservation espace coin vert PWA via ) */}
-          <div className="flex items-center gap-2 flex-wrap self-start lg:pr-36">
-            {/* Toggle Mode Sombre / Clair */}
-            <button
-              type="button"
-              onClick={toggleDarkMode}
-              title={darkMode ? "Passer en mode clair" : "Passer en mode sombre"}
-              className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
-                darkMode
-                  ? 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-700'
-                  : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-sm'
-              }`}
-            >
-              {darkMode ? <Sun size={15} /> : <Moon size={15} />}
-            </button>
-
-            <button
-              onClick={handleRefresh}
-              title="Actualiser"
-              className={`p-2 rounded-xl transition-colors border ${
-                darkMode
-                  ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
-                  : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
-              }`}
-            >
-              <RefreshCw size={15} className={isRefreshing ? 'animate-spin text-emerald-500' : ''} />
-            </button>
-            {isAdmin && (
-              <>
-                <button
-                  onClick={() => setShowCompanySettingsModal(true)}
-                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors border ${
-                    darkMode
-                      ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
-                      : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
-                  }`}
-                >
-                  <Settings size={14} /> Entreprise
-                </button>
-                <button
-                  onClick={onOpenSubscription || (() => {
-                    const targetSector = (activities[0]?.sectorSlug || company?.active_sector || 'boutique').replace(/^sec-/, '').toLowerCase();
-                    navigate(`/app/${targetSector}/abonnement`);
-                  })}
-                  className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition-colors shadow-sm shadow-indigo-600/20"
-                >
-                  <CreditCard size={14} /> Mon Abonnement
-                </button>
-                <button
-                  onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}
-                  className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white transition-colors shadow-md shadow-emerald-500/20"
-                >
-                  <Plus size={14} /> Ajouter une activité
-                </button>
-              </>
-            )}
-            {onLogout && (
+            {/* Actions globales (réservation espace coin vert PWA via ) */}
+            <div className="flex items-center gap-2 flex-wrap self-start lg:pr-36">
+              {/* Toggle Mode Sombre / Clair */}
               <button
-                onClick={onLogout}
-                title="Se déconnecter de la session"
-                className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors border ${
+                type="button"
+                onClick={toggleDarkMode}
+                title={darkMode ? "Passer en mode clair" : "Passer en mode sombre"}
+                className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors border ${
                   darkMode
-                    ? 'bg-slate-900 hover:bg-rose-950/60 border-slate-700 hover:border-rose-500/50 text-slate-300 hover:text-rose-300'
-                    : 'bg-white hover:bg-rose-50 border-slate-200 hover:border-rose-300 text-slate-700 hover:text-rose-600 shadow-sm'
+                    ? 'bg-slate-900 hover:bg-slate-800 text-amber-400 border-slate-700'
+                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-200 shadow-sm'
                 }`}
               >
-                <LogOut size={14} /> Déconnexion
+                {darkMode ? <Sun size={15} /> : <Moon size={15} />}
               </button>
-            )}
+
+              <button
+                onClick={handleRefresh}
+                title="Actualiser"
+                className={`p-2 rounded-xl transition-colors border ${
+                  darkMode
+                    ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
+                    : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+                }`}
+              >
+                <RefreshCw size={15} className={isRefreshing ? 'animate-spin text-emerald-500' : ''} />
+              </button>
+              {isAdmin && (
+                <>
+                  <button
+                    onClick={() => setShowCompanySettingsModal(true)}
+                    className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors border ${
+                      darkMode
+                        ? 'bg-slate-900 hover:bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+                        : 'bg-white hover:bg-slate-100 border-slate-200 text-slate-700 shadow-sm'
+                    }`}
+                  >
+                    <Settings size={14} /> Entreprise
+                  </button>
+                  <button
+                    onClick={onOpenSubscription || (() => {
+                      const targetSector = (activities[0]?.sectorSlug || company?.active_sector || 'boutique').replace(/^sec-/, '').toLowerCase();
+                      navigate(`/app/${targetSector}/abonnement`);
+                    })}
+                    className="flex items-center gap-1.5 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-xl text-xs font-bold text-white transition-colors shadow-sm shadow-indigo-600/20"
+                  >
+                    <CreditCard size={14} /> Mon Abonnement
+                  </button>
+                  <button
+                    onClick={() => { setForm(EMPTY_FORM); setFormError(''); setShowAddModal(true); }}
+                    className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-xl text-xs font-bold text-white transition-colors shadow-md shadow-emerald-500/20"
+                  >
+                    <Plus size={14} /> Ajouter une activité
+                  </button>
+                </>
+              )}
+              {onLogout && (
+                <button
+                  onClick={onLogout}
+                  title="Se déconnecter de la session"
+                  className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors border ${
+                    darkMode
+                      ? 'bg-slate-900 hover:bg-rose-950/60 border-slate-700 hover:border-rose-500/50 text-slate-300 hover:text-rose-300'
+                      : 'bg-white hover:bg-rose-50 border-slate-200 hover:border-rose-300 text-slate-700 hover:text-rose-600 shadow-sm'
+                  }`}
+                >
+                  <LogOut size={14} /> Déconnexion
+                </button>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* ══ GESTION MULTISITE — NIVEAU 2 : VUE DÉTAILLÉE D'UN SITE ═════════ */}
       {selectedSiteId && (() => {
