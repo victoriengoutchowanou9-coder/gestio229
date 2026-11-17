@@ -7,14 +7,28 @@ import fs from 'fs'
 import { VitePWA } from 'vite-plugin-pwa'
 
 // Version synchronisée avec public/version.json généré par prebuild
-let appVersion = String(Date.now())
+const vf = path.resolve(__dirname, 'public/version.json')
+let appVersion = ''
 try {
-  const vf = path.resolve(__dirname, 'public/version.json')
   if (fs.existsSync(vf)) {
     const raw = JSON.parse(fs.readFileSync(vf, 'utf8'))
     if (raw && raw.version) appVersion = String(raw.version).trim()
   }
 } catch (_) {}
+
+if (!appVersion) {
+  appVersion = String(Date.now())
+  try {
+    const pubDir = path.resolve(__dirname, 'public')
+    if (!fs.existsSync(pubDir)) fs.mkdirSync(pubDir, { recursive: true })
+    fs.writeFileSync(vf, JSON.stringify({
+      version: appVersion,
+      builtAt: new Date().toISOString(),
+      app: 'GESTIO 229 ERP',
+      status: 'stable'
+    }, null, 2), 'utf8')
+  } catch (_) {}
+}
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -145,7 +159,7 @@ export default defineConfig({
   define: {
     // Identifiant unique de chaque build — change à chaque déploiement Vercel
     // Utilisé pour détecter un nouveau déploiement et forcer un rechargement propre
-    __APP_VERSION__: JSON.stringify(`${Date.now()}`),
+    __APP_VERSION__: JSON.stringify(appVersion),
     // Domaine officiel de la plateforme GESTIO 229
     __APP_DOMAIN__: JSON.stringify('www.gestio229.com'),
   },

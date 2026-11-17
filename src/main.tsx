@@ -33,11 +33,15 @@ if (typeof window !== 'undefined') {
     document.documentElement.classList.add('dark')
   }
 
-  // ── 2. Gestion de version & Déclenchement transparent des mises à jour ─────
-  // Règle de stabilité absolue : Le logiciel ne doit JAMAIS redémarrer ou recharger automatiquement
-  // en cours de session (protège les ventes, caisses, formulaires et opérations).
-  // Les mises à jour sont notifiées élégamment via le composant PwaUpdateToast.
+  // ── 2. Gestion de version & Détection rigoureuse des nouvelles versions ─────
+  // Règles absolues GESTIO 229 :
+  // - Ne JAMAIS recharger ou actualiser automatiquement sans clic utilisateur
+  // - Ne JAMAIS rediriger automatiquement vers la page d'accueil
+  // - Déclencher la notification UNIQUEMENT lors d'une véritable nouvelle version
+  // - Mémoriser les versions fermées (X) pour éviter les notifications en boucle
   const PWA_VERSION_KEY = 'pwa-version'
+  const PWA_DISMISSED_KEY = 'gestio-pwa-dismissed-version'
+  const PWA_NOTIFIED_KEY = 'gestio-pwa-notified-version'
 
   const purgeCacheAndReload = async (newVer?: string) => {
     const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
@@ -64,13 +68,13 @@ if (typeof window !== 'undefined') {
     window.location.reload()
   }
 
-  // Contrôle au démarrage (mise à jour du marqueur sans rechargement intempestif)
+  // Contrôle au démarrage (mise à jour du marqueur version sans rechargement)
   try {
     const currentVersion = __APP_VERSION__
     localStorage.setItem(PWA_VERSION_KEY, currentVersion)
   } catch (_) {}
 
-  // Vérificateur en arrière-plan (notification non-bloquante sans coupure de session)
+  // Vérificateur en arrière-plan d'une nouvelle version réellement déployée
   const checkForNewVersion = async () => {
     try {
       const res = await fetch(`/version.json?t=${Date.now()}`, {
@@ -82,16 +86,39 @@ if (typeof window !== 'undefined') {
       const serverVersion = String(data?.version || '').trim()
       const localVersion = String(localStorage.getItem(PWA_VERSION_KEY) || __APP_VERSION__).trim()
 
+      // Si le serveur a une version différente de la version locale
       if (serverVersion && localVersion && serverVersion !== localVersion) {
-        console.log(`[GESTIO 229] Mise à jour disponible (${serverVersion} vs ${localVersion}). Notification utilisateur...`)
-        window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+        // 1. Ne pas redemander si l'utilisateur a fermé cette version (X)
+        const dismissed = sessionStorage.getItem(PWA_DISMISSED_KEY)
+        if (dismissed === serverVersion) {
+          return
+        }
+
+        // 2. Ne pas notifier plusieurs fois pour la même version en cours de session
+        const alreadyNotified = sessionStorage.getItem(PWA_NOTIFIED_KEY)
+        if (alreadyNotified === serverVersion) {
+          return
+        }
+
+        sessionStorage.setItem(PWA_NOTIFIED_KEY, serverVersion)
+        console.log(`[GESTIO 229] Véritable nouvelle version disponible (${serverVersion} vs ${localVersion}). Notification utilisateur...`)
+        window.dispatchEvent(new CustomEvent('gestio-pwa-update-available', {
+          detail: { serverVersion, localVersion }
+        }))
       }
     } catch (_) {}
   }
 
-  // ── 2b. Vérification périodique des mises à jour (toutes les 30s) ─────────
-  setTimeout(checkForNewVersion, 5000)
-  setInterval(checkForNewVersion, 30 * 1000)
+  // ── 2b. Vérification périodique raisonnable (délai initial 10s, intervalle 2 min, ou focus onglet)
+  setTimeout(checkForNewVersion, 10000)
+  setInterval(checkForNewVersion, 2 * 60 * 1000)
+
+  // Vérifier également quand l'utilisateur revient sur l'onglet
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') {
+      checkForNewVersion()
+    }
+  })
 
   // ── 3. Filet de sécurité global : chunk error + TDZ error ────────────────
   const isAutoReloadableError = (msg: string) =>
@@ -131,35 +158,44 @@ if (typeof window !== 'undefined') {
     }
   })
 
-  // ── 4. Service Worker PWA : Gestion professionnelle des mises à jour ────────
+  // ── 4. Service Worker PWA : Gestion propre et sans interruption intempestive ────
   if ('serviceWorker' in navigator) {
-    // Dès qu'un nouveau Service Worker est prêt, avertir l'utilisateur via le Toast
+    let hadInitialController = Boolean(navigator.serviceWorker.controller)
+
+    // Lorsque le contrôleur change (remplacement d'un SW existant par un nouveau)
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      console.log('[GESTIO 229] Service Worker mis à jour.')
-      window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+      if (!hadInitialController) {
+        // Prise de contrôle initiale du premier Service Worker installé. Ce n'est PAS une mise à jour.
+        hadInitialController = true
+        return
+      }
+      console.log('[GESTIO 229] Contrôleur Service Worker actualisé.')
+      checkForNewVersion()
     })
 
     window.addEventListener('load', () => {
       navigator.serviceWorker
         .register('/sw.js')
         .then((reg) => {
-          if (reg.waiting) {
-            reg.waiting.postMessage({ type: 'SKIP_WAITING' })
-            window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+          // Si un worker est déjà en attente (waiting) pour une page déjà contrôlée
+          if (reg.waiting && navigator.serviceWorker.controller) {
+            checkForNewVersion()
           }
 
+          // Détection d'un nouveau worker en cours d'installation
           reg.addEventListener('updatefound', () => {
             const newWorker = reg.installing
             if (newWorker) {
               newWorker.addEventListener('statechange', () => {
                 if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
-                  window.dispatchEvent(new CustomEvent('gestio-pwa-update-available'))
+                  // Nouveau worker installé avec succès : vérifier la version
+                  checkForNewVersion()
                 }
               })
             }
           })
 
-          // Contrôle unique en arrière-plan sans timer récurrent de rechargement
+          // Contrôle unique en tâche de fond
           reg.update().catch(() => {})
         })
         .catch(() => {})

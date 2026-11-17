@@ -4,12 +4,21 @@ import { RotateCcw, X } from 'lucide-react'
 export const PwaUpdateToast: React.FC = () => {
   const [show, setShow] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
-  const [countdown, setCountdown] = useState(5)
+  const [newVersion, setNewVersion] = useState<string | null>(null)
 
   useEffect(() => {
-    const handleUpdateAvailable = () => {
-      // Si rechargé il y a moins de 5 minutes, ne pas afficher
+    const handleUpdateAvailable = (event: Event) => {
+      const customEvent = event as CustomEvent<{ serverVersion?: string; localVersion?: string }>
+      const incomingVersion = customEvent.detail?.serverVersion || ''
+
       try {
+        // Si l'utilisateur a déjà fermé la notification pour cette version, ne pas l'afficher
+        const dismissed = sessionStorage.getItem('gestio-pwa-dismissed-version')
+        if (incomingVersion && dismissed === incomingVersion) {
+          return
+        }
+
+        // Si rechargé il y a moins de 15 secondes, ignorer
         const lastReloadStr = sessionStorage.getItem('pwa-reloaded-at')
         if (lastReloadStr) {
           const lastReload = parseInt(lastReloadStr, 10)
@@ -19,57 +28,51 @@ export const PwaUpdateToast: React.FC = () => {
         }
       } catch (_) {}
 
+      if (incomingVersion) {
+        setNewVersion(incomingVersion)
+      }
       setShow(true)
     }
 
-    window.addEventListener('gestio-pwa-update-available', handleUpdateAvailable)
+    window.addEventListener('gestio-pwa-update-available', handleUpdateAvailable as EventListener)
     return () => {
-      window.removeEventListener('gestio-pwa-update-available', handleUpdateAvailable)
+      window.removeEventListener('gestio-pwa-update-available', handleUpdateAvailable as EventListener)
     }
   }, [])
 
-  // Auto-reload après 5 secondes, sauf si l'utilisateur est dans un formulaire
-  useEffect(() => {
-    if (!show) return
-    
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          // Vérifier si l'utilisateur est dans un champ de saisie
-          const activeEl = document.activeElement
-          const isInForm = activeEl && (
-            activeEl.tagName === 'INPUT' || 
-            activeEl.tagName === 'TEXTAREA' || 
-            activeEl.tagName === 'SELECT' ||
-            (activeEl as HTMLElement).isContentEditable
-          )
-          if (isInForm) {
-            // Reporter de 10 secondes si l'utilisateur saisit
-            return 10
-          }
-          handleApplyUpdate()
-          return 0
-        }
-        return prev - 1
-      })
-    }, 1000)
+  // Fermeture par l'utilisateur (X) : mémoriser la version ignorée pour ne plus interrompre
+  const handleDismiss = () => {
+    setShow(false)
+    try {
+      if (newVersion) {
+        sessionStorage.setItem('gestio-pwa-dismissed-version', newVersion)
+      }
+    } catch (_) {}
+  }
 
-    return () => clearInterval(timer)
-  }, [show])
-
+  // Application manuelle de la mise à jour au clic sur « Actualiser »
+  // Ne recharge JAMAIS automatiquement : l'utilisateur décide quand actualiser
   const handleApplyUpdate = async () => {
     setIsUpdating(true)
     try {
       sessionStorage.setItem('pwa-reloaded-at', String(Date.now()))
+      if (newVersion) {
+        localStorage.setItem('pwa-version', newVersion)
+        sessionStorage.setItem('gestio-pwa-dismissed-version', newVersion)
+      }
       if ('caches' in window) {
         const keys = await caches.keys()
         await Promise.all(keys.map((k) => caches.delete(k)))
       }
       if ('serviceWorker' in navigator) {
-        const regs = await navigator.serviceWorker.getRegistrations()
-        await Promise.all(regs.map((r) => r.unregister()))
+        const reg = await navigator.serviceWorker.getRegistration()
+        if (reg?.waiting) {
+          reg.waiting.postMessage({ type: 'SKIP_WAITING' })
+        }
       }
     } catch (_) {}
+
+    // Rechargement propre de la page courante (conserve l'URL exacte, aucune redirection vers /)
     window.location.reload()
   }
 
@@ -83,7 +86,7 @@ export const PwaUpdateToast: React.FC = () => {
         </div>
         <div className="min-w-0">
           <p className="text-xs font-bold text-slate-100">Mise à jour disponible</p>
-          <p className="text-[11px] text-slate-400 truncate">Actualisation auto dans {countdown}s</p>
+          <p className="text-[11px] text-slate-400 truncate">Une nouvelle version de GESTIO 229 est prête.</p>
         </div>
       </div>
 
@@ -94,12 +97,13 @@ export const PwaUpdateToast: React.FC = () => {
           disabled={isUpdating}
           className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold shadow-sm transition disabled:opacity-50 cursor-pointer"
         >
-          {isUpdating ? '...' : 'Actualiser'}
+          {isUpdating ? 'Mise à jour...' : 'Actualiser'}
         </button>
         <button
           type="button"
-          onClick={() => setShow(false)}
+          onClick={handleDismiss}
           className="p-1 rounded-lg text-slate-400 hover:text-slate-200 transition cursor-pointer"
+          aria-label="Fermer la notification"
         >
           <X className="w-4 h-4" />
         </button>
