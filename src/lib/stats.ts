@@ -59,6 +59,9 @@ export interface ActivityStats {
   margeBrute: number;
   depenses: number;
   margeNette: number;
+  salairesNets?: number;
+  chargesPersonnel?: number;
+  depensesHorsRH?: number;
   salesCount: number;
   expensesCount: number;
   sales: any[];
@@ -361,11 +364,55 @@ function computeStatsForSector(
     return expDate >= startStr && expDate <= endStr;
   });
 
-  const totalExpenses = periodExpenses.reduce((sum, e) => sum + safeNum(e.amount), 0);
-  const roundedExpenses = Math.round(totalExpenses * 100) / 100;
+  // Ventilation stricte des dépenses :
+  // - Exclure les remboursements de dettes/avances/prêts (ce sont des règlements de créances, pas des charges)
+  // - Isoler les salaires nets du secteur
+  // - Isoler les charges patronales du secteur (CNSS Patronale + VPS)
+  // - Isoler les autres dépenses d'exploitation du secteur
+  const isRepayment = (e: any) => {
+    const cat = String(e.category || '').toLowerCase();
+    const desc = String(e.description || e.notes || e.beneficiary || '').toLowerCase();
+    return cat.includes('remboursement') || desc.includes('remboursement pret') || desc.includes('remboursement avance') || desc.includes('reglement pret');
+  };
 
-  // Marge nette = Marge brute - Dépenses
-  const margeNette = Math.round((margeBrute - roundedExpenses) * 100) / 100;
+  const isSalary = (e: any) => {
+    const cat = String(e.category || '').toLowerCase();
+    const desc = String(e.description || e.notes || '').toLowerCase();
+    return (cat.includes('salaire') || cat.includes('rémunération')) && !cat.includes('charge') && !desc.includes('patronale');
+  };
+
+  const isEmployerCharge = (e: any) => {
+    const cat = String(e.category || '').toLowerCase();
+    const desc = String(e.description || e.notes || '').toLowerCase();
+    return cat.includes('charges du personnel') || cat.includes('charges sociales') || cat.includes('cotisation') || desc.includes('cnss_patronale') || desc.includes('vps_benin');
+  };
+
+  let salairesNets = 0;
+  let chargesPersonnel = 0;
+  let depensesHorsRH = 0;
+
+  periodExpenses.forEach((e: any) => {
+    if (isRepayment(e)) return; // Ne pas compter deux fois les règlements de créances
+    const amt = safeNum(e.amount);
+    if (isSalary(e)) {
+      salairesNets += amt;
+    } else if (isEmployerCharge(e)) {
+      chargesPersonnel += amt;
+    } else {
+      depensesHorsRH += amt;
+    }
+  });
+
+  salairesNets = Math.round(salairesNets * 100) / 100;
+  chargesPersonnel = Math.round(chargesPersonnel * 100) / 100;
+  depensesHorsRH = Math.round(depensesHorsRH * 100) / 100;
+
+  // Total des dépenses d'exploitation consolidées sans double comptabilisation
+  const roundedExpenses = Math.round((depensesHorsRH + salairesNets + chargesPersonnel) * 100) / 100;
+
+  // FORMULE OFFICIELLE OBLIGATOIRE :
+  // MARGE NETTE DU SECTEUR = MARGE BRUTE DU SECTEUR – DÉPENSES DU SECTEUR – TOTAL DES SALAIRES NETS – TOTAL DES CHARGES DU PERSONNEL
+  const margeNette = Math.round((margeBrute - depensesHorsRH - salairesNets - chargesPersonnel) * 100) / 100;
 
   // 5. Calcul dédié Station-Service si applicable
   let stationFinancials: StationSectorFinancials | undefined;
@@ -443,6 +490,9 @@ function computeStatsForSector(
     margeBrute,
     depenses: roundedExpenses,
     margeNette,
+    salairesNets,
+    chargesPersonnel,
+    depensesHorsRH,
     salesCount: periodSales.length,
     expensesCount: periodExpenses.length,
     sales: periodSales,

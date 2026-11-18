@@ -15,6 +15,9 @@ function findBestPrintTarget(): HTMLElement | null {
   const explicitSelectors = [
     '#printable-area',
     '#invoice-a4-standard',
+    '#payslip-print',
+    '#bulletin-paie-print',
+    '[data-print-target="payslip"]',
     '#print-document-root',
     '[data-printable="true"]',
     '.printable-document',
@@ -118,7 +121,10 @@ export function preparePrintRoot(): HTMLElement | null {
   })
 
   // Supprimer les boutons d'action non imprimables dans le clone
-  clone.querySelectorAll('.no-print, .print\\:hidden').forEach((el) => el.remove())
+  clone.querySelectorAll('.no-print, .print\\:hidden, [data-no-print], button').forEach((el) => {
+    // Si c'est un bouton à l'intérieur du document d'impression, le retirer
+    el.remove()
+  })
 
   printRoot.appendChild(clone)
   document.body.classList.add('gestio-printing-active')

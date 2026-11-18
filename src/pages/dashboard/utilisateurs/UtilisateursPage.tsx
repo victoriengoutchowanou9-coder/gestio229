@@ -13,9 +13,19 @@ import { getRolesForSector, normalizeSectorSlug, getSectorAvailableModules } fro
 import SectorLoader from '../../../lib/SectorLoader'
 import { comptabiliserSalaireAuto } from '../../../services/compta_auto'
 import {
+  staffAdvanceLoanService,
+  StaffAdvance,
+  StaffLoan,
+  StaffRepayment,
+  StaffDebtSummary,
+} from '../../../services/staffAdvanceLoanService'
+import { generateBulletinPaiePDF } from '../../../utils/bulletinPaiePdf'
+import { generateRapportPaieRentabilitePDF } from '../../../utils/rapportPaieRentabilitePdf'
+import {
   UserPlus, Users, Eye, EyeOff, AlertCircle, CheckCircle2, Shield,
   Key, FileText, Printer, DollarSign, Briefcase, Calendar, Download, X,
-  Trash2, BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock, RefreshCw
+  Trash2, BadgePercent, Layers, Plus, Wallet, Smartphone, CreditCard, Clock, Check, Lock, RefreshCw,
+  TrendingUp, TrendingDown, FileSpreadsheet, BarChart2
 } from 'lucide-react'
 
 const fmt = (n: number) => new Intl.NumberFormat('fr-BJ').format(Math.round(n)) + ' FCFA'
@@ -53,6 +63,8 @@ export interface StaffMember {
   bonus: number
   hireDate: string
   advancePayment: number
+  sectorSlug?: string
+  sectorName?: string
 }
 
 export interface PayrollPayment {
@@ -90,6 +102,8 @@ interface PayslipData {
   employeeName: string
   jobTitle: string
   cnssNumber: string
+  sectorName: string
+  hireDate?: string
   baseSalary: number
   transportAllowance: number
   housingAllowance: number
@@ -98,8 +112,11 @@ interface PayslipData {
   cnssSalariale: number // 3.6% au Bénin
   cnssPatronale: number // 16.4% au Bénin
   vpsBénin: number // 4% Versement Patronal sur Salaires
-  advancePayment: number
-  netSalary: number
+  netBeforeDeductions: number // Salaire net avant remboursement des avances et prêts
+  advancePayment: number // Remboursement avance
+  loanDeduction: number // Remboursement prêt
+  otherDeductions: number // Autres retenues
+  netSalary: number // NET À PAYER
   totalEmployerCost: number
 }
 
@@ -141,8 +158,8 @@ const ALL_MODULES = [
 const UtilisateursPage: React.FC = () => {
   const { company, user } = useAuthStore()
 
-  // Tabs: 'utilisateurs' | 'paie' | 'audit'
-  const [activeTab, setActiveTab] = useState<'utilisateurs' | 'paie' | 'audit'>('utilisateurs')
+  // Tabs: 'utilisateurs' | 'paie' | 'rapports' | 'audit'
+  const [activeTab, setActiveTab] = useState<'utilisateurs' | 'paie' | 'rapports' | 'audit'>('utilisateurs')
 
   const [users, setUsers] = useState<InternalUser[]>([])
   const [loading, setLoading] = useState(true)
@@ -166,7 +183,7 @@ const UtilisateursPage: React.FC = () => {
   const [selectedForPayslip, setSelectedForPayslip] = useState<any | null>(null)
   const [generatedSlip, setGeneratedSlip] = useState<PayslipData | null>(null)
 
-  // Modal Nouveau Personnel
+  // Modal Nouveau Personnel avec secteur d'activité
   const [showNewStaffModal, setShowNewStaffModal] = useState(false)
   const [newStaffForm, setNewStaffForm] = useState({
     fullName: '',
@@ -178,13 +195,53 @@ const UtilisateursPage: React.FC = () => {
     housingAllowance: '0',
     bonus: '0',
     hireDate: new Date().toISOString().split('T')[0],
+    sectorSlug: '',
   })
   const [savingStaff, setSavingStaff] = useState(false)
 
-  // Modal Payer Salaire
+  // Modal Gestion des Avances & Prêts Individuels
+  const [selectedStaffForDebt, setSelectedStaffForDebt] = useState<any | null>(null)
+  const [debtSummary, setDebtSummary] = useState<StaffDebtSummary | null>(null)
+  const [debtLoading, setDebtLoading] = useState(false)
+  const [debtActiveSubTab, setDebtActiveSubTab] = useState<'avances' | 'prets' | 'historique'>('avances')
+  const [savingDebt, setSavingDebt] = useState(false)
+
+  // Formulaire Avance
+  const [advanceForm, setAdvanceForm] = useState({
+    montant: '',
+    date_avance: new Date().toISOString().split('T')[0],
+    motif: 'Avance sur salaire ponctuelle',
+    mode_decaissement: 'especes' as 'especes' | 'virement' | 'momo' | 'cheque',
+  })
+
+  // Formulaire Prêt
+  const [loanForm, setLoanForm] = useState({
+    montant_total: '',
+    motif: 'Prêt personnel accordé par l\'entreprise',
+    duree_mois: '3',
+    mensualite: '',
+    date_octroi: new Date().toISOString().split('T')[0],
+    date_debut_remboursement: new Date().toISOString().split('T')[0],
+    mode_decaissement: 'especes' as 'especes' | 'virement' | 'momo' | 'cheque',
+  })
+
+  // Formulaire Remboursement direct
+  const [repayForm, setRepayForm] = useState({
+    dette_id: '',
+    type_dette: 'avance' as 'avance' | 'pret',
+    montant: '',
+    mode_paiement: 'especes' as 'especes' | 'virement' | 'momo' | 'cheque',
+    notes: '',
+  })
+
+  // Modal Payer Salaire avec Retenues
   const [payingEmployee, setPayingEmployee] = useState<any | null>(null)
   const [payMethod, setPayMethod] = useState<'especes' | 'virement' | 'momo' | 'cheque'>('especes')
   const [isPaying, setIsPaying] = useState(false)
+  const [payingDebtSummary, setPayingDebtSummary] = useState<StaffDebtSummary | null>(null)
+  const [payAdvanceDeduction, setPayAdvanceDeduction] = useState<string>('0')
+  const [payLoanDeduction, setPayLoanDeduction] = useState<string>('0')
+  const [payOtherDeductions, setPayOtherDeductions] = useState<string>('0')
 
   // Modal Modification Mot de Passe Utilisateur Interne
   const [resetPasswordUser, setResetPasswordUser] = useState<any | null>(null)
@@ -898,6 +955,8 @@ const UtilisateursPage: React.FC = () => {
       advancePayment: number
       hireDate?: string
       isInternalUser: boolean
+      sectorSlug: string
+      sectorName: string
     }> = []
 
     // 1. Utilisateurs internes
@@ -914,6 +973,11 @@ const UtilisateursPage: React.FC = () => {
         bonus: 0,
         advancePayment: 0,
       }
+      const perm = (typeof u.permissions === 'object' && u.permissions) ? u.permissions : {}
+      const uSec = (u.sector_slug || perm.sector_slug || perm.sector_id || u.sector_id || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
+      const secMeta = sectors.find((s) => s.sector_slug === uSec || s.id === uSec)
+      const secName = secMeta?.sector_name || uSec.toUpperCase()
+
       list.push({
         id: u.id,
         fullName: u.full_name,
@@ -925,12 +989,18 @@ const UtilisateursPage: React.FC = () => {
         housingAllowance: p.housingAllowance,
         bonus: p.bonus,
         advancePayment: p.advancePayment,
-        isInternalUser: true
+        isInternalUser: true,
+        sectorSlug: uSec,
+        sectorName: secName,
       })
     })
 
     // 2. Personnel externe enregistré
     additionalStaff.forEach((s) => {
+      const sSec = (s.sectorSlug || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
+      const secMeta = sectors.find((sec) => sec.sector_slug === sSec || sec.id === sSec)
+      const secName = secMeta?.sector_name || s.sectorName || sSec.toUpperCase()
+
       list.push({
         id: s.id,
         fullName: s.fullName,
@@ -943,12 +1013,14 @@ const UtilisateursPage: React.FC = () => {
         bonus: s.bonus,
         advancePayment: s.advancePayment,
         hireDate: s.hireDate,
-        isInternalUser: false
+        isInternalUser: false,
+        sectorSlug: sSec,
+        sectorName: secName,
       })
     })
 
     return list
-  }, [users, payrollProfiles, additionalStaff])
+  }, [users, payrollProfiles, additionalStaff, sectors])
 
   // Statistiques de paie pour la période sélectionnée
   const periodStats = useMemo(() => {
@@ -986,7 +1058,7 @@ const UtilisateursPage: React.FC = () => {
     }
   }, [allStaffList, payrollPayments, payrollPeriod])
 
-  // Enregistrer un nouveau personnel
+  // Enregistrer un nouveau personnel avec rattachement au secteur
   const handleSaveNewStaff = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!newStaffForm.fullName.trim() || !newStaffForm.jobTitle.trim() || !newStaffForm.baseSalary) {
@@ -996,6 +1068,10 @@ const UtilisateursPage: React.FC = () => {
 
     setSavingStaff(true)
     try {
+      const assignedSectorSlug = (newStaffForm.sectorSlug || currentSectorSlug || sectors[0]?.sector_slug || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
+      const secMeta = sectors.find((s) => s.sector_slug === assignedSectorSlug || s.id === assignedSectorSlug)
+      const assignedSectorName = secMeta?.sector_name || assignedSectorSlug.toUpperCase()
+
       let createdStaffId = `staff-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
       if (company?.id) {
         try {
@@ -1013,39 +1089,62 @@ const UtilisateursPage: React.FC = () => {
               bonus: Number(newStaffForm.bonus) || 0,
               hire_date: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
               is_active: true,
-              notes: JSON.stringify({ sector_slug: currentSectorSlug, activity_id: currentActivityId })
+              sector_slug: assignedSectorSlug,
             })
             .select()
             .maybeSingle()
 
           if (dbStaff?.id) createdStaffId = dbStaff.id
         } catch (err) {
-          // Fallback user_profiles
           try {
-            const { data: uStaff } = await supabase
-              .from('user_profiles')
+            const { data: dbStaff2 } = await supabase
+              .from('staff_members')
               .insert({
                 company_id: company.id,
                 full_name: newStaffForm.fullName.trim(),
-                username: `emp_${Date.now()}`,
+                job_title: newStaffForm.jobTitle.trim(),
                 phone: newStaffForm.phone.trim() || null,
-                role: 'employe',
+                cnss_number: newStaffForm.cnssNumber.trim() || null,
+                base_salary: Number(newStaffForm.baseSalary) || 0,
+                transport_allowance: Number(newStaffForm.transportAllowance) || 0,
+                housing_allowance: Number(newStaffForm.housingAllowance) || 0,
+                bonus: Number(newStaffForm.bonus) || 0,
+                hire_date: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
                 is_active: true,
-                permissions: {
-                  job_title: newStaffForm.jobTitle.trim(),
-                  base_salary: Number(newStaffForm.baseSalary) || 0,
-                  transport_allowance: Number(newStaffForm.transportAllowance) || 0,
-                  housing_allowance: Number(newStaffForm.housingAllowance) || 0,
-                  bonus: Number(newStaffForm.bonus) || 0,
-                  cnss_number: newStaffForm.cnssNumber.trim() || null,
-                  sector_slug: currentSectorSlug,
-                  activity_id: currentActivityId
-                }
               })
               .select()
               .maybeSingle()
-            if (uStaff?.id) createdStaffId = uStaff.id
-          } catch (e2) {}
+            if (dbStaff2?.id) createdStaffId = dbStaff2.id
+          } catch (_) {
+            // Fallback user_profiles
+            try {
+              const { data: uStaff } = await supabase
+                .from('user_profiles')
+                .insert({
+                  company_id: company.id,
+                  full_name: newStaffForm.fullName.trim(),
+                  username: `emp_${Date.now()}`,
+                  phone: newStaffForm.phone.trim() || null,
+                  role: 'employe',
+                  is_active: true,
+                  sector_slug: assignedSectorSlug,
+                  sector_id: assignedSectorSlug,
+                  permissions: {
+                    job_title: newStaffForm.jobTitle.trim(),
+                    base_salary: Number(newStaffForm.baseSalary) || 0,
+                    transport_allowance: Number(newStaffForm.transportAllowance) || 0,
+                    housing_allowance: Number(newStaffForm.housingAllowance) || 0,
+                    bonus: Number(newStaffForm.bonus) || 0,
+                    cnss_number: newStaffForm.cnssNumber.trim() || null,
+                    sector_slug: assignedSectorSlug,
+                    sector_name: assignedSectorName,
+                  }
+                })
+                .select()
+                .maybeSingle()
+              if (uStaff?.id) createdStaffId = uStaff.id
+            } catch (e3) {}
+          }
         }
       }
 
@@ -1061,12 +1160,14 @@ const UtilisateursPage: React.FC = () => {
         bonus: Number(newStaffForm.bonus) || 0,
         hireDate: newStaffForm.hireDate || new Date().toISOString().split('T')[0],
         advancePayment: 0,
+        sectorSlug: assignedSectorSlug,
+        sectorName: assignedSectorName,
       }
 
       const updated = [newStaff, ...additionalStaff]
       setAdditionalStaff(updated)
 
-      setSuccess(`Nouveau personnel "${newStaff.fullName}" enregistré avec succès !`)
+      setSuccess(`Nouveau personnel "${newStaff.fullName}" rattaché au secteur "${assignedSectorName}" avec succès !`)
       setShowNewStaffModal(false)
       setNewStaffForm({
         fullName: '',
@@ -1078,9 +1179,156 @@ const UtilisateursPage: React.FC = () => {
         housingAllowance: '0',
         bonus: '0',
         hireDate: new Date().toISOString().split('T')[0],
+        sectorSlug: '',
       })
     } finally {
       setSavingStaff(false)
+    }
+  }
+
+  // ─── GESTION DES AVANCES & PRÊTS ACCORDÉS AU PERSONNEL ──────────────────────
+  const handleOpenAdvancesLoans = async (emp: any) => {
+    setSelectedStaffForDebt(emp)
+    setDebtActiveSubTab('avances')
+    setDebtLoading(true)
+    setError('')
+    setSuccess('')
+    try {
+      if (company?.id) {
+        const sum = await staffAdvanceLoanService.getStaffDebtSummary(company.id, emp.id)
+        setDebtSummary(sum)
+      }
+    } catch (err: any) {
+      console.warn('Erreur chargement avances/prêts:', err)
+    } finally {
+      setDebtLoading(false)
+    }
+  }
+
+  const handleCreateAdvance = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedStaffForDebt || !company?.id) return
+    const amt = Number(advanceForm.montant)
+    if (!amt || amt <= 0) {
+      setError('Veuillez saisir un montant d\'avance valide.')
+      return
+    }
+    setSavingDebt(true)
+    setError('')
+    try {
+      await staffAdvanceLoanService.createStaffAdvance(company.id, {
+        staff_id: selectedStaffForDebt.id,
+        employee_name: selectedStaffForDebt.fullName,
+        sector_slug: selectedStaffForDebt.sectorSlug || 'boutique',
+        date_avance: advanceForm.date_avance,
+        montant: amt,
+        motif: advanceForm.motif,
+        mode_decaissement: advanceForm.mode_decaissement,
+      })
+      const sum = await staffAdvanceLoanService.getStaffDebtSummary(company.id, selectedStaffForDebt.id)
+      setDebtSummary(sum)
+      setSuccess(`Avance de ${fmt(amt)} accordée avec succès à ${selectedStaffForDebt.fullName} !`)
+      setAdvanceForm((p) => ({ ...p, montant: '' }))
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors de la création de l\'avance.')
+    } finally {
+      setSavingDebt(false)
+    }
+  }
+
+  const handleCreateLoan = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedStaffForDebt || !company?.id) return
+    const amt = Number(loanForm.montant_total)
+    const duree = Number(loanForm.duree_mois) || 1
+    if (!amt || amt <= 0) {
+      setError('Veuillez saisir un montant de prêt valide.')
+      return
+    }
+    setSavingDebt(true)
+    setError('')
+    try {
+      await staffAdvanceLoanService.createStaffLoan(company.id, {
+        staff_id: selectedStaffForDebt.id,
+        employee_name: selectedStaffForDebt.fullName,
+        sector_slug: selectedStaffForDebt.sectorSlug || 'boutique',
+        date_octroi: loanForm.date_octroi,
+        montant_total: amt,
+        motif: loanForm.motif,
+        duree_mois: duree,
+        mensualite: loanForm.mensualite ? Number(loanForm.mensualite) : undefined,
+        date_debut_remboursement: loanForm.date_debut_remboursement,
+        mode_decaissement: loanForm.mode_decaissement,
+      })
+      const sum = await staffAdvanceLoanService.getStaffDebtSummary(company.id, selectedStaffForDebt.id)
+      setDebtSummary(sum)
+      setSuccess(`Prêt de ${fmt(amt)} octroyé avec succès à ${selectedStaffForDebt.fullName} !`)
+      setLoanForm((p) => ({ ...p, montant_total: '', mensualite: '' }))
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors de l\'octroi du prêt.')
+    } finally {
+      setSavingDebt(false)
+    }
+  }
+
+  const handleRecordRepayment = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!selectedStaffForDebt || !company?.id) return
+    const amt = Number(repayForm.montant)
+    if (!amt || amt <= 0) {
+      setError('Veuillez saisir un montant de remboursement valide.')
+      return
+    }
+    if (!repayForm.dette_id) {
+      setError('Veuillez sélectionner l\'avance ou le prêt à rembourser.')
+      return
+    }
+    setSavingDebt(true)
+    setError('')
+    try {
+      await staffAdvanceLoanService.recordStaffRepayment(company.id, {
+        staff_id: selectedStaffForDebt.id,
+        employee_name: selectedStaffForDebt.fullName,
+        sector_slug: selectedStaffForDebt.sectorSlug || 'boutique',
+        type_dette: repayForm.type_dette,
+        dette_id: repayForm.dette_id,
+        montant: amt,
+        mode_paiement: repayForm.mode_paiement,
+        notes: repayForm.notes,
+      })
+      const sum = await staffAdvanceLoanService.getStaffDebtSummary(company.id, selectedStaffForDebt.id)
+      setDebtSummary(sum)
+      setSuccess(`Remboursement de ${fmt(amt)} enregistré avec succès !`)
+      setRepayForm({ dette_id: '', type_dette: 'avance', montant: '', mode_paiement: 'especes', notes: '' })
+    } catch (err: any) {
+      setError(err.message || 'Erreur lors de l\'enregistrement du remboursement.')
+    } finally {
+      setSavingDebt(false)
+    }
+  }
+
+  // Ouvrir le modal Payer Salaire avec chargement automatique des dettes
+  const handleOpenSalaryPayment = async (emp: any) => {
+    setPayingEmployee(emp)
+    setPayMethod('especes')
+    setPayOtherDeductions('0')
+    setPayAdvanceDeduction('0')
+    setPayLoanDeduction('0')
+    setPayingDebtSummary(null)
+
+    if (company?.id) {
+      try {
+        const sum = await staffAdvanceLoanService.getStaffDebtSummary(company.id, emp.id)
+        setPayingDebtSummary(sum)
+        if (sum.totalAdvanceBalance > 0) {
+          setPayAdvanceDeduction(String(sum.totalAdvanceBalance))
+        }
+        if (sum.monthlyLoanPayment > 0) {
+          setPayLoanDeduction(String(sum.monthlyLoanPayment))
+        } else if (sum.totalLoanBalance > 0) {
+          setPayLoanDeduction(String(sum.totalLoanBalance))
+        }
+      } catch (_) {}
     }
   }
 
@@ -1103,8 +1351,15 @@ const UtilisateursPage: React.FC = () => {
       const cnssSal = Math.round(gross * 0.036)
       const cnssPat = Math.round(gross * 0.164)
       const vps = Math.round(gross * 0.04)
-      const adv = Number(payingEmployee.advancePayment) || 0
-      const net = Math.max(0, gross - cnssSal - adv)
+      
+      const netBefore = Math.max(0, gross - cnssSal)
+      const advDed = Math.max(0, Number(payAdvanceDeduction) || 0)
+      const loanDed = Math.max(0, Number(payLoanDeduction) || 0)
+      const othDed = Math.max(0, Number(payOtherDeductions) || 0)
+
+      // FORMULE OBLIGATOIRE :
+      // NET À PAYER = SALAIRE NET – RETENUE POUR AVANCE – RETENUE POUR PRÊT – AUTRES RETENUES
+      const net = Math.max(0, netBefore - advDed - loanDed - othDed)
 
       // 1. Enregistrer dans la table `expenses` Supabase pour cette période
       const expNum = `SAL-${payrollPeriod.replace('-', '')}-${String(Math.floor(1000 + Math.random() * 9000))}`
@@ -1121,6 +1376,7 @@ const UtilisateursPage: React.FC = () => {
           expense_date: expenseDate,
           employee_id: payingEmployee.id,
           employee_name: payingEmployee.fullName,
+          sector_slug: payingEmployee.sectorSlug || 'boutique',
           job_title: payingEmployee.jobTitle,
           base_salary: base,
           allowances: transp + house + bon,
@@ -1128,6 +1384,10 @@ const UtilisateursPage: React.FC = () => {
           cnss_salariale: cnssSal,
           cnss_patronale: cnssPat,
           vps_benin: vps,
+          net_before_deductions: netBefore,
+          advance_deduction: advDed,
+          loan_deduction: loanDed,
+          other_deductions: othDed,
           net_salary: net,
           payment_method: payMethod
         }),
@@ -1138,11 +1398,46 @@ const UtilisateursPage: React.FC = () => {
         console.warn('Erreur insertion expenses :', expErr)
       }
 
+      // Enregistrer automatiquement les remboursements de créances sans impacter deux fois les charges
+      if (advDed > 0 && payingDebtSummary?.activeAdvances?.length) {
+        const activeAdv = payingDebtSummary.activeAdvances[0]
+        try {
+          await staffAdvanceLoanService.recordStaffRepayment(company.id, {
+            staff_id: payingEmployee.id,
+            employee_name: payingEmployee.fullName,
+            sector_slug: payingEmployee.sectorSlug || 'boutique',
+            type_dette: 'avance',
+            dette_id: activeAdv.id,
+            montant: advDed,
+            mode_paiement: 'retenue_sur_salaire',
+            payroll_period: payrollPeriod,
+            notes: `Retenue automatique sur salaire ${payrollPeriod}`,
+          })
+        } catch (_) {}
+      }
+
+      if (loanDed > 0 && payingDebtSummary?.activeLoans?.length) {
+        const activeLoan = payingDebtSummary.activeLoans[0]
+        try {
+          await staffAdvanceLoanService.recordStaffRepayment(company.id, {
+            staff_id: payingEmployee.id,
+            employee_name: payingEmployee.fullName,
+            sector_slug: payingEmployee.sectorSlug || 'boutique',
+            type_dette: 'pret',
+            dette_id: activeLoan.id,
+            montant: loanDed,
+            mode_paiement: 'retenue_sur_salaire',
+            payroll_period: payrollPeriod,
+            notes: `Retenue automatique sur salaire ${payrollPeriod} (mensualité prêt)`,
+          })
+        } catch (_) {}
+      }
+
       // Comptabilisation automatique SYSCOHADA Paie (Journal JS + Règlement)
       try {
         await comptabiliserSalaireAuto({
           companyId: company.id,
-          sectorSlug: payingEmployee.sector || 'direction',
+          sectorSlug: payingEmployee.sectorSlug || payingEmployee.sector || 'boutique',
           salaryId: expData?.id || expNum,
           payrollPeriod: payrollPeriod,
           employeeName: payingEmployee.fullName,
@@ -1151,7 +1446,7 @@ const UtilisateursPage: React.FC = () => {
           netSalary: net,
           cnssAmount: cnssSal + cnssPat,
           taxSalaryAmount: vps,
-          advanceDeducted: adv,
+          advanceDeducted: advDed + loanDed + othDed,
           isPaid: true,
           paymentMethod: payMethod,
           createdById: user?.id || null,
@@ -1179,6 +1474,7 @@ const UtilisateursPage: React.FC = () => {
             company_id: company.id,
             staff_id: payingEmployee.id.startsWith('staff-') ? null : payingEmployee.id,
             employee_name: payingEmployee.fullName,
+            sector_slug: payingEmployee.sectorSlug || 'boutique',
             period: payrollPeriod,
             base_salary: base,
             gross_salary: gross,
@@ -1214,7 +1510,7 @@ const UtilisateursPage: React.FC = () => {
       const updated = [newPayment, ...payrollPayments]
       setPayrollPayments(updated)
 
-      setSuccess(`Salaire de ${payingEmployee.fullName} pour ${payrollPeriod} (${fmt(net)}) payé avec succès !`)
+      setSuccess(`Salaire de ${payingEmployee.fullName} pour ${payrollPeriod} (Net à payer: ${fmt(net)}) validé avec succès !`)
       setPayingEmployee(null)
     } catch (err: any) {
       setError(err.message || 'Erreur lors du versement du salaire.')
@@ -1224,15 +1520,37 @@ const UtilisateursPage: React.FC = () => {
   }
 
   // Calcul du bulletin de paie conforme Bénin
-  const calculatePayslip = (profile: any) => {
-    const gross = (profile.baseSalary || 0) + (profile.transportAllowance || 0) + (profile.housingAllowance || 0) + (profile.bonus || 0)
-    // Déductions Bénin : CNSS Salariale = 3.6% du brut
+  const calculatePayslip = async (profile: any) => {
+    let advDed = Number(profile.advancePayment) || 0
+    let loanDed = 0
+    let othDed = 0
+
+    if (company?.id) {
+      try {
+        const debt = await staffAdvanceLoanService.getStaffDebtSummary(company.id, profile.id)
+        if (debt.activeAdvances.length > 0 && advDed === 0) {
+          advDed = debt.totalAdvanceBalance
+        }
+        if (debt.activeLoans.length > 0) {
+          loanDed = debt.monthlyLoanPayment > 0 ? debt.monthlyLoanPayment : debt.totalLoanBalance
+        }
+      } catch (_) {}
+    }
+
+    const base = Number(profile.baseSalary) || 0
+    const transp = Number(profile.transportAllowance) || 0
+    const house = Number(profile.housingAllowance) || 0
+    const bon = Number(profile.bonus) || 0
+    const gross = base + transp + house + bon
     const cnssSal = Math.round(gross * 0.036)
-    // Charges patronales Bénin : CNSS Patronale = 16.4%, VPS = 4%
     const cnssPat = Math.round(gross * 0.164)
     const vps = Math.round(gross * 0.04)
-    const net = Math.max(0, gross - cnssSal - (profile.advancePayment || 0))
+    const netBefore = Math.max(0, gross - cnssSal)
+    const net = Math.max(0, netBefore - advDed - loanDed - othDed)
     const totalCost = gross + cnssPat + vps
+
+    const secMeta = sectors.find((s) => s.sector_slug === profile.sectorSlug || s.id === profile.sectorSlug)
+    const secName = secMeta?.sector_name || profile.sectorName || (profile.sectorSlug ? profile.sectorSlug.toUpperCase() : 'Commerce & Services')
 
     const slip: PayslipData = {
       slipNumber: `BP-${selectedYear}-${Math.floor(1000 + Math.random() * 9000)}`,
@@ -1240,16 +1558,21 @@ const UtilisateursPage: React.FC = () => {
       periodYear: selectedYear,
       employeeName: profile.fullName,
       jobTitle: profile.jobTitle,
-      cnssNumber: profile.cnssNumber,
-      baseSalary: profile.baseSalary || 0,
-      transportAllowance: profile.transportAllowance || 0,
-      housingAllowance: profile.housingAllowance || 0,
-      bonus: profile.bonus || 0,
+      cnssNumber: profile.cnssNumber || 'CNSS-BENIN',
+      sectorName: secName,
+      hireDate: profile.hireDate,
+      baseSalary: base,
+      transportAllowance: transp,
+      housingAllowance: house,
+      bonus: bon,
       grossSalary: gross,
       cnssSalariale: cnssSal,
       cnssPatronale: cnssPat,
       vpsBénin: vps,
-      advancePayment: profile.advancePayment || 0,
+      netBeforeDeductions: netBefore,
+      advancePayment: advDed,
+      loanDeduction: loanDed,
+      otherDeductions: othDed,
       netSalary: net,
       totalEmployerCost: totalCost
     }
@@ -1268,8 +1591,8 @@ const UtilisateursPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          {(['utilisateurs', 'paie', 'audit'] as const).map((tab) => (
+        <div className="flex items-center gap-2 flex-wrap">
+          {(['utilisateurs', 'paie', 'rapports', 'audit'] as const).map((tab) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
@@ -1279,7 +1602,13 @@ const UtilisateursPage: React.FC = () => {
                   : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
               }`}
             >
-              {tab === 'utilisateurs' ? 'Comptes & Droits' : tab === 'paie' ? 'Personnel & Paie' : 'Journal de Sécurité'}
+              {tab === 'utilisateurs'
+                ? 'Comptes & Droits'
+                : tab === 'paie'
+                ? 'Personnel & Paie'
+                : tab === 'rapports'
+                ? 'Rapports & Rentabilité RH'
+                : 'Journal de Sécurité'}
             </button>
           ))}
         </div>
@@ -1797,13 +2126,17 @@ const UtilisateursPage: React.FC = () => {
                               </div>
                               <div>
                                 <p className="font-bold text-slate-900 text-sm leading-tight">{emp.fullName}</p>
-                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
+                                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5 flex-wrap">
                                   <span>{emp.phone || 'Pas de tél'}</span>
                                   <span>•</span>
                                   <span className={`px-1.5 py-0.2 rounded font-semibold ${
                                     emp.isInternalUser ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'
                                   }`}>
                                     {emp.isInternalUser ? 'Utilisateur Interne' : 'Personnel'}
+                                  </span>
+                                  <span>•</span>
+                                  <span className="px-1.5 py-0.5 rounded font-bold text-[10px] bg-emerald-50 text-emerald-800 border border-emerald-200">
+                                    {emp.sectorName}
                                   </span>
                                 </div>
                               </div>
@@ -1832,7 +2165,7 @@ const UtilisateursPage: React.FC = () => {
                               {!paidRecord && (
                                 <button
                                   type="button"
-                                  onClick={() => setPayingEmployee(emp)}
+                                  onClick={() => handleOpenSalaryPayment(emp)}
                                   className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold text-xs flex items-center gap-1 shadow-sm transition active:scale-95"
                                   title="Enregistrer le décaissement du salaire"
                                 >
@@ -1842,9 +2175,18 @@ const UtilisateursPage: React.FC = () => {
                               )}
                               <button
                                 type="button"
+                                onClick={() => handleOpenAdvancesLoans(emp)}
+                                className="px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg font-semibold text-xs flex items-center gap-1 transition shadow-xs"
+                                title="Gérer les avances et prêts accordés à cet employé"
+                              >
+                                <CreditCard className="w-3.5 h-3.5" />
+                                <span>Avances / Prêts</span>
+                              </button>
+                              <button
+                                type="button"
                                 onClick={() => calculatePayslip(emp)}
                                 className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold text-xs flex items-center gap-1 transition"
-                                title="Générer et imprimer le bulletin officiel"
+                                title="Gérer et imprimer le bulletin officiel"
                               >
                                 <FileText className="w-3.5 h-3.5" />
                                 <span>Bulletin</span>
@@ -1861,6 +2203,166 @@ const UtilisateursPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* ONGLET "RAPPORTS & RENTABILITE RH" */}
+      {activeTab === 'rapports' && (() => {
+        // Synthèse par secteur depuis allStaffList et payrollPayments pour le mois sélectionné
+        const sectorMap: Record<string, {
+          sectorName: string; headcount: number;
+          salarialBrut: number; cnssPatronale: number; salarialNet: number;
+          advances: number; loans: number; repayments: number;
+        }> = {}
+
+        allStaffList.forEach((emp) => {
+          const slug = emp.sectorSlug || 'general'
+          if (!sectorMap[slug]) sectorMap[slug] = {
+            sectorName: emp.sectorName || slug, headcount: 0,
+            salarialBrut: 0, cnssPatronale: 0, salarialNet: 0,
+            advances: 0, loans: 0, repayments: 0,
+          }
+          const e = sectorMap[slug]
+          e.headcount++
+          const gross = emp.baseSalary + emp.transportAllowance + emp.housingAllowance + emp.bonus
+          const cnssSal = Math.round(gross * 0.036)
+          const cnssPatr = Math.round(gross * 0.164)
+          const vps = Math.round(gross * 0.04)
+          const paidRec = payrollPayments.find((p) => p.employeeId === emp.id && p.period === payrollPeriod)
+          e.salarialBrut += gross
+          e.cnssPatronale += cnssPatr + vps
+          e.salarialNet += paidRec ? (paidRec.netSalary || 0) : Math.max(0, gross - cnssSal)
+        })
+
+        const sectorRows = Object.values(sectorMap)
+        const totalBrut = sectorRows.reduce((s, r) => s + r.salarialBrut, 0)
+        const totalNet = sectorRows.reduce((s, r) => s + r.salarialNet, 0)
+        const totalCharges = sectorRows.reduce((s, r) => s + r.cnssPatronale, 0)
+        const totalStaff = sectorRows.reduce((s, r) => s + r.headcount, 0)
+
+        return (
+          <div className="space-y-6">
+            {/* En-tête */}
+            <div className="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-black text-slate-900 text-base flex items-center gap-2">
+                    <BarChart2 className="w-5 h-5 text-indigo-600" />
+                    Rapports de Paie &amp; Rentabilité RH
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">Synthèse mensuelle par secteur d&apos;activité — Période : <strong>{payrollPeriod}</strong></p>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <select
+                    value={payrollPeriod}
+                    onChange={(e) => setPayrollPeriod(e.target.value)}
+                    className="px-3 py-2 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white"
+                  >
+                    {Array.from({ length: 12 }, (_, i) => {
+                      const d = new Date(); d.setMonth(d.getMonth() - i)
+                      const val = d.toISOString().slice(0, 7)
+                      return <option key={val} value={val}>{val}</option>
+                    })}
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            {/* KPI Cards */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm">
+                <span className="text-[10px] font-bold uppercase text-slate-500 block mb-1">Effectif Total</span>
+                <p className="text-2xl font-black text-slate-900">{totalStaff}</p>
+                <span className="text-[10px] text-slate-400">{sectorRows.length} secteur(s)</span>
+              </div>
+              <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-200 shadow-sm">
+                <span className="text-[10px] font-bold uppercase text-indigo-700 block mb-1">Masse Salariale Brute</span>
+                <p className="text-xl font-black text-indigo-900 font-mono">{fmt(totalBrut)}</p>
+                <span className="text-[10px] text-indigo-500">Total bruts imposables</span>
+              </div>
+              <div className="p-4 bg-rose-50 rounded-xl border border-rose-200 shadow-sm">
+                <span className="text-[10px] font-bold uppercase text-rose-700 block mb-1">Charges Patronales</span>
+                <p className="text-xl font-black text-rose-900 font-mono">{fmt(totalCharges)}</p>
+                <span className="text-[10px] text-rose-500">CNSS 16,4% + VPS 4%</span>
+              </div>
+              <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-200 shadow-sm">
+                <span className="text-[10px] font-bold uppercase text-emerald-700 block mb-1">Total Net à Payer</span>
+                <p className="text-xl font-black text-emerald-900 font-mono">{fmt(totalNet)}</p>
+                <span className="text-[10px] text-emerald-600">Après cotisations salariales</span>
+              </div>
+            </div>
+
+            {/* Tableau par secteur */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+              <div className="px-5 py-3 border-b border-slate-100 flex items-center justify-between">
+                <h4 className="font-black text-slate-800 text-sm">Détail par Secteur d&apos;Activité</h4>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold flex items-center gap-1.5 transition no-print"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    Imprimer
+                  </button>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs text-slate-600">
+                  <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600 uppercase">
+                    <tr>
+                      <th className="px-4 py-3">Secteur</th>
+                      <th className="px-4 py-3 text-center">Effectif</th>
+                      <th className="px-4 py-3 text-right">Brut Total</th>
+                      <th className="px-4 py-3 text-right">Net Total</th>
+                      <th className="px-4 py-3 text-right">Charges Patron.</th>
+                      <th className="px-4 py-3 text-right">Coût RH Total</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {sectorRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="text-center py-8 text-slate-400">
+                          Aucun employé rattaché pour cette période
+                        </td>
+                      </tr>
+                    ) : (
+                      sectorRows.map((row, idx) => {
+                        const coutRH = row.salarialNet + row.cnssPatronale
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50 transition">
+                            <td className="px-4 py-3">
+                              <span className="font-bold text-slate-900">{row.sectorName}</span>
+                              <span className="text-[10px] text-slate-400 block">Secteur d&apos;activité</span>
+                            </td>
+                            <td className="px-4 py-3 text-center font-bold text-slate-800">{row.headcount}</td>
+                            <td className="px-4 py-3 text-right font-mono font-semibold text-slate-700">{fmt(row.salarialBrut)}</td>
+                            <td className="px-4 py-3 text-right font-mono font-bold text-emerald-700">{fmt(row.salarialNet)}</td>
+                            <td className="px-4 py-3 text-right font-mono text-rose-600">{fmt(row.cnssPatronale)}</td>
+                            <td className="px-4 py-3 text-right font-mono font-black text-slate-900">{fmt(coutRH)}</td>
+                          </tr>
+                        )
+                      })
+                    )}
+                  </tbody>
+                  <tfoot className="bg-slate-900 text-white text-xs font-bold">
+                    <tr>
+                      <td className="px-4 py-3">TOTAL ENTREPRISE</td>
+                      <td className="px-4 py-3 text-center">{totalStaff}</td>
+                      <td className="px-4 py-3 text-right font-mono">{fmt(totalBrut)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-emerald-400">{fmt(totalNet)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-rose-400">{fmt(totalCharges)}</td>
+                      <td className="px-4 py-3 text-right font-mono text-amber-400">{fmt(totalNet + totalCharges)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+              <div className="px-5 py-3 border-t border-slate-100 bg-slate-50 text-[11px] text-slate-500">
+                <strong>Formule Marge Nette Secteur :</strong> Marge Brute – Dépenses Hors RH – Salaires Nets – Charges Patronales
+                <br />Les remboursements d&apos;avances/prêts sont comptabilisés en créances (compte 422) et n&apos;affectent pas la marge nette une seconde fois.
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ONGLET 3: SÉCURITÉ & AUDIT */}
       {activeTab === 'audit' && (
@@ -1894,30 +2396,41 @@ const UtilisateursPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL BULLETIN DE PAIE OFFICIEL (Format Imprimable A4) */}
+      {/* MODAL BULLETIN DE PAIE OFFICIEL (Format Imprimable A4 & Conforme Bénin) */}
       {generatedSlip && (
-        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[92vh] overflow-y-auto">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 print:static print:bg-white print:p-0 print:m-0 print:z-auto print:block">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl p-6 max-h-[92vh] overflow-y-auto print:max-h-none print:h-auto print:overflow-visible print:border-none print:shadow-none print:p-0 print:m-0">
+            {/* Barre d'action supérieure masquée à l'impression */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4 print:hidden no-print">
               <div className="flex items-center gap-2 text-emerald-600">
                 <FileText className="w-5 h-5" />
-                <h3 className="font-bold text-slate-800">Bulletin de Paie Officiel (Bénin)</h3>
+                <h3 className="font-bold text-slate-800">Bulletin de Paie Officiel (Bénin &amp; UEMOA)</h3>
               </div>
-              <button onClick={() => setGeneratedSlip(null)} className="text-slate-400 hover:text-slate-600">
+              <button
+                type="button"
+                onClick={() => setGeneratedSlip(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
-            <div id="payslip-print" className="p-6 bg-white border border-slate-300 rounded-xl text-xs space-y-4 text-slate-700">
+            {/* Conteneur imprimable isolé */}
+            <div
+              id="payslip-print"
+              data-printable="true"
+              data-print-target="payslip"
+              className="p-6 bg-white border border-slate-300 rounded-xl text-xs space-y-4 text-slate-700 print:border-none print:p-0 print:m-0 print:text-black print:rounded-none"
+            >
               {/* Entête Entreprise */}
               <div className="flex justify-between items-start border-b border-slate-200 pb-3">
                 <div>
                   <h2 className="font-black text-base text-slate-900 uppercase">{company?.name || 'ENTREPRISE GESTIO 229'}</h2>
-                  <p className="text-slate-500">IFU: {(company as any)?.ifu_number || '0202618902891'} | RCCM: RB/COT/26-B-001</p>
-                  <p className="text-slate-500">Siège: {(company as any)?.address || 'Cotonou, République du Bénin'}</p>
+                  <p className="text-slate-500">IFU : {(company as any)?.ifu_number || '0202618902891'} | RCCM : RB/COT/26-B-001</p>
+                  <p className="text-slate-500">Siège : {(company as any)?.address || 'Cotonou, République du Bénin'}</p>
                 </div>
                 <div className="text-right">
-                  <span className="bg-emerald-50 text-emerald-800 font-bold px-3 py-1 rounded-full text-xs">
+                  <span className="bg-emerald-50 text-emerald-800 font-bold px-3 py-1 rounded-full text-xs border border-emerald-200">
                     BULLETIN DE PAIE
                   </span>
                   <p className="font-mono text-slate-500 mt-1">{generatedSlip.slipNumber}</p>
@@ -1931,11 +2444,15 @@ const UtilisateursPage: React.FC = () => {
                   <span className="text-[10px] uppercase font-bold text-slate-400">Salarié</span>
                   <p className="font-bold text-slate-800 text-sm">{generatedSlip.employeeName}</p>
                   <p className="text-slate-500">Poste : {generatedSlip.jobTitle}</p>
+                  <p className="text-slate-500">Secteur : {generatedSlip.sectorName || 'Commerce Général'}</p>
                 </div>
                 <div>
                   <span className="text-[10px] uppercase font-bold text-slate-400">Régime Social</span>
                   <p className="font-semibold text-slate-700">N° CNSS : {generatedSlip.cnssNumber}</p>
-                  <p className="text-slate-500">Convention : Commerce & Services Bénin</p>
+                  <p className="text-slate-500">Convention : Commerce &amp; Services Bénin</p>
+                  {generatedSlip.hireDate && (
+                    <p className="text-slate-500">Embauche : {generatedSlip.hireDate}</p>
+                  )}
                 </div>
               </div>
 
@@ -1999,11 +2516,33 @@ const UtilisateursPage: React.FC = () => {
                       <td className="p-2 text-right">-</td>
                       <td className="p-2 text-right text-slate-500">{fmt(generatedSlip.vpsBénin)}</td>
                     </tr>
+                    <tr className="bg-slate-50 font-semibold text-slate-800">
+                      <td className="p-2">SALAIRE NET AVANT REMBOURSEMENTS</td>
+                      <td className="p-2 text-right">-</td>
+                      <td className="p-2 text-right text-slate-900 font-bold">{fmt(generatedSlip.netBeforeDeductions)}</td>
+                      <td className="p-2 text-right">-</td>
+                    </tr>
                     {generatedSlip.advancePayment > 0 && (
                       <tr>
-                        <td className="p-2">Acompte / Avance sur salaire versé</td>
+                        <td className="p-2">Remboursement Avance sur salaire</td>
                         <td className="p-2 text-right">-</td>
-                        <td className="p-2 text-right text-red-600">{fmt(generatedSlip.advancePayment)}</td>
+                        <td className="p-2 text-right text-red-600">- {fmt(generatedSlip.advancePayment)}</td>
+                        <td className="p-2 text-right">-</td>
+                      </tr>
+                    )}
+                    {generatedSlip.loanDeduction > 0 && (
+                      <tr>
+                        <td className="p-2">Remboursement Prêt au personnel (Mensualité)</td>
+                        <td className="p-2 text-right">-</td>
+                        <td className="p-2 text-right text-red-600">- {fmt(generatedSlip.loanDeduction)}</td>
+                        <td className="p-2 text-right">-</td>
+                      </tr>
+                    )}
+                    {generatedSlip.otherDeductions > 0 && (
+                      <tr>
+                        <td className="p-2">Autres retenues sur salaire</td>
+                        <td className="p-2 text-right">-</td>
+                        <td className="p-2 text-right text-red-600">- {fmt(generatedSlip.otherDeductions)}</td>
                         <td className="p-2 text-right">-</td>
                       </tr>
                     )}
@@ -2018,35 +2557,81 @@ const UtilisateursPage: React.FC = () => {
                   <p className="text-xs text-slate-500">Payable par virement, MoMo ou chèque barré</p>
                 </div>
                 <div className="text-right">
-                  <p className="text-xl font-black text-emerald-800">{fmt(generatedSlip.netSalary)}</p>
+                  <p className="text-xl font-black text-emerald-800 font-mono">{fmt(generatedSlip.netSalary)}</p>
                 </div>
               </div>
 
               {/* Signatures */}
               <div className="pt-3 flex justify-between text-[11px] text-slate-500">
                 <div className="text-center">
-                  <p>Signature de l'Employé(e)</p>
+                  <p className="font-semibold text-slate-700">Signature de l'Employé(e)</p>
                   <p className="text-[9px] text-slate-400">(Précédée de "Lu et approuvé")</p>
-                  <div className="h-10 border-b border-dotted border-slate-400 w-32 mx-auto mt-1" />
+                  <div className="h-10 border-b border-dotted border-slate-400 w-36 mx-auto mt-1" />
                 </div>
                 <div className="text-center">
-                  <p>Pour la Direction</p>
-                  <p className="text-[9px] text-slate-400">Cachet & Signature de l'Employeur</p>
-                  <div className="h-10 border-b border-dotted border-slate-400 w-32 mx-auto mt-1" />
+                  <p className="font-semibold text-slate-700">Pour la Direction</p>
+                  <p className="text-[9px] text-slate-400">Cachet officiel &amp; Signature</p>
+                  <div className="h-10 border-b border-dotted border-slate-400 w-36 mx-auto mt-1" />
                 </div>
               </div>
             </div>
 
-            <div className="mt-4 flex items-center justify-end gap-2">
+            {/* Boutons d'action : strictly hidden during print */}
+            <div className="mt-4 flex items-center justify-end gap-2 print:hidden no-print">
               <button
+                type="button"
+                onClick={() => {
+                  try {
+                    const doc = generateBulletinPaiePDF({
+                      slipNumber: generatedSlip.slipNumber,
+                      periodMonth: generatedSlip.periodMonth,
+                      periodYear: generatedSlip.periodYear,
+                      companyName: company?.name || 'ENTREPRISE GESTIO 229',
+                      companyIfu: (company as any)?.ifu_number,
+                      companyRccm: (company as any)?.rccm_number,
+                      companyAddress: (company as any)?.address,
+                      companyPhone: (company as any)?.phone,
+                      companyEmail: (company as any)?.email,
+                      employeeName: generatedSlip.employeeName,
+                      jobTitle: generatedSlip.jobTitle,
+                      cnssNumber: generatedSlip.cnssNumber,
+                      sectorName: generatedSlip.sectorName,
+                      hireDate: generatedSlip.hireDate,
+                      baseSalary: generatedSlip.baseSalary,
+                      transportAllowance: generatedSlip.transportAllowance,
+                      housingAllowance: generatedSlip.housingAllowance,
+                      bonus: generatedSlip.bonus,
+                      grossSalary: generatedSlip.grossSalary,
+                      cnssSalariale: generatedSlip.cnssSalariale,
+                      cnssPatronale: generatedSlip.cnssPatronale,
+                      vpsBenin: generatedSlip.vpsBénin,
+                      netBeforeDeductions: generatedSlip.netBeforeDeductions,
+                      advancePayment: generatedSlip.advancePayment,
+                      loanDeduction: generatedSlip.loanDeduction,
+                      otherDeductions: generatedSlip.otherDeductions,
+                      netSalary: generatedSlip.netSalary,
+                      totalEmployerCost: generatedSlip.totalEmployerCost,
+                    })
+                    doc.save(`Bulletin_Paie_${generatedSlip.employeeName.replace(/\s+/g, '_')}_${generatedSlip.periodYear}_${generatedSlip.periodMonth.split(' ')[0]}.pdf`)
+                  } catch (pdfErr: any) {
+                    setError('Erreur génération PDF: ' + pdfErr.message)
+                  }
+                }}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
+              >
+                <Download className="w-4 h-4" /> Télécharger en PDF
+              </button>
+              <button
+                type="button"
                 onClick={() => window.print()}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm"
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition"
               >
                 <Printer className="w-4 h-4" /> Imprimer le Bulletin
               </button>
               <button
+                type="button"
                 onClick={() => setGeneratedSlip(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold"
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition"
               >
                 Fermer
               </button>
@@ -2106,6 +2691,23 @@ const UtilisateursPage: React.FC = () => {
                     placeholder="Ex: Caissier, Vendeur, Livreur..."
                     className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-1.5">
+                    Secteur d'activité rattaché *
+                  </label>
+                  <select
+                    value={newStaffForm.sectorSlug || currentSectorSlug || (sectors[0]?.sector_slug || '')}
+                    onChange={(e) => setNewStaffForm((p) => ({ ...p, sectorSlug: e.target.value }))}
+                    className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm font-semibold focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white"
+                  >
+                    {sectors.map((s) => (
+                      <option key={s.id} value={s.sector_slug || s.id}>
+                        {s.sector_name}
+                      </option>
+                    ))}
+                  </select>
                 </div>
 
                 <div>
@@ -2232,7 +2834,301 @@ const UtilisateursPage: React.FC = () => {
         </div>
       )}
 
-      {/* ══ MODAL PAYER LE SALAIRE ═════════════════════════════════════════════ */}
+      {/* ══ MODAL AVANCES & PRÊTS ══════════════════════════════════════════════ */}
+      {selectedStaffForDebt && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto">
+            {/* Header */}
+            <div className="sticky top-0 bg-white px-6 py-4 border-b border-slate-100 flex items-center justify-between z-10">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-indigo-100 flex items-center justify-center font-bold text-indigo-800">
+                  <CreditCard className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-black text-slate-900">Avances &amp; Prêts</h3>
+                  <p className="text-xs text-slate-500">{selectedStaffForDebt.fullName} — {selectedStaffForDebt.jobTitle}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {debtSummary && (debtSummary.totalAdvancesDue + debtSummary.totalLoansDue) > 0 && (
+                  <span className="px-3 py-1 bg-rose-100 text-rose-800 text-xs font-black rounded-full border border-rose-300">
+                    Dette totale : {fmt(debtSummary.totalAdvancesDue + debtSummary.totalLoansDue)}
+                  </span>
+                )}
+                <button type="button" onClick={() => setSelectedStaffForDebt(null)}
+                  className="text-slate-400 hover:text-slate-600 p-1.5 rounded-xl hover:bg-slate-100 transition">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Sub-tabs */}
+            <div className="px-6 pt-4 flex gap-2 border-b border-slate-100 pb-0">
+              {(['avances', 'prets', 'historique'] as const).map((st) => (
+                <button key={st} type="button" onClick={() => setDebtActiveSubTab(st)}
+                  className={`px-4 py-2 text-xs font-bold rounded-t-xl border-b-2 transition ${debtActiveSubTab === st
+                    ? 'border-indigo-600 text-indigo-700 bg-indigo-50'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
+                  {st === 'avances' ? 'Avances sur Salaire' : st === 'prets' ? 'Prêts Accordés' : 'Historique Remboursements'}
+                </button>
+              ))}
+            </div>
+
+            <div className="p-6 space-y-4">
+              {debtLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="w-8 h-8 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : (
+                <>
+                  {/* ─── SUB-TAB: AVANCES ─── */}
+                  {debtActiveSubTab === 'avances' && (
+                    <div className="space-y-4">
+                      {/* Liste des avances actives */}
+                      {staffAdvances.length === 0 ? (
+                        <div className="text-center py-6 text-slate-400 text-sm">Aucune avance sur salaire enregistrée</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {staffAdvances.map((av: any) => (
+                            <div key={av.id} className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs flex justify-between items-center">
+                              <div>
+                                <p className="font-bold text-amber-900">{av.motif || 'Avance sur salaire'}</p>
+                                <p className="text-amber-600">{av.date_avance} · {av.mode_decaissement}</p>
+                              </div>
+                              <div className="text-right">
+                                <p className="font-mono font-black text-rose-700">{fmt(av.montant)}</p>
+                                <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${av.statut === 'rembourse' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'}`}>
+                                  {av.statut === 'rembourse' ? 'Soldé' : 'En cours'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Formulaire nouvelle avance */}
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                        <p className="text-xs font-black text-slate-700 uppercase tracking-wider">Accorder une Nouvelle Avance</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Montant (F CFA) *</label>
+                            <input type="number" min={0} step={500} value={advanceForm.montant}
+                              onChange={(e) => setAdvanceForm((p) => ({ ...p, montant: e.target.value }))}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                              placeholder="Ex: 25000" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Date</label>
+                            <input type="date" value={advanceForm.date_avance}
+                              onChange={(e) => setAdvanceForm((p) => ({ ...p, date_avance: e.target.value }))}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Motif</label>
+                          <input type="text" value={advanceForm.motif}
+                            onChange={(e) => setAdvanceForm((p) => ({ ...p, motif: e.target.value }))}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+                            placeholder="Ex: Urgence médicale" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Mode de Décaissement</label>
+                          <select value={advanceForm.mode_decaissement}
+                            onChange={(e) => setAdvanceForm((p) => ({ ...p, mode_decaissement: e.target.value as any }))}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white">
+                            <option value="especes">Espèces</option>
+                            <option value="virement">Virement</option>
+                            <option value="momo">Mobile Money</option>
+                            <option value="cheque">Chèque</option>
+                          </select>
+                        </div>
+                        <div className="flex justify-end">
+                          <button type="button" disabled={savingDebt || !advanceForm.montant}
+                            onClick={() => handleCreateAdvance(selectedStaffForDebt)}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition shadow-sm flex items-center gap-1.5 disabled:opacity-50">
+                            {savingDebt ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                            Enregistrer l&apos;Avance
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ─── SUB-TAB: PRÊTS ─── */}
+                  {debtActiveSubTab === 'prets' && (
+                    <div className="space-y-4">
+                      {staffLoans.length === 0 ? (
+                        <div className="text-center py-6 text-slate-400 text-sm">Aucun prêt accordé à cet employé</div>
+                      ) : (
+                        <div className="space-y-2">
+                          {staffLoans.map((loan: any) => (
+                            <div key={loan.id} className="p-3 bg-indigo-50 rounded-xl border border-indigo-200 text-xs">
+                              <div className="flex justify-between items-start">
+                                <div>
+                                  <p className="font-bold text-indigo-900">{loan.motif || 'Prêt personnel'}</p>
+                                  <p className="text-indigo-600">{loan.date_octroi} · {loan.duree_mois} mois · Mensualité {fmt(loan.mensualite)}</p>
+                                </div>
+                                <div className="text-right">
+                                  <p className="font-mono font-black text-indigo-800">{fmt(loan.montant_total)}</p>
+                                  <p className="text-[10px] text-rose-600 font-bold">Reste : {fmt(loan.solde_restant || loan.montant_total)}</p>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Formulaire nouveau prêt */}
+                      <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 space-y-3">
+                        <p className="text-xs font-black text-slate-700 uppercase tracking-wider">Accorder un Nouveau Prêt</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Montant Total *</label>
+                            <input type="number" min={0} step={1000} value={loanForm.montant_total}
+                              onChange={(e) => setLoanForm((p) => ({ ...p, montant_total: e.target.value }))}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="Ex: 150000" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Durée (mois)</label>
+                            <input type="number" min={1} max={60} value={loanForm.duree_mois}
+                              onChange={(e) => setLoanForm((p) => ({ ...p, duree_mois: e.target.value }))}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Mensualité (F CFA)</label>
+                            <input type="number" min={0} step={500}
+                              value={loanForm.mensualite || (loanForm.montant_total && loanForm.duree_mois ? Math.ceil(Number(loanForm.montant_total) / Number(loanForm.duree_mois)).toString() : '')}
+                              onChange={(e) => setLoanForm((p) => ({ ...p, mensualite: e.target.value }))}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:outline-none" placeholder="Auto-calculé" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Début Remboursement</label>
+                            <input type="date" value={loanForm.date_debut_remboursement}
+                              onChange={(e) => setLoanForm((p) => ({ ...p, date_debut_remboursement: e.target.value }))}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Motif</label>
+                          <input type="text" value={loanForm.motif}
+                            onChange={(e) => setLoanForm((p) => ({ ...p, motif: e.target.value }))}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase text-slate-600 mb-1">Mode de Décaissement</label>
+                          <select value={loanForm.mode_decaissement}
+                            onChange={(e) => setLoanForm((p) => ({ ...p, mode_decaissement: e.target.value as any }))}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-indigo-500 focus:outline-none bg-white">
+                            <option value="especes">Espèces</option>
+                            <option value="virement">Virement</option>
+                            <option value="momo">Mobile Money</option>
+                            <option value="cheque">Chèque</option>
+                          </select>
+                        </div>
+                        <div className="flex justify-end">
+                          <button type="button" disabled={savingDebt || !loanForm.montant_total}
+                            onClick={() => handleCreateLoan(selectedStaffForDebt)}
+                            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-black transition shadow-sm flex items-center gap-1.5 disabled:opacity-50">
+                            {savingDebt ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+                            Enregistrer le Prêt
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* ─── SUB-TAB: HISTORIQUE ─── */}
+                  {debtActiveSubTab === 'historique' && (
+                    <div className="space-y-4">
+                      {staffRepayments.length === 0 ? (
+                        <div className="text-center py-6 text-slate-400 text-sm">Aucun remboursement enregistré</div>
+                      ) : (
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-xs text-slate-600">
+                            <thead className="bg-slate-50 font-bold text-slate-500 uppercase border-b border-slate-200">
+                              <tr>
+                                <th className="px-3 py-2 text-left">Date</th>
+                                <th className="px-3 py-2 text-left">Type</th>
+                                <th className="px-3 py-2 text-right">Montant</th>
+                                <th className="px-3 py-2 text-left">Mode</th>
+                                <th className="px-3 py-2 text-left">Notes</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {staffRepayments.map((rep: any) => (
+                                <tr key={rep.id} className="hover:bg-slate-50">
+                                  <td className="px-3 py-2 font-mono">{rep.date_remboursement || rep.date_paiement}</td>
+                                  <td className="px-3 py-2">
+                                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${rep.type_dette === 'avance' ? 'bg-amber-100 text-amber-800' : 'bg-indigo-100 text-indigo-800'}`}>
+                                      {rep.type_dette === 'avance' ? 'Avance' : 'Prêt'}
+                                    </span>
+                                  </td>
+                                  <td className="px-3 py-2 text-right font-mono font-bold text-emerald-700">{fmt(rep.montant)}</td>
+                                  <td className="px-3 py-2 capitalize">{rep.mode_paiement || '—'}</td>
+                                  <td className="px-3 py-2 text-slate-400">{rep.notes || '—'}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+
+                      {/* Formulaire remboursement manuel */}
+                      <div className="p-4 bg-emerald-50 rounded-2xl border border-emerald-200 space-y-3">
+                        <p className="text-xs font-black text-emerald-800 uppercase tracking-wider">Enregistrer un Remboursement Manuel</p>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-emerald-800 mb-1">Type de Dette</label>
+                            <select value={repayForm.type_dette}
+                              onChange={(e) => setRepayForm((p) => ({ ...p, type_dette: e.target.value as any }))}
+                              className="w-full px-3 py-2 border border-emerald-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white">
+                              <option value="avance">Avance sur salaire</option>
+                              <option value="pret">Prêt accordé</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-emerald-800 mb-1">Montant (F CFA)</label>
+                            <input type="number" min={0} step={500} value={repayForm.montant}
+                              onChange={(e) => setRepayForm((p) => ({ ...p, montant: e.target.value }))}
+                              className="w-full px-3 py-2 border border-emerald-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="Ex: 15000" />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-emerald-800 mb-1">Mode de Paiement</label>
+                            <select value={repayForm.mode_paiement}
+                              onChange={(e) => setRepayForm((p) => ({ ...p, mode_paiement: e.target.value as any }))}
+                              className="w-full px-3 py-2 border border-emerald-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white">
+                              <option value="especes">Espèces</option>
+                              <option value="virement">Virement</option>
+                              <option value="momo">Mobile Money</option>
+                              <option value="cheque">Chèque</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-emerald-800 mb-1">Notes</label>
+                            <input type="text" value={repayForm.notes}
+                              onChange={(e) => setRepayForm((p) => ({ ...p, notes: e.target.value }))}
+                              className="w-full px-3 py-2 border border-emerald-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none" placeholder="Remarque optionnelle" />
+                          </div>
+                        </div>
+                        <div className="flex justify-end">
+                          <button type="button" disabled={savingDebt || !repayForm.montant}
+                            onClick={() => handleRecordRepayment(selectedStaffForDebt)}
+                            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-sm flex items-center gap-1.5 disabled:opacity-50">
+                            {savingDebt ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <Check className="w-3.5 h-3.5" />}
+                            Enregistrer le Remboursement
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══ MODAL PAYER LE SALAIRE ═══════════════════════════════════════════ */}
       {payingEmployee && (() => {
         const base = Number(payingEmployee.baseSalary) || 0
         const transp = Number(payingEmployee.transportAllowance) || 0
@@ -2240,12 +3136,13 @@ const UtilisateursPage: React.FC = () => {
         const bon = Number(payingEmployee.bonus) || 0
         const gross = base + transp + house + bon
         const cnssSal = Math.round(gross * 0.036)
-        const adv = Number(payingEmployee.advancePayment) || 0
-        const net = Math.max(0, gross - cnssSal - adv)
+        const netAvant = Math.max(0, gross - cnssSal)
+        const totalRetenues = Number(payAdvanceDeduction) + Number(payLoanDeduction) + Number(payOtherDeductions)
+        const netAPayer = Math.max(0, netAvant - totalRetenues)
 
         return (
           <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-fadeIn">
-            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200">
+            <div className="bg-white rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 max-h-[92vh] overflow-y-auto">
               <div className="flex items-center justify-between pb-3 border-b border-slate-100 mb-4">
                 <div className="flex items-center gap-2">
                   <div className="w-9 h-9 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold">
@@ -2256,17 +3153,13 @@ const UtilisateursPage: React.FC = () => {
                     <p className="text-xs text-slate-500">Période : {payrollPeriod}</p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setPayingEmployee(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1 rounded-lg"
-                >
+                <button type="button" onClick={() => setPayingEmployee(null)} className="text-slate-400 hover:text-slate-600 p-1 rounded-lg">
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Récapitulatif Salarié & Calcul */}
               <div className="space-y-4">
+                {/* Décomposition salariale */}
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200">
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold text-slate-900 text-sm">{payingEmployee.fullName}</span>
@@ -2274,35 +3167,71 @@ const UtilisateursPage: React.FC = () => {
                   </div>
                   <div className="space-y-1.5 text-xs text-slate-600 pt-2 border-t border-slate-200">
                     <div className="flex justify-between">
-                      <span>Salaire de base conventionnel :</span>
+                      <span>Salaire de base :</span>
                       <span className="font-mono font-bold text-slate-800">{fmt(base)}</span>
                     </div>
                     <div className="flex justify-between text-emerald-700">
                       <span>Indemnités &amp; Primes :</span>
                       <span className="font-mono font-bold">+{fmt(transp + house + bon)}</span>
                     </div>
+                    <div className="flex justify-between font-bold text-slate-800 border-t border-slate-200 pt-1.5">
+                      <span>= Salaire Brut :</span>
+                      <span className="font-mono">{fmt(gross)}</span>
+                    </div>
                     <div className="flex justify-between text-rose-600">
-                      <span>Retenue CNSS (3.6% part salariale) :</span>
+                      <span>CNSS salariale (3,6%) :</span>
                       <span className="font-mono font-bold">-{fmt(cnssSal)}</span>
                     </div>
-                    {adv > 0 && (
-                      <div className="flex justify-between text-rose-600">
-                        <span>Acompte sur salaire déduit :</span>
-                        <span className="font-mono font-bold">-{fmt(adv)}</span>
-                      </div>
-                    )}
-                    <div className="flex justify-between pt-2 border-t border-slate-200 text-sm font-black text-emerald-800">
-                      <span>NET À DÉCAISSER :</span>
-                      <span className="font-mono text-base">{fmt(net)}</span>
+                    <div className="flex justify-between font-bold text-slate-900 border-t border-slate-200 pt-1.5">
+                      <span>= Net avant retenues :</span>
+                      <span className="font-mono">{fmt(netAvant)}</span>
                     </div>
                   </div>
                 </div>
 
-                {/* Choix de la Trésorerie Source */}
+                {/* Retenues avances / prêts / autres */}
+                <div className="p-4 bg-amber-50 rounded-2xl border border-amber-200 space-y-3">
+                  <p className="text-xs font-black text-amber-800 uppercase tracking-wider">Retenues sur salaire</p>
+                  {payingDebtSummary && (payingDebtSummary.totalAdvancesDue > 0 || payingDebtSummary.totalLoansDue > 0) && (
+                    <div className="text-[11px] text-amber-700 bg-amber-100 rounded-xl p-2.5 border border-amber-200">
+                      {'💡'} Dettes en cours — Avances : <strong>{fmt(payingDebtSummary.totalAdvancesDue)}</strong> · Prêts : <strong>{fmt(payingDebtSummary.totalLoansDue)}</strong>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-1 gap-2.5">
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-amber-900 mb-1">Retenue Avance sur salaire (F CFA)</label>
+                      <input type="number" min={0} step={500} value={payAdvanceDeduction}
+                        onChange={(e) => setPayAdvanceDeduction(e.target.value)}
+                        className="w-full px-3 py-2 border border-amber-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none bg-white" placeholder="0" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-amber-900 mb-1">Retenue Remboursement Prêt (F CFA)</label>
+                      <input type="number" min={0} step={500} value={payLoanDeduction}
+                        onChange={(e) => setPayLoanDeduction(e.target.value)}
+                        className="w-full px-3 py-2 border border-amber-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none bg-white" placeholder="0" />
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold uppercase text-amber-900 mb-1">Autres Retenues (F CFA)</label>
+                      <input type="number" min={0} step={500} value={payOtherDeductions}
+                        onChange={(e) => setPayOtherDeductions(e.target.value)}
+                        className="w-full px-3 py-2 border border-amber-300 rounded-xl text-sm font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none bg-white" placeholder="0" />
+                    </div>
+                  </div>
+                  <div className="pt-2 border-t border-amber-200 space-y-1 text-xs">
+                    <div className="flex justify-between text-amber-700">
+                      <span>Total retenues :</span>
+                      <span className="font-mono font-bold">-{fmt(totalRetenues)}</span>
+                    </div>
+                    <div className="flex justify-between font-black text-emerald-800 pt-1">
+                      <span className="text-base">NET À PAYER :</span>
+                      <span className="font-mono text-lg">{fmt(netAPayer)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Mode de paiement */}
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">
-                    Mode / Source de Paiement *
-                  </label>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 mb-2">Mode / Source de Paiement *</label>
                   <div className="grid grid-cols-2 gap-2">
                     {[
                       { id: 'especes', label: 'Espèces', icon: Wallet, desc: 'Tiroir-Caisse direct' },
@@ -2313,16 +3242,8 @@ const UtilisateursPage: React.FC = () => {
                       const Icon = m.icon
                       const isSelected = payMethod === m.id
                       return (
-                        <button
-                          key={m.id}
-                          type="button"
-                          onClick={() => setPayMethod(m.id as any)}
-                          className={`p-3 rounded-2xl border text-left transition flex items-start gap-2.5 ${
-                            isSelected
-                              ? 'bg-emerald-50/80 border-emerald-500 text-emerald-900 shadow-sm'
-                              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
-                          }`}
-                        >
+                        <button key={m.id} type="button" onClick={() => setPayMethod(m.id as any)}
+                          className={`p-3 rounded-2xl border text-left transition flex items-start gap-2.5 ${isSelected ? 'bg-emerald-50/80 border-emerald-500 text-emerald-900 shadow-sm' : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'}`}>
                           <Icon className={`w-4 h-4 mt-0.5 ${isSelected ? 'text-emerald-700' : 'text-slate-400'}`} />
                           <div>
                             <p className="font-bold text-xs">{m.label}</p>
@@ -2334,33 +3255,23 @@ const UtilisateursPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Note Informative Conformité & Persistance */}
                 <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 leading-relaxed">
-                  🛡️ <strong>Rattachement Comptable :</strong> Ce paiement sera enregistré dans la table <code>expenses</code> au titre de la période <strong>{payrollPeriod}</strong>. La marge nette de ce mois sera calculée sans modifier rétroactivement les autres périodes.
+                  {'🛡️'} <strong>Rattachement Comptable :</strong> Ce paiement sera enregistré au titre de <strong>{payrollPeriod}</strong>. Les retenues avances/prêts sont comptabilisées en créances (compte 422) et non en charges RH — la marge nette n'est pas affectée deux fois.
                 </div>
 
-                {/* Actions */}
                 <div className="flex gap-2 pt-2 justify-end border-t border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => setPayingEmployee(null)}
-                    disabled={isPaying}
-                    className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition"
-                  >
+                  <button type="button" onClick={() => setPayingEmployee(null)} disabled={isPaying}
+                    className="px-4 py-2 border border-slate-300 text-slate-700 rounded-xl text-xs font-bold hover:bg-slate-50 transition">
                     Annuler
                   </button>
-                  <button
-                    type="button"
-                    onClick={handleConfirmSalaryPayment}
-                    disabled={isPaying}
-                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-lg shadow-emerald-600/30 flex items-center gap-1.5"
-                  >
+                  <button type="button" onClick={handleConfirmSalaryPayment} disabled={isPaying}
+                    className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black transition shadow-lg shadow-emerald-600/30 flex items-center gap-1.5">
                     {isPaying ? (
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                     ) : (
                       <>
                         <Check className="w-4 h-4" />
-                        <span>Confirmer le Paiement ({fmt(net)})</span>
+                        <span>Confirmer le Paiement ({fmt(netAPayer)})</span>
                       </>
                     )}
                   </button>
