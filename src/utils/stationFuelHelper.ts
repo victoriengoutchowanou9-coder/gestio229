@@ -196,6 +196,20 @@ export async function safeStationInsert(
       payload.numero_pompe = num
       payload.nom = num
     }
+    if (payload.type_carburant) {
+      const tc = String(payload.type_carburant).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      if (tc.includes('super') || tc.includes('essence') || tc === 'sp95') {
+        payload.type_carburant = 'SP95'
+      } else if (tc === 'sp98') {
+        payload.type_carburant = 'SP98'
+      } else if (tc.includes('gasoil') || tc.includes('diesel') || tc.includes('gazole')) {
+        payload.type_carburant = 'Gasoil'
+      } else if (tc.includes('petrole') || tc.includes('kero') || tc.includes('lampant')) {
+        payload.type_carburant = 'Kerosene'
+      } else if (tc.includes('gaz') || tc.includes('gpl')) {
+        payload.type_carburant = 'Gaz'
+      }
+    }
   }
 
   let currentPayload = { ...payload }
@@ -240,6 +254,21 @@ export async function safeStationUpdate(
   rawPayload: Record<string, any>
 ): Promise<{ data: any; error: any }> {
   const payload: Record<string, any> = { ...rawPayload }
+
+  if (table === 'station_pompes' && payload.type_carburant) {
+    const tc = String(payload.type_carburant).trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    if (tc.includes('super') || tc.includes('essence') || tc === 'sp95') {
+      payload.type_carburant = 'SP95'
+    } else if (tc === 'sp98') {
+      payload.type_carburant = 'SP98'
+    } else if (tc.includes('gasoil') || tc.includes('diesel') || tc.includes('gazole')) {
+      payload.type_carburant = 'Gasoil'
+    } else if (tc.includes('petrole') || tc.includes('kero') || tc.includes('lampant')) {
+      payload.type_carburant = 'Kerosene'
+    } else if (tc.includes('gaz') || tc.includes('gpl')) {
+      payload.type_carburant = 'Gaz'
+    }
+  }
 
   let currentPayload = { ...payload }
   let lastError: any = null

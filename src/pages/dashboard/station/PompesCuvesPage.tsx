@@ -295,11 +295,35 @@ export const PompesCuvesPage: React.FC = () => {
     try {
       const cleanSlug = sectorSlug || 'station-service'
       const cuveTrouvee = cuves.find(c => c.id === pompeForm.cuve_id)
+
+      // Normalisation stricte selon la contrainte station_pompes_type_carburant_check :
+      // Valeurs exactes autorisées en base : 'SP95', 'SP98', 'Gasoil', 'Kerosene', 'Gaz'
+      const rawCarb = (pompeForm.type_carburant || '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+
+      let dbTypeCarburant = 'SP95'
+      if (rawCarb.includes('super') || rawCarb.includes('essence') || rawCarb === 'sp95') {
+        dbTypeCarburant = 'SP95'
+      } else if (rawCarb === 'sp98') {
+        dbTypeCarburant = 'SP98'
+      } else if (rawCarb.includes('gasoil') || rawCarb.includes('diesel') || rawCarb.includes('gazole')) {
+        dbTypeCarburant = 'Gasoil'
+      } else if (rawCarb.includes('petrole') || rawCarb.includes('kero') || rawCarb.includes('lampant')) {
+        dbTypeCarburant = 'Kerosene'
+      } else if (rawCarb.includes('gaz') || rawCarb.includes('gpl')) {
+        dbTypeCarburant = 'Gaz'
+      } else if (['SP95', 'SP98', 'Gasoil', 'Kerosene', 'Gaz'].includes(pompeForm.type_carburant)) {
+        dbTypeCarburant = pompeForm.type_carburant
+      }
+
       const payload = {
         company_id: companyId,
         sector_slug: cleanSlug,
         numero_pompe: pompeForm.numero_pompe,
-        type_carburant: pompeForm.type_carburant,
+        type_carburant: dbTypeCarburant,
         cuve_id: pompeForm.cuve_id || null,
         cuve_associee: cuveTrouvee ? cuveTrouvee.nom : null,
         index_actuel: Number(pompeForm.index_actuel) || 0,
