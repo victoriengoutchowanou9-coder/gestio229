@@ -36,6 +36,7 @@ import {
   calculateFuelExonerationTax,
   StationExonerationConfig
 } from '../../../services/stationFuelService'
+import { ajouterDestinataireRapport } from '../../../services/destinatairesReportService'
 
 // ─── MAPPING DES MODULES & PERMISSIONS DYNAMIQUES PAR SECTEUR ────────────────
 const MODULES_PAR_SECTEUR: Record<string, Array<{ id: string; label: string }>> = {
@@ -680,6 +681,39 @@ export const ConfigPage: React.FC = () => {
   // Charger les informations entreprise
   useEffect(() => {
     if (company) {
+      const localActive = (typeof window !== 'undefined' && company.id)
+        ? localStorage.getItem(`gestio229_emecef_active_${company.id}`)
+        : null
+      const localNim = (typeof window !== 'undefined' && company.id)
+        ? localStorage.getItem(`gestio229_emecef_nim_${company.id}`)
+        : null
+      const localToken = (typeof window !== 'undefined' && company.id)
+        ? localStorage.getItem(`gestio229_emecef_token_${company.id}`)
+        : null
+      const localApiUrl = (typeof window !== 'undefined' && company.id)
+        ? localStorage.getItem(`gestio229_emecef_api_url_${company.id}`)
+        : null
+      const localLogo = (typeof window !== 'undefined' && company.id)
+        ? localStorage.getItem(`gestio229_logo_url_${company.id}`)
+        : null
+
+      // Récupération depuis sales_circuit_mode_by_sector.__emecef_config__
+      const salesMeta = (company as any)?.sales_circuit_mode_by_sector
+      const emecefMeta = (salesMeta && typeof salesMeta === 'object' && salesMeta.__emecef_config__)
+        ? salesMeta.__emecef_config__
+        : {}
+      const extraMeta = (salesMeta && typeof salesMeta === 'object' && salesMeta.__company_extra_config__)
+        ? salesMeta.__company_extra_config__
+        : {}
+
+      const resolvedActive = localActive !== null
+        ? localActive === 'true'
+        : (company.e_mecef_active ?? emecefMeta.e_mecef_active ?? false)
+
+      const resolvedNim = company.e_mecef_nim || emecefMeta.e_mecef_nim || localNim || 'BENIN-DGI-EMEF-2026-001'
+      const resolvedToken = (company as any).e_mecef_token || emecefMeta.e_mecef_token || localToken || ''
+      const resolvedApiUrl = (company as any).e_mecef_api_url || emecefMeta.e_mecef_api_url || localApiUrl || 'https://emef.dgi.bj/api/v1'
+
       setForm({
         name: company.name || '',
         legal_form: company.legal_form || 'SARL',
@@ -690,19 +724,19 @@ export const ConfigPage: React.FC = () => {
         city: company.city || 'Cotonou',
         phone: company.phone || '',
         email: company.email || '',
-        logo_url: company.logo_url || '',
+        logo_url: company.logo_url || extraMeta.logo_url || localLogo || '',
         currency: company.currency || 'FCFA',
         tva_default_rate: company.tva_default_rate ?? 18,
         aib_default_rate: company.aib_default_rate ?? 1,
-        e_mecef_active: company.e_mecef_active ?? false,
-        e_mecef_connected: (company as any).e_mecef_connected ?? false,
-        e_mecef_nim: company.e_mecef_nim || '',
-        e_mecef_token: (company as any).e_mecef_token || '',
-        e_mecef_api_url: (company as any).e_mecef_api_url || '',
-        closure_email_1: (company as any).closure_email_1 || (company as any).email || '',
-        closure_email_2: (company as any).closure_email_2 || '',
-        closure_email_3: (company as any).closure_email_3 || '',
-        auto_send_closure_pdf: (company as any).auto_send_closure_pdf ?? true,
+        e_mecef_active: resolvedActive,
+        e_mecef_connected: resolvedActive,
+        e_mecef_nim: resolvedNim,
+        e_mecef_token: resolvedToken,
+        e_mecef_api_url: resolvedApiUrl,
+        closure_email_1: (company as any).closure_email_1 || extraMeta.closure_email_1 || (company as any).email || '',
+        closure_email_2: (company as any).closure_email_2 || extraMeta.closure_email_2 || '',
+        closure_email_3: (company as any).closure_email_3 || extraMeta.closure_email_3 || '',
+        auto_send_closure_pdf: (company as any).auto_send_closure_pdf ?? extraMeta.auto_send_closure_pdf ?? true,
       })
     }
   }, [company])
@@ -733,16 +767,211 @@ export const ConfigPage: React.FC = () => {
     }
   }, [company?.id, activeTab])
 
-  // Sauvegarde des paramètres entreprise
+  // ─── Sauvegarde des Paramètres Établissement ─────────────────────────────
+  const handleSaveEtablissement = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!company?.id) return
+    setSaving(true)
+    try {
+      if (typeof window !== 'undefined' && form.logo_url) {
+        localStorage.setItem(`gestio229_logo_url_${company.id}`, form.logo_url)
+      }
+
+      const existingSalesMeta = (company as any)?.sales_circuit_mode_by_sector && typeof (company as any).sales_circuit_mode_by_sector === 'object'
+        ? { ...(company as any).sales_circuit_mode_by_sector }
+        : {}
+
+      const updatedSalesMeta = {
+        ...existingSalesMeta,
+        __company_extra_config__: {
+          ...(existingSalesMeta.__company_extra_config__ || {}),
+          logo_url: form.logo_url || '',
+          updated_at: new Date().toISOString()
+        }
+      }
+
+      const { error } = await supabase
+        .from('companies')
+        .update({
+          name: form.name.trim(),
+          legal_form: form.legal_form,
+          address: form.address ? form.address.trim() : null,
+          city: form.city ? form.city.trim() : 'Cotonou',
+          phone: form.phone ? form.phone.trim() : null,
+          email: form.email ? form.email.trim() : null,
+          rccm_number: form.rccm_number ? form.rccm_number.trim() : null,
+          currency: form.currency || 'FCFA',
+          sales_circuit_mode_by_sector: updatedSalesMeta,
+          onboarding_completed: true,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', company.id)
+
+      if (error) throw error
+
+      toast.success("Informations de l'établissement sauvegardées avec succès")
+      await refreshTenantContext()
+    } catch (err: any) {
+      toast.error('Erreur de mise à jour établissement', err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ─── Sauvegarde des Paramètres Fiscaux & Activation e-MECeF ──────────────
+  const handleSaveFiscalite = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!company?.id) return
+    setSaving(true)
+    try {
+      const activeState = Boolean(form.e_mecef_active)
+
+      // 1. Mémorisation locale stricte et isolée par entreprise (tenant_id)
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(`gestio229_emecef_active_${company.id}`, activeState ? 'true' : 'false')
+        if (form.e_mecef_nim) localStorage.setItem(`gestio229_emecef_nim_${company.id}`, form.e_mecef_nim)
+        if (form.e_mecef_token) localStorage.setItem(`gestio229_emecef_token_${company.id}`, form.e_mecef_token)
+        if (form.e_mecef_api_url) localStorage.setItem(`gestio229_emecef_api_url_${company.id}`, form.e_mecef_api_url)
+      }
+
+      // 2. Mémorisation persistante dans sales_circuit_mode_by_sector (colonne JSONB certifiée de companies)
+      const existingSalesMeta = (company as any)?.sales_circuit_mode_by_sector && typeof (company as any).sales_circuit_mode_by_sector === 'object'
+        ? { ...(company as any).sales_circuit_mode_by_sector }
+        : {}
+
+      const updatedSalesMeta = {
+        ...existingSalesMeta,
+        __emecef_config__: {
+          e_mecef_active: activeState,
+          e_mecef_connected: activeState,
+          e_mecef_nim: form.e_mecef_nim || '',
+          e_mecef_token: form.e_mecef_token || '',
+          e_mecef_api_url: form.e_mecef_api_url || '',
+          updated_at: new Date().toISOString()
+        }
+      }
+
+      // 3. Mise à jour de la table companies sur les colonnes réelles PostgreSQL Supabase
+      const fiscalPayload: Record<string, any> = {
+        ifu_number: form.ifu_number ? form.ifu_number.trim() : null,
+        regime_fiscal: form.regime_fiscal || 'Régime Réel Simplifié (RRS)',
+        tva_default_rate: Number(form.tva_default_rate) || 0,
+        aib_default_rate: Number(form.aib_default_rate) || 0,
+        e_mecef_active: activeState,
+        e_mecef_nim: form.e_mecef_nim ? form.e_mecef_nim.trim() : 'BENIN-DGI-EMEF-2026-001',
+        sales_circuit_mode_by_sector: updatedSalesMeta,
+        onboarding_completed: true,
+        updated_at: new Date().toISOString()
+      }
+
+      const { error } = await supabase
+        .from('companies')
+        .update(fiscalPayload)
+        .eq('id', company.id)
+
+      if (error) throw error
+
+      toast.success(
+        activeState
+          ? 'Fiscalité enregistrée : COMPTE e-MECeF ACTIVÉ (FACTURE DE VENTE)'
+          : 'Fiscalité enregistrée : Mode BON DE COMMANDE actif'
+      )
+      await refreshTenantContext()
+    } catch (err: any) {
+      toast.error('Erreur de mise à jour fiscale', err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // ─── Sauvegarde des Alertes & Destinataires de Clôture ────────────────────
+  const handleSaveNotifications = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!company?.id) return
+    setSaving(true)
+    try {
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(`gestio229_auto_send_closure_pdf_${company.id}`, form.auto_send_closure_pdf ? 'true' : 'false')
+        if (form.closure_email_1) localStorage.setItem(`gestio229_closure_email_1_${company.id}`, form.closure_email_1)
+        if (form.closure_email_2) localStorage.setItem(`gestio229_closure_email_2_${company.id}`, form.closure_email_2)
+        if (form.closure_email_3) localStorage.setItem(`gestio229_closure_email_3_${company.id}`, form.closure_email_3)
+      }
+
+      // Synchroniser avec parametres_destinataires
+      const emails = [
+        { email: form.closure_email_1, nom: 'Direction Générale' },
+        { email: form.closure_email_2, nom: 'Gérant de Boutique' },
+        { email: form.closure_email_3, nom: 'Comptabilité' },
+      ].filter((x) => x.email && x.email.includes('@'))
+
+      for (const item of emails) {
+        try {
+          await ajouterDestinataireRapport(company.id, item.email, item.nom, true)
+        } catch (_) {}
+      }
+
+      const existingSalesMeta = (company as any)?.sales_circuit_mode_by_sector && typeof (company as any).sales_circuit_mode_by_sector === 'object'
+        ? { ...(company as any).sales_circuit_mode_by_sector }
+        : {}
+
+      const updatedSalesMeta = {
+        ...existingSalesMeta,
+        __company_extra_config__: {
+          ...(existingSalesMeta.__company_extra_config__ || {}),
+          auto_send_closure_pdf: Boolean(form.auto_send_closure_pdf),
+          closure_email_1: form.closure_email_1 || '',
+          closure_email_2: form.closure_email_2 || '',
+          closure_email_3: form.closure_email_3 || '',
+          updated_at: new Date().toISOString()
+        }
+      }
+
+      const { error } = await supabase
+        .from('companies')
+        .update({
+          sales_circuit_mode_by_sector: updatedSalesMeta,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', company.id)
+
+      if (error) throw error
+
+      toast.success('Paramètres des alertes de clôture sauvegardés avec succès')
+      await refreshTenantContext()
+    } catch (err: any) {
+      toast.error('Erreur de sauvegarde des alertes', err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Fallback général : délégué selon l'onglet actif ou filtré sur colonnes réelles
   const handleSaveCompany = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!company?.id) return
+    if (activeTab === 'fiscalite') return handleSaveFiscalite(e)
+    if (activeTab === 'notifications') return handleSaveNotifications(e)
+    if (activeTab === 'etablissement') return handleSaveEtablissement(e)
+
     setSaving(true)
     try {
       const { error } = await supabase
         .from('companies')
         .update({
-          ...form,
+          name: form.name.trim(),
+          legal_form: form.legal_form,
+          ifu_number: form.ifu_number || null,
+          rccm_number: form.rccm_number || null,
+          regime_fiscal: form.regime_fiscal || 'Régime Réel Simplifié (RRS)',
+          address: form.address || null,
+          city: form.city || 'Cotonou',
+          phone: form.phone || null,
+          email: form.email || null,
+          currency: form.currency || 'FCFA',
+          tva_default_rate: Number(form.tva_default_rate) || 0,
+          aib_default_rate: Number(form.aib_default_rate) || 0,
+          e_mecef_active: Boolean(form.e_mecef_active),
+          e_mecef_nim: form.e_mecef_nim || 'BENIN-DGI-EMEF-2026-001',
           onboarding_completed: true,
           updated_at: new Date().toISOString()
         })
@@ -1317,7 +1546,7 @@ export const ConfigPage: React.FC = () => {
       {/* ONGLET 1 : ÉTABLISSEMENT                                            */}
       {/* =================================================================== */}
       {activeTab === 'etablissement' && (
-        <form onSubmit={handleSaveCompany} className="space-y-6 animate-fadeIn">
+        <form onSubmit={handleSaveEtablissement} className="space-y-6 animate-fadeIn">
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
               <Building2 className="w-5 h-5 text-emerald-600" />
@@ -1464,7 +1693,7 @@ export const ConfigPage: React.FC = () => {
       {/* ONGLET 2 : FISCALITÉ DGI BÉNIN & e-MECeF                            */}
       {/* =================================================================== */}
       {activeTab === 'fiscalite' && (
-        <form onSubmit={handleSaveCompany} className="space-y-6 animate-fadeIn">
+        <form onSubmit={handleSaveFiscalite} className="space-y-6 animate-fadeIn">
           {/* Identifiants Fiscaux */}
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
             <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 border-b border-slate-100 pb-3">
@@ -1546,7 +1775,7 @@ export const ConfigPage: React.FC = () => {
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                     : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
                 }`}>
-                  {form.e_mecef_active ? '● FACTURE DE VENTE (e-MECeF Associé)' : '○ BON DE COMMANDE (Non associé)'}
+                  {form.e_mecef_active ? '● COMPTE e-MECeF ACTIVÉ (FACTURE DE VENTE)' : '○ BON DE COMMANDE (Non associé)'}
                 </span>
               </div>
             </div>
@@ -1570,7 +1799,7 @@ export const ConfigPage: React.FC = () => {
               }`}>
                 <h4 className="font-black text-slate-800 mb-1 flex items-center gap-1.5">
                   <span>CAS 2 : Compte e-MECeF associé et option activée</span>
-                  {form.e_mecef_active && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
+                  {form.e_mecef_active && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full font-bold">COMPTE e-MECeF ACTIVÉ</span>}
                 </h4>
                 <p>
                   Le document commercial émis porte automatiquement le titre officiel <strong>FACTURE DE VENTE</strong>.
@@ -1602,7 +1831,7 @@ export const ConfigPage: React.FC = () => {
               </label>
             </div>
 
-            {form.e_mecef_connected && (
+            {(form.e_mecef_active || form.e_mecef_connected) && (
               <div className="p-4 bg-emerald-50/40 border border-emerald-200 rounded-2xl space-y-4 animate-fadeIn">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
@@ -1636,6 +1865,9 @@ export const ConfigPage: React.FC = () => {
                     placeholder="Clé secrète / Token JWT fourni par la DGI"
                     className="w-full px-3 py-2 bg-white border border-slate-200 rounded-xl text-sm font-mono"
                   />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Renseignez ici le jeton d'autorisation JWT fourni par la DGI pour associer la plateforme e-MECeF de votre entreprise à GESTIO229.
+                  </p>
                 </div>
               </div>
             )}
@@ -1658,7 +1890,7 @@ export const ConfigPage: React.FC = () => {
       {/* ONGLET 3 : CLÔTURES DE CAISSE & NOTIFICATIONS EMAIL                */}
       {/* =================================================================== */}
       {activeTab === 'notifications' && (
-        <form onSubmit={handleSaveCompany} className="space-y-6 animate-fadeIn">
+        <form onSubmit={handleSaveNotifications} className="space-y-6 animate-fadeIn">
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
             <div className="border-b border-slate-100 pb-3">
               <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">

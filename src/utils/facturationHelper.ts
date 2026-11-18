@@ -111,13 +111,13 @@ const fmt = (n: number = 0) => formatFCFA(n)
  */
 export function isCompanyEmecefActive(company?: FacturationCompanyInfo | null): boolean {
   if (!company) return false
-  if (company.e_mecef_active === true || company.e_mecef_connected === true) {
-    return true
-  }
   if (typeof window !== 'undefined' && company.id) {
     const localVal = localStorage.getItem(`gestio229_emecef_active_${company.id}`)
     if (localVal === 'true') return true
     if (localVal === 'false') return false
+  }
+  if (company.e_mecef_active === true || company.e_mecef_connected === true) {
+    return true
   }
   return false
 }

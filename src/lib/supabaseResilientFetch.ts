@@ -401,6 +401,97 @@ export function createResilientFetch(supabaseUrl: string, supabaseAnonKey: strin
     // Exécuter d'abord l'appel réel vers Supabase PostgREST
     const realResponse = await baseFetch(input, init)
 
+    // ─── RÉSILIENCE SPÉCIFIQUE TABLE COMPANIES (SCHÉMA CACHE COLONNES MANQUANTES) ───
+    if (table === 'companies') {
+      // 1. GESTION DES LECTURES (GET / HEAD) : enrichir l'entreprise avec les métadonnées extra
+      if ((method === 'GET' || method === 'HEAD') && realResponse.ok) {
+        try {
+          const cloneData = await realResponse.clone().json()
+          const rows = Array.isArray(cloneData) ? cloneData : cloneData ? [cloneData] : []
+          let enriched = false
+          for (const c of rows) {
+            const salesMeta = c?.sales_circuit_mode_by_sector
+            if (salesMeta && typeof salesMeta === 'object') {
+              const emecef = salesMeta.__emecef_config__
+              const extra = salesMeta.__company_extra_config__
+              if (emecef && typeof emecef === 'object') {
+                if (c.e_mecef_active === undefined && emecef.e_mecef_active !== undefined) c.e_mecef_active = emecef.e_mecef_active
+                if (!c.e_mecef_nim && emecef.e_mecef_nim) c.e_mecef_nim = emecef.e_mecef_nim
+                if (!c.e_mecef_token && emecef.e_mecef_token) c.e_mecef_token = emecef.e_mecef_token
+                if (!c.e_mecef_api_url && emecef.e_mecef_api_url) c.e_mecef_api_url = emecef.e_mecef_api_url
+                if (c.e_mecef_connected === undefined && emecef.e_mecef_connected !== undefined) c.e_mecef_connected = emecef.e_mecef_connected
+                enriched = true
+              }
+              if (extra && typeof extra === 'object') {
+                if (!c.logo_url && extra.logo_url) c.logo_url = extra.logo_url
+                if (c.auto_send_closure_pdf === undefined && extra.auto_send_closure_pdf !== undefined) c.auto_send_closure_pdf = extra.auto_send_closure_pdf
+                if (!c.closure_email_1 && extra.closure_email_1) c.closure_email_1 = extra.closure_email_1
+                if (!c.closure_email_2 && extra.closure_email_2) c.closure_email_2 = extra.closure_email_2
+                if (!c.closure_email_3 && extra.closure_email_3) c.closure_email_3 = extra.closure_email_3
+                enriched = true
+              }
+            }
+          }
+          if (enriched) {
+            return buildPostgrestResponse(Array.isArray(cloneData) ? rows : rows[0], init, 200)
+          }
+        } catch (_) {}
+        return realResponse
+      }
+
+      // 2. GESTION DES MISES À JOUR (PATCH) AVEC ERREUR PGRST204 SUR COLONNE INEXISTANTE
+      if (method === 'PATCH' && !realResponse.ok && realResponse.status === 400) {
+        try {
+          const errBody = await realResponse.clone().json().catch(() => null)
+          const errMsg = String(errBody?.message || '')
+          if (errBody?.code === 'PGRST204' || errMsg.includes("in the schema cache")) {
+            let currentPayload = typeof init?.body === 'string' ? JSON.parse(init.body) : null
+            if (currentPayload && typeof currentPayload === 'object') {
+              let retryResponse = realResponse
+              let attempts = 0
+              const maxAttempts = 10
+              const strippedExtras: Record<string, any> = {}
+
+              while (!retryResponse.ok && attempts < maxAttempts) {
+                const errJson = await retryResponse.clone().json().catch(() => null)
+                const msg = String(errJson?.message || '')
+                const colMatch = msg.match(/Could not find the '([^']+)' column of 'companies' in the schema cache/i)
+                if (!colMatch || !colMatch[1]) break
+                const missingCol = colMatch[1]
+                strippedExtras[missingCol] = currentPayload[missingCol]
+                delete currentPayload[missingCol]
+
+                // Mémoriser la colonne supprimée dans sales_circuit_mode_by_sector.__company_extra_config__
+                const existingMeta = currentPayload.sales_circuit_mode_by_sector && typeof currentPayload.sales_circuit_mode_by_sector === 'object'
+                  ? { ...currentPayload.sales_circuit_mode_by_sector }
+                  : {}
+                currentPayload.sales_circuit_mode_by_sector = {
+                  ...existingMeta,
+                  __company_extra_config__: {
+                    ...(existingMeta.__company_extra_config__ || {}),
+                    ...strippedExtras,
+                    updated_at: new Date().toISOString()
+                  }
+                }
+
+                retryResponse = await baseFetch(input, {
+                  ...init,
+                  body: JSON.stringify(currentPayload)
+                })
+                attempts++
+              }
+
+              if (retryResponse.ok) {
+                return retryResponse
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      return realResponse
+    }
+
     if (!BRIDGED_TABLES.has(table)) {
       return realResponse
     }
