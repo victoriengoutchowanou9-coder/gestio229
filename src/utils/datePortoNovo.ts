@@ -51,3 +51,22 @@ export function getPortoNovoNow(date: Date = new Date()): PortoNovoDateTime {
     isoPortoNovo: date.toISOString(),
   }
 }
+
+/**
+ * Formate une date au format béninois complet ou court
+ */
+export function formatBeninDateTime(dateInput?: string | Date | null): string {
+  if (!dateInput) return getPortoNovoNow().fullDisplay
+  const d = typeof dateInput === 'string' ? new Date(dateInput) : dateInput
+  if (isNaN(d.getTime())) return getPortoNovoNow().fullDisplay
+  return new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Africa/Porto-Novo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  }).format(d)
+}
+

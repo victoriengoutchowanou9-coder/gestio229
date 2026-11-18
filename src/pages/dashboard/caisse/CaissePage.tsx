@@ -59,6 +59,7 @@ import {
 } from '../../../services/salesCircuitService'
 import { generateFactureBonPdf } from '../../../utils/imprimerieDevisPdf'
 import { imprimerTicketThermique, TicketData } from '../../../utils/thermalPrinter'
+import { isCompanyEmecefActive, getDocumentFooterMessage } from '../../../utils/facturationHelper'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -2962,7 +2963,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                       orderNumber: bonDetailModal.order_number,
                       date: bonDetailModal.created_at,
                       customerName: bonDetailModal.customer_name,
-                      cashierName: user?.full_name || 'Caissier'
+                      cashierName: user?.full_name || 'Caissier',
+                      title: isCompanyEmecefActive(company) ? 'FACTURE DE VENTE' : 'BON DE COMMANDE'
                     },
                     lines: bonDetailModal.items.map((it: any) => ({
                       code: it.product_code,
@@ -2983,7 +2985,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                     payments: [
                       { method: bonDetailModal.payment_status || 'En attente', amount: Number(bonDetailModal.paid_amount || 0) }
                     ],
-                    footerMessage: 'GESTIO 229 — Merci de votre confiance'
+                    footerMessage: getDocumentFooterMessage(company)
                   }
                   imprimerTicketThermique(ticketData, { width: '80mm', autoPrint: true })
                 }}
@@ -3464,7 +3466,8 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                       orderNumber: receiptSuccessBon.order_number,
                       date: receiptSuccessBon.date,
                       customerName: receiptSuccessBon.customer_name,
-                      cashierName: receiptSuccessBon.cashier_name
+                      cashierName: receiptSuccessBon.cashier_name,
+                      title: isCompanyEmecefActive(company) ? 'FACTURE DE VENTE' : 'BON DE COMMANDE'
                     },
                     lines: (receiptSuccessBon.items || []).map((it: any) => ({
                       code: it.product_code,
@@ -3485,7 +3488,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                     payments: [
                       { method: receiptSuccessBon.payment_method || 'Espèces', amount: receiptSuccessBon.amount_paid }
                     ],
-                    footerMessage: `Réf: ${receiptSuccessBon.transaction_ref} • Merci de votre confiance !`
+                    footerMessage: getDocumentFooterMessage(company)
                   }
                   imprimerTicketThermique(ticketData, { width: '80mm', autoPrint: true })
                 }}

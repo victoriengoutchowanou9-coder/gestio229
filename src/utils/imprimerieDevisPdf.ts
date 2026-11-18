@@ -8,6 +8,7 @@ import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
 import { DevisImprimerie, DevisLigne } from '../services/imprimerieService'
 import { formatFCFA } from './tax'
+import { isCompanyEmecefActive } from './facturationHelper'
 
 export interface DevisCompanyInfo {
   name: string
@@ -360,7 +361,9 @@ export function generateFactureBonPdf(
   doc.text(companyName, margin, y + 4)
 
   // Titre document
-  const docTitle = options?.documentTitle || (Number(bon.paid_amount || 0) >= Number(bon.total_amount || 0) ? 'FACTURE' : 'FACTURE D\'ACOMPTE')
+  const isEmecef = isCompanyEmecefActive(company as any)
+  const isPaid = Number(bon.paid_amount || 0) >= Number(bon.total_amount || 0)
+  const docTitle = options?.documentTitle || (isEmecef ? (isPaid ? 'FACTURE DE VENTE' : "FACTURE D'ACOMPTE") : 'BON DE COMMANDE')
   doc.setFontSize(18)
   doc.setTextColor(...accentColor)
   doc.text(docTitle, pageWidth - margin, y + 4, { align: 'right' })
@@ -544,11 +547,15 @@ export function generateFactureBonPdf(
   doc.setFont('helvetica', 'normal')
   doc.setFontSize(7)
   doc.setTextColor(148, 163, 184)
-  const footerText = `Facture éditée par ${company?.name || 'GESTIO 229'} via GESTIO229 SaaS — www.gestio229.com`
+  const isBonDoc = docTitle.includes('BON DE COMMANDE')
+  const footerText = isBonDoc
+    ? 'Merci de passer à la caisse pour obtenir votre facture normalisée après validation de votre commande'
+    : `Facture éditée par ${company?.name || 'GESTIO 229'} via GESTIO229 SaaS — www.gestio229.com`
   doc.text(footerText, margin, footerY)
   doc.text('Page 1 / 1', pageWidth - margin, footerY, { align: 'right' })
 
-  const fileName = `Facture_${orderNum}_${(bon.customer_name || 'Client').replace(/\s+/g, '_')}.pdf`
+  const prefix = isBonDoc ? 'Bon_de_Commande' : 'Facture'
+  const fileName = `${prefix}_${orderNum}_${(bon.customer_name || 'Client').replace(/\s+/g, '_')}.pdf`
   const blobUrl = doc.output('bloburl')
 
   if (options?.action === 'download') {

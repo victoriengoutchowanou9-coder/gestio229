@@ -24,19 +24,23 @@ export interface TicketPaymentItem {
 
 export interface TicketData {
   company: {
+    id?: string
     name: string
     address?: string
     phone?: string
     email?: string
     ifu?: string
     rccm?: string
+    e_mecef_active?: boolean
   }
   sale: {
     orderNumber: string
     date: string | Date
     cashierName?: string
     customerName?: string
+    customerIfu?: string
     isDuplicate?: boolean
+    title?: string
   }
   lines: TicketLineItem[]
   totals: {
@@ -176,10 +180,11 @@ export function imprimerTicketThermique(
   <div class="divider"></div>
 
   <div>
-    <div><b>Ticket :</b> ${data.sale.orderNumber}</div>
+    <div><b>${data.sale.title || 'Ticket'} :</b> ${data.sale.orderNumber}</div>
     <div><b>Date :</b> ${dateFormatee}</div>
     ${data.sale.cashierName ? `<div><b>Caissier :</b> ${data.sale.cashierName}</div>` : ''}
     <div><b>Client :</b> ${data.sale.customerName || 'Client Comptoir'}</div>
+    ${data.sale.customerIfu ? `<div><b>IFU :</b> ${data.sale.customerIfu}</div>` : ''}
   </div>
 
   <div class="divider"></div>
@@ -259,9 +264,9 @@ export function imprimerTicketThermique(
   <div class="divider"></div>
 
   <div class="text-center footer">
-    <div>${data.footerMessage || 'Merci pour vos achats ! À bientôt.'}</div>
+    <div>${data.footerMessage || ((data.sale.title || '').includes('BON DE COMMANDE') ? 'Merci de passer à la caisse pour obtenir votre facture normalisée après validation de votre commande' : 'Merci pour vos achats ! À bientôt.')}</div>
     <div style="margin-top: 4px; font-size: 8px; color: #666;">
-      Logiciel GESTIO 229 • Supermarché & Supérette
+      Logiciel GESTIO 229 • Système Commercial & POS
     </div>
   </div>
 
@@ -318,7 +323,7 @@ export function telechargerTicketPDF(data: TicketData, fileName?: string): void 
   y += 4
 
   doc.setFontSize(7.5)
-  doc.text(`Ticket : ${data.sale.orderNumber}`, 4, y)
+  doc.text(`${data.sale.title || 'Ticket'} : ${data.sale.orderNumber}`, 4, y)
   y += 3.5
   const dateStr = new Date(data.sale.date).toLocaleString('fr-BJ', { timeZone: 'Africa/Porto-Novo' })
   doc.text(`Date : ${dateStr}`, 4, y)
@@ -391,8 +396,9 @@ export function telechargerTicketPDF(data: TicketData, fileName?: string): void 
   y += 5
 
   doc.setFontSize(7)
-  doc.text(data.footerMessage || 'Merci pour votre confiance !', 40, y, { align: 'center' })
+  const isBonTicketPdf = (data.sale.title || '').includes('BON DE COMMANDE')
+  doc.text(data.footerMessage || (isBonTicketPdf ? 'Merci de passer à la caisse pour obtenir votre facture normalisée' : 'Merci pour votre confiance !'), 40, y, { align: 'center' })
 
-  const name = fileName || `Ticket_${data.sale.orderNumber}.pdf`
+  const name = fileName || (isBonTicketPdf ? `Bon_de_Commande_${data.sale.orderNumber}.pdf` : `Ticket_${data.sale.orderNumber}.pdf`)
   doc.save(name)
 }

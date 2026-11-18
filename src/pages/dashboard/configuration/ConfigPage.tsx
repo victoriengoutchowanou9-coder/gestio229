@@ -750,6 +750,10 @@ export const ConfigPage: React.FC = () => {
 
       if (error) throw error
 
+      if (company?.id) {
+        localStorage.setItem(`gestio229_emecef_active_${company.id}`, form.e_mecef_active ? 'true' : 'false')
+      }
+
       toast.success('Configuration sauvegardée avec succès')
       await refreshTenantContext()
     } catch (err: any) {
@@ -1524,71 +1528,75 @@ export const ConfigPage: React.FC = () => {
             </div>
           </div>
 
-          {/* Module e-MECeF DGI */}
+          {/* Rubrique : CONFIGURATION e-MECeF / FACTURATION */}
           <div className="bg-white rounded-3xl border border-slate-200 p-6 shadow-sm space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3 flex-wrap gap-2">
               <div>
                 <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2">
                   <Shield className="w-5 h-5 text-emerald-600" />
-                  <span>Module e-MECeF (Facture Normalisée DGI Bénin)</span>
+                  <span>CONFIGURATION e-MECeF / FACTURATION</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Gestion des deux modes légaux d'émission des factures et tickets
+                  Gestion conditionnelle du titre du document commercial (Bon de Commande vs Facture de Vente)
                 </p>
               </div>
               <div className="flex items-center gap-2">
                 <span className={`text-xs font-bold px-3 py-1 rounded-full ${
-                  form.e_mecef_connected
+                  form.e_mecef_active
                     ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                    : 'bg-slate-100 text-slate-700 border border-slate-200'
+                    : 'bg-indigo-50 text-indigo-800 border border-indigo-200'
                 }`}>
-                  {form.e_mecef_connected ? '● État 2 : Connecté DGI' : '○ État 1 : Facture Standard'}
+                  {form.e_mecef_active ? '● FACTURE DE VENTE (e-MECeF Associé)' : '○ BON DE COMMANDE (Non associé)'}
                 </span>
               </div>
             </div>
 
-            {/* Explications des deux états */}
+            {/* Explications des deux situations exigées */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className={`p-4 rounded-2xl border text-xs leading-relaxed ${
-                !form.e_mecef_connected ? 'bg-emerald-50/50 border-emerald-300 text-slate-700' : 'bg-slate-50 border-slate-200 text-slate-500'
+                !form.e_mecef_active ? 'bg-indigo-50/50 border-indigo-300 text-slate-700' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}>
                 <h4 className="font-black text-slate-800 mb-1 flex items-center gap-1.5">
-                  <span>État 1 : Facture Commerciale Standard</span>
-                  {!form.e_mecef_connected && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
+                  <span>CAS 1 : Compte e-MECeF non associé ou option désactivée</span>
+                  {!form.e_mecef_active && <span className="text-[10px] bg-indigo-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
                 </h4>
                 <p>
-                  Par défaut, l'application émet des <strong>Factures Commerciales Standards</strong> parfaitement valides avec toutes les mentions commerciales et légales, <strong>sans QR code factice ni faux NIM</strong>.
+                  Le document généré porte automatiquement le titre <strong>BON DE COMMANDE</strong> (n'affiche pas "Facture de vente") avec la mention : <em>« Merci de passer à la caisse pour obtenir votre facture normalisée après validation de votre commande »</em>.
                 </p>
               </div>
 
               <div className={`p-4 rounded-2xl border text-xs leading-relaxed ${
-                form.e_mecef_connected ? 'bg-emerald-50/50 border-emerald-300 text-slate-700' : 'bg-slate-50 border-slate-200 text-slate-500'
+                form.e_mecef_active ? 'bg-emerald-50/50 border-emerald-300 text-slate-700' : 'bg-slate-50 border-slate-200 text-slate-500'
               }`}>
                 <h4 className="font-black text-slate-800 mb-1 flex items-center gap-1.5">
-                  <span>État 2 : e-MECeF Certifié & Connecté</span>
-                  {form.e_mecef_connected && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
+                  <span>CAS 2 : Compte e-MECeF associé et option activée</span>
+                  {form.e_mecef_active && <span className="text-[10px] bg-emerald-600 text-white px-2 py-0.5 rounded-full">Actif</span>}
                 </h4>
                 <p>
-                  Activation dès que l'entreprise dispose de son NIM officiel et de ses jetons API e-MECeF DGI. Chaque vente génère le QR code officiel et les compteurs fiscaux certifiés.
+                  Le document commercial émis porte automatiquement le titre officiel <strong>FACTURE DE VENTE</strong>.
                 </p>
               </div>
             </div>
 
-            {/* Toggle activation e-MECeF */}
+            {/* Bouton d'activation exigé */}
             <div className="pt-2">
-              <label className="flex items-center gap-3 cursor-pointer">
+              <label className="flex items-center gap-3 cursor-pointer p-3 bg-slate-50 rounded-2xl border border-slate-200 hover:bg-slate-100 transition">
                 <input
                   type="checkbox"
-                  checked={form.e_mecef_connected}
-                  onChange={(e) => setForm({ ...form, e_mecef_connected: e.target.checked, e_mecef_active: e.target.checked })}
+                  checked={form.e_mecef_active}
+                  onChange={(e) => setForm({
+                    ...form,
+                    e_mecef_active: e.target.checked,
+                    e_mecef_connected: e.target.checked
+                  })}
                   className="w-5 h-5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
                 />
                 <div>
-                  <span className="text-xs font-bold text-slate-800">
-                    Activer la certification e-MECeF DGI en direct
+                  <span className="text-xs font-bold text-slate-900">
+                    Mon entreprise dispose d'un compte e-MECeF associé à GESTIO229
                   </span>
                   <p className="text-[11px] text-slate-500">
-                    Cochez cette case uniquement si votre machine ou API e-MECeF est enregistrée auprès de la DGI Bénin.
+                    Active l'intitulé officiel « FACTURE DE VENTE » propre à cette entreprise. Si décoché, l'application génère un « BON DE COMMANDE ».
                   </p>
                 </div>
               </label>

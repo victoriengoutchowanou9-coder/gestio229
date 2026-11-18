@@ -16,6 +16,15 @@ import {
 import { isFuelProduct } from '../../../utils/stationFuelHelper'
 import jsPDF from 'jspdf'
 import autoTable from 'jspdf-autotable'
+import {
+  isCompanyEmecefActive,
+  getDocumentTitle,
+  getDocumentFooterMessage,
+  isProductVatSubject,
+  computeFacturationFiscalSummary,
+  downloadFacturePdf,
+  FacturationDocumentData
+} from '../../../utils/facturationHelper'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
 import { useUIStore } from '../../../store/uiStore'
@@ -1361,7 +1370,7 @@ export const POSPage: React.FC = () => {
     return cart.reduce((sum, i) => sum + i.qty * i.discount, 0)
   }, [cart])
 
-  // Décomposition fiscale ligne par ligne rigoureuse
+  // Décomposition fiscale ligne par ligne rigoureuse (TVA calculée UNIQUEMENT sur la base taxable HT)
   const cartFiscalSummary = useMemo(() => {
     let ht = 0
     let tva = 0
@@ -1372,14 +1381,7 @@ export const POSPage: React.FC = () => {
 
     cart.forEach((item) => {
       const lineTtc = item.qty * item.unitPrice - item.qty * item.discount
-      const isVat = Boolean(
-        item.product.is_vat_subject ??
-        item.product.is_taxable ??
-        item.product.sector_meta?.is_taxable ??
-        (Number(item.product.tva_rate) > 0) ??
-        (Number(item.product.vat_rate) > 0) ??
-        false
-      )
+      const isVat = isProductVatSubject(item.product)
       const vatRate = isVat ? Number(item.product.vat_rate ?? item.product.tva_rate ?? 18) : 0
 
       // AIB : si coché sur le produit OU coché manuellement sur le panier
@@ -1409,12 +1411,13 @@ export const POSPage: React.FC = () => {
           vatRate,
           itemAibRate
         )
-        ht += decomp.ht
-        tva += decomp.tva
-        aib += decomp.aib
-        if (!isVat) {
+        if (isVat) {
+          ht += decomp.ht
+          tva += decomp.tva
+        } else {
           totalExonere += lineTtc
         }
+        aib += decomp.aib
       }
     })
 
@@ -2652,169 +2655,61 @@ export const POSPage: React.FC = () => {
 
   const handleDownloadPDF = (sale: SaleRecord) => {
     try {
-      const doc = new jsPDF()
+      const docTitle = getDocumentTitle(company, sale.status)
+      const docFooter = getDocumentFooterMessage(company, sale.status)
 
-      // En-tête de l'entreprise
-      doc.setFontSize(18)
-      doc.setFont('helvetica', 'bold')
-      doc.setTextColor(5, 150, 105)
-      doc.text(company?.name || 'GESTIO 229 ERP', 14, 20)
-
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(100, 116, 139)
-      doc.text(`IFU : ${company?.ifu_number || 'Non renseigné'}  |  RCCM : ${company?.rccm_number || 'Non renseigné'}`, 14, 26)
-      doc.text(`${company?.address ? `${company.address}, ` : ''}${company?.city || 'Cotonou, République du Bénin'}`, 14, 31)
-      doc.text(`Tél : ${company?.phone || '+229 01 00 00 00'}  |  Email : ${company?.email || 'contact@gestio229.bj'}`, 14, 36)
-
-      // Bloc Titre & Réf Facture
-      doc.setFontSize(14)
-      doc.setFont('helvetica', 'bold')
-      doc.setTextColor(15, 23, 42)
-      const docTitle = sale.status === 'AVOIR' ? "FACTURE D'AVOIR" : 'FACTURE DE VENTE'
-      doc.text(docTitle, 135, 20)
-
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'normal')
-      doc.text(`N° : ${sale.order_number}`, 135, 26)
-      doc.text(`Date : ${formatBeninDateTime(sale.date)}`, 135, 31)
-      doc.text(`Caisse : Caisse Principale POS`, 135, 36)
-
-      doc.setDrawColor(226, 232, 240)
-      doc.line(14, 42, 196, 42)
-
-      // Bloc Facturé à
-      doc.setFillColor(248, 250, 252)
-      doc.roundedRect(14, 46, 182, 16, 2, 2, 'F')
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(9)
-      doc.setTextColor(100, 116, 139)
-      doc.text('FACTURÉ À :', 18, 52)
-      doc.setTextColor(15, 23, 42)
-      doc.setFontSize(11)
-      doc.text(sale.customer_name || 'Client Comptoir', 18, 58)
-
-      if (sale.customer_ifu) {
-        doc.setFontSize(9)
-        doc.setFont('helvetica', 'normal')
-        doc.setTextColor(100, 116, 139)
-        doc.text(`N° IFU : ${sale.customer_ifu}`, 120, 58)
-      }
-
-      // Tableau des Lignes
-      const tableData = sale.lines.map((l) => [
-        l.product.code || 'ART',
-        l.product.name,
-        String(l.qty),
-        l.product.unit || 'Pièce',
-        fmt(l.unitPrice),
-        fmt(l.qty * l.unitPrice)
-      ])
-
-      autoTable(doc, {
-        startY: 68,
-        head: [['Réf', 'Désignation', 'Qté', 'Unité', 'Prix Unit. TTC', 'Total TTC']],
-        body: tableData,
-        theme: 'striped',
-        headStyles: {
-          fillColor: [5, 150, 105],
-          textColor: 255,
-          fontStyle: 'bold',
-          fontSize: 9
+      const docData: FacturationDocumentData = {
+        company: {
+          id: company?.id,
+          name: company?.name || 'GESTIO 229 ERP',
+          ifu_number: company?.ifu_number,
+          rccm_number: company?.rccm_number,
+          address: company?.address,
+          city: company?.city,
+          phone: company?.phone,
+          email: company?.email,
+          logo_url: company?.logo_url,
+          e_mecef_active: isCompanyEmecefActive(company),
         },
-        bodyStyles: {
-          fontSize: 9,
-          textColor: [30, 41, 59]
+        sale: {
+          id: sale.id,
+          order_number: sale.order_number,
+          date: sale.date,
+          status: sale.status,
+          caisseNom: 'Caisse Principale POS',
+          table_numero: sale.table_numero,
+          serveur_nom: sale.serveur_nom,
+          couverts: sale.couverts,
+          is_deferred: sale.is_deferred,
         },
-        columnStyles: {
-          0: { cellWidth: 25 },
-          1: { cellWidth: 'auto' },
-          2: { halign: 'center', cellWidth: 18 },
-          3: { halign: 'center', cellWidth: 20 },
-          4: { halign: 'right', cellWidth: 32 },
-          5: { halign: 'right', cellWidth: 35 }
-        }
-      })
-
-      const finalY = (doc as any).lastAutoTable.finalY + 10
-      const startX = 120
-
-      // Totaux
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(71, 85, 105)
-      doc.text('Total Hors Taxes :', startX, finalY)
-      doc.text(fmt(sale.total_ht), 196, finalY, { align: 'right' })
-
-      doc.text('Total TVA (18%) :', startX, finalY + 6)
-      doc.text(fmt(sale.total_tva), 196, finalY + 6, { align: 'right' })
-
-      if (sale.total_aib && sale.total_aib > 0) {
-        doc.text('Total AIB :', startX, finalY + 12)
-        doc.text(fmt(sale.total_aib), 196, finalY + 12, { align: 'right' })
+        customer: {
+          name: sale.customer_name || 'Client Comptoir',
+          ifu: sale.customer_ifu,
+        },
+        payments: sale.payments || [],
+        summary: computeFacturationFiscalSummary(
+          sale.lines,
+          sale.payments,
+          {
+            ancienne_dette_avant_facture: sale.ancienne_dette_avant_facture,
+            credit_amount: sale.credit_amount,
+            montant_credit_actuel: sale.montant_credit_actuel,
+            montant_restant_du_global: sale.montant_restant_du_global,
+            amount_paid: sale.amount_paid,
+            total_amount: sale.total_amount,
+          }
+        ),
+        documentTitle: docTitle,
+        footerMessage: docFooter,
+        emballages_consignes: sale.emballages_consignes,
       }
 
-      const netY = (sale.total_aib && sale.total_aib > 0) ? finalY + 18 : finalY + 12
-
-      doc.setDrawColor(203, 213, 225)
-      doc.line(startX, netY - 2, 196, netY - 2)
-
-      doc.setFont('helvetica', 'bold')
-      doc.setFontSize(11)
-      doc.setTextColor(15, 23, 42)
-      doc.text('NET À PAYER :', startX, netY + 4)
-      doc.setTextColor(5, 150, 105)
-      doc.text(fmt(sale.total_amount), 196, netY + 4, { align: 'right' })
-
-      // Règlements (Règle Métier 1 : Montant Restant Dû Global)
-      doc.setFontSize(9)
-      doc.setFont('helvetica', 'bold')
-      doc.setTextColor(71, 85, 105)
-      doc.text('Règlements effectués :', 14, finalY)
-      doc.setFont('helvetica', 'normal')
-      let pY = finalY + 6
-
-      const ancienneDettePdf = Number(sale.ancienne_dette_avant_facture || 0)
-      const creditActuelPdf = Number(sale.montant_credit_actuel ?? sale.credit_amount ?? 0)
-      const resteGlobalPdf = Number(sale.montant_restant_du_global ?? (ancienneDettePdf + creditActuelPdf))
-
-      if (ancienneDettePdf > 0) {
-        doc.text(`• Dette antérieure : ${fmt(ancienneDettePdf)}`, 14, pY)
-        pY += 5
-      }
-
-      if (creditActuelPdf > 0) {
-        doc.text(`• Crédit actuel (${sale.order_number}) : ${fmt(creditActuelPdf)}`, 14, pY)
-        pY += 5
-      }
-
-      sale.payments.forEach((p) => {
-        doc.text(`• ${p.method.replace('_', ' ').toUpperCase()} : ${fmt(p.amount)}`, 14, pY)
-        pY += 5
-      })
-
-      if (creditActuelPdf > 0 || ancienneDettePdf > 0) {
-        doc.setTextColor(225, 29, 72)
-        doc.setFont('helvetica', 'bold')
-        doc.text(`• MONTANT TOTAL RESTANT DÛ : ${fmt(resteGlobalPdf)}`, 14, pY)
-        pY += 5
-        if (ancienneDettePdf > 0) {
-          doc.setFontSize(7.5)
-          doc.setFont('helvetica', 'normal')
-          doc.setTextColor(100, 116, 139)
-          doc.text(`Détail : ${fmt(ancienneDettePdf)} (ancien) + ${fmt(creditActuelPdf)} (actuel) = ${fmt(resteGlobalPdf)}`, 14, pY)
-          pY += 5
-        }
-      }
-
-      // Mentions Légales
-      doc.setFontSize(8)
-      doc.setFont('helvetica', 'normal')
-      doc.setTextColor(148, 163, 184)
-      doc.text('Facture commerciale émise par GESTIO 229 ERP — République du Bénin', 105, 280, { align: 'center' })
-
-      doc.save(`Facture_${sale.order_number}.pdf`)
-      toast.success('Facture PDF générée', `Téléchargement : Facture_${sale.order_number}.pdf`)
+      const formatToUse = printFormat === 'ticket80' ? 'ticket80' : 'a4'
+      downloadFacturePdf(docData, formatToUse)
+      toast.success(
+        `${docTitle} PDF téléchargé`,
+        `${docTitle} N° ${sale.order_number} généré avec succès.`
+      )
     } catch (e: any) {
       console.error('Erreur génération PDF:', e)
       toast.error('Erreur génération PDF', e.message)
@@ -2870,6 +2765,30 @@ export const POSPage: React.FC = () => {
       s.order_number.toLowerCase().includes(historySearch.toLowerCase()) ||
       s.customer_name.toLowerCase().includes(historySearch.toLowerCase())
   )
+
+  const modalDocTitle = useMemo(() => {
+    return getDocumentTitle(company, currentSale?.status)
+  }, [company, currentSale?.status])
+
+  const modalFooterMessage = useMemo(() => {
+    return getDocumentFooterMessage(company, currentSale?.status)
+  }, [company, currentSale?.status])
+
+  const currentSaleFiscalSummary = useMemo(() => {
+    if (!currentSale) return null
+    return computeFacturationFiscalSummary(
+      currentSale.lines,
+      currentSale.payments,
+      {
+        ancienne_dette_avant_facture: currentSale.ancienne_dette_avant_facture,
+        credit_amount: currentSale.credit_amount,
+        montant_credit_actuel: currentSale.montant_credit_actuel,
+        montant_restant_du_global: currentSale.montant_restant_du_global,
+        amount_paid: currentSale.amount_paid,
+        total_amount: currentSale.total_amount,
+      }
+    )
+  }, [currentSale])
 
   return (
     <div className="space-y-4">
@@ -3653,11 +3572,17 @@ export const POSPage: React.FC = () => {
                   {!isRestaurant && (
                     <>
                       <div className="flex justify-between text-slate-600 text-[11px]">
-                        <span>Sous-total HT :</span>
+                        <span>Total HT taxable :</span>
                         <span className="font-mono font-bold">{fmt(cartFiscalSummary.ht)}</span>
                       </div>
+                      {cartFiscalSummary.totalExonere > 0 && (
+                        <div className="flex justify-between text-slate-600 text-[11px]">
+                          <span>Total exonéré :</span>
+                          <span className="font-mono font-bold">{fmt(cartFiscalSummary.totalExonere)}</span>
+                        </div>
+                      )}
                       <div className="flex justify-between text-slate-600 text-[11px]">
-                        <span>TVA (18%) :</span>
+                        <span>Total TVA (18%) :</span>
                         <span className="font-mono font-bold">{fmt(cartFiscalSummary.tva)}</span>
                       </div>
 
@@ -4630,8 +4555,13 @@ export const POSPage: React.FC = () => {
                   </div>
                 </div>
                 <div className="text-right">
-                  <span className="px-3 py-1 bg-slate-100 text-slate-800 rounded-lg font-black text-xs uppercase tracking-wider">
-                    {currentSale?.status === 'AVOIR' ? 'FACTURE D\'AVOIR' : 'FACTURE DE VENTE'}
+                  <span className={clsx(
+                    "px-3 py-1 rounded-lg font-black text-xs uppercase tracking-wider",
+                    modalDocTitle.includes('BON DE COMMANDE') ? "bg-indigo-50 text-indigo-800 border border-indigo-200" :
+                    modalDocTitle.includes('AVOIR') ? "bg-rose-50 text-rose-800 border border-rose-200" :
+                    "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                  )}>
+                    {modalDocTitle}
                   </span>
                   <p className="font-mono font-bold text-sm mt-1.5">{currentSale?.order_number}</p>
                   <p className="text-slate-500">Date : {formatBeninDateTime(currentSale?.date)}</p>
@@ -4666,20 +4596,34 @@ export const POSPage: React.FC = () => {
                     <th className="p-2.5 text-center">Qté</th>
                     <th className="p-2.5 text-center">Unité</th>
                     <th className="p-2.5 text-right">Prix Unit. TTC</th>
+                    <th className="p-2.5 text-center">Régime fiscal</th>
                     <th className="p-2.5 text-right">Total TTC</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {currentSale?.lines.map((l, i) => (
-                    <tr key={i}>
-                      <td className="p-2.5 font-mono text-slate-500">{l.product.code}</td>
-                      <td className="p-2.5 font-medium text-slate-900">{l.product.name}</td>
-                      <td className="p-2.5 text-center font-mono font-bold">{l.qty}</td>
-                      <td className="p-2.5 text-center text-slate-500">{l.product.unit}</td>
-                      <td className="p-2.5 text-right font-mono">{fmt(l.unitPrice)}</td>
-                      <td className="p-2.5 text-right font-mono font-bold">{fmt(l.qty * l.unitPrice)}</td>
-                    </tr>
-                  ))}
+                  {currentSale?.lines.map((l, i) => {
+                    const isVat = isProductVatSubject(l.product)
+                    const vatRate = isVat ? Number(l.product?.vat_rate ?? l.product?.tva_rate ?? 18) : 0
+                    const regimeLabel = isVat ? `Taxable (${vatRate}%)` : 'Exonéré'
+                    return (
+                      <tr key={i}>
+                        <td className="p-2.5 font-mono text-slate-500">{l.product.code}</td>
+                        <td className="p-2.5 font-medium text-slate-900">{l.product.name}</td>
+                        <td className="p-2.5 text-center font-mono font-bold">{l.qty}</td>
+                        <td className="p-2.5 text-center text-slate-500">{l.product.unit || 'Pièce'}</td>
+                        <td className="p-2.5 text-right font-mono">{fmt(l.unitPrice)}</td>
+                        <td className="p-2.5 text-center font-semibold text-[11px]">
+                          <span className={clsx(
+                            "px-2 py-0.5 rounded-full text-[10px]",
+                            isVat ? "bg-emerald-50 text-emerald-700 border border-emerald-200" : "bg-slate-100 text-slate-600 border border-slate-200"
+                          )}>
+                            {regimeLabel}
+                          </span>
+                        </td>
+                        <td className="p-2.5 text-right font-mono font-bold">{fmt(l.qty * l.unitPrice)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
 
@@ -4720,30 +4664,28 @@ export const POSPage: React.FC = () => {
                   )}
                 </div>
 
-                <div className="w-56 space-y-1.5 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <div className="w-64 space-y-1.5 text-xs bg-slate-50 p-3 rounded-xl border border-slate-200">
                   <div className="flex justify-between">
-                    <span className="text-slate-600">Total Hors Taxes :</span>
-                    <span className="font-mono font-bold">{fmt(currentSale?.total_ht || 0)}</span>
+                    <span className="text-slate-600 font-medium">Total HT taxable :</span>
+                    <span className="font-mono font-bold">{fmt(currentSaleFiscalSummary?.totalHtTaxable ?? currentSale?.total_ht ?? 0)}</span>
                   </div>
-                  {(currentSale?.total_exonere || 0) > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Total Exonéré :</span>
-                      <span className="font-mono font-bold">{fmt(currentSale.total_exonere)}</span>
-                    </div>
-                  )}
                   <div className="flex justify-between">
-                    <span className="text-slate-600">Total TVA (18%) :</span>
-                    <span className="font-mono font-bold">{fmt(currentSale?.total_tva || 0)}</span>
+                    <span className="text-slate-600 font-medium">Total exonéré :</span>
+                    <span className="font-mono font-bold">{fmt(currentSaleFiscalSummary?.totalExonere ?? currentSale?.total_exonere ?? 0)}</span>
                   </div>
-                  {currentSale?.total_aib > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600 font-medium">Total TVA (18%) :</span>
+                    <span className="font-mono font-bold">{fmt(currentSaleFiscalSummary?.totalTva ?? currentSale?.total_tva ?? 0)}</span>
+                  </div>
+                  {((currentSaleFiscalSummary?.totalAib ?? currentSale?.total_aib ?? 0) > 0) && (
                     <div className="flex justify-between">
-                      <span className="text-slate-600">Total AIB :</span>
-                      <span className="font-mono font-bold">{fmt(currentSale.total_aib)}</span>
+                      <span className="text-slate-600 font-medium">Total AIB :</span>
+                      <span className="font-mono font-bold">{fmt(currentSaleFiscalSummary?.totalAib ?? currentSale?.total_aib ?? 0)}</span>
                     </div>
                   )}
                   <div className="flex justify-between text-sm font-black text-slate-900 pt-1.5 border-t border-slate-300">
                     <span>NET À PAYER :</span>
-                    <span className="font-mono text-emerald-800">{fmt(currentSale?.total_amount || 0)}</span>
+                    <span className="font-mono text-emerald-800">{fmt(currentSaleFiscalSummary?.netAPayer ?? currentSale?.total_amount ?? 0)}</span>
                   </div>
                 </div>
               </div>
@@ -4785,15 +4727,23 @@ export const POSPage: React.FC = () => {
                 </div>
               )}
 
-              {/* Mentions Légales Standard (Pas de fausses mentions e-MECeF) */}
-              <div className="pt-4 border-t border-slate-200 text-center text-[10px] text-slate-400 space-y-0.5">
-                <p>Facture commerciale émise par GESTIO 229 ERP — République du Bénin</p>
-                <p>Pour tout renseignement, veuillez contacter la Direction de {company?.name}.</p>
+              {/* Mentions de bas de page adaptées au type de document */}
+              <div className="pt-4 border-t border-slate-200 text-center text-[10px] space-y-1">
+                {modalDocTitle.includes('BON DE COMMANDE') ? (
+                  <div className="p-3 bg-indigo-50 border border-indigo-200 rounded-xl text-indigo-900 font-bold text-xs">
+                    Merci de passer à la caisse pour obtenir votre facture normalisée après validation de votre commande
+                  </div>
+                ) : (
+                  <>
+                    <p className="text-slate-600 font-semibold">Facture commerciale émise par GESTIO 229 ERP — République du Bénin</p>
+                    <p className="text-slate-400">Pour tout renseignement, veuillez contacter la Direction de {company?.name || "l'entreprise"}.</p>
+                  </>
+                )}
               </div>
             </div>
           ) : (printFormat === 'ticket80' || printFormat === 'ticket80_double') ? (
             /* ── TICKET DE CAISSE 80MM STANDARD (SANS FAUX NUMÉROS FISCAUX) ── */
-            <div className="mx-auto max-w-[80mm] p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl font-mono text-xs space-y-3">
+            <div id="invoice-ticket-standard" data-printable="true" className="mx-auto max-w-[80mm] p-4 bg-slate-50 border border-dashed border-slate-300 rounded-xl font-mono text-xs space-y-3">
               <div className="text-center space-y-1">
                 {company?.logo_url && (
                   <img
@@ -4810,7 +4760,7 @@ export const POSPage: React.FC = () => {
               </div>
 
               <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-0.5 text-[11px]">
-                <p className="font-bold">Facture : {currentSale?.order_number}</p>
+                <p className="font-bold">{modalDocTitle} : {currentSale?.order_number}</p>
                 <p>Client : {currentSale?.customer_name}</p>
                 {currentSale?.table_numero && (
                   <p className="font-black text-rose-700">
@@ -4824,17 +4774,22 @@ export const POSPage: React.FC = () => {
                   <tr className="border-b border-slate-200">
                     <th className="text-left pb-1">Article</th>
                     <th className="text-center pb-1">Qté</th>
+                    <th className="text-center pb-1">Régime</th>
                     <th className="text-right pb-1">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {currentSale?.lines.map((l, i) => (
-                    <tr key={i}>
-                      <td className="py-1">{l.product.name}</td>
-                      <td className="py-1 text-center">{l.qty}</td>
-                      <td className="py-1 text-right">{fmt(l.qty * l.unitPrice)}</td>
-                    </tr>
-                  ))}
+                  {currentSale?.lines.map((l, i) => {
+                    const isVat = isProductVatSubject(l.product)
+                    return (
+                      <tr key={i}>
+                        <td className="py-1">{l.product.name}</td>
+                        <td className="py-1 text-center font-bold">{l.qty}</td>
+                        <td className="py-1 text-center text-[10px] text-slate-500">{isVat ? 'TVA 18%' : 'Exonéré'}</td>
+                        <td className="py-1 text-right">{fmt(l.qty * l.unitPrice)}</td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
 
@@ -4852,14 +4807,22 @@ export const POSPage: React.FC = () => {
               )}
 
               <div className="border-t border-dashed border-slate-300 pt-2 space-y-1 text-right">
-                <p className="font-black text-sm">TOTAL TTC : {fmt(currentSale?.total_amount || 0)}</p>
+                <p className="font-black text-sm">TOTAL NET TTC : {fmt(currentSaleFiscalSummary?.netAPayer ?? currentSale?.total_amount ?? 0)}</p>
                 <p className="text-[10px] text-slate-500">
-                  Dont HT : {fmt(currentSale?.total_ht || 0)} | Dont TVA (18%) : {fmt(currentSale?.total_tva || 0)}
+                  Dont HT taxable : {fmt(currentSaleFiscalSummary?.totalHtTaxable ?? currentSale?.total_ht ?? 0)}
                 </p>
-                {(currentSale?.total_aib || 0) > 0 && (
-                  <p className="text-[10px] text-amber-800 font-bold">Dont AIB : {fmt(currentSale?.total_aib || 0)}</p>
+                {(currentSaleFiscalSummary?.totalExonere ?? currentSale?.total_exonere ?? 0) > 0 && (
+                  <p className="text-[10px] text-slate-500">
+                    Dont Exonéré : {fmt(currentSaleFiscalSummary?.totalExonere ?? currentSale?.total_exonere ?? 0)}
+                  </p>
                 )}
-                <p className="text-xs text-emerald-700 font-bold">Payé : {fmt(currentSale?.amount_paid || 0)}</p>
+                <p className="text-[10px] text-slate-500">
+                  Dont TVA (18%) : {fmt(currentSaleFiscalSummary?.totalTva ?? currentSale?.total_tva ?? 0)}
+                </p>
+                {((currentSaleFiscalSummary?.totalAib ?? currentSale?.total_aib ?? 0) > 0) && (
+                  <p className="text-[10px] text-amber-800 font-bold">Dont AIB : {fmt(currentSaleFiscalSummary?.totalAib ?? currentSale?.total_aib ?? 0)}</p>
+                )}
+                <p className="text-xs text-emerald-700 font-bold">Payé : {fmt(currentSale?.amount_paid || currentSaleFiscalSummary?.totalRegle || 0)}</p>
                 {(currentSale?.ancienne_dette_avant_facture || 0) > 0 && (
                   <p className="text-[11px] text-slate-600">Dette ant. : {fmt(currentSale?.ancienne_dette_avant_facture || 0)}</p>
                 )}
@@ -4880,8 +4843,14 @@ export const POSPage: React.FC = () => {
                 )}
               </div>
 
-              <div className="text-center pt-2 border-t border-slate-200 text-[10px] text-slate-400">
-                <p>Merci pour votre visite !</p>
+              <div className="text-center pt-2 border-t border-slate-200 text-[10px] text-slate-600">
+                {modalDocTitle.includes('BON DE COMMANDE') ? (
+                  <p className="font-bold text-indigo-900 leading-tight">
+                    Merci de passer à la caisse pour obtenir votre facture normalisée après validation de votre commande
+                  </p>
+                ) : (
+                  <p>Merci pour votre visite !</p>
+                )}
               </div>
 
               {/* 2ÈME EXEMPLAIRE : PRODUCTION CUISINE & BAR (SI FORMAT DOUBLE CHOISI) */}
