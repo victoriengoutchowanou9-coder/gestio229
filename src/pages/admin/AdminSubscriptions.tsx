@@ -21,7 +21,7 @@ import React, { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import { useAdminCompanies } from '../../hooks/useAdminData'
 import {
-  CreditCard, RefreshCw, Eye, CheckCircle2, XCircle, Clock,
+  CreditCard, RefreshCw, Eye, CheckCircle2, XCircle, Clock, Search, Filter, DollarSign, Sparkles,
   Shield, Layers, Smartphone, Calendar, PlusCircle, Lock, Unlock,
   Save, AlertCircle, Check
 } from 'lucide-react'
@@ -53,7 +53,12 @@ function formatDate(d: string | null | undefined): string {
 export const AdminSubscriptions: React.FC = () => {
   const { companies, loading, reload } = useAdminCompanies()
 
-  const [activeTab, setActiveTab] = useState<'companies' | 'payments' | 'settings'>('companies')
+  const [activeTab, setActiveTab] = useState<'companies' | 'payments' | 'saaspay' | 'settings'>('companies')
+  const [saaspayTransactions, setSaaspayTransactions] = useState<any[]>([])
+  const [saaspaySearch, setSaaspaySearch] = useState('')
+  const [saaspayStatusFilter, setSaaspayStatusFilter] = useState<'all' | 'successful' | 'pending' | 'failed'>('all')
+  const [saaspayPeriodFilter, setSaaspayPeriodFilter] = useState<'all' | 'this_month' | 'last_3_months'>('all')
+  const [checkingSaaspayId, setCheckingSaaspayId] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<string>('all')
 
   // Données multi-secteurs chargées depuis Supabase
@@ -378,6 +383,33 @@ export const AdminSubscriptions: React.FC = () => {
         type: 'error',
         text: res.error || 'Erreur lors du rejet.',
       })
+    }
+  }
+
+  const handleCheckSaaspayStatus = async (ref: string, sessionId?: string) => {
+    setCheckingSaaspayId(ref || sessionId || '')
+    try {
+      const q = new URLSearchParams()
+      if (ref) q.set('ref', ref)
+      if (sessionId) q.set('session_id', sessionId)
+      const res = await fetch(`/api/saaspay-webhook?${q.toString()}`)
+      const data = await res.json()
+      if (data?.success) {
+        setFeedback({
+          type: 'success',
+          text: `Transaction ${ref} synchronisée : ${data.message || data.status}`,
+        })
+        await loadSubscriptionDetails()
+      } else {
+        setFeedback({
+          type: 'error',
+          text: data?.error || data?.message || 'Statut non mis à jour.',
+        })
+      }
+    } catch (e: any) {
+      setFeedback({ type: 'error', text: e.message || 'Erreur réseau.' })
+    } finally {
+      setCheckingSaaspayId(null)
     }
   }
 

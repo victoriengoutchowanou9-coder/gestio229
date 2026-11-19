@@ -15,7 +15,7 @@
 // =============================================================================
 
 import React, { useState, useEffect, useMemo } from 'react'
-import { useParams } from 'react-router-dom'
+import { useParams, useLocation } from 'react-router-dom'
 import {
   CreditCard, CheckCircle2, Sparkles, ShieldCheck, Calendar,
   Building2, Smartphone, RefreshCw, AlertCircle, Lock, Unlock,
@@ -55,6 +55,7 @@ import {
 import {
   AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE,
   initiateAutomaticSubscriptionPayment,
+  checkAutomaticPaymentStatus,
 } from '../../../services/payment/paymentGatewayService'
 
 const PRESET_DURATIONS = [1, 2, 3, 4, 6, 12]
@@ -179,9 +180,20 @@ const AbonnementPageContent: React.FC = () => {
   const [durationMonths, setDurationMonths] = useState<number>(1)
   const [customDurationInput, setCustomDurationInput] = useState<string>('')
 
-  // Mode de paiement sélectionné : 'manuel' | 'automatique' | null
-  const [selectedPaymentMode, setSelectedPaymentMode] = useState<'manuel' | 'automatique' | null>('manuel')
+  const location = useLocation()
+
+  // Mode de paiement sélectionné : 'automatique' (SaaS Pay) | 'manuel'
+  const [selectedPaymentMode, setSelectedPaymentMode] = useState<'manuel' | 'automatique' | null>('automatique')
   const [autoPaymentMessage, setAutoPaymentMessage] = useState<string | null>(null)
+  const [initiatingSaaspay, setInitiatingSaaspay] = useState(false)
+  const [saaspayError, setSaaspayError] = useState<string | null>(null)
+  const [paymentReturnStatus, setPaymentReturnStatus] = useState<{
+    status: 'pending' | 'successful' | 'failed' | 'cancelled' | null
+    reference?: string
+    message?: string
+    newExpirationDate?: string
+  } | null>(null)
+  const [checkingPaymentStatus, setCheckingPaymentStatus] = useState(false)
 
   // Formulaire de paiement manuel (Section 7.2)
   const [payerPhone, setPayerPhone] = useState(company?.phone || '')
@@ -239,6 +251,35 @@ const AbonnementPageContent: React.FC = () => {
   useEffect(() => {
     loadAllSubscriptionData()
   }, [company?.id, currentSectors.join(',')])
+
+  // Détection automatique du retour après paiement SaaS Pay
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const payment = params.get('payment')
+    const ref = params.get('ref')
+    const sessionId = params.get('session_id')
+
+    if ((payment === 'return' || ref || sessionId) && (ref || sessionId)) {
+      setSelectedPaymentMode('automatique')
+      setCheckingPaymentStatus(true)
+      checkAutomaticPaymentStatus({ reference: ref || undefined, sessionId: sessionId || undefined })
+        .then((res) => {
+          setCheckingPaymentStatus(false)
+          setPaymentReturnStatus({
+            status: res.status as any,
+            reference: ref || sessionId || undefined,
+            message: res.message,
+            newExpirationDate: res.newExpirationDate,
+          })
+          if (res.status === 'successful') {
+            loadAllSubscriptionData()
+          }
+        })
+        .catch(() => {
+          setCheckingPaymentStatus(false)
+        })
+    }
+  }, [location.search])
 
   // Calcul détaillé selon les règles GESTIO 229 (Secteurs initiaux, ajoutés, gratuits, barème)
   const detailedPricing = useMemo(() => {
@@ -404,19 +445,61 @@ const AbonnementPageContent: React.FC = () => {
     reader.readAsDataURL(file)
   }
 
-  const handleSelectAutomaticPayment = async () => {
+  const handleSelectAutomaticPayment = () => {
     setSelectedPaymentMode('automatique')
     setSubmitFeedback(null)
+    setSaaspayError(null)
+  }
+
+  const handleStartSaaspayPayment = async () => {
     if (!company?.id) return
-    const res = await initiateAutomaticSubscriptionPayment({
-      companyId: company.id,
-      companyName: company.name,
-      sectorSlug: targetScope,
-      durationMonths,
-      amountFcfa: durationCalc.netTotal,
-      payerPhone,
-    })
-    setAutoPaymentMessage(res.message || AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE)
+    setInitiatingSaaspay(true)
+    setSaaspayError(null)
+
+    try {
+      const res = await initiateAutomaticSubscriptionPayment({
+        companyId: company.id,
+        companyName: company.name,
+        sectorSlug: targetScope,
+        sectorsCovered: detailedPricing.sectorsCovered,
+        durationMonths,
+        amountFcfa: detailedPricing.netTotalPrice,
+        payerPhone,
+        payerEmail: company.email,
+        planSlug: detailedPricing.planSlug,
+      })
+
+      if (!res.available || !res.checkoutUrl) {
+        setSaaspayError(res.error || res.message || 'Impossible d\'initialiser la session de paiement SaaS Pay.')
+        setInitiatingSaaspay(false)
+        return
+      }
+
+      // Redirection immédiate vers le guichet officiel sécurisé SaaS Pay
+      window.location.href = res.checkoutUrl
+    } catch (err: any) {
+      setSaaspayError(err?.message || 'Erreur lors de la redirection vers SaaS Pay.')
+      setInitiatingSaaspay(false)
+    }
+  }
+
+  const handleManualCheckStatus = async (refOrSession: string) => {
+    setCheckingPaymentStatus(true)
+    try {
+      const res = await checkAutomaticPaymentStatus({ reference: refOrSession, sessionId: refOrSession })
+      setCheckingPaymentStatus(false)
+      setPaymentReturnStatus({
+        status: res.status as any,
+        reference: refOrSession,
+        message: res.message,
+        newExpirationDate: res.newExpirationDate,
+      })
+      if (res.status === 'successful') {
+        loadAllSubscriptionData()
+      }
+    } catch (_) {
+      setCheckingPaymentStatus(false)
+    }
   }
 
   const handleSubmitManualPayment = async (e: React.FormEvent) => {
@@ -1058,7 +1141,7 @@ const AbonnementPageContent: React.FC = () => {
               </div>
             </div>
 
-            {/* Deux boutons de mode de paiement (Section 6) : 1. Manuel | 2. Automatique */}
+            {/* Sélection du mode de paiement : 1. Automatique (SaaS Pay) | 2. Manuel */}
             <div className="mb-4">
               <label className="block text-xs font-bold uppercase tracking-wider text-slate-300 mb-2">
                 Mode de paiement
@@ -1067,50 +1150,168 @@ const AbonnementPageContent: React.FC = () => {
                 <button
                   type="button"
                   onClick={() => {
+                    setSelectedPaymentMode('automatique')
+                    setSubmitFeedback(null)
+                  }}
+                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
+                    selectedPaymentMode === 'automatique'
+                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-500/20 ring-1 ring-emerald-400'
+                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                  }`}
+                >
+                  <CreditCard className="w-4 h-4 text-emerald-300" />
+                  <span>1. SaaS Pay</span>
+                  <span className="text-[10px] bg-emerald-700 text-emerald-100 px-1.5 py-0.2 rounded font-extrabold uppercase">Direct</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
                     setSelectedPaymentMode('manuel')
                     setAutoPaymentMessage(null)
                   }}
                   className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-2 transition-all ${
                     selectedPaymentMode === 'manuel'
-                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-lg shadow-emerald-500/20'
-                      : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
-                  }`}
-                >
-                  <Smartphone className="w-4 h-4" />
-                  1. Manuel
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSelectAutomaticPayment}
-                  className={`py-2.5 px-3 rounded-xl border text-xs font-bold flex items-center justify-center gap-1.5 transition-all ${
-                    selectedPaymentMode === 'automatique'
-                      ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-lg shadow-amber-500/20'
+                      ? 'bg-slate-800 text-white border-slate-600 shadow-lg'
                       : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
                   }`}
                 >
-                  <CreditCard className="w-4 h-4" />
-                  2. Automatique <span className="text-[10px] opacity-75 font-normal">(Bientôt)</span>
+                  <Smartphone className="w-4 h-4" />
+                  <span>2. Manuel</span>
                 </button>
               </div>
             </div>
 
-            {/* Contenu Mode « Automatique » (Section 8) */}
+            {/* Contenu Mode « Automatique » via SaaS Pay */}
             {selectedPaymentMode === 'automatique' && (
-              <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-4 space-y-3">
-                <div className="flex items-start gap-2.5">
-                  <Info className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
-                  <p className="text-xs text-amber-200 leading-relaxed font-medium">
-                    {autoPaymentMessage || AUTOMATIC_PAYMENT_UNAVAILABLE_MESSAGE}
-                  </p>
+              <div className="rounded-2xl bg-gradient-to-b from-slate-950 to-slate-900 border border-emerald-500/30 p-4 space-y-4 shadow-xl">
+                {/* En-tête Passerelle */}
+                <div className="flex items-start justify-between gap-2 pb-3 border-b border-slate-800">
+                  <div className="flex items-center gap-2">
+                    <div className="w-9 h-9 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 flex items-center justify-center font-black">
+                      <Sparkles className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-black text-white uppercase tracking-wider">
+                        Passerelle SaaS Pay
+                      </h3>
+                      <p className="text-[10px] text-slate-400">
+                        MTN MoMo, Moov Money, Celtiis, Wave &amp; Cartes
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-400">
+                    Instantané 24/7
+                  </span>
                 </div>
+
+                {/* Bannière de statut après retour de paiement */}
+                {paymentReturnStatus && (
+                  <div className={`p-3.5 rounded-xl border text-xs space-y-2 ${
+                    paymentReturnStatus.status === 'successful'
+                      ? 'bg-emerald-500/15 border-emerald-500 text-emerald-200'
+                      : paymentReturnStatus.status === 'pending'
+                      ? 'bg-amber-500/15 border-amber-500 text-amber-200'
+                      : 'bg-rose-500/15 border-rose-500 text-rose-200'
+                  }`}>
+                    <div className="flex items-center gap-2 font-bold">
+                      {paymentReturnStatus.status === 'successful' ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      ) : paymentReturnStatus.status === 'pending' ? (
+                        <Clock className="w-4 h-4 text-amber-400 shrink-0 animate-spin" />
+                      ) : (
+                        <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      )}
+                      <span>
+                        {paymentReturnStatus.status === 'successful'
+                          ? 'Paiement Confirmé avec Succès !'
+                          : paymentReturnStatus.status === 'pending'
+                          ? 'Paiement en cours de validation'
+                          : 'Paiement non complété'}
+                      </span>
+                    </div>
+                    <p className="text-[11px] opacity-90 leading-relaxed">
+                      {paymentReturnStatus.message ||
+                        (paymentReturnStatus.status === 'successful'
+                          ? `Votre abonnement a été automatiquement activé jusqu'au ${paymentReturnStatus.newExpirationDate ? new Date(paymentReturnStatus.newExpirationDate).toLocaleDateString('fr-BJ') : 'prochaine échéance'}.`
+                          : paymentReturnStatus.status === 'pending'
+                          ? 'Votre opérateur valide la transaction. Si vous avez approuvé le débit sur votre téléphone, cliquez sur Vérifier ci-dessous.'
+                          : 'La transaction n\'a pas pu aboutir ou a été interrompue. Aucun débit n\'a été appliqué.')}
+                    </p>
+                    {paymentReturnStatus.reference && (
+                      <p className="font-mono text-[10px] opacity-75">
+                        Réf : {paymentReturnStatus.reference}
+                      </p>
+                    )}
+                    {paymentReturnStatus.status === 'pending' && (
+                      <button
+                        type="button"
+                        onClick={() => handleManualCheckStatus(paymentReturnStatus.reference || '')}
+                        disabled={checkingPaymentStatus}
+                        className="w-full py-1.5 px-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-lg text-[11px] transition flex items-center justify-center gap-1.5"
+                      >
+                        {checkingPaymentStatus ? (
+                          <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3.5 h-3.5" />
+                        )}
+                        <span>Vérifier le statut maintenant</span>
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {/* Message d'erreur initialisation */}
+                {saaspayError && (
+                  <div className="p-3 bg-rose-500/15 border border-rose-500/40 rounded-xl text-xs text-rose-200 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-rose-400" />
+                    <span>{saaspayError}</span>
+                  </div>
+                )}
+
+                {/* Détails du renouvellement (Section 3 cahier des charges) */}
+                <div className="bg-slate-950/80 rounded-xl p-3 border border-slate-800 space-y-2 text-xs">
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span>Abonnement cible :</span>
+                    <span className="font-bold text-slate-200">
+                      {targetScope === 'all' ? 'Pack Global (Tous secteurs)' : `Secteur ${targetScope.toUpperCase()}`}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center text-slate-400">
+                    <span>Durée de validité :</span>
+                    <span className="font-bold text-white">{durationMonths} mois</span>
+                  </div>
+                  <div className="flex justify-between items-center pt-2 border-t border-slate-800 text-slate-300">
+                    <span className="font-bold">Montant exact à payer :</span>
+                    <span className="text-base font-black text-emerald-400 font-mono">
+                      {detailedPricing.netTotalPrice.toLocaleString('fr-FR')} FCFA
+                    </span>
+                  </div>
+                </div>
+
+                {/* Bouton d'action officiel obligatoire : RENOUVELER MON ABONNEMENT */}
                 <button
                   type="button"
-                  onClick={() => setSelectedPaymentMode('manuel')}
-                  className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition-colors"
+                  onClick={handleStartSaaspayPayment}
+                  disabled={initiatingSaaspay || detailedPricing.netTotalPrice <= 0}
+                  className="w-full py-3.5 px-4 rounded-xl bg-gradient-to-r from-emerald-600 via-emerald-500 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-black text-xs uppercase tracking-wider transition-all shadow-xl shadow-emerald-600/30 active:scale-[0.99] disabled:opacity-50 flex items-center justify-center gap-2"
                 >
-                  Utiliser le paiement manuel dès maintenant
+                  {initiatingSaaspay ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Connexion à SaaS Pay...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock className="w-4 h-4 text-emerald-200" />
+                      <span>RENOUVELER MON ABONNEMENT ({detailedPricing.netTotalPrice.toLocaleString('fr-FR')} FCFA)</span>
+                    </>
+                  )}
                 </button>
+
+                <p className="text-[10px] text-center text-slate-500 leading-tight">
+                  🛡️ Redirection sécurisée vers la page officielle de paiement SaaS Pay. Validation automatique instantanée.
+                </p>
               </div>
             )}
 
