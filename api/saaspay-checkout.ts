@@ -64,9 +64,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(404).json({ success: false, error: 'Entreprise introuvable dans GESTIO229.' })
     }
 
-    const effectiveCompanyName = company_name || company.name || 'Entreprise GESTIO229'
-    const effectiveEmail = customer_email || company.email || undefined
-    const effectivePhone = customer_phone || company.phone || undefined
+    const effectiveCompanyName = (company_name || company.name || 'Entreprise GESTIO229').trim()
+    const rawEmail = (customer_email || company.email || '').trim()
+    const effectiveEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)
+      ? rawEmail
+      : `contact.${String(company_id).replace(/[^a-zA-Z0-9]/g, '').slice(0, 10).toLowerCase()}@gestio229.com`
+    const effectivePhone = (customer_phone || company.phone || '').trim() || undefined
 
     // 2. Générer une référence de transaction unique et sécurisée
     const timestamp = Date.now()
@@ -98,9 +101,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     })
 
     if (!sessionRes.success || !sessionRes.checkoutUrl) {
+      console.error('[saaspay-checkout] Échec session SaaS Pay:', sessionRes.error, sessionRes.raw)
       return res.status(502).json({
         success: false,
         error: sessionRes.error || 'Erreur lors de l\'initialisation de la session auprès de SaaS Pay.',
+        detail: typeof sessionRes.error === 'string' ? sessionRes.error : JSON.stringify(sessionRes.error),
         raw: sessionRes.raw,
       })
     }

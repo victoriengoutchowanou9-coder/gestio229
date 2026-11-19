@@ -144,7 +144,7 @@ class AbonnementErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorB
 
 const AbonnementPageContent: React.FC = () => {
   const { sectorSlug: routeSectorSlug } = useParams<{ sectorSlug?: string }>()
-  const { company } = useAuthStore()
+  const { company, user } = useAuthStore()
 
   // Secteurs de l'entreprise
   const currentSectors: string[] = useMemo(() => {
@@ -465,7 +465,7 @@ const AbonnementPageContent: React.FC = () => {
         durationMonths,
         amountFcfa: detailedPricing.netTotalPrice,
         payerPhone,
-        payerEmail: company.email,
+        payerEmail: company.email || user?.email || undefined,
         planSlug: detailedPricing.planSlug,
       })
 

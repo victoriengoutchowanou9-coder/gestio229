@@ -69,16 +69,41 @@ export async function createSaspayCheckoutSession(
   const numericAmount = typeof params.amount === 'number' ? params.amount : parseFloat(params.amount)
   const formattedAmount = numericAmount.toFixed(2)
 
+  // 1. Validation et normalisation obligatoire de customer_email selon l'API SaaS Pay
+  let cleanEmail = (params.customerEmail || '').trim()
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+  if (!emailRegex.test(cleanEmail)) {
+    const safeRef = String(params.reference || params.customerName || 'client')
+      .replace(/[^a-zA-Z0-9]/g, '')
+      .slice(0, 10)
+      .toLowerCase() || 'client'
+    cleanEmail = `contact.${safeRef}@gestio229.com`
+  }
+
+  // 2. Validation et normalisation obligatoire de customer_name selon l'API SaaS Pay
+  let cleanName = (params.customerName || '').trim()
+  if (!cleanName || cleanName.length < 2) {
+    cleanName = 'Client GESTIO229'
+  }
+
   const payload: any = {
     amount: formattedAmount,
     currency: params.currency || 'XOF',
-    description: params.description,
+    description: params.description || 'Abonnement GESTIO229',
+    customer_email: cleanEmail,
+    customer_name: cleanName,
     return_url: params.returnUrl,
   }
 
-  if (params.customerEmail) payload.customer_email = params.customerEmail
-  if (params.customerName) payload.customer_name = params.customerName
-  if (params.customerPhone) payload.customer_phone = params.customerPhone
+  if (params.customerPhone && params.customerPhone.trim()) {
+    payload.customer_phone = params.customerPhone.trim()
+  }
+
+  if (params.reference) {
+    payload.metadata = {
+      reference: params.reference,
+    }
+  }
 
   const endpoint = `${SASPAY_API_BASE_URL}/checkout-sessions/`
 
@@ -95,11 +120,20 @@ export async function createSaspayCheckoutSession(
     const data: any = await res.json().catch(() => null)
 
     if (!res.ok) {
-      const errMsg =
-        data?.message ||
-        data?.error ||
-        data?.detail ||
-        `Échec création session SaaS Pay (HTTP ${res.status})`
+      let errMsg = ''
+      if (typeof data?.error === 'string') {
+        errMsg = data.error
+      } else if (typeof data?.error === 'object' && data.error !== null) {
+        errMsg = Object.entries(data.error)
+          .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
+          .join(' | ')
+      } else if (data?.message) {
+        errMsg = typeof data.message === 'string' ? data.message : JSON.stringify(data.message)
+      } else if (data?.detail) {
+        errMsg = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
+      } else {
+        errMsg = `Échec création session SaaS Pay (HTTP ${res.status})`
+      }
       return { success: false, error: errMsg, raw: data }
     }
 

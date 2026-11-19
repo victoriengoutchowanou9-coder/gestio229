@@ -83,7 +83,8 @@ export async function initiateAutomaticSubscriptionPayment(
     const data = await res.json().catch(() => null)
 
     if (!res.ok || !data?.success) {
-      const errMsg = data?.error || 'Échec d\'initialisation du paiement SaaS Pay.'
+      const rawError = data?.detail || data?.error || data?.message || `Échec d'initialisation du paiement SaaS Pay (HTTP ${res.status}).`
+      const errMsg = typeof rawError === 'string' ? rawError : JSON.stringify(rawError)
       return {
         available: false,
         status: 'failed',
