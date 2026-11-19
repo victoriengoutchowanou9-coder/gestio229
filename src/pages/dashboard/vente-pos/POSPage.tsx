@@ -233,6 +233,27 @@ export const POSPage: React.FC = () => {
   const [restaurantServeurId, setRestaurantServeurId] = useState<string>('')
   const [restaurantSessionId, setRestaurantSessionId] = useState<string>('')
   const [restaurantServeursList, setRestaurantServeursList] = useState<any[]>([])
+  // Synchronisation automatique et bidirectionnelle de la serveuse sélectionnée
+  useEffect(() => {
+    if (!restaurantServeursList || restaurantServeursList.length === 0) return
+    if (restaurantServeur && restaurantServeur !== 'Client Comptoir Direct' && restaurantServeur !== 'Serveur de Salle') {
+      const matched = restaurantServeursList.find(s =>
+        (s.nom_complet && s.nom_complet.trim().toLowerCase() === restaurantServeur.trim().toLowerCase()) ||
+        (restaurantServeurId && s.id === restaurantServeurId)
+      )
+      if (matched) {
+        if (!restaurantServeurId || restaurantServeurId !== matched.id) setRestaurantServeurId(matched.id)
+        if (matched.active_session_id && restaurantSessionId !== matched.active_session_id) setRestaurantSessionId(matched.active_session_id)
+      }
+    } else if (restaurantServeurId && (!restaurantServeur || restaurantServeur === 'Client Comptoir Direct')) {
+      const matched = restaurantServeursList.find(s => s.id === restaurantServeurId)
+      if (matched && matched.nom_complet !== restaurantServeur) {
+        setRestaurantServeur(matched.nom_complet)
+        if (matched.active_session_id) setRestaurantSessionId(matched.active_session_id)
+      }
+    }
+  }, [restaurantServeur, restaurantServeurId, restaurantServeursList])
+
   const [recipeProducts, setRecipeProducts] = useState<Product[]>([])
   const [pendingOrders, setPendingOrders] = useState<any[]>([])
   const location = useLocation()
@@ -753,9 +774,9 @@ export const POSPage: React.FC = () => {
       try {
         const [fichesRes, srvRes, sessRes, staffRes] = await Promise.all([
           supabaseTenant('restaurant_fiches_techniques').select('*').order('plat_nom'),
-          supabaseTenant('restaurant_serveurs').select('id, matricule, nom_complet, role, telephone, statut').eq('statut', 'ACTIF').order('nom_complet'),
-          supabaseTenant('restaurant_sessions_serveurs').select('id, serveur_id, serveur_nom, statut, created_at').eq('statut', 'OUVERTE').order('created_at', { ascending: false }),
-          supabaseTenant('staff_members').select('id, first_name, last_name, role, phone_number, is_active').eq('is_active', true)
+          supabaseTenant('restaurant_serveurs').select('*').eq('statut', 'ACTIF').order('nom_complet'),
+          supabaseTenant('restaurant_sessions_serveurs').select('*').eq('statut', 'OUVERTE').order('created_at', { ascending: false }),
+          supabaseTenant('staff_members').select('*').eq('is_active', true)
         ])
 
         const srvMap = new Map<string, any>()
@@ -802,26 +823,60 @@ export const POSPage: React.FC = () => {
           })
         }
 
-        // 3. Fusionner avec staff_members si rôle serveuse / barman
+        // 3. Fusionner avec staff_members si rôle serveuse / barman / resto
         if (staffRes.data) {
           staffRes.data.forEach((st: any) => {
-            const rLower = (st.role || '').toLowerCase()
-            if (rLower.includes('serveu') || rLower.includes('barman') || rLower.includes('resto') || rLower.includes('salle')) {
-              const fn = `${st.first_name || ''} ${st.last_name || ''}`.trim() || st.first_name || st.last_name || ''
+            const rLower = (st.role || st.job_title || '').toLowerCase()
+            const fn = (st.full_name || `${st.first_name || ''} ${st.last_name || ''}`).trim()
+            if (!fn) return
+            const sSlug = (st.sector_slug || '').toLowerCase()
+            const isMatch = sSlug === 'restaurant' || sSlug === 'bar-restaurant-maquis' || sSlug === 'bar' || sSlug === 'maquis' || sSlug === 'fastfood' ||
+              rLower.includes('serveu') || rLower.includes('barman') || rLower.includes('resto') || rLower.includes('salle') || rLower.includes('sommelier')
+            if (isMatch) {
               const key = fn.toLowerCase()
-              if (key && !srvMap.has(key)) {
+              if (!srvMap.has(key)) {
                 srvMap.set(key, {
                   id: st.id,
-                  matricule: `STF-${fn.slice(0, 3).toUpperCase()}`,
+                  matricule: st.matricule || `STF-${fn.slice(0, 3).toUpperCase()}`,
                   nom_complet: fn,
                   role: 'SERVEUR',
-                  telephone: st.phone_number || '',
+                  telephone: st.phone || st.phone_number || '',
                   has_open_session: false,
                   active_session_id: null
                 })
               }
             }
           })
+        }
+
+        // 4. Fallback direct résilient si srvMap est vide
+        if (srvMap.size === 0 && (company?.id || companyId)) {
+          const compId = company?.id || companyId
+          try {
+            const { data: directSrv } = await supabase
+              .from('restaurant_serveurs')
+              .select('*')
+              .eq('company_id', compId)
+              .eq('statut', 'ACTIF')
+            if (directSrv && directSrv.length > 0) {
+              directSrv.forEach((s: any) => {
+                const key = (s.nom_complet || '').trim().toLowerCase()
+                if (key && !srvMap.has(key)) {
+                  srvMap.set(key, {
+                    id: s.id,
+                    matricule: s.matricule || `SRV-${s.nom_complet.slice(0, 3).toUpperCase()}`,
+                    nom_complet: s.nom_complet.trim(),
+                    role: s.role || 'SERVEUR',
+                    telephone: s.telephone || '',
+                    has_open_session: false,
+                    active_session_id: null
+                  })
+                }
+              })
+            }
+          } catch (fbErr) {
+            console.warn('[POSPage] Direct fallback restaurant_serveurs notice:', fbErr)
+          }
         }
 
         // Tri : les serveuses avec session ouverte apparaissent en premier, puis tri alphabétique
@@ -2109,9 +2164,21 @@ export const POSPage: React.FC = () => {
     const activeCaisseSnapshot = activeCaisse ? { ...activeCaisse } : null
     const restaurantTableSnapshot = restaurantTable
     const restaurantCouvertsSnapshot = restaurantCouverts
-    const restaurantServeurSnapshot = restaurantServeur || 'Serveur de Salle'
-    const restaurantServeurIdSnapshot = restaurantServeurId || null
-    const restaurantSessionIdSnapshot = restaurantSessionId || null
+    let restaurantServeurSnapshot = restaurantServeur || ''
+    if (!restaurantServeurSnapshot && restaurantServeursList.length > 0) {
+      restaurantServeurSnapshot = restaurantServeursList[0].nom_complet
+    }
+    if (!restaurantServeurSnapshot) restaurantServeurSnapshot = 'Serveur de Salle'
+
+    let restaurantServeurIdSnapshot = restaurantServeurId || null
+    let restaurantSessionIdSnapshot = restaurantSessionId || null
+    if (!restaurantServeurIdSnapshot && restaurantServeurSnapshot && restaurantServeursList.length > 0) {
+      const matched = restaurantServeursList.find(s => (s.nom_complet || '').trim().toLowerCase() === restaurantServeurSnapshot.trim().toLowerCase())
+      if (matched) {
+        restaurantServeurIdSnapshot = matched.id
+        restaurantSessionIdSnapshot = matched.active_session_id || null
+      }
+    }
     const loadedPendingBonSnapshot = loadedPendingBon ? { ...loadedPendingBon } : null
 
     // Génération orderNum avant l'envoi réseau
@@ -3112,6 +3179,12 @@ export const POSPage: React.FC = () => {
               setServeur={setRestaurantServeur}
               circuit={restaurantCircuit}
               setCircuit={setRestaurantCircuit}
+              serveursListProp={restaurantServeursList}
+              onServeurChange={(matched) => {
+                setRestaurantServeur(matched.nom_complet)
+                setRestaurantServeurId(matched.id)
+                setRestaurantSessionId(matched.active_session_id || '')
+              }}
             />
           )}
 
@@ -3507,7 +3580,7 @@ export const POSPage: React.FC = () => {
                       ) : (
                         <div className="flex items-center gap-1.5">
                           <select
-                            value={restaurantServeurId || ''}
+                            value={restaurantServeurId || (restaurantServeursList.find(s => (s.nom_complet || '').trim().toLowerCase() === (restaurantServeur || '').trim().toLowerCase())?.id) || ''}
                             onChange={(e) => {
                               const sId = e.target.value
                               setRestaurantServeurId(sId)

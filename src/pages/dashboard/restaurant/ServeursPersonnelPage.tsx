@@ -1551,9 +1551,34 @@ export const ServeursPersonnelPage: React.FC = () => {
                   <p className="text-xs text-slate-500">Matricule : {selectedStaffDetail.matricule} • Rôle : {selectedStaffDetail.role} • Zone : {selectedStaffDetail.zone_attribuee}</p>
                 </div>
               </div>
-              <button onClick={() => setSelectedStaffDetail(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
-                <X className="w-5 h-5" />
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const newStatut = selectedStaffDetail.statut === 'ACTIF' ? 'INACTIF' : 'ACTIF'
+                    try {
+                      await supabaseTenant('restaurant_serveurs').update({ statut: newStatut }).eq('id', selectedStaffDetail.id)
+                      setSelectedStaffDetail({ ...selectedStaffDetail, statut: newStatut })
+                      toast.success('Statut employé mis à jour', `${selectedStaffDetail.nom_complet} est maintenant ${newStatut}.`)
+                      loadAllData()
+                    } catch (err: any) {
+                      toast.error('Erreur', err.message)
+                    }
+                  }}
+                  className={clsx(
+                    'px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-sm',
+                    selectedStaffDetail.statut === 'ACTIF'
+                      ? 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                      : 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
+                  )}
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  {selectedStaffDetail.statut === 'ACTIF' ? 'Désactiver Compte' : 'Réactiver Compte'}
+                </button>
+                <button onClick={() => setSelectedStaffDetail(null)} className="p-2 text-slate-400 hover:text-slate-600 rounded-xl">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
             {/* Récapitulatif financier de la serveuse */}

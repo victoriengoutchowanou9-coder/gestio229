@@ -1,7 +1,7 @@
 /**
  * SUITE DE TESTS AUTOMATISÉS — GESTIO 229 RESTAURANT / BAR / MAQUIS / FAST-FOOD
  * VALIDATION DE LA COHÉRENCE SERVEUSES - VENTES - SESSIONS - RAPPORTS ET RENTABILITÉ
- * Conforme aux 8 exigences obligatoires de la section 7.
+ * Conforme aux 8 exigences obligatoires et à la liaison bidirectionnelle Personnel <-> POS.
  */
 
 const assert = require('assert')
@@ -36,9 +36,9 @@ test('POSPage contient le state restaurantSessionId pour lier les sessions activ
   assert(posContent.includes('restaurantSessionId'), 'restaurantSessionId doit exister dans POSPage.tsx')
 })
 
-test('POSPage charge les serveuses depuis restaurant_serveurs ET restaurant_sessions_serveurs', () => {
-  assert(posContent.includes("supabaseTenant('restaurant_serveurs')"), 'Doit requêter restaurant_serveurs')
-  assert(posContent.includes("supabaseTenant('restaurant_sessions_serveurs')"), 'Doit requêter restaurant_sessions_serveurs')
+test('POSPage charge les serveuses depuis restaurant_serveurs ET restaurant_sessions_serveurs avec select(*)', () => {
+  assert(posContent.includes("supabaseTenant('restaurant_serveurs').select('*')"), 'Doit requêter restaurant_serveurs avec select(*)')
+  assert(posContent.includes("supabaseTenant('restaurant_sessions_serveurs').select('*')"), 'Doit requêter restaurant_sessions_serveurs avec select(*)')
   assert(posContent.includes('has_open_session'), 'Doit marquer has_open_session')
   assert(posContent.includes('active_session_id'), 'Doit mapper active_session_id')
 })
@@ -127,29 +127,55 @@ test('L\'en-tête et les signatures d\'impression professionnelles sont configur
 })
 
 // -----------------------------------------------------------------------------
-// SIMULATION NUMÉRIQUE DETERMINISTE DES CALCULS FINANCIERS
+// [TEST 9] Isolation sectorielle & enregistrement TABLES_WITH_PHYSICAL_SECTOR_SLUG
 // -----------------------------------------------------------------------------
-console.log('\n[TEST 9] Simulation numérique déterministe (Scénario ANE & Awa)...')
+console.log('\n[TEST 9] Résilience schéma et protection TABLES_WITH_PHYSICAL_SECTOR_SLUG...')
+
+const tenantContent = fs.readFileSync(path.join(__dirname, '../src/lib/supabaseTenant.ts'), 'utf-8')
+const sectorClientContent = fs.readFileSync(path.join(__dirname, '../src/lib/sectorClient.ts'), 'utf-8')
+const widgetContent = fs.readFileSync(path.join(__dirname, '../src/pages/dashboard/restaurant/RestaurantOrderWidget.tsx'), 'utf-8')
+
+test('Toutes les tables restaurant_* sont dans TABLES_WITH_PHYSICAL_SECTOR_SLUG', () => {
+  assert(tenantContent.includes("'restaurant_serveurs'"), 'restaurant_serveurs doit être dans TABLES_WITH_PHYSICAL_SECTOR_SLUG')
+  assert(tenantContent.includes("'restaurant_sessions_serveurs'"), 'restaurant_sessions_serveurs doit être dans TABLES_WITH_PHYSICAL_SECTOR_SLUG')
+  assert(tenantContent.includes("'restaurant_tables'"), 'restaurant_tables doit être dans TABLES_WITH_PHYSICAL_SECTOR_SLUG')
+  assert(tenantContent.includes("'restaurant_commandes'"), 'restaurant_commandes doit être dans TABLES_WITH_PHYSICAL_SECTOR_SLUG')
+})
+
+test('sectorClient.ts reconnaît les entités restaurant et personnel de salle', () => {
+  assert(sectorClientContent.includes('isRestaurantStaffOrEntity'), 'Doit contenir isRestaurantStaffOrEntity')
+  assert(sectorClientContent.includes("rLower.includes('serveu')"), 'Doit reconnaître le rôle serveur/serveuse')
+})
+
+test('RestaurantOrderWidget synchronisé avec POSPage et affiche les serveuses réelles', () => {
+  assert(widgetContent.includes('serveursListProp'), 'RestaurantOrderWidget doit accepter serveursListProp')
+  assert(widgetContent.includes('onServeurChange'), 'RestaurantOrderWidget doit accepter onServeurChange')
+  assert(!widgetContent.includes('<option value="Serveur de Salle" className="bg-slate-900 text-white">Serveur de Salle</option>'), 'Serveur de Salle ne doit pas être la seule option générique')
+})
+
+test('POSPage implémente la synchronisation bidirectionnelle du serveur', () => {
+  assert(posContent.includes('Synchronisation automatique et bidirectionnelle de la serveuse sélectionnée'), 'Hook de synchronisation présent')
+  assert(posContent.includes('serveursListProp={restaurantServeursList}'), 'RestaurantOrderWidget doit recevoir restaurantServeursList')
+  assert(posContent.includes('restaurantServeurIdSnapshot'), 'Auto-résolution des IDs et sessions serveuse avant enregistrement de vente')
+})
+
+// -----------------------------------------------------------------------------
+// [TEST 10] Simulation numérique déterministe
+// -----------------------------------------------------------------------------
+console.log('\n[TEST 10] Simulation numérique déterministe (Scénario ANE & Awa)...')
 
 test('Simulation : Vente ANE (Castel + Poulet) et Vente Awa (Beaufort + Poisson)', () => {
-  // Scénario ANE :
-  // Vente 1 : 2x Castel (Vente = 2x1000 = 2000 FCFA, Coût = 2x600 = 1200 FCFA)
-  // Vente 2 : 1x Poulet bicyclette (Vente = 5000 FCFA, Coût = 3000 FCFA)
   const ventesANE = [
     { order_number: 'VTE-ANE-01', total_amount: 2000, total_cost: 1200, date: '2026-11-05', status: 'COMPLET' },
     { order_number: 'VTE-ANE-02', total_amount: 5000, total_cost: 3000, date: '2026-11-06', status: 'COMPLET' },
     { order_number: 'VTE-ANE-03-ANNULEE', total_amount: 10000, total_cost: 6000, date: '2026-11-06', status: 'ANNULE' }
   ]
 
-  // Scénario Awa :
-  // Vente 1 : 3x Beaufort (Vente = 3x1200 = 3600 FCFA, Coût = 3x750 = 2250 FCFA)
-  // Vente à crédit (comptée 1 seule fois) : 4000 FCFA, Coût = 2500 FCFA
   const ventesAwa = [
     { order_number: 'VTE-AWA-01', total_amount: 3600, total_cost: 2250, date: '2026-11-05', status: 'COMPLET' },
     { order_number: 'VTE-AWA-02-CREDIT', total_amount: 4000, total_cost: 2500, date: '2026-11-05', status: 'COMPLET' }
   ]
 
-  // Calcul ANE (hors annulée)
   const caANE = ventesANE.filter(v => v.status !== 'ANNULE').reduce((acc, v) => acc + v.total_amount, 0)
   const coutANE = ventesANE.filter(v => v.status !== 'ANNULE').reduce((acc, v) => acc + v.total_cost, 0)
   const margeANE = caANE - coutANE
@@ -162,7 +188,6 @@ test('Simulation : Vente ANE (Castel + Poulet) et Vente Awa (Beaufort + Poisson)
   assert.strictEqual(joursANE, 2, 'ANE a 2 jours de service distincts')
   assert.strictEqual(moyANE, 3500, 'Moyenne journalière ANE doit être 3 500 FCFA')
 
-  // Calcul Awa
   const caAwa = ventesAwa.reduce((acc, v) => acc + v.total_amount, 0)
   const coutAwa = ventesAwa.reduce((acc, v) => acc + v.total_cost, 0)
   const margeAwa = caAwa - coutAwa
@@ -175,7 +200,6 @@ test('Simulation : Vente ANE (Castel + Poulet) et Vente Awa (Beaufort + Poisson)
   assert.strictEqual(joursAwa, 1, 'Awa a 1 jour de service')
   assert.strictEqual(moyAwa, 7600, 'Moyenne journalière Awa doit être 7 600 FCFA')
 
-  // Consolidation globale (Toutes les serveuses)
   const totalCA = caANE + caAwa
   const totalCout = coutANE + coutAwa
   const totalMarge = totalCA - totalCout

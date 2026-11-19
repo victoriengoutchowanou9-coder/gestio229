@@ -116,6 +116,23 @@ export const TABLES_WITH_PHYSICAL_SECTOR_SLUG = new Set<string>([
   'station_lubrifiants',
   'station_services_annexes',
   'station_mouvements_cuves',
+  // Tables M032 Restaurant / Bar / Maquis / Fast-Food
+  'restaurant_zones',
+  'restaurant_tables',
+  'restaurant_commandes',
+  'restaurant_commande_lignes',
+  'restaurant_serveurs',
+  'restaurant_sessions_serveurs',
+  'restaurant_boissons_confiees',
+  'restaurant_versements_serveurs',
+  'restaurant_presences',
+  'restaurant_plaintes_incidents',
+  'restaurant_creances_serveuses',
+  'restaurant_reglements_serveuses',
+  'restaurant_fiches_techniques',
+  'restaurant_fiche_ingredients',
+  'restaurant_pertes_gaspillages',
+  'restaurant_reservations',
 ])
 
 // Tables dont la colonne physique 'notes' existe dans Supabase
@@ -195,6 +212,16 @@ function wrapQueryWithSectorIsolation(
               const finalData = isSingle ? (isolated[0] || null) : isMaybeSingle ? (isolated[0] || null) : isolated
               const customRes = { ...fbRes, data: finalData, count: isolated.length, error: null }
               return onfulfilled ? onfulfilled(customRes) : customRes
+            }
+
+            // Protection des tables dédiées restaurant / bar / maquis
+            if (physicalTable.startsWith('restaurant_')) {
+              if (canonicalSectorSlug(cleanSlug) === 'restaurant') {
+                return onfulfilled ? onfulfilled(res) : res
+              } else if (cleanSlug && !isHub) {
+                const emptyRes = { ...res, data: isSingle || isMaybeSingle ? null : [], count: 0 }
+                return onfulfilled ? onfulfilled(emptyRes) : emptyRes
+              }
             }
 
             // Si la table n'a pas de colonne SQL sector_slug mais que la requête a réussi, filtrer en mémoire
@@ -353,7 +380,15 @@ export function supabaseTenant(table: string, scope: TenantScope): TenantQueryCl
         query = query.eq('company_id', companyId)
       }
       if (hasPhysicalCol && cleanSlug && !isHub) {
-        query = query.eq('sector_slug', cleanSlug)
+        if (physicalTable.startsWith('restaurant_')) {
+          if (canonicalSectorSlug(cleanSlug) === 'restaurant') {
+            query = query.in('sector_slug', ['restaurant', 'bar-restaurant-maquis', 'bar', 'maquis', 'fastfood', cleanSlug])
+          } else {
+            query = query.eq('sector_slug', cleanSlug)
+          }
+        } else {
+          query = query.eq('sector_slug', cleanSlug)
+        }
       }
 
       return wrapQueryWithSectorIsolation(query, physicalTable, companyId || '', cleanSlug, isHub, hasPhysicalCol)

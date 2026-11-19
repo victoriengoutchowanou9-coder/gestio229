@@ -180,6 +180,28 @@ export function isItemInSector(item: any, targetSectorSlug?: string): boolean {
     }
   }
 
+  // 1d. Détection des entités et rôles dédiés bar / restaurant / maquis / personnel de salle
+  const rLower = String(item.role || item.job_title || '').toLowerCase()
+  const isRestaurantStaffOrEntity = (
+    rLower.includes('serveu') ||
+    rLower.includes('barman') ||
+    rLower.includes('cuisin') ||
+    rLower.includes('salle') ||
+    rLower.includes('resto') ||
+    rLower.includes('plonge') ||
+    rLower.includes('sommelier') ||
+    Boolean(item.serveur_nom) ||
+    Boolean(item.numero_table) ||
+    Boolean(item.table_numero) ||
+    Boolean(item.plat_nom) ||
+    (typeof item.matricule === 'string' && item.matricule.toUpperCase().startsWith('SRV')) ||
+    item.fonds_initial !== undefined ||
+    item.total_boissons_confiees_ttc !== undefined
+  )
+  if (isRestaurantStaffOrEntity) {
+    return activeCanon === 'restaurant'
+  }
+
   // 2. Tag explicite dans sector_meta JSONB
   if (item.sector_meta && typeof item.sector_meta === 'object') {
     const metaSlug = item.sector_meta.sector_slug || item.sector_meta.sector || item.sector_meta.secteur
