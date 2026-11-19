@@ -83,13 +83,28 @@ export async function initiateAutomaticSubscriptionPayment(
     const data = await res.json().catch(() => null)
 
     if (!res.ok || !data?.success) {
-      const rawError = data?.detail || data?.error || data?.message || `Échec d'initialisation du paiement SaaS Pay (HTTP ${res.status}).`
-      const errMsg = typeof rawError === 'string' ? rawError : JSON.stringify(rawError)
+      let explicitMessage = ''
+      if (res.status === 401 || res.status === 403) {
+        explicitMessage = 'Authentification SaaS Pay incorrecte. Veuillez contacter le support technique.'
+      } else if (res.status === 502 || res.status === 503 || res.status === 504) {
+        explicitMessage = 'Problème de connexion au serveur de paiement SaaS Pay. Veuillez réessayer dans quelques instants.'
+      } else if (res.status === 500) {
+        explicitMessage = data?.error || 'Initialisation du paiement impossible pour le moment. Veuillez réessayer.'
+      } else {
+        explicitMessage = data?.error || data?.detail || data?.message || 'Initialisation du paiement impossible. Veuillez vérifier vos informations.'
+      }
+
+      console.error('[SaaS Pay Gateway Error]', {
+        status: res.status,
+        data,
+        detail: data?.detail || data?.error,
+      })
+
       return {
         available: false,
         status: 'failed',
-        message: errMsg,
-        error: errMsg,
+        message: explicitMessage,
+        error: explicitMessage,
         requiresServerWebhookVerification: true,
       }
     }
@@ -106,10 +121,11 @@ export async function initiateAutomaticSubscriptionPayment(
       requiresServerWebhookVerification: true,
     }
   } catch (err: any) {
+    console.error('[SaaS Pay Network Error]', err)
     return {
       available: false,
       status: 'failed',
-      message: `Erreur de connexion avec le service de paiement : ${err?.message || err}`,
+      message: 'Problème de connexion au serveur de paiement. Veuillez vérifier votre connexion Internet.',
       error: err?.message,
       requiresServerWebhookVerification: true,
     }

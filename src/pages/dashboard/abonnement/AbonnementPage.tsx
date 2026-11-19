@@ -1205,6 +1205,25 @@ const AbonnementPageContent: React.FC = () => {
                   </span>
                 </div>
 
+                {/* Badges des opérateurs disponibles sur SaaS Pay */}
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/10 border border-amber-500/30 text-amber-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span> MTN MoMo
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-500/10 border border-blue-500/30 text-blue-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400"></span> Moov Money
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/10 border border-indigo-500/30 text-indigo-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-400"></span> Celtiis
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-cyan-500/10 border border-cyan-500/30 text-cyan-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span> Wave
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/10 border border-emerald-500/30 text-emerald-300">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span> Carte Visa / MC
+                  </span>
+                </div>
+
                 {/* Bannière de statut après retour de paiement */}
                 {paymentReturnStatus && (
                   <div className={`p-3.5 rounded-xl border text-xs space-y-2 ${

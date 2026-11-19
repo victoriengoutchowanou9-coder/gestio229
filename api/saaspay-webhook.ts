@@ -12,7 +12,7 @@ import {
   getSaspayCheckoutSessionStatus,
   verifySaspayWebhookSignature,
   getSupabaseAdmin,
-} from './_lib/saaspayClient'
+} from './_lib/saaspayClient.ts'
 
 /**
  * Lit le corps brut d'une requête HTTP pour la vérification HMAC
