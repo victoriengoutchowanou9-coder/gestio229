@@ -377,6 +377,24 @@ const UtilisateursPage: React.FC = () => {
     setEditUserPermissions(newPerms)
   }
 
+  const handleEditSectorChange = (newSector: string) => {
+    const cleanSlug = normalizeSectorSlug(newSector)
+    setEditUserSector(cleanSlug)
+    const roles = getRolesForSector(cleanSlug)
+    const newRole = roles[0]?.id || 'vendeur'
+    setEditUserRole(newRole)
+    const roleObj = roles.find((r) => r.id === newRole)
+    const rolePerms = (roleObj?.defaultPermissions as any) || {}
+
+    const newModules = SectorLoader.getAvailableModulesForSector(cleanSlug, company)
+    const updatedPerms: Record<string, any> = { ...editUserPermissions }
+    newModules.forEach((m) => {
+      const allowed = Boolean(rolePerms[m.id])
+      updatedPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
+    })
+    setEditUserPermissions(updatedPerms)
+  }
+
   const handleEditRoleChange = (newRole: string) => {
     const roles = getRolesForSector(editUserSector)
     const roleObj = roles.find((r) => r.id === newRole)
@@ -388,17 +406,47 @@ const UtilisateursPage: React.FC = () => {
       updatedPerms[m.id] = allowed ? { view: true, create: true, edit: true, delete: true } : false
     })
 
+    // Pré-configuration automatique des droits opérationnels selon le rôle
+    const isGerantOrAdmin = ['gerant', 'directeur', 'responsable_secteur', 'pharmacien_titulaire', 'maitre_hotel', 'chef_chantier'].includes(newRole)
+    const isCaissier = ['caissier', 'responsable_caisse', 'vendeur', 'pompiste'].includes(newRole)
+
+    updatedPerms.can_view = true
+    updatedPerms.can_create = true
+    updatedPerms.can_edit = isGerantOrAdmin || newRole !== 'stagiaire'
+    updatedPerms.can_delete = isGerantOrAdmin
+    updatedPerms.can_validate = isGerantOrAdmin
+    updatedPerms.can_cashier = isCaissier || isGerantOrAdmin
+
     setEditUserRole(newRole)
     setEditUserPermissions(updatedPerms)
+  }
+
+  const toggleEditActionPermission = (actionKey: 'can_view' | 'can_create' | 'can_edit' | 'can_delete' | 'can_validate' | 'can_cashier') => {
+    setEditUserPermissions((prev) => ({
+      ...prev,
+      [actionKey]: !prev[actionKey],
+    }))
   }
 
   const handleOpenEditUser = (u: InternalUser) => {
     const perm = (typeof u.permissions === 'object' && u.permissions) ? u.permissions : {}
     const uSector = (perm.sector_slug || perm.sector || perm.assigned_sector || u.sector_id || currentSectorSlug || 'boutique').toLowerCase().replace(/^sec-/, '').trim()
+    const userRole = u.role || 'vendeur'
+    const isGerantOrAdmin = ['gerant', 'directeur', 'responsable_secteur', 'super_admin'].includes(userRole)
+    const isCaissier = ['caissier', 'responsable_caisse', 'vendeur', 'pompiste'].includes(userRole)
+
     setEditUser(u)
     setEditUserSector(uSector)
-    setEditUserRole(u.role || 'vendeur')
-    setEditUserPermissions({ ...perm })
+    setEditUserRole(userRole)
+    setEditUserPermissions({
+      ...perm,
+      can_view: perm.can_view !== false,
+      can_create: perm.can_create !== false,
+      can_edit: perm.can_edit !== false,
+      can_delete: perm.can_delete !== undefined ? Boolean(perm.can_delete) : isGerantOrAdmin,
+      can_validate: perm.can_validate !== undefined ? Boolean(perm.can_validate) : isGerantOrAdmin,
+      can_cashier: perm.can_cashier !== undefined ? Boolean(perm.can_cashier) : isCaissier,
+    })
     setEditUserError('')
   }
 
@@ -421,34 +469,66 @@ const UtilisateursPage: React.FC = () => {
         sector_id: cleanSectorSlug,
         role_label: roleLabel,
         is_internal_user: true,
+        can_view: editUserPermissions.can_view !== false,
+        can_create: editUserPermissions.can_create !== false,
+        can_edit: editUserPermissions.can_edit !== false,
+        can_delete: Boolean(editUserPermissions.can_delete),
+        can_validate: Boolean(editUserPermissions.can_validate),
+        can_cashier: Boolean(editUserPermissions.can_cashier),
       }
 
-      const { error } = await supabase
+      let saveError: any = null
+
+      // Tentative 1 : avec sector_slug et sector_id (si migration M088 appliquée)
+      const { error: errFull } = await supabase
         .from('user_profiles')
         .update({
           role: editUserRole,
-          sector_id: cleanSectorSlug,
           sector_slug: cleanSectorSlug,
+          sector_id: cleanSectorSlug,
           permissions: updatedPermissionsPayload,
+          updated_at: new Date().toISOString(),
         })
         .eq('id', editUser.id)
 
-      if (error) {
-        const { error: fallbackErr } = await supabase
+      if (errFull) {
+        // Tentative 2 : avec sector_slug uniquement (cas classique M021/M024)
+        const { error: errSlugOnly } = await supabase
           .from('user_profiles')
           .update({
             role: editUserRole,
-            sector_id: cleanSectorSlug,
+            sector_slug: cleanSectorSlug,
             permissions: updatedPermissionsPayload,
+            updated_at: new Date().toISOString(),
           })
           .eq('id', editUser.id)
-        if (fallbackErr) throw fallbackErr
+
+        if (errSlugOnly) {
+          // Tentative 3 universelle : role + permissions JSONB (aucune dépendance de colonne physique)
+          const { error: errBase } = await supabase
+            .from('user_profiles')
+            .update({
+              role: editUserRole,
+              permissions: updatedPermissionsPayload,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', editUser.id)
+
+          if (errBase) {
+            saveError = errBase
+          }
+        }
       }
 
-      setSuccess(`Permissions de "${editUser.full_name}" mises à jour avec succès !`)
+      if (saveError) {
+        throw new Error(saveError.message || 'Impossible d\'enregistrer les modifications du profil.')
+      }
+
+      setSuccess(`Permissions et droits d'accès de "${editUser.full_name}" enregistrés avec succès pour le secteur "${cleanSectorSlug.toUpperCase()}" !`)
       setEditUser(null)
       loadUsers()
     } catch (err: any) {
+      console.error('[handleSaveEditUser Error]', err)
       setEditUserError(err.message || 'Erreur lors de la mise à jour des permissions.')
     } finally {
       setSavingEditUser(false)
@@ -823,19 +903,19 @@ const UtilisateursPage: React.FC = () => {
         password_hash: form.password,
         phone: form.phone.trim() || null,
         role: form.role,
-        sector_id: assignedSectorSlug,
         is_active: true,
         permissions: permissionsPayload,
       }
 
       let profileErr: any = null
+      // 1. Essai avec sector_slug
       const { error: errWithSlug } = await supabase.from('user_profiles').insert({
         ...baseUserObj,
         sector_slug: assignedSectorSlug,
       })
 
       if (errWithSlug) {
-        // Fallback si la colonne physique sector_slug n'existe pas encore
+        // 2. Fallback universel (baseUserObj avec permissions JSONB contenant déjà le secteur)
         const { error: fallbackErr } = await supabase.from('user_profiles').insert(baseUserObj)
         profileErr = fallbackErr
       }
@@ -1128,7 +1208,6 @@ const UtilisateursPage: React.FC = () => {
                   role: 'employe',
                   is_active: true,
                   sector_slug: assignedSectorSlug,
-                  sector_id: assignedSectorSlug,
                   permissions: {
                     job_title: newStaffForm.jobTitle.trim(),
                     base_salary: Number(newStaffForm.baseSalary) || 0,
@@ -1137,6 +1216,7 @@ const UtilisateursPage: React.FC = () => {
                     bonus: Number(newStaffForm.bonus) || 0,
                     cnss_number: newStaffForm.cnssNumber.trim() || null,
                     sector_slug: assignedSectorSlug,
+                    sector_id: assignedSectorSlug,
                     sector_name: assignedSectorName,
                   }
                 })
@@ -3382,6 +3462,24 @@ const UtilisateursPage: React.FC = () => {
               </div>
             )}
 
+            {/* Sélection / Changement de secteur d'activité */}
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
+              <label className="text-xs font-bold text-slate-700 block">
+                Secteur d'Activité d'Affectation
+              </label>
+              <select
+                value={editUserSector}
+                onChange={(e) => handleEditSectorChange(e.target.value)}
+                className="w-full px-4 py-2 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:outline-none bg-white font-medium"
+              >
+                {sectors.map((s) => (
+                  <option key={s.id || s.sector_slug} value={s.sector_slug}>
+                    {s.sector_name} ({s.sector_slug})
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Rôle métier spécialisé pour ce secteur */}
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-2">
               <label className="text-xs font-bold text-slate-700 block">
@@ -3399,8 +3497,77 @@ const UtilisateursPage: React.FC = () => {
                 ))}
               </select>
               <p className="text-[11px] text-slate-500 italic">
-                Changer le rôle métier pré-coche automatiquement les modules recommandés pour ce poste.
+                Changer le rôle métier pré-coche automatiquement les modules et droits recommandés pour ce poste.
               </p>
+            </div>
+
+            {/* Permissions & Actions Opérationnelles Granulaires */}
+            <div className="bg-emerald-50/50 border border-emerald-200/60 rounded-2xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="text-xs font-black text-slate-800 uppercase flex items-center gap-1.5">
+                  <Shield className="w-4 h-4 text-emerald-600" />
+                  Actions & Droits Opérationnels ({editUserSector})
+                </h4>
+                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-100/80 px-2 py-0.5 rounded-md">
+                  Contrôle Granulaire
+                </span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer hover:border-emerald-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={editUserPermissions.can_view !== false}
+                    onChange={() => toggleEditActionPermission('can_view')}
+                    className="w-4 h-4 accent-emerald-600 rounded"
+                  />
+                  <span>1. Consultation</span>
+                </label>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer hover:border-emerald-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={editUserPermissions.can_create !== false}
+                    onChange={() => toggleEditActionPermission('can_create')}
+                    className="w-4 h-4 accent-emerald-600 rounded"
+                  />
+                  <span>2. Création</span>
+                </label>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer hover:border-emerald-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={editUserPermissions.can_edit !== false}
+                    onChange={() => toggleEditActionPermission('can_edit')}
+                    className="w-4 h-4 accent-emerald-600 rounded"
+                  />
+                  <span>3. Modification</span>
+                </label>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer hover:border-emerald-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editUserPermissions.can_delete)}
+                    onChange={() => toggleEditActionPermission('can_delete')}
+                    className="w-4 h-4 accent-emerald-600 rounded"
+                  />
+                  <span>4. Suppression</span>
+                </label>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer hover:border-emerald-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editUserPermissions.can_validate)}
+                    onChange={() => toggleEditActionPermission('can_validate')}
+                    className="w-4 h-4 accent-emerald-600 rounded"
+                  />
+                  <span>5. Validation</span>
+                </label>
+                <label className="flex items-center gap-2 p-2.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 cursor-pointer hover:border-emerald-300 transition">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editUserPermissions.can_cashier)}
+                    onChange={() => toggleEditActionPermission('can_cashier')}
+                    className="w-4 h-4 accent-emerald-600 rounded"
+                  />
+                  <span>6. Encaissement</span>
+                </label>
+              </div>
             </div>
 
             {/* Liste dynamique des modules pour ce secteur */}

@@ -1361,18 +1361,50 @@ export const ConfigPage: React.FC = () => {
         ...primaryConfig.modules
       }
 
-      const { error: updateErr } = await supabase
+      let updateError: any = null
+
+      // Tentative 1 : avec sector_slug et sector_id (si colonnes physiques présentes)
+      const { error: errFull } = await supabase
         .from('user_profiles')
         .update({
           role: primaryConfig.role,
-          sector_id: primarySector,
           sector_slug: primarySector,
+          sector_id: primarySector,
           permissions: updatedPermissionsPayload,
           updated_at: new Date().toISOString()
         })
         .eq('id', editPermissionsUser.id)
 
-      if (updateErr) throw updateErr
+      if (errFull) {
+        // Tentative 2 : avec sector_slug uniquement (cas classique M021/M024)
+        const { error: errSlugOnly } = await supabase
+          .from('user_profiles')
+          .update({
+            role: primaryConfig.role,
+            sector_slug: primarySector,
+            permissions: updatedPermissionsPayload,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editPermissionsUser.id)
+
+        if (errSlugOnly) {
+          // Tentative 3 : universelle sans colonnes physiques (role + permissions JSONB garantis)
+          const { error: errBase } = await supabase
+            .from('user_profiles')
+            .update({
+              role: primaryConfig.role,
+              permissions: updatedPermissionsPayload,
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', editPermissionsUser.id)
+
+          if (errBase) {
+            updateError = errBase
+          }
+        }
+      }
+
+      if (updateError) throw updateError
 
       // Enregistrer l'événement d'audit
       try {
