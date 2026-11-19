@@ -231,6 +231,7 @@ export const POSPage: React.FC = () => {
   const [restaurantCouverts, setRestaurantCouverts] = useState(1)
   const [restaurantServeur, setRestaurantServeur] = useState('')
   const [restaurantServeurId, setRestaurantServeurId] = useState<string>('')
+  const [restaurantSessionId, setRestaurantSessionId] = useState<string>('')
   const [restaurantServeursList, setRestaurantServeursList] = useState<any[]>([])
   const [recipeProducts, setRecipeProducts] = useState<Product[]>([])
   const [pendingOrders, setPendingOrders] = useState<any[]>([])
@@ -747,17 +748,90 @@ export const POSPage: React.FC = () => {
       console.warn('[POSPage] Erreur récupération clients:', custErr)
     }
 
-    // 3. Charger les fiches techniques (Recettes Restaurant) et les serveuses
+    // 3. Charger les fiches techniques (Recettes Restaurant) et les serveuses (unification serveurs + sessions + personnel)
     if (isRestaurant) {
       try {
-        const [fichesRes, srvRes] = await Promise.all([
+        const [fichesRes, srvRes, sessRes, staffRes] = await Promise.all([
           supabaseTenant('restaurant_fiches_techniques').select('*').order('plat_nom'),
-          supabaseTenant('restaurant_serveurs').select('id, matricule, nom_complet, role, telephone').eq('statut', 'ACTIF').order('nom_complet')
+          supabaseTenant('restaurant_serveurs').select('id, matricule, nom_complet, role, telephone, statut').eq('statut', 'ACTIF').order('nom_complet'),
+          supabaseTenant('restaurant_sessions_serveurs').select('id, serveur_id, serveur_nom, statut, created_at').eq('statut', 'OUVERTE').order('created_at', { ascending: false }),
+          supabaseTenant('staff_members').select('id, first_name, last_name, role, phone_number, is_active').eq('is_active', true)
         ])
 
+        const srvMap = new Map<string, any>()
+
+        // 1. D'abord les serveurs enregistrés dans restaurant_serveurs
         if (srvRes.data) {
-          setRestaurantServeursList(srvRes.data)
+          srvRes.data.forEach((s: any) => {
+            const key = (s.nom_complet || '').trim().toLowerCase()
+            if (!key) return
+            srvMap.set(key, {
+              id: s.id,
+              matricule: s.matricule || `SRV-${s.nom_complet.slice(0, 3).toUpperCase()}`,
+              nom_complet: s.nom_complet.trim(),
+              role: s.role || 'SERVEUR',
+              telephone: s.telephone || '',
+              has_open_session: false,
+              active_session_id: null
+            })
+          })
         }
+
+        // 2. Fusionner avec les sessions ouvertes dans restaurant_sessions_serveurs
+        if (sessRes.data) {
+          sessRes.data.forEach((sess: any) => {
+            const srvNom = (sess.serveur_nom || '').trim()
+            if (!srvNom) return
+            const key = srvNom.toLowerCase()
+            if (srvMap.has(key)) {
+              const existing = srvMap.get(key)
+              existing.has_open_session = true
+              existing.active_session_id = sess.id
+              if (!existing.id && sess.serveur_id) existing.id = sess.serveur_id
+            } else {
+              srvMap.set(key, {
+                id: sess.serveur_id || `sess-${sess.id}`,
+                matricule: `SRV-${srvNom.slice(0, 3).toUpperCase()}`,
+                nom_complet: srvNom,
+                role: 'SERVEUR',
+                telephone: '',
+                has_open_session: true,
+                active_session_id: sess.id
+              })
+            }
+          })
+        }
+
+        // 3. Fusionner avec staff_members si rôle serveuse / barman
+        if (staffRes.data) {
+          staffRes.data.forEach((st: any) => {
+            const rLower = (st.role || '').toLowerCase()
+            if (rLower.includes('serveu') || rLower.includes('barman') || rLower.includes('resto') || rLower.includes('salle')) {
+              const fn = `${st.first_name || ''} ${st.last_name || ''}`.trim() || st.first_name || st.last_name || ''
+              const key = fn.toLowerCase()
+              if (key && !srvMap.has(key)) {
+                srvMap.set(key, {
+                  id: st.id,
+                  matricule: `STF-${fn.slice(0, 3).toUpperCase()}`,
+                  nom_complet: fn,
+                  role: 'SERVEUR',
+                  telephone: st.phone_number || '',
+                  has_open_session: false,
+                  active_session_id: null
+                })
+              }
+            }
+          })
+        }
+
+        // Tri : les serveuses avec session ouverte apparaissent en premier, puis tri alphabétique
+        const unified = Array.from(srvMap.values()).sort((a, b) => {
+          if (a.has_open_session && !b.has_open_session) return -1
+          if (!a.has_open_session && b.has_open_session) return 1
+          return a.nom_complet.localeCompare(b.nom_complet)
+        })
+
+        setRestaurantServeursList(unified)
 
         if (fichesRes.data && fichesRes.data.length > 0) {
           // Regrouper par plat_nom pour générer les articles virtuels de recettes
@@ -2037,6 +2111,7 @@ export const POSPage: React.FC = () => {
     const restaurantCouvertsSnapshot = restaurantCouverts
     const restaurantServeurSnapshot = restaurantServeur || 'Serveur de Salle'
     const restaurantServeurIdSnapshot = restaurantServeurId || null
+    const restaurantSessionIdSnapshot = restaurantSessionId || null
     const loadedPendingBonSnapshot = loadedPendingBon ? { ...loadedPendingBon } : null
 
     // Génération orderNum avant l'envoi réseau
@@ -2192,6 +2267,7 @@ export const POSPage: React.FC = () => {
           couverts: restaurantCouvertsSnapshot || 1,
           serveur_nom: restaurantServeurSnapshot || null,
           serveur_id: restaurantServeurIdSnapshot || null,
+          session_id: restaurantSessionIdSnapshot || null,
           total_exonere: cartFiscalSummarySnapshot.totalExonere, ancienne_dette_avant_facture: ancienneDetteEstim,
           montant_credit_actuel: creditActuel, montant_restant_du_global: montantRestantDuGlobalEstim,
           lines: cartSnapshot.map(c => ({ product: { id: c.product.id, code: c.product.code, name: c.product.name, unit: c.product.unit || c.product.uv || 'Pièce', cost_price: c.product.cost_price, selling_price: c.product.selling_price, is_vat_subject: c.product.is_vat_subject, vat_rate: c.product.vat_rate, is_aib_subject: c.product.is_aib_subject, aib_rate: c.product.aib_rate, coef: c.product.coef }, qty: c.qty, unitPrice: c.unitPrice, discount: c.discount })),
@@ -2216,6 +2292,12 @@ export const POSPage: React.FC = () => {
           customer_name: custName,
           status: isDeferredSnapshot ? 'pending_delivery' : 'COMPLET',
           sector_slug: currentSectorSlug,
+          sector_meta: {
+            serveur_nom: restaurantServeurSnapshot || null,
+            serveur_id: restaurantServeurIdSnapshot || null,
+            session_id: restaurantSessionIdSnapshot || null,
+            table_numero: restaurantTableSnapshot || null
+          },
           e_mecef_uid: encodedMeta,
           created_by: user?.id || null,
           notes: JSON.stringify(notesPayload)
@@ -2552,6 +2634,29 @@ export const POSPage: React.FC = () => {
                 .update({ statut: 'OCCUPEE', updated_at: new Date().toISOString() })
                 .eq('company_id', compId)
                 .eq('numero_table', numTable)
+            }
+
+            // 6. Associer la vente à la session de service active de la serveuse
+            if (restaurantSessionIdSnapshot) {
+              try {
+                const { data: curSess } = await supabase
+                  .from('restaurant_sessions_serveurs')
+                  .select('total_ventes_declarees_ttc')
+                  .eq('id', restaurantSessionIdSnapshot)
+                  .maybeSingle()
+                if (curSess) {
+                  const newTotal = (Number(curSess.total_ventes_declarees_ttc) || 0) + totalNetTTCSnapshot
+                  await supabase
+                    .from('restaurant_sessions_serveurs')
+                    .update({
+                      total_ventes_declarees_ttc: newTotal,
+                      updated_at: new Date().toISOString()
+                    })
+                    .eq('id', restaurantSessionIdSnapshot)
+                }
+              } catch (sessUpErr) {
+                console.warn('[POSPage] Erreur mise à jour session serveuse:', sessUpErr)
+              }
             }
           })())
         }
@@ -3376,12 +3481,12 @@ export const POSPage: React.FC = () => {
                     </select>
                   </div>
 
-                  {/* Si vente Client Comptoir en mode Restaurant : Attribution de la vente à une Serveuse */}
-                  {isRestaurant && !selectedCustomerId && (
+                  {/* Attribution de la commande à une serveuse en mode Restaurant / Bar / Maquis */}
+                  {isRestaurant && (
                     <div className="pt-1.5 border-t border-slate-200/60 space-y-1.5 animate-fadeIn">
                       <div className="flex items-center justify-between">
                         <label className="text-[10px] font-black text-rose-950 uppercase tracking-wider flex items-center gap-1">
-                          <span>🍸</span> Attribution Vente Comptoir :
+                          <span>🍸</span> Serveuse Responsable :
                         </label>
                         <span className={clsx(
                           "text-[10px] font-bold px-2 py-0.5 rounded-full",
@@ -3409,16 +3514,18 @@ export const POSPage: React.FC = () => {
                               const matched = restaurantServeursList.find(s => s.id === sId)
                               if (matched) {
                                 setRestaurantServeur(matched.nom_complet)
+                                setRestaurantSessionId(matched.active_session_id || '')
                               } else {
                                 setRestaurantServeur('Client Comptoir Direct')
+                                setRestaurantSessionId('')
                               }
                             }}
-                            className="w-full text-xs border border-rose-200 rounded-xl p-2 bg-white font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                            className="w-full text-xs border border-rose-200 rounded-xl p-2 bg-white font-bold text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500 shadow-sm"
                           >
                             <option value="">-- Vente Directe Comptoir (Sans serveuse) --</option>
                             {restaurantServeursList.map((srv) => (
                               <option key={srv.id} value={srv.id}>
-                                💁‍♀️ {srv.nom_complet} {srv.matricule ? `[Matricule : ${srv.matricule}]` : ''} {srv.telephone ? `— ${srv.telephone}` : ''}
+                                💁‍♀️ {srv.nom_complet} {srv.has_open_session ? '🟢 [Session de service active]' : ''} {srv.matricule ? `[${srv.matricule}]` : ''} {srv.telephone ? `— ${srv.telephone}` : ''}
                               </option>
                             ))}
                           </select>

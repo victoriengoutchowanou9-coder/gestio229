@@ -192,10 +192,36 @@ export const ServeursPersonnelPage: React.FC = () => {
 
   const handleOpenSession = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!sessionForm.serveur_nom.trim()) return
+    const srvNom = sessionForm.serveur_nom.trim()
+    if (!srvNom) return
     try {
+      // 1. Rechercher ou créer automatiquement la serveuse dans restaurant_serveurs
+      let srvId: string | null = null
+      const existing = personnel.find(p => p.nom_complet && p.nom_complet.trim().toLowerCase() === srvNom.toLowerCase())
+      if (existing) {
+        srvId = existing.id
+      } else {
+        try {
+          const { data: newSrv } = await supabaseTenant('restaurant_serveurs').insert({
+            matricule: `SRV-${srvNom.replace(/\s+/g, '').slice(0, 3).toUpperCase()}`,
+            nom_complet: srvNom,
+            role: 'SERVEUR',
+            telephone: '',
+            zone_attribuee: 'Salle principale',
+            taux_commission: 2,
+            statut: 'ACTIF',
+            notes: 'Enregistrée automatiquement lors de l\'ouverture de session'
+          }).select('id').maybeSingle()
+          if (newSrv) srvId = newSrv.id
+        } catch (autoErr) {
+          console.warn('[ServeursPersonnelPage] Notice création automatique serveuse:', autoErr)
+        }
+      }
+
+      // 2. Insérer la session avec serveur_id lié
       const { data, error } = await supabaseTenant('restaurant_sessions_serveurs').insert({
-        serveur_nom: sessionForm.serveur_nom.trim(),
+        serveur_id: srvId,
+        serveur_nom: srvNom,
         date_session: new Date().toISOString().slice(0, 10),
         heure_ouverture: new Date().toISOString(),
         fonds_initial: Number(sessionForm.fonds_initial) || 0,
@@ -209,7 +235,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       }).select().single()
 
       if (error) throw error
-      toast.success('Session ouverte', `Session bar ouverte pour ${sessionForm.serveur_nom}.`)
+      toast.success('Session ouverte', `Session bar ouverte pour ${srvNom}.`)
       setShowSessionModal(false)
       setSelectedSession(data)
       loadAllData()
