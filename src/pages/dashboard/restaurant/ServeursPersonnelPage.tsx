@@ -347,18 +347,25 @@ export const ServeursPersonnelPage: React.FC = () => {
     e.preventDefault()
     if (!selectedSession) return
 
-    const res = await cloturerSessionServeuse({
+    const res = await cloturerSessionServeuseEtVerserCaisse({
       session_id: selectedSession.id,
+      company_id: companyId,
+      serveur_nom: selectedSession.serveur_nom,
+      montant_verse: Number(clotureForm.montant_verse) || 0,
+      mode_reglement: clotureForm.mode_reglement || 'ESPECES',
       cloture_par: user?.user_metadata?.full_name || user?.email || 'Gérant',
       justification_ecart: clotureForm.justification_ecart
     })
 
     if (res.success) {
-      toast.success('Session clôturée', `Clôture validée. Écart final : ${fmt(res.ecart)}`)
+      toast.success(
+        'Session clôturée & Versement Caisse validé',
+        `Versement de ${fmt(res.montant_verse)} validé en Caisse (Réf: ${res.reference_versement}). Écart: ${fmt(res.ecart)}`
+      )
       setShowClotureModal(false)
       loadAllData()
     } else {
-      toast.error('Erreur', 'Impossible de clôturer la session.')
+      toast.error('Erreur', res.error || 'Impossible de clôturer la session.')
     }
   }
 
@@ -652,11 +659,236 @@ export const ServeursPersonnelPage: React.FC = () => {
                       <DollarSign className="w-3.5 h-3.5" /> Encaisser Versement
                     </button>
                     <button
-                      onClick={() => setShowClotureModal(true)}
+                      onClick={() => {
+    const reste = sessionSuiviDetail?.solde_restant ?? selectedSession.solde_restant_a_remettre ?? 0
+    setClotureForm({
+      montant_verse: reste,
+      mode_reglement: 'ESPECES',
+      justification_ecart: ''
+    })
+    setShowClotureModal(true)
+  }}
                       className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" /> Clôturer Session
                     </button>
+                  </div>
+                )}
+              </div>
+
+              {/* ── SECTION BIVALVE : SESSION DE SERVICE UNIFIÉE AVEC DEUX SUIVIS DISTINCTS ── */}
+              <div className="space-y-6 bg-slate-50/80 p-5 rounded-3xl border border-slate-200">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                  <div>
+                    <h4 className="text-sm font-black text-slate-900 uppercase tracking-wide flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-rose-600" />
+                      Session de Service — {selectedSession.serveur_nom}
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Réf: SESS-{selectedSession.id.slice(0, 8).toUpperCase()} • Deux suivis indépendants et accumulation automatique
+                    </p>
+                  </div>
+                  <span className={clsx(
+                    'text-xs font-black px-3 py-1 rounded-full uppercase',
+                    selectedSession.statut === 'OUVERTE' ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-slate-200 text-slate-700'
+                  )}>
+                    {selectedSession.statut}
+                  </span>
+                </div>
+
+                {/* ── SECTION 1 : BAR ── */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-xs font-black uppercase text-amber-900 flex items-center gap-1.5">
+                      <Wine className="w-4 h-4 text-amber-600" />
+                      SECTION 1 : BAR (Boissons & Produits Bar)
+                    </h5>
+                    <span className="text-xs font-black text-amber-950 font-mono bg-amber-100/80 px-2.5 py-0.5 rounded-lg border border-amber-200">
+                      Total BAR : {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
+                    </span>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-amber-50/70 text-amber-950 font-black text-[10px] uppercase border-b border-amber-200/60">
+                        <tr>
+                          <th className="p-3">Produit Bar</th>
+                          <th className="p-3 text-center">Quantité Vente</th>
+                          <th className="p-3 text-right">Prix Unitaire</th>
+                          <th className="p-3 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {sessionSuiviDetail && sessionSuiviDetail.bar_items.length > 0 ? (
+                          sessionSuiviDetail.bar_items.map((b, idx) => (
+                            <tr key={idx} className="hover:bg-amber-50/20 transition">
+                              <td className="p-3 font-bold text-slate-900">{b.nom}</td>
+                              <td className="p-3 text-center font-mono font-black text-slate-800 bg-slate-50/50">{b.quantite}</td>
+                              <td className="p-3 text-right font-mono text-slate-600">{fmt(b.prix_unitaire)}</td>
+                              <td className="p-3 text-right font-mono font-black text-amber-700">{fmt(b.total)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={4} className="p-4 text-center text-slate-400 italic">
+                              Aucune vente BAR enregistrée pour cette session.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      {sessionSuiviDetail && sessionSuiviDetail.bar_items.length > 0 && (
+                        <tfoot className="bg-amber-50/50 border-t border-amber-200/80 font-black text-xs">
+                          <tr>
+                            <td colSpan={3} className="p-3 text-amber-950 uppercase">Total Ventes BAR :</td>
+                            <td className="p-3 text-right font-mono text-amber-700 text-sm">{fmt(sessionSuiviDetail.total_bar)}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+
+                {/* ── SECTION 2 : RESTAURANT / MAQUIS ── */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <h5 className="text-xs font-black uppercase text-rose-900 flex items-center gap-1.5">
+                      <Utensils className="w-4 h-4 text-rose-600" />
+                      SECTION 2 : RESTAURANT / MAQUIS (Plats & Repas)
+                    </h5>
+                    <span className="text-xs font-black text-rose-950 font-mono bg-rose-100/80 px-2.5 py-0.5 rounded-lg border border-rose-200">
+                      Total RESTAURANT : {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
+                    </span>
+                  </div>
+
+                  <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                    <table className="w-full text-xs text-left">
+                      <thead className="bg-rose-50/70 text-rose-950 font-black text-[10px] uppercase border-b border-rose-200/60">
+                        <tr>
+                          <th className="p-3">Plat / Repas</th>
+                          <th className="p-3 text-center">Quantité Vendue</th>
+                          <th className="p-3 text-right">Prix Unitaire</th>
+                          <th className="p-3 text-right">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {sessionSuiviDetail && sessionSuiviDetail.restaurant_items.length > 0 ? (
+                          sessionSuiviDetail.restaurant_items.map((r, idx) => (
+                            <tr key={idx} className="hover:bg-rose-50/20 transition">
+                              <td className="p-3 font-bold text-slate-900">{r.nom}</td>
+                              <td className="p-3 text-center font-mono font-black text-slate-800 bg-slate-50/50">{r.quantite}</td>
+                              <td className="p-3 text-right font-mono text-slate-600">{fmt(r.prix_unitaire)}</td>
+                              <td className="p-3 text-right font-mono font-black text-rose-700">{fmt(r.total)}</td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={4} className="p-4 text-center text-slate-400 italic">
+                              Aucune vente RESTAURANT / MAQUIS enregistrée pour cette session.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                      {sessionSuiviDetail && sessionSuiviDetail.restaurant_items.length > 0 && (
+                        <tfoot className="bg-rose-50/50 border-t border-rose-200/80 font-black text-xs">
+                          <tr>
+                            <td colSpan={3} className="p-3 text-rose-950 uppercase">Total Ventes RESTAURANT :</td>
+                            <td className="p-3 text-right font-mono text-rose-700 text-sm">{fmt(sessionSuiviDetail.total_restaurant)}</td>
+                          </tr>
+                        </tfoot>
+                      )}
+                    </table>
+                  </div>
+                </div>
+
+                {/* ── RÉCAPITULATIF FINANCIER DE LA SESSION ── */}
+                <div className="bg-white p-4 rounded-2xl border-2 border-indigo-200 shadow-sm space-y-2">
+                  <h5 className="text-xs font-black uppercase text-indigo-950 tracking-wider flex items-center gap-1.5 border-b pb-2">
+                    <DollarSign className="w-4 h-4 text-indigo-600" />
+                    Récapitulatif Financier de la Session
+                  </h5>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1 text-xs">
+                    <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200/60">
+                      <span className="text-[10px] uppercase font-bold text-amber-800 block">Total BAR</span>
+                      <strong className="text-sm font-black font-mono text-amber-900">
+                        {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 bg-rose-50 rounded-xl border border-rose-200/60">
+                      <span className="text-[10px] uppercase font-bold text-rose-800 block">Total RESTAURANT</span>
+                      <strong className="text-sm font-black font-mono text-rose-900">
+                        {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 bg-indigo-50 rounded-xl border border-indigo-200/60">
+                      <span className="text-[10px] uppercase font-bold text-indigo-800 block">Total Attendu</span>
+                      <strong className="text-sm font-black font-mono text-indigo-950">
+                        {fmt(sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0)}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 bg-emerald-50 rounded-xl border border-emerald-200/60">
+                      <span className="text-[10px] uppercase font-bold text-emerald-800 block">Déjà Versé Gérant</span>
+                      <strong className="text-sm font-black font-mono text-emerald-700">
+                        {fmt(selectedSession.total_versements_recus ?? 0)}
+                      </strong>
+                    </div>
+                  </div>
+                  <div className="mt-2 pt-2 border-t flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-700">Solde Restant à Reverser par la Serveuse :</span>
+                    <strong className={clsx(
+                      'text-base font-black font-mono px-3 py-1 rounded-xl',
+                      (sessionSuiviDetail?.solde_restant ?? selectedSession.solde_restant_a_remettre ?? 0) > 0
+                        ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                        : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                    )}>
+                      {fmt(sessionSuiviDetail?.solde_restant ?? selectedSession.solde_restant_a_remettre ?? 0)}
+                    </strong>
+                  </div>
+                </div>
+
+                {/* ── HISTORIQUE CONSULTABLE DE TOUTES LES VENTES DE LA SESSION ── */}
+                {sessionSuiviDetail && sessionSuiviDetail.historique_ventes && sessionSuiviDetail.historique_ventes.length > 0 && (
+                  <div className="space-y-2">
+                    <h5 className="text-xs font-black uppercase text-slate-800 flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-slate-600" />
+                      Historique des Ventes Réalisées ({sessionSuiviDetail.historique_ventes.length} transactions)
+                    </h5>
+                    <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white max-h-60 overflow-y-auto">
+                      <table className="w-full text-xs text-left">
+                        <thead className="bg-slate-100 text-slate-600 font-bold text-[10px] uppercase sticky top-0">
+                          <tr>
+                            <th className="p-2.5">N° Commande</th>
+                            <th className="p-2.5">Date / Heure</th>
+                            <th className="p-2.5 text-center">Circuit</th>
+                            <th className="p-2.5 text-center">Table</th>
+                            <th className="p-2.5">Détail Articles</th>
+                            <th className="p-2.5 text-right">Montant</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {sessionSuiviDetail.historique_ventes.map((h, i) => (
+                            <tr key={i} className="hover:bg-slate-50">
+                              <td className="p-2.5 font-mono font-bold text-slate-800">{h.order_number}</td>
+                              <td className="p-2.5 text-slate-500 text-[11px]">{new Date(h.date).toLocaleTimeString('fr-FR')}</td>
+                              <td className="p-2.5 text-center">
+                                <span className={clsx(
+                                  'text-[10px] font-black px-2 py-0.5 rounded-full',
+                                  h.circuit === 'BAR' ? 'bg-amber-100 text-amber-900' : 'bg-rose-100 text-rose-900'
+                                )}>
+                                  {h.circuit}
+                                </span>
+                              </td>
+                              <td className="p-2.5 text-center font-bold text-slate-700">{h.table_numero || 'Comptoir'}</td>
+                              <td className="p-2.5 text-slate-600 text-[11px]">
+                                {h.items && h.items.length > 0
+                                  ? h.items.map(it => `${it.quantite}x ${it.nom}`).join(', ')
+                                  : 'Vente directe'}
+                              </td>
+                              <td className="p-2.5 text-right font-mono font-black text-slate-900">{fmt(h.total)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
                 )}
               </div>
@@ -1253,60 +1485,204 @@ export const ServeursPersonnelPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── MODALE 4 : CLÔTURE DE SESSION AVEC BILAN DÉTAILLÉ ── */}
+      {/* ── MODALE 4 : CLÔTURE DE SESSION ET VERSEMENT À LA CAISSE (EXIGENCE POINT 7) ── */}
       {showClotureModal && selectedSession && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white w-full max-w-2xl rounded-3xl p-6 shadow-2xl space-y-4 my-8">
             <div className="flex items-center justify-between border-b pb-3">
               <div>
-                <h3 className="font-black text-slate-900 text-base">Clôturer Définitivement la Session</h3>
-                <p className="text-[11px] text-slate-400">Serveuse : {selectedSession.serveur_nom}</p>
+                <h3 className="font-black text-slate-900 text-lg flex items-center gap-2">
+                  <CheckCircle2 className="w-5 h-5 text-rose-600" />
+                  RÉCAPITULATIF DE CLÔTURE DE SESSION
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Serveuse : <strong className="text-slate-800">{selectedSession.serveur_nom}</strong> • Réf : SESS-{selectedSession.id.slice(0, 8).toUpperCase()}
+                </p>
               </div>
-              <button onClick={() => setShowClotureModal(false)}><X className="w-5 h-5 text-slate-400" /></button>
+              <button onClick={() => setShowClotureModal(false)} className="p-1 hover:bg-slate-100 rounded-full"><X className="w-5 h-5 text-slate-400" /></button>
             </div>
-            <form onSubmit={handleCloture} className="space-y-3.5">
-              <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2">
-                <div className="flex justify-between font-bold text-slate-700">
-                  <span>Total Boissons Confiées :</span>
-                  <span className="font-mono">{fmt(selectedSession.total_boissons_confiees_ttc)}</span>
+
+            <form onSubmit={handleCloture} className="space-y-4 text-xs">
+              {/* Horodatage & Détails de session */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200">
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Date de Session</span>
+                  <strong className="text-slate-800">{selectedSession.date_session}</strong>
                 </div>
-                <div className="flex justify-between font-bold text-slate-700">
-                  <span>Fonds Initial Remis :</span>
-                  <span className="font-mono">{fmt(selectedSession.fonds_initial)}</span>
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Heure Ouverture</span>
+                  <strong className="text-slate-800">{new Date(selectedSession.heure_ouverture).toLocaleTimeString('fr-FR')}</strong>
                 </div>
-                <div className="flex justify-between font-bold text-emerald-700">
-                  <span>Total Versements Encaissés :</span>
-                  <span className="font-mono font-black">{fmt(selectedSession.total_versements_recus)}</span>
-                </div>
-                <div className={clsx(
-                  'flex justify-between font-black pt-2 border-t text-sm',
-                  selectedSession.solde_restant_a_remettre > 0 ? 'text-rose-600 border-rose-200' : 'text-emerald-700 border-slate-200'
-                )}>
-                  <span>{selectedSession.solde_restant_a_remettre > 0 ? 'Écart / Reste Dû Non Versé :' : 'Session Équilibrée :'}</span>
-                  <span className="font-mono">{fmt(selectedSession.solde_restant_a_remettre)}</span>
+                <div>
+                  <span className="text-[10px] uppercase font-bold text-slate-400 block">Heure Clôture</span>
+                  <strong className="text-rose-600">{new Date().toLocaleTimeString('fr-FR')}</strong>
                 </div>
               </div>
 
-              {selectedSession.solde_restant_a_remettre > 0 && (
-                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-[11px] text-rose-800 space-y-1">
-                  <p className="font-black flex items-center gap-1">
-                    <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
-                    Écart constaté sur la session
-                  </p>
-                  <p>
-                    Le solde de {fmt(selectedSession.solde_restant_a_remettre)} reste dû par {selectedSession.serveur_nom}. La session sera archivée avec cet écart financier et imputée à ses créances.
-                  </p>
+              {/* DÉTAIL BAR */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="font-black text-amber-900 uppercase flex items-center gap-1">
+                    <Wine className="w-3.5 h-3.5 text-amber-600" /> DÉTAIL BAR
+                  </span>
+                  <span className="font-mono font-bold text-amber-800">
+                    Total BAR : {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
+                  </span>
                 </div>
-              )}
+                <div className="border border-amber-200/60 rounded-xl overflow-hidden max-h-32 overflow-y-auto">
+                  <table className="w-full text-[11px] text-left">
+                    <thead className="bg-amber-50 text-amber-900 font-bold uppercase sticky top-0">
+                      <tr>
+                        <th className="p-1.5">Produit</th>
+                        <th className="p-1.5 text-center">Quantité</th>
+                        <th className="p-1.5 text-right">P.U.</th>
+                        <th className="p-1.5 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-amber-100/60">
+                      {sessionSuiviDetail && sessionSuiviDetail.bar_items.length > 0 ? (
+                        sessionSuiviDetail.bar_items.map((b, i) => (
+                          <tr key={i}>
+                            <td className="p-1.5">{b.nom}</td>
+                            <td className="p-1.5 text-center font-mono">{b.quantite}</td>
+                            <td className="p-1.5 text-right font-mono">{fmt(b.prix_unitaire)}</td>
+                            <td className="p-1.5 text-right font-mono font-bold text-amber-800">{fmt(b.total)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan={4} className="p-2 text-center text-slate-400">Aucun produit bar</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
 
+              {/* DÉTAIL RESTAURANT / MAQUIS */}
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center">
+                  <span className="font-black text-rose-900 uppercase flex items-center gap-1">
+                    <Utensils className="w-3.5 h-3.5 text-rose-600" /> DÉTAIL RESTAURANT / MAQUIS
+                  </span>
+                  <span className="font-mono font-bold text-rose-800">
+                    Total RESTAURANT : {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
+                  </span>
+                </div>
+                <div className="border border-rose-200/60 rounded-xl overflow-hidden max-h-32 overflow-y-auto">
+                  <table className="w-full text-[11px] text-left">
+                    <thead className="bg-rose-50 text-rose-900 font-bold uppercase sticky top-0">
+                      <tr>
+                        <th className="p-1.5">Plat</th>
+                        <th className="p-1.5 text-center">Quantité</th>
+                        <th className="p-1.5 text-right">P.U.</th>
+                        <th className="p-1.5 text-right">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-rose-100/60">
+                      {sessionSuiviDetail && sessionSuiviDetail.restaurant_items.length > 0 ? (
+                        sessionSuiviDetail.restaurant_items.map((r, i) => (
+                          <tr key={i}>
+                            <td className="p-1.5">{r.nom}</td>
+                            <td className="p-1.5 text-center font-mono">{r.quantite}</td>
+                            <td className="p-1.5 text-right font-mono">{fmt(r.prix_unitaire)}</td>
+                            <td className="p-1.5 text-right font-mono font-bold text-rose-800">{fmt(r.total)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr><td colSpan={4} className="p-2 text-center text-slate-400">Aucun plat restaurant</td></tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* SYNTHÈSE FINANCIÈRE & SAISIE DU VERSEMENT */}
+              <div className="p-4 bg-slate-900 text-white rounded-2xl space-y-3">
+                <div className="flex justify-between items-center border-b border-slate-700 pb-2">
+                  <span className="font-bold text-slate-300">SYNTHÈSE FINANCIÈRE</span>
+                  <span className="text-[10px] text-rose-400 font-bold uppercase">Circuit Vente ➔ Session ➔ Clôture ➔ Versement ➔ Caisse</span>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Ventes BAR</span>
+                    <strong className="text-amber-400 font-mono">{fmt(sessionSuiviDetail?.total_bar ?? 0)}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Ventes RESTAURANT</span>
+                    <strong className="text-rose-400 font-mono">{fmt(sessionSuiviDetail?.total_restaurant ?? 0)}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Total Général Attendu</span>
+                    <strong className="text-emerald-400 font-mono text-sm">
+                      {fmt(sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0)}
+                    </strong>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-800">
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-200 block mb-1">
+                      Montant Effectivement Versé (FCFA) *
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min="0"
+                      value={clotureForm.montant_verse}
+                      onChange={e => setClotureForm({ ...clotureForm, montant_verse: Number(e.target.value) })}
+                      className="w-full px-3 py-2 bg-slate-800 text-white font-mono font-black text-sm rounded-xl border border-slate-700 outline-none focus:ring-2 focus:ring-rose-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-[11px] font-bold text-slate-200 block mb-1">
+                      Mode de Règlement *
+                    </label>
+                    <select
+                      value={clotureForm.mode_reglement}
+                      onChange={e => setClotureForm({ ...clotureForm, mode_reglement: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-800 text-white font-bold text-xs rounded-xl border border-slate-700 outline-none focus:ring-2 focus:ring-rose-500"
+                    >
+                      <option value="ESPECES">Espèces (Caisse)</option>
+                      <option value="MTN_MOMO">MTN Mobile Money</option>
+                      <option value="MOOV_MONEY">Moov Money</option>
+                      <option value="CARTE_BANCAIRE">Carte Bancaire</option>
+                      <option value="VIREMENT">Virement Bancaire</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Écart et solde restant */}
+                {(() => {
+                  const totalAttendu = sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0
+                  const dejaVerse = selectedSession.total_versements_recus ?? 0
+                  const verseMaintenant = Number(clotureForm.montant_verse) || 0
+                  const ecart = totalAttendu - (dejaVerse + verseMaintenant)
+
+                  return (
+                    <div className="p-3 bg-slate-800 rounded-xl flex items-center justify-between text-xs border border-slate-700">
+                      <div>
+                        <span className="text-slate-400 block text-[10px]">Écart financier constaté :</span>
+                        <strong className={clsx('font-mono font-black', ecart === 0 ? 'text-emerald-400' : 'text-amber-400')}>
+                          {ecart === 0 ? 'Aucun écart (Session Soldée)' : `Écart de ${fmt(Math.abs(ecart))} ${ecart > 0 ? '(Manquant)' : '(Surplus)'}`}
+                        </strong>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-slate-400 block text-[10px]">Alimentation Caisse :</span>
+                        <strong className="text-emerald-400 font-mono">+{fmt(verseMaintenant)}</strong>
+                      </div>
+                    </div>
+                  )
+                })()}
+              </div>
+
+              {/* Justification si écart */}
               <div>
                 <label className="text-xs font-bold text-slate-700 block mb-1">
-                  Justification / Motif de clôture {selectedSession.solde_restant_a_remettre > 0 && '*'}
+                  Justification / Remarques de clôture :
                 </label>
                 <textarea
                   rows={2}
-                  required={selectedSession.solde_restant_a_remettre > 0}
-                  placeholder="Ex: Reste 3 boissons en vitrine, fin de service normal..."
+                  placeholder="Commentaire de fin de service (optionnel si solde exact)..."
                   value={clotureForm.justification_ecart}
                   onChange={e => setClotureForm({ ...clotureForm, justification_ecart: e.target.value })}
                   className="w-full px-3 py-2 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-rose-500"
@@ -1315,8 +1691,9 @@ export const ServeursPersonnelPage: React.FC = () => {
 
               <div className="pt-3 flex justify-end gap-2 border-t">
                 <button type="button" onClick={() => setShowClotureModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
-                <button type="submit" className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-md">
-                  Confirmer Clôture Définitive
+                <button type="submit" className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-lg shadow-rose-600/30 transition flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4" />
+                  Valider Clôture & Versement en Caisse
                 </button>
               </div>
             </form>

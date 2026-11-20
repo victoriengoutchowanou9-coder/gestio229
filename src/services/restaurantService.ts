@@ -59,11 +59,44 @@ export interface ServeurSession {
   statut: 'OUVERTE' | 'CLOTUREE' | 'VERIFIEE'
   total_boissons_confiees_ttc: number
   total_ventes_declarees_ttc: number
+  total_bar_ttc?: number
+  total_restaurant_ttc?: number
   total_versements_recus: number
   solde_restant_a_remettre: number
   ecart_financier: number
   justification_ecart?: string
   cloture_par?: string
+  notes?: string
+}
+
+export interface LigneAccumuleeSession {
+  produit_id: string
+  nom: string
+  prix_unitaire: number
+  quantite: number
+  total: number
+  circuit: 'BAR' | 'RESTAURANT'
+}
+
+export interface HistoriqueVenteSession {
+  order_number: string
+  date: string
+  circuit: 'BAR' | 'RESTAURANT'
+  table_numero?: string
+  total: number
+  items: Array<{ nom: string; quantite: number; prix_unitaire: number; total: number }>
+}
+
+export interface SessionSuiviDetail {
+  bar_items: LigneAccumuleeSession[]
+  restaurant_items: LigneAccumuleeSession[]
+  total_bar: number
+  total_restaurant: number
+  total_general: number
+  total_verse: number
+  solde_restant: number
+  ecart: number
+  historique_ventes: HistoriqueVenteSession[]
 }
 
 export interface BoissonConfiee {
@@ -835,6 +868,480 @@ export async function cloturerSessionServeuse(params: {
 }
 
 /**
+ * 4.b Accumulation automatique des produits dans la session active d'une serveuse
+ * - Maintient deux sections étanches : BAR et RESTAURANT/MAQUIS
+ * - Cumule les quantités pour un même produit / plat
+ * - Recalcule automatiquement les montants totaux
+ * - Conserve l'historique chronologique des transactions de la session
+ */
+export async function accumulerVenteDansSessionServeuse(params: {
+  session_id: string
+  order_number: string
+  circuit: 'BAR' | 'RESTAURANT'
+  table_numero?: string
+  items: Array<{
+    produit_id?: string
+    nom: string
+    quantite: number
+    prix_unitaire: number
+    total?: number
+    circuit?: 'BAR' | 'RESTAURANT'
+  }>
+  total_vente: number
+}): Promise<{ success: boolean; error?: string }> {
+  const { session_id, order_number, circuit, table_numero, items, total_vente } = params
+  if (!session_id) return { success: false, error: 'Session ID requis' }
+
+  try {
+    const { data: sess, error } = await supabase
+      .from('restaurant_sessions_serveurs')
+      .select('*')
+      .eq('id', session_id)
+      .single()
+
+    if (error || !sess) {
+      console.warn('[RestaurantService] Session introuvable pour accumulation:', session_id)
+      return { success: false, error: 'Session introuvable' }
+    }
+
+    let suivi: SessionSuiviDetail = {
+      bar_items: [],
+      restaurant_items: [],
+      total_bar: 0,
+      total_restaurant: 0,
+      total_general: 0,
+      total_verse: Number(sess.total_versements_recus) || 0,
+      solde_restant: 0,
+      ecart: 0,
+      historique_ventes: []
+    }
+
+    if (sess.notes) {
+      try {
+        const parsed = typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes
+        if (parsed && (parsed.bar_items || parsed.restaurant_items || parsed.historique_ventes)) {
+          suivi = {
+            ...suivi,
+            ...parsed,
+            bar_items: Array.isArray(parsed.bar_items) ? parsed.bar_items : [],
+            restaurant_items: Array.isArray(parsed.restaurant_items) ? parsed.restaurant_items : [],
+            historique_ventes: Array.isArray(parsed.historique_ventes) ? parsed.historique_ventes : []
+          }
+        }
+      } catch (_) {}
+    }
+
+    const itemsSummaryForHistory: Array<{ nom: string; quantite: number; prix_unitaire: number; total: number }> = []
+
+    for (const it of items) {
+      const qte = Number(it.quantite) || 0
+      const pu = Number(it.prix_unitaire) || 0
+      const lineTot = Number(it.total ?? qte * pu)
+      if (qte <= 0) continue
+
+      const itemCircuit: 'BAR' | 'RESTAURANT' = it.circuit || circuit
+      const cleanNom = (it.nom || 'Article').trim()
+      const prodId = it.produit_id || cleanNom
+
+      itemsSummaryForHistory.push({
+        nom: cleanNom,
+        quantite: qte,
+        prix_unitaire: pu,
+        total: lineTot
+      })
+
+      if (itemCircuit === 'BAR') {
+        const existingIdx = suivi.bar_items.findIndex(
+          b => (b.produit_id && it.produit_id && b.produit_id === it.produit_id) || b.nom.toLowerCase() === cleanNom.toLowerCase()
+        )
+        if (existingIdx >= 0) {
+          const prev = suivi.bar_items[existingIdx]
+          const newQty = Math.round((prev.quantite + qte) * 1000) / 1000
+          suivi.bar_items[existingIdx] = {
+            ...prev,
+            quantite: newQty,
+            prix_unitaire: pu > 0 ? pu : prev.prix_unitaire,
+            total: Math.round(newQty * (pu > 0 ? pu : prev.prix_unitaire))
+          }
+        } else {
+          suivi.bar_items.push({
+            produit_id: prodId,
+            nom: cleanNom,
+            prix_unitaire: pu,
+            quantite: qte,
+            total: lineTot,
+            circuit: 'BAR'
+          })
+        }
+      } else {
+        const existingIdx = suivi.restaurant_items.findIndex(
+          r => (r.produit_id && it.produit_id && r.produit_id === it.produit_id) || r.nom.toLowerCase() === cleanNom.toLowerCase()
+        )
+        if (existingIdx >= 0) {
+          const prev = suivi.restaurant_items[existingIdx]
+          const newQty = Math.round((prev.quantite + qte) * 1000) / 1000
+          suivi.restaurant_items[existingIdx] = {
+            ...prev,
+            quantite: newQty,
+            prix_unitaire: pu > 0 ? pu : prev.prix_unitaire,
+            total: Math.round(newQty * (pu > 0 ? pu : prev.prix_unitaire))
+          }
+        } else {
+          suivi.restaurant_items.push({
+            produit_id: prodId,
+            nom: cleanNom,
+            prix_unitaire: pu,
+            quantite: qte,
+            total: lineTot,
+            circuit: 'RESTAURANT'
+          })
+        }
+      }
+    }
+
+    suivi.total_bar = Math.round(suivi.bar_items.reduce((s, b) => s + b.total, 0))
+    suivi.total_restaurant = Math.round(suivi.restaurant_items.reduce((s, r) => s + r.total, 0))
+    suivi.total_general = Math.round(suivi.total_bar + suivi.total_restaurant)
+    suivi.total_verse = Number(sess.total_versements_recus) || 0
+    suivi.solde_restant = Math.max(0, suivi.total_general - suivi.total_verse)
+    suivi.ecart = suivi.solde_restant
+
+    suivi.historique_ventes.unshift({
+      order_number,
+      date: new Date().toISOString(),
+      circuit,
+      table_numero: table_numero || 'Comptoir',
+      total: total_vente,
+      items: itemsSummaryForHistory
+    })
+
+    const updatePayload: any = {
+      total_ventes_declarees_ttc: suivi.total_general,
+      total_bar_ttc: suivi.total_bar,
+      total_restaurant_ttc: suivi.total_restaurant,
+      solde_restant_a_remettre: suivi.solde_restant,
+      notes: JSON.stringify(suivi),
+      updated_at: new Date().toISOString()
+    }
+
+    await supabase
+      .from('restaurant_sessions_serveurs')
+      .update(updatePayload)
+      .eq('id', session_id)
+
+    return { success: true }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur accumulation vente session:', err.message)
+    return { success: false, error: err.message }
+  }
+}
+
+/**
+ * 4.c Récupérer le suivi détaillé de la session d'une serveuse avec réconciliation live
+ */
+export async function obtenirSuiviSessionServeuse(
+  session_id: string,
+  company_id: string
+): Promise<SessionSuiviDetail> {
+  let detail: SessionSuiviDetail = {
+    bar_items: [],
+    restaurant_items: [],
+    total_bar: 0,
+    total_restaurant: 0,
+    total_general: 0,
+    total_verse: 0,
+    solde_restant: 0,
+    ecart: 0,
+    historique_ventes: []
+  }
+
+  if (!session_id) return detail
+
+  try {
+    const { data: sess } = await supabase
+      .from('restaurant_sessions_serveurs')
+      .select('*')
+      .eq('id', session_id)
+      .maybeSingle()
+
+    if (sess) {
+      detail.total_verse = Number(sess.total_versements_recus) || 0
+      detail.total_bar = Number(sess.total_bar_ttc) || 0
+      detail.total_restaurant = Number(sess.total_restaurant_ttc) || 0
+      detail.total_general = Number(sess.total_ventes_declarees_ttc) || (detail.total_bar + detail.total_restaurant)
+      detail.solde_restant = Number(sess.solde_restant_a_remettre) || Math.max(0, detail.total_general - detail.total_verse)
+      detail.ecart = Number(sess.ecart_financier) || detail.solde_restant
+
+      if (sess.notes) {
+        try {
+          const parsed = typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes
+          if (parsed) {
+            if (Array.isArray(parsed.bar_items)) detail.bar_items = parsed.bar_items
+            if (Array.isArray(parsed.restaurant_items)) detail.restaurant_items = parsed.restaurant_items
+            if (Array.isArray(parsed.historique_ventes)) detail.historique_ventes = parsed.historique_ventes
+            if (parsed.total_bar) detail.total_bar = Number(parsed.total_bar)
+            if (parsed.total_restaurant) detail.total_restaurant = Number(parsed.total_restaurant)
+            if (parsed.total_general) detail.total_general = Number(parsed.total_general)
+          }
+        } catch (_) {}
+      }
+    }
+
+    const { data: sales } = await supabase
+      .from('sales_orders')
+      .select('*, items:sales_order_items(*)')
+      .eq('company_id', company_id)
+      .neq('status', 'ANNULE')
+      .order('created_at', { ascending: false })
+      .limit(200)
+
+    if (sales && sales.length > 0) {
+      const sessionSales = sales.filter(s => {
+        const meta = s.sector_meta || {}
+        let parsedNotes: any = {}
+        try { if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes } catch (_) {}
+        return (
+          meta.session_id === session_id ||
+          parsedNotes.session_id === session_id ||
+          (sess && s.sector_meta?.serveur_nom === sess.serveur_nom && s.order_date === sess.date_session)
+        )
+      })
+
+      if (sessionSales.length > 0) {
+        const barMap = new Map<string, LigneAccumuleeSession>()
+        const restoMap = new Map<string, LigneAccumuleeSession>()
+        const histo: HistoriqueVenteSession[] = []
+
+        detail.bar_items.forEach(b => barMap.set(b.nom.toLowerCase(), { ...b }))
+        detail.restaurant_items.forEach(r => restoMap.set(r.nom.toLowerCase(), { ...r }))
+
+        sessionSales.forEach(s => {
+          let parsedNotes: any = {}
+          try { if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes } catch (_) {}
+          const saleCircuit: 'BAR' | 'RESTAURANT' = (s.sector_meta?.circuit === 'CUISINE' || parsedNotes.circuit === 'CUISINE') ? 'RESTAURANT' : 'BAR'
+          const lines = (s.items && s.items.length > 0) ? s.items : (parsedNotes.lines || [])
+
+          const itemsHisto: Array<{ nom: string; quantite: number; prix_unitaire: number; total: number }> = []
+
+          lines.forEach((l: any) => {
+            const nom = (l.product_name || l.product?.name || l.designation || 'Article').trim()
+            const qte = Number(l.quantity || l.qty || 1)
+            const pu = Number(l.unit_price || l.unitPrice || 0)
+            const tot = Number(l.total_ttc || l.total || (qte * pu))
+            const isRecipe = Boolean(l.is_recipe || l.product?.is_recipe)
+            const lineCirc: 'BAR' | 'RESTAURANT' = (isRecipe || saleCircuit === 'RESTAURANT') ? 'RESTAURANT' : 'BAR'
+            const key = nom.toLowerCase()
+
+            itemsHisto.push({ nom, quantite: qte, prix_unitaire: pu, total: tot })
+
+            if (lineCirc === 'BAR') {
+              if (barMap.has(key)) {
+                const inExistingHisto = detail.historique_ventes.some(h => h.order_number === s.order_number)
+                if (!inExistingHisto) {
+                  const ex = barMap.get(key)!
+                  ex.quantite = Math.round((ex.quantite + qte) * 1000) / 1000
+                  ex.total = Math.round(ex.quantite * ex.prix_unitaire)
+                }
+              } else {
+                barMap.set(key, {
+                  produit_id: l.product_id || l.product?.id || nom,
+                  nom,
+                  prix_unitaire: pu,
+                  quantite: qte,
+                  total: tot,
+                  circuit: 'BAR'
+                })
+              }
+            } else {
+              if (restoMap.has(key)) {
+                const inExistingHisto = detail.historique_ventes.some(h => h.order_number === s.order_number)
+                if (!inExistingHisto) {
+                  const ex = restoMap.get(key)!
+                  ex.quantite = Math.round((ex.quantite + qte) * 1000) / 1000
+                  ex.total = Math.round(ex.quantite * ex.prix_unitaire)
+                }
+              } else {
+                restoMap.set(key, {
+                  produit_id: l.product_id || l.product?.id || nom,
+                  nom,
+                  prix_unitaire: pu,
+                  quantite: qte,
+                  total: tot,
+                  circuit: 'RESTAURANT'
+                })
+              }
+            }
+          })
+
+          const inHisto = detail.historique_ventes.some(h => h.order_number === s.order_number)
+          if (!inHisto) {
+            histo.push({
+              order_number: s.order_number,
+              date: s.created_at || new Date().toISOString(),
+              circuit: saleCircuit,
+              table_numero: s.sector_meta?.table_numero || parsedNotes.table_numero || 'Comptoir',
+              total: Number(s.total_amount || 0),
+              items: itemsHisto
+            })
+          }
+        })
+
+        detail.bar_items = Array.from(barMap.values())
+        detail.restaurant_items = Array.from(restoMap.values())
+        detail.historique_ventes = [...histo, ...detail.historique_ventes]
+        detail.total_bar = Math.round(detail.bar_items.reduce((acc, b) => acc + b.total, 0))
+        detail.total_restaurant = Math.round(detail.restaurant_items.reduce((acc, r) => acc + r.total, 0))
+        detail.total_general = Math.round(detail.total_bar + detail.total_restaurant)
+        detail.solde_restant = Math.max(0, detail.total_general - detail.total_verse)
+        detail.ecart = detail.solde_restant
+      }
+    }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur obtenirSuiviSessionServeuse:', err.message)
+  }
+
+  return detail
+}
+
+/**
+ * 4.d Clôture de session complète avec versement réel et injection directe en Caisse
+ * CIRCUIT OBLIGATOIRE :
+ * VENTE BAR ─┐
+ *            ├── SESSION SERVEUSE ── CLÔTURE ── VERSEMENT ── CAISSE
+ * VENTE REST ─┘
+ * Libellé : VERSEMENT CLÔTURE SESSION SERVEUSE
+ */
+export async function cloturerSessionServeuseEtVerserCaisse(params: {
+  session_id: string
+  company_id: string
+  serveur_nom: string
+  montant_verse: number
+  mode_reglement: string
+  cloture_par: string
+  justification_ecart?: string
+  caisse_id?: string | null
+}): Promise<{
+  success: boolean
+  reference_versement: string
+  total_attendu: number
+  montant_verse: number
+  ecart: number
+  error?: string
+}> {
+  const { session_id, company_id, serveur_nom, montant_verse, mode_reglement, cloture_par, justification_ecart, caisse_id } = params
+
+  try {
+    const { data: sess, error: sErr } = await supabase
+      .from('restaurant_sessions_serveurs')
+      .select('*')
+      .eq('id', session_id)
+      .single()
+
+    if (sErr || !sess) throw new Error('Session introuvable.')
+
+    const suivi = await obtenirSuiviSessionServeuse(session_id, company_id)
+    const totalAttendu = Number(suivi.total_general) || Number(sess.total_ventes_declarees_ttc) || 0
+    const montantVerserNum = Number(montant_verse) || 0
+    const totalDejaVerse = Number(sess.total_versements_recus) || 0
+    const nouveauTotalVerse = totalDejaVerse + montantVerserNum
+    const soldeRestantApres = Math.max(0, totalAttendu - nouveauTotalVerse)
+    const ecart = totalAttendu - nouveauTotalVerse
+
+    const refVersement = `VMT-CLOTURE-${Date.now().toString().slice(-6)}`
+
+    // 1. Clôturer la session
+    const { error: clErr } = await supabase
+      .from('restaurant_sessions_serveurs')
+      .update({
+        statut: 'CLOTUREE',
+        heure_cloture: new Date().toISOString(),
+        total_versements_recus: nouveauTotalVerse,
+        solde_restant_a_remettre: soldeRestantApres,
+        ecart_financier: ecart,
+        justification_ecart: justification_ecart || (ecart !== 0 ? `Écart clôture de ${ecart} FCFA` : null),
+        cloture_par,
+        total_bar_ttc: suivi.total_bar,
+        total_restaurant_ttc: suivi.total_restaurant,
+        total_ventes_declarees_ttc: totalAttendu,
+        updated_at: new Date().toISOString()
+      })
+      .eq('id', session_id)
+
+    if (clErr) throw clErr
+
+    // 2. Enregistrer le versement réel si montant > 0
+    if (montantVerserNum > 0) {
+      await supabase
+        .from('restaurant_versements_serveurs')
+        .insert({
+          company_id,
+          session_id,
+          reference: refVersement,
+          serveur_nom,
+          montant: montantVerserNum,
+          mode_reglement: mode_reglement || 'ESPECES',
+          recu_par: cloture_par,
+          solde_avant: totalAttendu - totalDejaVerse,
+          solde_apres: soldeRestantApres,
+          date_versement: new Date().toISOString(),
+          commentaire: 'VERSEMENT CLÔTURE SESSION SERVEUSE'
+        })
+
+      // 3. Alimenter la Caisse avec le libellé strict : VERSEMENT CLÔTURE SESSION SERVEUSE
+      try {
+        const isCash = mode_reglement === 'ESPECES' || mode_reglement === 'espece'
+        const isMomo = ['MTN_MOMO', 'MOOV_MONEY', 'MOMO', 'momo_mtn', 'momo_moov'].includes(mode_reglement)
+        const compId = company_id
+
+        await enregistrerMouvementCaisse({
+          company_id: compId,
+          sector_slug: 'restaurant',
+          caisse_id: caisse_id || null,
+          type: 'entree',
+          sens: 'entree',
+          montant_especes: isCash ? montantVerserNum : 0,
+          montant_momo: isMomo ? montantVerserNum : 0,
+          source_module: 'restaurant_cloture_session',
+          source_id: refVersement,
+          motif: 'VERSEMENT CLÔTURE SESSION SERVEUSE',
+          user_name: cloture_par
+        })
+
+        await enregistrerEntreeCaisse({
+          company_id: compId,
+          secteur_id: 'restaurant',
+          caisse_id: caisse_id || null,
+          montant: montantVerserNum,
+          mode_paiement: isCash ? 'espece' : 'mtn_momo',
+          source: 'VERSEMENT CLÔTURE SESSION SERVEUSE',
+          reference_id: session_id
+        })
+      } catch (caisseErr: any) {
+        console.warn('[RestaurantService] Notice liaison caisse clôture:', caisseErr.message)
+      }
+    }
+
+    return {
+      success: true,
+      reference_versement: refVersement,
+      total_attendu: totalAttendu,
+      montant_verse: montantVerserNum,
+      ecart
+    }
+  } catch (err: any) {
+    console.error('[RestaurantService] Erreur cloturerSessionServeuseEtVerserCaisse:', err.message)
+    return {
+      success: false,
+      reference_versement: '',
+      total_attendu: 0,
+      montant_verse: 0,
+      ecart: 0,
+      error: err.message
+    }
+  }
+}
+
+/**
  * 5. Régler une créance de serveuse (Paiement total ou partiel)
  * RÈGLE D'OR : Relié directement à la caisse de l'établissement (Caisse & Clôtures Service)
  */
@@ -1147,7 +1654,7 @@ export async function creerCommandeEnAttente(params: {
       serveur_nom,
       client_nom: client_nom || 'Client Comptoir',
       circuit,
-      statut: 'EN_ATTENTE',
+      statut: 'OUVERTE',
       validation_status: 'EN_ATTENTE_CONFIRMATION',
       confirmation_expires_at: expires_at,
       created_by_name: created_by_name || 'Caissier',
@@ -1613,6 +2120,9 @@ export default {
   attribuerBoissonServeuse,
   enregistrerVersementServeur,
   cloturerSessionServeuse,
+  accumulerVenteDansSessionServeuse,
+  obtenirSuiviSessionServeuse,
+  cloturerSessionServeuseEtVerserCaisse,
   payerCreanceServeuse,
   enregistrerRetourBouteilles,
   enregistrerRetourEmballageSession,

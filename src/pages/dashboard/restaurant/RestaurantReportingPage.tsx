@@ -10,6 +10,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
+  FileText,
   BarChart3, TrendingUp, TrendingDown, RefreshCw, Calendar,
   Filter, Users, Package, Wine, UtensilsCrossed, Printer, Download,
   Layers, DollarSign, Clock, ShieldCheck, AlertCircle, FileSpreadsheet,
@@ -430,6 +431,11 @@ export const RestaurantReportingPage: React.FC = () => {
       solde_consignes: number
       sessions_count: number
       ecarts_cloture: number
+      montant_verse_total: number
+      produits_bar: Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>
+      plats_restaurant: Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>
+      produits_bar_list?: any[]
+      plats_restaurant_list?: any[]
       sales_detail: any[]
     }> = {}
 
@@ -461,8 +467,11 @@ export const RestaurantReportingPage: React.FC = () => {
         solde_consignes: 0,
         sessions_count: 0,
         ecarts_cloture: 0,
-        sales_detail: []
-      }
+          montant_verse_total: 0,
+          produits_bar: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
+          plats_restaurant: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
+          sales_detail: []
+        }
     })
 
     // Index des commandes resto pour corrélation
@@ -531,6 +540,9 @@ export const RestaurantReportingPage: React.FC = () => {
           solde_consignes: 0,
           sessions_count: 0,
           ecarts_cloture: 0,
+          montant_verse_total: 0,
+          produits_bar: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
+          plats_restaurant: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
           sales_detail: []
         }
       }
@@ -586,6 +598,9 @@ export const RestaurantReportingPage: React.FC = () => {
           solde_consignes: 0,
           sessions_count: 0,
           ecarts_cloture: 0,
+          montant_verse_total: 0,
+          produits_bar: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
+          plats_restaurant: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
           sales_detail: []
         }
       }
@@ -641,8 +656,11 @@ export const RestaurantReportingPage: React.FC = () => {
             solde_consignes: 0,
             sessions_count: 0,
             ecarts_cloture: 0,
-            sales_detail: []
-          }
+          montant_verse_total: 0,
+          produits_bar: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
+          plats_restaurant: {} as Record<string, { nom: string; quantite: number; montant_total: number; prix_unitaire: number }>,
+          sales_detail: []
+        }
         }
         srvMap[srvNom].sessions_count += 1
         srvMap[srvNom].ecarts_cloture += Number(s.ecart_financier || 0)
@@ -1532,63 +1550,283 @@ export const RestaurantReportingPage: React.FC = () => {
                 </div>
               </div>
 
-              {/* Détail individuel des ventes si une serveuse est sélectionnée */}
-              {filterServeuse !== 'all' && activeServeusesList.length > 0 && (
-                <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm space-y-4 p-5 animate-fadeIn">
-                  <div className="flex justify-between items-center">
-                    <div>
-                      <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
-                        <FileText className="w-4 h-4 text-rose-600" />
-                        <span>Journal des Factures & Ventes de {filterServeuse}</span>
-                      </h4>
-                      <p className="text-[11px] text-slate-500">
-                        Historique chronologique des transactions attribuées
-                      </p>
-                    </div>
-                    <span className="text-[11px] font-mono text-slate-500">
-                      {activeServeusesList[0].sales_detail.length} facture(s)
-                    </span>
-                  </div>
+              {/* ── POINT 8 : FICHE DÉTAILLÉE DE RENTABILITÉ & VENTES DE LA SERVEUSE SÉLECTIONNÉE ── */}
+              {filterServeuse !== 'all' && activeServeusesList.length > 0 && (() => {
+                const srv = activeServeusesList[0]
+                const totalCa = srv.ca_mensuel || (srv.ventes_bar + srv.ventes_cuisine)
+                const ecart = srv.ecarts_cloture || 0
 
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-xs text-left">
-                      <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
-                        <tr>
-                          <th className="p-2.5">Réf Facture</th>
-                          <th className="p-2.5">Date</th>
-                          <th className="p-2.5">Client / Table</th>
-                          <th className="p-2.5 text-right">Total TTC</th>
-                          <th className="p-2.5 text-right">Coût Achat</th>
-                          <th className="p-2.5 text-right">Marge Nette</th>
-                          <th className="p-2.5 text-center">Règlement</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {activeServeusesList[0].sales_detail.map((sale: any, idx: number) => (
-                          <tr key={idx} className="hover:bg-slate-50/50">
-                            <td className="p-2.5 font-mono font-bold text-slate-900">{sale.order_number}</td>
-                            <td className="p-2.5 font-mono text-slate-600">{sale.date || sale.created_at?.slice(0, 10)}</td>
-                            <td className="p-2.5 text-slate-700">{sale.customer_name}</td>
-                            <td className="p-2.5 text-right font-mono font-black text-indigo-700">{fmt(sale.total_amount)}</td>
-                            <td className="p-2.5 text-right font-mono text-amber-700">{fmt(sale.total_cost)}</td>
-                            <td className="p-2.5 text-right font-mono font-bold text-emerald-600">{fmt(sale.marge)}</td>
-                            <td className="p-2.5 text-center font-mono text-[10px] uppercase font-bold text-slate-600">
-                              {sale.payment_method}
-                            </td>
-                          </tr>
-                        ))}
-                        {activeServeusesList[0].sales_detail.length === 0 && (
-                          <tr>
-                            <td colSpan={7} className="p-6 text-center text-slate-400">
-                              Aucune facture détaillée trouvée pour {filterServeuse} sur cette période.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                return (
+                  <div className="space-y-6 animate-fadeIn">
+                    {/* En-tête imprimable et écran de la serveuse */}
+                    <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-3xl p-6 border border-slate-800 shadow-lg">
+                      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-2xl">💁‍♀️</span>
+                            <h3 className="text-lg font-black text-white">
+                              Fiche Individuelle de Service • {srv.nom}
+                            </h3>
+                            {srv.has_open_session && (
+                              <span className="text-[10px] bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                                🟢 Session Active
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Période : {periodPreset === 'select_month' ? selectedMonth : (dateRange.start.toLocaleDateString('fr-FR') + ' au ' + dateRange.end.toLocaleDateString('fr-FR'))}
+                            {srv.matricule && <span className="ml-2 font-mono">({srv.matricule})</span>}
+                          </p>
+                        </div>
+
+                        {/* Bouton Impression Rapport Individuel */}
+                        <button
+                          type="button"
+                          onClick={() => window.print()}
+                          className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl text-xs font-black shadow-md flex items-center gap-2 transition print:hidden"
+                        >
+                          <Printer className="w-4 h-4" />
+                          <span>Imprimer ce Rapport Serveuse</span>
+                        </button>
+                      </div>
+
+                      {/* 5 Indicateurs Financiers Clés (Point 8) */}
+                      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-6">
+                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/10">
+                          <p className="text-[10px] uppercase font-bold text-blue-300">🍷 CA Ventes BAR</p>
+                          <p className="text-base font-black font-mono text-white mt-1">{fmt(srv.ventes_bar)}</p>
+                          <span className="text-[9px] text-blue-200">Boissons du bar</span>
+                        </div>
+
+                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/10">
+                          <p className="text-[10px] uppercase font-bold text-orange-300">🍽️ CA RESTAURANT</p>
+                          <p className="text-base font-black font-mono text-white mt-1">{fmt(srv.ventes_cuisine)}</p>
+                          <span className="text-[9px] text-orange-200">Plats cuisine / maquis</span>
+                        </div>
+
+                        <div className="bg-white/15 backdrop-blur-md rounded-2xl p-3 border border-white/20">
+                          <p className="text-[10px] uppercase font-bold text-emerald-300">💰 CA Total Réalisé</p>
+                          <p className="text-base font-black font-mono text-emerald-400 mt-1">{fmt(totalCa)}</p>
+                          <span className="text-[9px] text-emerald-200 font-bold">BAR + RESTAURANT</span>
+                        </div>
+
+                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/10">
+                          <p className="text-[10px] uppercase font-bold text-amber-300">🏦 Versé en Caisse</p>
+                          <p className="text-base font-black font-mono text-amber-300 mt-1">{fmt(srv.montant_verse_total)}</p>
+                          <span className="text-[9px] text-slate-300">Versement de clôture</span>
+                        </div>
+
+                        <div className="bg-white/10 backdrop-blur-md rounded-2xl p-3 border border-white/10 col-span-2 sm:col-span-1">
+                          <p className="text-[10px] uppercase font-bold text-purple-300">⚖️ Écart de Clôture</p>
+                          <p className={clsx('text-base font-black font-mono mt-1', ecart === 0 ? 'text-emerald-400' : ecart < 0 ? 'text-rose-400' : 'text-amber-400')}>
+                            {fmt(ecart)}
+                          </p>
+                          <span className="text-[9px] font-bold">
+                            {ecart === 0 ? '✓ Soldé / Juste' : ecart < 0 ? '⚠️ Manquant constaté' : 'ℹ️ Excédent'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Grille des 2 Tableaux : Produits BAR & Plats RESTAURANT vendus */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      {/* TABLEAU SECTION 1 : VENTES BAR */}
+                      <div className="bg-white rounded-3xl border border-blue-200 shadow-sm overflow-hidden flex flex-col">
+                        <div className="bg-blue-50/70 p-4 border-b border-blue-100 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold">
+                              🍷
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-black text-blue-950 uppercase tracking-wider">
+                                Section 1 • Produits BAR Vendus
+                              </h4>
+                              <p className="text-[10px] text-blue-700">
+                                Boissons déstockées du stock bar
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-xs font-mono font-black text-blue-800 bg-blue-100 px-2.5 py-1 rounded-xl">
+                            {fmt(srv.ventes_bar)}
+                          </span>
+                        </div>
+
+                        <div className="p-4 flex-1 overflow-x-auto">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] border-b border-slate-200">
+                              <tr>
+                                <th className="p-2.5">Produit (Boisson)</th>
+                                <th className="p-2.5 text-center">Quantité</th>
+                                <th className="p-2.5 text-right">P.U. Moyen</th>
+                                <th className="p-2.5 text-right">Total BAR TTC</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {(srv.produits_bar_list || []).map((p: any, idx: number) => {
+                                const pu = p.quantite > 0 ? Math.round(p.montant_total / p.quantite) : (p.prix_unitaire || 0)
+                                return (
+                                  <tr key={idx} className="hover:bg-blue-50/30">
+                                    <td className="p-2.5 font-bold text-slate-900">{p.nom}</td>
+                                    <td className="p-2.5 text-center font-mono font-black text-blue-700">{p.quantite}</td>
+                                    <td className="p-2.5 text-right font-mono text-slate-600">{fmt(pu)}</td>
+                                    <td className="p-2.5 text-right font-mono font-black text-blue-900">{fmt(p.montant_total)}</td>
+                                  </tr>
+                                )
+                              })}
+                              {(!srv.produits_bar_list || srv.produits_bar_list.length === 0) && (
+                                <tr>
+                                  <td colSpan={4} className="p-6 text-center text-slate-400">
+                                    Aucune vente BAR enregistrée pour cette serveuse sur la période.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                            {(srv.produits_bar_list && srv.produits_bar_list.length > 0) && (
+                              <tfoot className="bg-blue-50/50 font-black border-t border-blue-200 text-blue-950">
+                                <tr>
+                                  <td className="p-2.5 uppercase text-[10px]">TOTAL SECTION BAR</td>
+                                  <td className="p-2.5 text-center font-mono">
+                                    {srv.produits_bar_list.reduce((acc: number, x: any) => acc + x.quantite, 0)}
+                                  </td>
+                                  <td className="p-2.5 text-right font-mono">-</td>
+                                  <td className="p-2.5 text-right font-mono font-black text-blue-800">
+                                    {fmt(srv.ventes_bar)}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            )}
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* TABLEAU SECTION 2 : VENTES RESTAURANT */}
+                      <div className="bg-white rounded-3xl border border-orange-200 shadow-sm overflow-hidden flex flex-col">
+                        <div className="bg-orange-50/70 p-4 border-b border-orange-100 flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <div className="w-8 h-8 rounded-xl bg-orange-600 text-white flex items-center justify-center font-bold">
+                              🍽️
+                            </div>
+                            <div>
+                              <h4 className="text-xs font-black text-orange-950 uppercase tracking-wider">
+                                Section 2 • Plats RESTAURANT / MAQUIS
+                              </h4>
+                              <p className="text-[10px] text-orange-700">
+                                Plats et recettes avec fiches techniques cuisine
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-xs font-mono font-black text-orange-800 bg-orange-100 px-2.5 py-1 rounded-xl">
+                            {fmt(srv.ventes_cuisine)}
+                          </span>
+                        </div>
+
+                        <div className="p-4 flex-1 overflow-x-auto">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px] border-b border-slate-200">
+                              <tr>
+                                <th className="p-2.5">Plat / Recette</th>
+                                <th className="p-2.5 text-center">Quantité</th>
+                                <th className="p-2.5 text-right">P.U. Moyen</th>
+                                <th className="p-2.5 text-right">Total RESTO TTC</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {(srv.plats_restaurant_list || []).map((p: any, idx: number) => {
+                                const pu = p.quantite > 0 ? Math.round(p.montant_total / p.quantite) : (p.prix_unitaire || 0)
+                                return (
+                                  <tr key={idx} className="hover:bg-orange-50/30">
+                                    <td className="p-2.5 font-bold text-slate-900">{p.nom}</td>
+                                    <td className="p-2.5 text-center font-mono font-black text-orange-700">{p.quantite}</td>
+                                    <td className="p-2.5 text-right font-mono text-slate-600">{fmt(pu)}</td>
+                                    <td className="p-2.5 text-right font-mono font-black text-orange-900">{fmt(p.montant_total)}</td>
+                                  </tr>
+                                )
+                              })}
+                              {(!srv.plats_restaurant_list || srv.plats_restaurant_list.length === 0) && (
+                                <tr>
+                                  <td colSpan={4} className="p-6 text-center text-slate-400">
+                                    Aucune vente RESTAURANT enregistrée pour cette serveuse sur la période.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                            {(srv.plats_restaurant_list && srv.plats_restaurant_list.length > 0) && (
+                              <tfoot className="bg-orange-50/50 font-black border-t border-orange-200 text-orange-950">
+                                <tr>
+                                  <td className="p-2.5 uppercase text-[10px]">TOTAL SECTION RESTAURANT</td>
+                                  <td className="p-2.5 text-center font-mono">
+                                    {srv.plats_restaurant_list.reduce((acc: number, x: any) => acc + x.quantite, 0)}
+                                  </td>
+                                  <td className="p-2.5 text-right font-mono">-</td>
+                                  <td className="p-2.5 text-right font-mono font-black text-orange-800">
+                                    {fmt(srv.ventes_cuisine)}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            )}
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Journal des Factures & Ventes de la serveuse (Conservé et fiabilisé) */}
+                    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm space-y-4 p-5">
+                      <div className="flex justify-between items-center">
+                        <div>
+                          <h4 className="text-xs font-black text-slate-900 uppercase tracking-wider flex items-center gap-1.5">
+                            <FileText className="w-4 h-4 text-rose-600" />
+                            <span>Journal des Factures & Ventes de {srv.nom}</span>
+                          </h4>
+                          <p className="text-[11px] text-slate-500">
+                            Historique chronologique des transactions attribuées
+                          </p>
+                        </div>
+                        <span className="text-[11px] font-mono text-slate-500 font-bold bg-slate-100 px-3 py-1 rounded-xl">
+                          {srv.sales_detail.length} facture(s)
+                        </span>
+                      </div>
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs text-left">
+                          <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                            <tr>
+                              <th className="p-2.5">Réf Facture</th>
+                              <th className="p-2.5">Date</th>
+                              <th className="p-2.5">Client / Table</th>
+                              <th className="p-2.5 text-right">Total TTC</th>
+                              <th className="p-2.5 text-right">Coût Achat</th>
+                              <th className="p-2.5 text-right">Marge Nette</th>
+                              <th className="p-2.5 text-center">Règlement</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {srv.sales_detail.map((sale: any, idx: number) => (
+                              <tr key={idx} className="hover:bg-slate-50/50">
+                                <td className="p-2.5 font-mono font-bold text-slate-900">{sale.order_number}</td>
+                                <td className="p-2.5 font-mono text-slate-600">{sale.date || sale.created_at?.slice(0, 10)}</td>
+                                <td className="p-2.5 text-slate-700">{sale.customer_name}</td>
+                                <td className="p-2.5 text-right font-mono font-black text-indigo-700">{fmt(sale.total_amount)}</td>
+                                <td className="p-2.5 text-right font-mono text-amber-700">{fmt(sale.total_cost)}</td>
+                                <td className="p-2.5 text-right font-mono font-bold text-emerald-600">{fmt(sale.marge)}</td>
+                                <td className="p-2.5 text-center font-mono text-[10px] uppercase font-bold text-slate-600">
+                                  {sale.payment_method}
+                                </td>
+                              </tr>
+                            ))}
+                            {srv.sales_detail.length === 0 && (
+                              <tr>
+                                <td colSpan={7} className="p-6 text-center text-slate-400">
+                                  Aucune facture détaillée trouvée pour {srv.nom} sur cette période.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
+                )
+              })()}
             </div>
           )}
 
@@ -1634,7 +1872,7 @@ export const RestaurantReportingPage: React.FC = () => {
                         </td>
                         <td className="p-3 text-right font-mono text-blue-700 font-bold">{fmt(s.ventes_bar)}</td>
                         <td className="p-3 text-right font-mono text-orange-700 font-bold">{fmt(s.ventes_cuisine)}</td>
-                        <td className="p-3 text-right font-mono font-black text-slate-900">{fmt(s.ca_mensuel || s.total_ventes)}</td>
+                        <td className="p-3 text-right font-mono font-black text-slate-900">{fmt(s.ca_mensuel)}</td>
                         <td className="p-3 text-right font-mono font-bold text-emerald-600">{fmt(s.total_paye)}</td>
                         <td className="p-3 text-right font-mono font-black text-rose-600">
                           {s.creances_restantes > 0 ? fmt(s.creances_restantes) : <span className="text-emerald-600 font-bold">Soldé (0)</span>}

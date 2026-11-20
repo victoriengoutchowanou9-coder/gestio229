@@ -640,7 +640,7 @@ export const POSPage: React.FC = () => {
                              (Number(statusRes.session?.fond_actuel_momo ?? statusRes.caisse?.fond_ouverture_momo ?? 0)),
             ouvert_par: statusRes.ouvertParNom || 'Caissier',
             ouvert_par_id: statusRes.session?.ouvert_par || null,
-            sector_slug: currentSectorSlug,
+            sector_slug: currentSectorSlug || 'bar_restaurant',
             company_id: companyId,
             is_previous_day: statusRes.isPreviousDay,
           }
@@ -2052,7 +2052,7 @@ export const POSPage: React.FC = () => {
 
       const res = await creerEtTransmettreBon({
         company_id: activeCompId,
-        sector_slug: currentSectorSlug,
+        sector_slug: currentSectorSlug || 'bar_restaurant',
         seller_id: sellerId,
         seller_name: sellerName,
         customer_id: selectedCustomer?.id || null,
@@ -2137,10 +2137,33 @@ export const POSPage: React.FC = () => {
       return
     }
 
-    // Contrôle serveuse obligatoire en mode restaurant
-    if (isRestaurant && (!restaurantServeur || !restaurantServeur.trim() || restaurantServeur === 'Client Comptoir Direct')) {
-      if (restaurantServeursList.length > 0 && !restaurantServeurId) {
-        toast.error('Serveuse obligatoire', 'Veuillez sélectionner la serveuse responsable de cette commande.')
+    // Règle 2 : Pour toute vente BAR ou RESTAURANT / MAQUIS, la sélection d'une serveuse avec session active est obligatoire
+    if (isRestaurant) {
+      const cleanSrv = (restaurantServeur || '').trim()
+      const isInvalidServeur = !cleanSrv ||
+        cleanSrv.toLowerCase() === 'client comptoir' ||
+        cleanSrv.toLowerCase() === 'client comptoir direct' ||
+        cleanSrv.toLowerCase() === 'serveur de salle' ||
+        cleanSrv.toLowerCase() === 'comptoir'
+
+      if (isInvalidServeur) {
+        toast.error('Serveuse obligatoire', 'Pour toute vente BAR ou RESTAURANT / MAQUIS, la sélection d\'une serveuse est obligatoire. Client Comptoir n\'est pas une serveuse.')
+        return
+      }
+
+      const matchedSrv = restaurantServeursList.find(s =>
+        (s.nom_complet && s.nom_complet.trim().toLowerCase() === cleanSrv.toLowerCase()) ||
+        (restaurantServeurId && s.id === restaurantServeurId)
+      )
+
+      const hasActiveSession = Boolean(
+        restaurantSessionId ||
+        matchedSrv?.has_open_session ||
+        matchedSrv?.active_session_id
+      )
+
+      if (!hasActiveSession) {
+        toast.error('Session active requise', `La serveuse "${cleanSrv}" ne dispose d'aucune session de service active. Veuillez ouvrir sa session dans le module Personnel & Serveurs.`)
         return
       }
     }
@@ -2195,59 +2218,7 @@ export const POSPage: React.FC = () => {
     const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
     const custName = selectedCustomerSnapshot ? selectedCustomerSnapshot.name : (isRestaurant && restaurantTableSnapshot ? `Table ${restaurantTableSnapshot}` : 'Client Comptoir')
 
-    // ─── WORKFLOW RESTAURANT : COMMANDE EN ATTENTE 4 MINUTES (0 DÉSTOCKAGE, 0 DETTE) ───
-    if (isRestaurant) {
-      try {
-        const { creerCommandeEnAttente } = await import('../../../services/restaurantService')
-        const expiresAt = new Date(Date.now() + 240 * 1000).toISOString()
-        const waitRes = await creerCommandeEnAttente({
-          company_id: company?.id ?? companyId ?? '',
-          order_number: orderNum,
-          circuit: restaurantCircuit,
-          table_numero: restaurantTableSnapshot || 'Comptoir',
-          couverts: restaurantCouvertsSnapshot || 1,
-          serveur_nom: restaurantServeurSnapshot,
-          serveur_id: restaurantServeurIdSnapshot,
-          items: cartSnapshot.map(c => ({
-            produit_id: c.product.id,
-            designation: c.product.name,
-            quantite: c.qty,
-            prix_unitaire: c.unitPrice,
-            is_consigne: Boolean(c.product.sector_meta?.is_consigne)
-          })),
-          total_ht: cartFiscalSummarySnapshot.ht,
-          total_ttc: totalNetTTCSnapshot
-        })
-
-        if (!waitRes.success) {
-          setPaying(false)
-          toast.error('Erreur commande restaurant', waitRes.error || 'Impossible d\'enregistrer la commande en attente.')
-          return
-        }
-
-        setPendingRestoOrder({
-          orderNumber: orderNum,
-          expiresAt,
-          items: cartSnapshot,
-          totalTtc: totalNetTTCSnapshot,
-          totalHt: cartFiscalSummarySnapshot.ht,
-          serveurNom: restaurantServeurSnapshot,
-          tableNumero: restaurantTableSnapshot || 'Comptoir',
-          circuit: restaurantCircuit,
-          clientNom: custName
-        })
-        setPendingCountdownSeconds(240)
-        setShowPendingRestoModal(true)
-        clearCart()
-        setPaying(false)
-        toast.info('Commande en attente (4 min)', `Commande ${orderNum} enregistrée. Aucun déstockage ni créance pendant 4 minutes.`)
-        return
-      } catch (err: any) {
-        setPaying(false)
-        toast.error('Erreur', err.message)
-        return
-      }
-    }
+    // Vente directe POS validée immédiatement (circuits BAR et RESTAURANT)
 
     // ─── OPTIMISTIC UI : Vider le panier et mettre à jour l'historique instantanément ───
     clearCart()
@@ -2328,7 +2299,7 @@ export const POSPage: React.FC = () => {
         const todayDate = new Date().toISOString().split('T')[0]
         const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferredSnapshot ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
         const notesPayload = {
-          sector_slug: currentSectorSlug, payments: paymentsList, customer_name: custName,
+          sector_slug: currentSectorSlug || 'bar_restaurant', payments: paymentsList, customer_name: custName,
           customer_ifu: selectedCustomerSnapshot?.ifu_number || null, is_deferred: isDeferredSnapshot,
           table_numero: restaurantTableSnapshot || null,
           couverts: restaurantCouvertsSnapshot || 1,
@@ -2358,7 +2329,7 @@ export const POSPage: React.FC = () => {
           payment_method: primaryMethod,
           customer_name: custName,
           status: isDeferredSnapshot ? 'pending_delivery' : 'COMPLET',
-          sector_slug: currentSectorSlug,
+          sector_slug: currentSectorSlug || 'bar_restaurant',
           sector_meta: {
             serveur_nom: restaurantServeurSnapshot || null,
             serveur_id: restaurantServeurIdSnapshot || null,
@@ -2416,7 +2387,7 @@ export const POSPage: React.FC = () => {
             total_ht: lineHt,
             total_ttc: lineTotal,
             company_id: company?.id ?? companyId ?? '',
-            sector_slug: currentSectorSlug
+            sector_slug: currentSectorSlug || 'bar_restaurant'
           }
         })
 
@@ -2432,7 +2403,7 @@ export const POSPage: React.FC = () => {
           const lineUvCostHT = lineIsTaxed ? Math.round((lineUvCostTTC / (1 + lineVatRate / 100)) * 100) / 100 : Math.round(lineUvCostTTC * 100) / 100
           return {
             company_id: company?.id ?? companyId ?? '',
-            sector_slug: currentSectorSlug,
+            sector_slug: currentSectorSlug || 'bar_restaurant',
             product_id: line.product.id,
             movement_type: 'VENTE_POS',
             reference_type: 'sales_order',
@@ -2491,7 +2462,7 @@ export const POSPage: React.FC = () => {
           caisseOps.push(
             enregistrerMouvementCaisse({
               company_id: compId,
-              sector_slug: currentSectorSlug,
+              sector_slug: currentSectorSlug || 'bar_restaurant',
               caisse_id: caisseId,
               caisse_session_id: activeCaisseSnapshot?.id,
               type: 'vente',
@@ -2594,83 +2565,78 @@ export const POSPage: React.FC = () => {
           })())
         }
 
-        // Opérations Restaurant (KDS, Déstockage Fiches Techniques, Affectation Table)
+        // Opérations Restaurant (KDS, Déstockage Fiches Techniques, Affectation Table, Session Serveuse)
         const restaurantOps: Promise<any>[] = []
         if (isRestaurant) {
           restaurantOps.push((async () => {
             const compId = company?.id ?? companyId ?? ''
             const numTable = restaurantTableSnapshot || 'COMPTOIR'
             const srvNom = restaurantServeurSnapshot || 'Serveur'
+            const isBarCircuit = restaurantCircuit === 'BAR'
 
-            // 1. Enregistrer dans restaurant_commandes
-            const { data: restCmd } = await supabase.from('restaurant_commandes').insert({
-              company_id: compId,
-              sector_slug: currentSectorSlug,
-              numero_commande: orderNum,
-              table_numero: numTable,
-              type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
-              serveur_nom: srvNom,
-              serveur_id: restaurantServeurIdSnapshot,
-              client_nom: custName,
-              statut: 'EN_PREPARATION',
-              statut_paiement: creditAmount >= totalNetTTCSnapshot ? 'EN_ATTENTE' : 'SOLDE',
-              total_ht: cartFiscalSummarySnapshot.ht,
-              total_tva: cartFiscalSummarySnapshot.tva,
-              total_aib: cartFiscalSummarySnapshot.aib,
-              total_ttc: totalNetTTCSnapshot,
-              total_paye: totalNetTTCSnapshot - creditAmount,
-              reste_a_payer: creditAmount,
-              mode_reglement: primaryMethod,
-              couverts: restaurantCouvertsSnapshot || 1,
-              heure_ouverture: new Date().toISOString()
-            }).select('id').maybeSingle()
-
-            const restCmdId = restCmd?.id || null
-
-            // 2. Insérer les lignes dans restaurant_commande_lignes pour affichage KDS direct
-            const kdsLignes = cartSnapshot.map(line => {
-              const catLower = ((line.product.category || line.product.category_name || '') as string).toLowerCase()
-              const nameLower = (line.product.name || '').toLowerCase()
-              const isDrink = catLower.includes('boisson') || catLower.includes('biere') || catLower.includes('vin') ||
-                catLower.includes('soda') || catLower.includes('bar') || catLower.includes('jus') ||
-                nameLower.includes('biere') || nameLower.includes('coca') || nameLower.includes('fanta') ||
-                nameLower.includes('castel') || nameLower.includes('youki') || nameLower.includes('guinness') ||
-                nameLower.includes('whisky') || nameLower.includes('eau ')
-              const destination = isDrink ? 'BAR' : 'CUISINE'
-
-              return {
+            // Pour VENTE RESTAURANT / MAQUIS uniquement : Enregistrer dans restaurant_commandes et déstocker matières premières
+            if (!isBarCircuit) {
+              // 1. Enregistrer dans restaurant_commandes (statut conforme à la contrainte CHECK)
+              const { data: restCmd } = await supabase.from('restaurant_commandes').insert({
                 company_id: compId,
-                sector_slug: currentSectorSlug,
+                sector_slug: currentSectorSlug || 'bar_restaurant',
+                numero_commande: orderNum,
+                table_numero: numTable,
+                type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
+                serveur_nom: srvNom,
+                serveur_id: restaurantServeurIdSnapshot,
+                client_nom: custName,
+                statut: 'EN_PREPARATION',
+                statut_paiement: creditAmount >= totalNetTTCSnapshot ? 'EN_ATTENTE' : 'SOLDE',
+                total_ht: cartFiscalSummarySnapshot.ht,
+                total_tva: cartFiscalSummarySnapshot.tva,
+                total_aib: cartFiscalSummarySnapshot.aib,
+                total_ttc: totalNetTTCSnapshot,
+                total_paye: totalNetTTCSnapshot - creditAmount,
+                reste_a_payer: creditAmount,
+                mode_reglement: primaryMethod,
+                couverts: restaurantCouvertsSnapshot || 1,
+                heure_ouverture: new Date().toISOString()
+              }).select('id').maybeSingle()
+
+              const restCmdId = restCmd?.id || null
+
+              // 2. Insérer les lignes dans restaurant_commande_lignes pour affichage KDS direct
+              const kdsLignes = cartSnapshot.map(line => ({
+                company_id: compId,
+                sector_slug: currentSectorSlug || 'bar_restaurant',
                 commande_id: restCmdId,
                 commande_numero: orderNum,
                 table_numero: numTable,
                 serveur_nom: srvNom,
                 produit_id: line.product.id,
                 designation: line.product.name,
-                destination: destination,
+                destination: 'CUISINE',
                 quantite: line.qty,
                 prix_unitaire: line.unitPrice,
                 total_ligne: line.qty * line.unitPrice,
                 statut_preparation: 'NOUVEAU',
                 heure_commande: new Date().toISOString()
+              }))
+
+              if (kdsLignes.length > 0) {
+                await supabase.from('restaurant_commande_lignes').insert(kdsLignes)
               }
-            })
 
-            await supabase.from('restaurant_commande_lignes').insert(kdsLignes)
-
-            // 3. Déstockage automatique des matières premières de cuisine selon fiches techniques
-            for (const line of cartSnapshot) {
-              await destockerMatieresPlat({
-                company_id: compId,
-                order_id: savedDbSale.id,
-                order_number: orderNum,
-                plat_nom: line.product.name,
-                portion_qty: line.qty,
-                sector_slug: currentSectorSlug
-              })
+              // 3. Déstockage automatique des matières premières de cuisine selon fiches techniques
+              for (const line of cartSnapshot) {
+                await destockerMatieresPlat({
+                  company_id: compId,
+                  order_id: savedDbSale.id,
+                  order_number: orderNum,
+                  plat_nom: line.product.name,
+                  portion_qty: line.qty,
+                  sector_slug: currentSectorSlug || 'bar_restaurant'
+                })
+              }
             }
 
-            // 4. Créer la créance serveuse et suivre les contenants consignés
+            // 4. Suivre les contenants consignés et créances serveuses
             const nbConsignes = cartSnapshot.reduce((acc, it) => {
               const nom = (it.product.name || '').toLowerCase()
               const isBouteilleConsignee = nom.includes('castel') || nom.includes('beaufort') || nom.includes('guinness') || nom.includes('youki') || nom.includes('biere')
@@ -2679,7 +2645,7 @@ export const POSPage: React.FC = () => {
 
             await supabase.from('restaurant_creances_serveuses').insert({
               company_id: compId,
-              sector_slug: currentSectorSlug,
+              sector_slug: currentSectorSlug || 'bar_restaurant',
               order_id: savedDbSale.id,
               order_number: orderNum,
               serveur_nom: srvNom,
@@ -2703,9 +2669,27 @@ export const POSPage: React.FC = () => {
                 .eq('numero_table', numTable)
             }
 
-            // 6. Associer la vente à la session de service active de la serveuse
+            // 6. Accumulation automatique des produits dans la session active de la serveuse
             if (restaurantSessionIdSnapshot) {
               try {
+                const { accumulerVenteDansSessionServeuse } = await import('../../../services/restaurantService')
+                await accumulerVenteDansSessionServeuse({
+                  session_id: restaurantSessionIdSnapshot,
+                  order_number: orderNum,
+                  circuit: isBarCircuit ? 'BAR' : 'RESTAURANT',
+                  table_numero: numTable,
+                  items: cartSnapshot.map(c => ({
+                    produit_id: c.product.id,
+                    nom: c.product.name,
+                    quantite: c.qty,
+                    prix_unitaire: c.unitPrice,
+                    total: c.qty * c.unitPrice,
+                    circuit: (isBarCircuit && !c.product.is_recipe) ? 'BAR' : 'RESTAURANT'
+                  })),
+                  total_vente: totalNetTTCSnapshot
+                })
+
+                // Incrémenter total_ventes_declarees_ttc sur la session active de la serveuse
                 const { data: curSess } = await supabase
                   .from('restaurant_sessions_serveurs')
                   .select('total_ventes_declarees_ttc')
