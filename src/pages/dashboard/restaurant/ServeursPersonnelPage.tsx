@@ -3,7 +3,8 @@ import {
   Users, Plus, RefreshCw, Award, Percent, DollarSign,
   Phone, UserCheck, Shield, ChevronRight, X, Search,
   Wine, Wallet, ArrowDownRight, CheckCircle2, Clock,
-  AlertTriangle, FileText, Check, ShieldAlert, RotateCcw, Package
+  AlertTriangle, FileText, Check, ShieldAlert, RotateCcw, Package,
+  Sparkles, Utensils
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
