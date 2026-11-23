@@ -4,13 +4,13 @@
 // Dette initiale, encaissement des arriérés, relances WhatsApp et reçus
 // =============================================================================
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useParams } from 'react-router-dom'
 import {
   Users, Plus, Search, Phone, MapPin, AlertCircle, RefreshCw, X,
   DollarSign, MessageCircle, FileText, Printer, CheckCircle2, ArrowDownCircle,
   CreditCard, Smartphone, ShieldCheck, History, Edit3, Trash2, AlertTriangle,
-  Tag, SlidersHorizontal
+  Tag, SlidersHorizontal, ChevronDown, ChevronUp, Calendar, Check, Receipt
 } from 'lucide-react'
 import { supabase } from '../../../lib/supabase'
 import { useAuthStore } from '../../../store/authStore'
@@ -32,6 +32,276 @@ import {
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
+
+// =============================================================================
+// UTILITAIRES FUSEAU HORAIRE BÉNIN (Africa/Porto-Novo, UTC+1)
+// =============================================================================
+export function getBeninNowInput(): string {
+  const d = new Date()
+  const beninOffsetMs = 60 * 60 * 1000 // UTC+1 Bénin
+  const utc = d.getTime() + (d.getTimezoneOffset() * 60000)
+  const beninDate = new Date(utc + beninOffsetMs)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${beninDate.getFullYear()}-${pad(beninDate.getMonth() + 1)}-${pad(beninDate.getDate())}T${pad(beninDate.getHours())}:${pad(beninDate.getMinutes())}`
+}
+
+export function formatBeninDateTime(isoString: string | null | undefined): string {
+  if (!isoString) return '-'
+  const d = new Date(isoString)
+  if (isNaN(d.getTime())) return isoString
+  return new Intl.DateTimeFormat('fr-BJ', {
+    timeZone: 'Africa/Porto-Novo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(d)
+}
+
+export function formatBeninDate(isoString: string | null | undefined): string {
+  if (!isoString) return '-'
+  const d = new Date(isoString)
+  if (isNaN(d.getTime())) return isoString
+  return new Intl.DateTimeFormat('fr-BJ', {
+    timeZone: 'Africa/Porto-Novo',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(d)
+}
+
+export function beninInputToIso(inputVal: string): string {
+  if (!inputVal) return new Date().toISOString()
+  try {
+    const withTz = inputVal.length === 16 ? `${inputVal}:00+01:00` : inputVal
+    const d = new Date(withTz)
+    if (!isNaN(d.getTime())) return d.toISOString()
+  } catch {}
+  return new Date().toISOString()
+}
+
+export interface ImputedPayment {
+  payment_id: string
+  payment_date: string
+  montant_impute: number
+  montant_total_paiement: number
+  payment_method: string
+  reference: string
+  notes?: string
+}
+
+export interface CreditPurchase {
+  id: string
+  reference: string
+  date: string
+  montant_initial: number
+  montant_rembourse: number
+  solde_restant: number
+  statut: 'SOLDÉ' | 'EN COURS'
+  is_initial?: boolean
+  payments_imputes: ImputedPayment[]
+}
+
+// =============================================================================
+// ALGORITHME D'IMPUTATION AUTOMATIQUE FIFO (Premier entré, premier remboursé)
+// =============================================================================
+export function computeFifoCreditPurchases(
+  clientInfo: { totalDette: number; totalRembourse: number; soldeDu: number; created_at?: string },
+  rawSales: any[],
+  rawDebts: ClientDebt[],
+  rawPayments: DebtPayment[]
+): CreditPurchase[] {
+  // 1. Dédoublonner et trier chronologiquement les paiements (ascendant)
+  const paymentsMap = new Map<string, DebtPayment>()
+  for (const p of rawPayments || []) {
+    if (p && p.id && !paymentsMap.has(p.id)) {
+      paymentsMap.set(p.id, {
+        ...p,
+        amount: Number(p.amount) || 0,
+        payment_date: p.payment_date || p.created_at || new Date().toISOString()
+      })
+    }
+  }
+  const payments = Array.from(paymentsMap.values()).sort(
+    (a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime()
+  )
+
+  // 2. Extraire et dédoublonner les achats à crédit depuis sales_orders
+  const salesMap = new Map<string, { id: string; reference: string; date: string; montant_initial: number; is_initial: boolean }>()
+  for (const s of rawSales || []) {
+    if (s && s.id && !salesMap.has(s.id)) {
+      const creditAmt = Number(s.credit_amount) || (s.payment_status === 'credit' ? Number(s.total_amount) || 0 : 0)
+      if (creditAmt > 0) {
+        salesMap.set(s.id, {
+          id: s.id,
+          reference: s.order_number || `FAC-${s.id.slice(0, 8).toUpperCase()}`,
+          date: s.order_date ? `${s.order_date}T08:00:00Z` : (s.created_at || new Date().toISOString()),
+          montant_initial: creditAmt,
+          is_initial: false
+        })
+      }
+    }
+  }
+
+  const purchases = Array.from(salesMap.values()).sort(
+    (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+  )
+
+  // 3. Calculer la dette totale cible et intégrer la dette initiale / arriéré
+  const totalDetteTarget = Number(clientInfo.totalDette) || 0
+  const sumSalesCredit = purchases.reduce((sum, p) => sum + p.montant_initial, 0)
+
+  if (totalDetteTarget > sumSalesCredit) {
+    const diff = totalDetteTarget - sumSalesCredit
+    const oldestDebt = (rawDebts || [])[0]
+    const initialDate = oldestDebt?.created_at || clientInfo.created_at || (purchases.length > 0 ? purchases[0].date : new Date(0).toISOString())
+    // L'arriéré / dette initiale est placé en tête (priorité FIFO : ancienne dette d'abord)
+    purchases.unshift({
+      id: oldestDebt?.id || 'dette-initiale',
+      reference: 'ARRIERE-INITIAL',
+      date: initialDate,
+      montant_initial: diff,
+      is_initial: true
+    })
+  } else if (purchases.length === 0 && totalDetteTarget > 0) {
+    purchases.push({
+      id: 'dette-initiale',
+      reference: 'ARRIERE-INITIAL',
+      date: new Date().toISOString(),
+      montant_initial: totalDetteTarget,
+      is_initial: true
+    })
+  }
+
+  // Trier strictement par date croissante pour l'application FIFO
+  purchases.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime())
+
+  // 4. Initialisation des champs de suivi
+  const trackedPurchases: CreditPurchase[] = purchases.map((p) => ({
+    ...p,
+    montant_rembourse: 0,
+    solde_restant: p.montant_initial,
+    statut: 'EN COURS',
+    payments_imputes: []
+  }))
+
+  // 5. Imputation automatique FIFO des remboursements
+  for (const pay of payments) {
+    let available = pay.amount
+    for (const purch of trackedPurchases) {
+      if (available <= 0) break
+      const needed = purch.montant_initial - purch.montant_rembourse
+      if (needed > 0) {
+        const take = Math.min(available, needed)
+        purch.montant_rembourse += take
+        purch.solde_restant = Math.max(0, purch.montant_initial - purch.montant_rembourse)
+        purch.statut = purch.solde_restant <= 0 ? 'SOLDÉ' : 'EN COURS'
+        purch.payments_imputes.push({
+          payment_id: pay.id,
+          payment_date: pay.payment_date,
+          montant_impute: take,
+          montant_total_paiement: pay.amount,
+          payment_method: pay.payment_method,
+          reference: pay.reference || '-',
+          notes: pay.notes || ''
+        })
+        available -= take
+      }
+    }
+  }
+
+  return trackedPurchases
+}
+
+// =============================================================================
+// FILTRE PAR PÉRIODE AVEC REPORT DE SOLDE ANTÉRIEUR
+// =============================================================================
+export function filterPurchasesByPeriod(
+  trackedPurchases: CreditPurchase[],
+  allPayments: DebtPayment[],
+  startDateStr?: string,
+  endDateStr?: string
+) {
+  if (!startDateStr && !endDateStr) {
+    const totalAchats = trackedPurchases.reduce((s, p) => s + p.montant_initial, 0)
+    const totalRembourse = trackedPurchases.reduce((s, p) => s + p.montant_rembourse, 0)
+    const soldeFinal = trackedPurchases.reduce((s, p) => s + p.solde_restant, 0)
+    const soldesCount = trackedPurchases.filter(p => p.statut === 'SOLDÉ').length
+    const enCoursCount = trackedPurchases.filter(p => p.statut === 'EN COURS').length
+    return {
+      isPeriod: false,
+      startDateStr: '',
+      endDateStr: '',
+      soldeAnterieur: 0,
+      achatsPeriode: totalAchats,
+      remboursementsPeriode: totalRembourse,
+      soldeFinal,
+      soldesCount,
+      enCoursCount,
+      purchases: trackedPurchases,
+      paymentsInPeriod: allPayments
+    }
+  }
+
+  const start = startDateStr ? new Date(`${startDateStr}T00:00:00Z`).getTime() : 0
+  const end = endDateStr ? new Date(`${endDateStr}T23:59:59.999Z`).getTime() : Infinity
+
+  // Calculs antérieurs à la période
+  const priorPurchases = trackedPurchases.filter(p => new Date(p.date).getTime() < start)
+  const priorPurchasesTotal = priorPurchases.reduce((s, p) => s + p.montant_initial, 0)
+  const priorPayments = allPayments.filter(p => new Date(p.payment_date).getTime() < start)
+  const priorPaymentsTotal = priorPayments.reduce((s, p) => s + p.amount, 0)
+  const soldeAnterieur = Math.max(0, priorPurchasesTotal - priorPaymentsTotal)
+
+  // Éléments de la période
+  const periodPurchases = trackedPurchases.filter(p => {
+    const t = new Date(p.date).getTime()
+    return t >= start && t <= end
+  })
+  const achatsPeriode = periodPurchases.reduce((s, p) => s + p.montant_initial, 0)
+
+  const paymentsInPeriod = allPayments.filter(p => {
+    const t = new Date(p.payment_date).getTime()
+    return t >= start && t <= end
+  })
+  const remboursementsPeriode = paymentsInPeriod.reduce((s, p) => s + p.amount, 0)
+
+  const soldeFinal = Math.max(0, soldeAnterieur + achatsPeriode - remboursementsPeriode)
+
+  // Invoices to include in the statement table:
+  // 1. Any prior purchase that had an unpaid balance at the start of the period
+  // 2. All purchases within the period
+  const displayPurchases = trackedPurchases.filter(p => {
+    const t = new Date(p.date).getTime()
+    if (t >= start && t <= end) return true
+    if (t < start) {
+      const paymentsBeforeStartOnThis = (p.payments_imputes || [])
+        .filter(pi => new Date(pi.payment_date).getTime() < start)
+        .reduce((sum, pi) => sum + pi.montant_impute, 0)
+      const remainingAtStart = p.montant_initial - paymentsBeforeStartOnThis
+      return remainingAtStart > 0
+    }
+    return false
+  })
+
+  const soldesCount = displayPurchases.filter(p => p.statut === 'SOLDÉ').length
+  const enCoursCount = displayPurchases.filter(p => p.statut === 'EN COURS').length
+
+  return {
+    isPeriod: true,
+    startDateStr: startDateStr || '',
+    endDateStr: endDateStr || '',
+    soldeAnterieur,
+    achatsPeriode,
+    remboursementsPeriode,
+    soldeFinal,
+    soldesCount,
+    enCoursCount,
+    purchases: displayPurchases,
+    paymentsInPeriod
+  }
+}
 
 export interface ClientDebt {
   id: string
@@ -149,6 +419,20 @@ const ClientsPage: React.FC = () => {
   // Données client_debts et debt_payments (Module Créances & Remboursements)
   const [debtsByClient, setDebtsByClient] = useState<Record<string, ClientDebt[]>>({})
   const [payments, setPayments] = useState<DebtPayment[]>([])
+  const [creditSalesByClient, setCreditSalesByClient] = useState<Record<string, any[]>>({})
+  const [expandedInvoiceIds, setExpandedInvoiceIds] = useState<Record<string, boolean>>({})
+  const toggleInvoiceExpand = useCallback((invId: string) => {
+    setExpandedInvoiceIds((prev) => ({ ...prev, [invId]: !prev[invId] }))
+  }, [])
+
+  // Filtre par période pour l'impression de la situation globale
+  const [statementPeriodMode, setStatementPeriodMode] = useState<'all' | 'period'>('all')
+  const [statementStartDate, setStatementStartDate] = useState<string>('')
+  const [statementEndDate, setStatementEndDate] = useState<string>('')
+
+  // Verrou synchrone anti-double clic pour les remboursements
+  const isSubmittingPaymentRef = useRef(false)
+
   const [paymentsByClientState, setPaymentsByClientState] = useState<Record<string, DebtPayment[]>>({})
   const setPaymentsByClient = useCallback((val: Record<string, DebtPayment[]>) => {
     setPaymentsByClientState(val || {})
@@ -221,7 +505,7 @@ const ClientsPage: React.FC = () => {
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null)
   const [paymentAmount, setPaymentAmount] = useState<number>(0)
   const [paymentMode, setPaymentMode] = useState<string>('Espèces')
-  const [paymentDate, setPaymentDate] = useState<string>(new Date().toISOString().slice(0, 16))
+  const [paymentDate, setPaymentDate] = useState<string>(getBeninNowInput())
   const [paymentReference, setPaymentReference] = useState<string>('')
   const [paymentNotes, setPaymentNotes] = useState<string>('')
   const [isProcessingPayment, setIsProcessingPayment] = useState(false)
@@ -408,21 +692,25 @@ const ClientsPage: React.FC = () => {
     if (!currentCompanyId || clientIds.length === 0) return
     const activeSector = currentSectorSlug || 'boutique'
     try {
-      const [debtsRes, paymentsRes] = await Promise.all([
+      const [debtsRes, paymentsRes, salesRes] = await Promise.all([
         supabase
           .from('client_debts')
           .select('*')
           .eq('company_id', currentCompanyId)
-          .eq('sector_code', activeSector)
           .in('client_id', clientIds)
           .order('created_at', { ascending: false }),
         supabase
           .from('debt_payments')
           .select('*')
           .eq('company_id', currentCompanyId)
-          .eq('sector_code', activeSector)
           .in('client_id', clientIds)
-          .order('payment_date', { ascending: false })
+          .order('payment_date', { ascending: false }),
+        supabase
+          .from('sales_orders')
+          .select('id, order_number, order_date, total_amount, paid_amount, credit_amount, payment_status, customer_id, customer_name, created_at, notes')
+          .eq('company_id', currentCompanyId)
+          .or('credit_amount.gt.0,payment_status.eq.credit,payment_status.eq.partiel')
+          .order('created_at', { ascending: true })
       ])
 
       if (debtsRes.data) {
@@ -440,9 +728,18 @@ const ClientsPage: React.FC = () => {
       }
 
       if (paymentsRes.data) {
-        setPayments(paymentsRes.data || [])
-        const groupedPayments: Record<string, DebtPayment[]> = {}
+        // Dédoublonnage strict par identifiant unique pour empêcher les doublons
+        const seenPaymentIds = new Set<string>()
+        const dedupedPayments: DebtPayment[] = []
         for (const p of paymentsRes.data) {
+          if (p && p.id && !seenPaymentIds.has(p.id)) {
+            seenPaymentIds.add(p.id)
+            dedupedPayments.push(p)
+          }
+        }
+        setPayments(dedupedPayments)
+        const groupedPayments: Record<string, DebtPayment[]> = {}
+        for (const p of dedupedPayments) {
           if (!groupedPayments[p.client_id]) groupedPayments[p.client_id] = []
           groupedPayments[p.client_id].push({
             ...p,
@@ -455,10 +752,30 @@ const ClientsPage: React.FC = () => {
         setPayments([])
         setPaymentsByClient({})
       }
+
+      if (salesRes.data) {
+        const groupedSales: Record<string, any[]> = {}
+        for (const s of salesRes.data) {
+          const k = s.customer_id
+          if (k) {
+            if (!groupedSales[k]) groupedSales[k] = []
+            groupedSales[k].push(s)
+          } else if (s.customer_name) {
+            // Regrouper par nom pour les ventes de comptoir où customer_id est null
+            const nameKey = s.customer_name.trim().toLowerCase()
+            if (!groupedSales[nameKey]) groupedSales[nameKey] = []
+            groupedSales[nameKey].push(s)
+          }
+        }
+        setCreditSalesByClient(groupedSales)
+      } else {
+        setCreditSalesByClient({})
+      }
     } catch (e) {
       console.warn('Erreur chargement client_debts/debt_payments :', e)
       setPayments([])
       setPaymentsByClient({})
+      setCreditSalesByClient({})
     }
   }, [currentCompanyId, currentSectorSlug])
 
@@ -468,7 +785,7 @@ const ClientsPage: React.FC = () => {
     try {
       // Isolation stricte multi-secteurs garantie par supabaseTenant
       let query = supabaseTenant('clients')
-        .select('id, code, name, ifu_number, phone, email, address, city, credit_limit, current_debt, payment_terms_days, credit_authorized, discount_eligible, discount_rate, is_active', { count: 'exact' })
+        .select('id, code, name, ifu_number, phone, email, address, city, credit_limit, current_debt, payment_terms_days, credit_authorized, discount_eligible, discount_rate, is_active')
         .eq('is_active', true)
         .order('name')
         .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
@@ -555,6 +872,17 @@ const ClientsPage: React.FC = () => {
     const soldeDu = legacyDebt
     return { totalDette, totalRembourse, soldeDu, debts, payments }
   }, [debtsByClient, paymentsByClient])
+
+  // Suivi des achats à crédit ventilés par facture avec imputation automatique FIFO
+  const getClientCreditPurchases = useCallback((cust: Customer): CreditPurchase[] => {
+    const custInfo = getCustomerDetteInfo(cust)
+    const nameKey = (cust.name || '').trim().toLowerCase()
+    const rawSales = [
+      ...(creditSalesByClient[cust.id] || []),
+      ...(nameKey && creditSalesByClient[nameKey] ? creditSalesByClient[nameKey] : [])
+    ]
+    return computeFifoCreditPurchases(custInfo, rawSales, custInfo.debts, custInfo.payments)
+  }, [getCustomerDetteInfo, creditSalesByClient])
 
   const filtered = customers.filter((c) => {
     const matchSearch =
@@ -776,7 +1104,7 @@ const ClientsPage: React.FC = () => {
     const { soldeDu } = getCustomerDetteInfo(cust)
     setPaymentAmount(soldeDu || cust.current_debt || 0)
     setPaymentMode('Espèces')
-    setPaymentDate(new Date().toISOString().slice(0, 16))
+    setPaymentDate(getBeninNowInput())
     setPaymentReference('')
     setPaymentNotes('')
     setShowPaymentModal(true)
@@ -785,7 +1113,7 @@ const ClientsPage: React.FC = () => {
   // Valider le remboursement (Transaction complète : caisse, client_debts, debt_payments, cash_sessions)
   const handleProcessPayment = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (isProcessingPayment || !selectedCustomer || paymentAmount <= 0) return
+    if (isSubmittingPaymentRef.current || isProcessingPayment || !selectedCustomer || paymentAmount <= 0) return
 
     const { soldeDu, totalDette, totalRembourse, debts } = getCustomerDetteInfo(selectedCustomer)
     if (paymentAmount > soldeDu) {
@@ -793,6 +1121,7 @@ const ClientsPage: React.FC = () => {
       return
     }
 
+    isSubmittingPaymentRef.current = true
     setIsProcessingPayment(true)
     try {
       // 1. Vérification session caisse ouverte pour company_id + sector_code courant
@@ -800,6 +1129,7 @@ const ClientsPage: React.FC = () => {
       if (!activeSession) {
         toast.error('Caisse non ouverte', 'Ouvrez la caisse du jour pour enregistrer un remboursement.')
         setIsProcessingPayment(false)
+        isSubmittingPaymentRef.current = false
         return
       }
 
@@ -834,7 +1164,7 @@ const ClientsPage: React.FC = () => {
       const resteApres = Math.max(0, debtTotalDette - newTotalRembourse)
       const newStatus = resteApres <= 0 ? 'soldée' : 'en_cours'
       const receiptNumber = paymentReference.trim() || `REC-${new Date().getFullYear()}-${Math.floor(100000 + Math.random() * 900000)}`
-      const payDateIso = paymentDate ? new Date(paymentDate).toISOString() : new Date().toISOString()
+      const payDateIso = paymentDate ? beninInputToIso(paymentDate) : new Date().toISOString()
 
       // 3. INSERT dans debt_payments
       const normalizedMethod = paymentMode === 'cash' ? 'Espèces' : paymentMode === 'momo' ? 'MTN MoMo' : paymentMode === 'moov' ? 'Moov Money' : paymentMode
@@ -1010,6 +1340,7 @@ const ClientsPage: React.FC = () => {
     } catch (err: any) {
       toast.error('Erreur lors du versement', err.message)
     } finally {
+      isSubmittingPaymentRef.current = false
       setIsProcessingPayment(false)
     }
   }
@@ -1888,9 +2219,7 @@ const ClientsPage: React.FC = () => {
                 <div>
                   <span className="text-slate-500 font-sans">Date : </span>
                   <strong className="text-slate-900">
-                    {new Date(activePaymentReceipt.payment.payment_date).toLocaleDateString('fr-BJ', {
-                      day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-                    })}
+                    {formatBeninDateTime(activePaymentReceipt.payment.payment_date)}
                   </strong>
                 </div>
               </div>
@@ -2118,82 +2447,226 @@ const ClientsPage: React.FC = () => {
                     </div>
                   )}
 
-                  {/* Historique des Remboursements issu de debt_payments — JAMAIS VIDÉ */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2.5">
-                      <h4 className="font-bold text-slate-800 text-xs flex items-center gap-2 uppercase tracking-wide">
-                        <History className="w-4 h-4 text-emerald-600" />
-                        Historique des remboursements ({custInfo.payments.length})
-                      </h4>
-                      <span className="text-[11px] text-slate-400">Archivage permanent</span>
-                    </div>
+                  {/* NOUVELLE ORGANISATION : HISTORIQUE DES ACHATS À CRÉDIT & REMBOURSEMENTS (FIFO) */}
+                  {(() => {
+                    const creditPurchases = getClientCreditPurchases(activeDetailsCustomer)
+                    return (
+                      <div>
+                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 mb-2.5">
+                          <div>
+                            <h4 className="font-bold text-slate-800 text-xs flex items-center gap-2 uppercase tracking-wide">
+                              <Receipt className="w-4 h-4 text-emerald-600" />
+                              Suivi des Achats à Crédit & Règlements ({creditPurchases.length})
+                            </h4>
+                            <p className="text-[11px] text-slate-500">
+                              Imputation FIFO automatique (anciennes dettes soldées en priorité) • Cliquez sur une ligne pour déplier le détail
+                            </p>
+                          </div>
+                          <span className="text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
+                            Méthode FIFO active
+                          </span>
+                        </div>
 
-                    {custInfo.payments.length === 0 ? (
-                      <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-400 text-xs">
-                        Aucun remboursement enregistré pour ce client.
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                        <table className="w-full text-left text-xs">
-                          <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600 uppercase">
-                            <tr>
-                              <th className="px-4 py-2.5">Date</th>
-                              <th className="px-4 py-2.5 text-right">Montant remboursé</th>
-                              <th className="px-4 py-2.5">Mode</th>
-                              <th className="px-4 py-2.5 text-right">Reste après opération</th>
-                              <th className="px-4 py-2.5 text-center">Reçu</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100">
-                            {custInfo.payments.map((p) => {
-                              const pDate = new Date(p.payment_date)
-                              const dateStr = !isNaN(pDate.getTime())
-                                ? pDate.toLocaleDateString('fr-BJ', {
-                                    day: '2-digit',
-                                    month: '2-digit',
-                                    year: 'numeric',
-                                    hour: '2-digit',
-                                    minute: '2-digit',
-                                  })
-                                : p.payment_date
+                        {creditPurchases.length === 0 ? (
+                          <div className="p-8 text-center bg-slate-50 rounded-xl border border-dashed border-slate-200 text-slate-400 text-xs">
+                            Aucun achat à crédit ni arriéré enregistré pour ce client.
+                          </div>
+                        ) : (
+                          <div className="space-y-2">
+                            <div className="overflow-x-auto border border-slate-200 rounded-xl bg-white shadow-xs">
+                              <table className="w-full text-left text-xs">
+                                <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-700 uppercase tracking-wider text-[11px]">
+                                  <tr>
+                                    <th className="px-3.5 py-2.5 whitespace-nowrap">Date Achat</th>
+                                    <th className="px-3.5 py-2.5">Réf Facture</th>
+                                    <th className="px-3.5 py-2.5 text-right whitespace-nowrap">Achat à crédit</th>
+                                    <th className="px-3.5 py-2.5 text-right whitespace-nowrap">Montant remboursé</th>
+                                    <th className="px-3.5 py-2.5 text-right whitespace-nowrap">Solde restant dû</th>
+                                    <th className="px-3.5 py-2.5 text-center">Statut</th>
+                                    <th className="px-3.5 py-2.5 text-center">Détail</th>
+                                  </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                  {creditPurchases.map((inv) => {
+                                    const isExpanded = Boolean(expandedInvoiceIds[inv.id])
+                                    const isSolde = inv.statut === 'SOLDÉ'
+                                    return (
+                                      <React.Fragment key={inv.id}>
+                                        <tr
+                                          onClick={() => toggleInvoiceExpand(inv.id)}
+                                          className={clsx(
+                                            'cursor-pointer transition-colors hover:bg-slate-50/90',
+                                            isExpanded && 'bg-slate-50/60'
+                                          )}
+                                        >
+                                          <td className="px-3.5 py-3 font-medium text-slate-700 whitespace-nowrap">
+                                            {formatBeninDate(inv.date)}
+                                          </td>
+                                          <td className="px-3.5 py-3 font-mono font-bold text-slate-800">
+                                            <div className="flex items-center gap-1.5">
+                                              <FileText className="w-3.5 h-3.5 text-slate-400" />
+                                              <span>{inv.reference}</span>
+                                              {inv.is_initial && (
+                                                <span className="text-[9px] font-sans font-semibold bg-amber-100 text-amber-800 px-1 py-0.2 rounded">
+                                                  Initial
+                                                </span>
+                                              )}
+                                            </div>
+                                          </td>
+                                          <td className="px-3.5 py-3 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
+                                            {fmt(inv.montant_initial)}
+                                          </td>
+                                          <td className="px-3.5 py-3 text-right font-mono font-bold text-emerald-700 whitespace-nowrap">
+                                            {fmt(inv.montant_rembourse)}
+                                          </td>
+                                          <td className="px-3.5 py-3 text-right font-mono font-black whitespace-nowrap">
+                                            <span className={isSolde ? 'text-slate-400 font-normal' : 'text-rose-600'}>
+                                              {fmt(inv.solde_restant)}
+                                            </span>
+                                          </td>
+                                          <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                                            <span
+                                              className={clsx(
+                                                'inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider',
+                                                isSolde
+                                                  ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                                                  : 'bg-amber-100 text-amber-900 border border-amber-200'
+                                              )}
+                                            >
+                                              {isSolde ? <Check className="w-3 h-3 text-emerald-700" /> : <History className="w-3 h-3 text-amber-700" />}
+                                              {inv.statut}
+                                            </span>
+                                          </td>
+                                          <td className="px-3.5 py-3 text-center whitespace-nowrap">
+                                            <button
+                                              type="button"
+                                              onClick={(e) => {
+                                                e.stopPropagation()
+                                                toggleInvoiceExpand(inv.id)
+                                              }}
+                                              className="p-1 rounded-lg hover:bg-slate-200 text-slate-500 hover:text-slate-700 transition"
+                                              title={isExpanded ? 'Masquer les règlements' : 'Voir les règlements'}
+                                            >
+                                              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                                            </button>
+                                          </td>
+                                        </tr>
 
-                              return (
-                                <tr key={p.id} className="hover:bg-slate-50/80 transition">
-                                  <td className="px-4 py-2.5 font-medium text-slate-700">{dateStr}</td>
-                                  <td className="px-4 py-2.5 text-right font-mono font-bold text-emerald-700">
-                                    {fmt(p.amount)}
-                                  </td>
-                                  <td className="px-4 py-2.5">
-                                    <span className="px-2 py-0.5 rounded-md font-semibold text-[11px] bg-slate-100 text-slate-700">
-                                      {p.payment_method}
-                                    </span>
-                                  </td>
-                                  <td className="px-4 py-2.5 text-right font-mono font-bold text-slate-800">
-                                    {fmt(p.reste_apres)}
-                                  </td>
-                                  <td className="px-4 py-2.5 text-center">
-                                    <button
-                                      onClick={() => {
-                                        const linkedDebt = custInfo.debts.find((d) => d.id === p.debt_id) || custInfo.debts[0]
-                                        setActivePaymentReceipt({
-                                          payment: p,
-                                          customer: activeDetailsCustomer,
-                                          debt: linkedDebt,
-                                        })
-                                      }}
-                                      className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center gap-1 mx-auto transition"
-                                    >
-                                      <Printer className="w-3 h-3" /> Imprimer
-                                    </button>
-                                  </td>
-                                </tr>
-                              )
-                            })}
-                          </tbody>
-                        </table>
+                                        {/* Ligne Dépliée : Détail des règlements imputés */}
+                                        {isExpanded && (
+                                          <tr className="bg-slate-50/80 border-b border-slate-200">
+                                            <td colSpan={7} className="p-3 pl-6 sm:pl-8">
+                                              <div className="bg-white rounded-xl border border-slate-200 p-3 shadow-xs space-y-2">
+                                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 border-b border-slate-100 pb-1.5">
+                                                  <span className="text-[11px] font-bold text-slate-700 uppercase flex items-center gap-1.5">
+                                                    <DollarSign className="w-3.5 h-3.5 text-emerald-600" />
+                                                    Règlements imputés sur {inv.reference} ({inv.payments_imputes.length})
+                                                  </span>
+                                                  <span className="text-[11px] text-slate-500">
+                                                    Cumul remboursé : <strong className="text-emerald-700 font-mono">{fmt(inv.montant_rembourse)}</strong> / {fmt(inv.montant_initial)}
+                                                  </span>
+                                                </div>
+
+                                                {inv.payments_imputes.length === 0 ? (
+                                                  <p className="text-[11px] text-slate-400 italic py-1">
+                                                    Aucun remboursement n'a encore été imputé sur cet achat à crédit.
+                                                  </p>
+                                                ) : (
+                                                  <div className="overflow-x-auto">
+                                                    <table className="w-full text-left text-[11px]">
+                                                      <thead className="text-[10px] uppercase font-bold text-slate-500 border-b border-slate-100">
+                                                        <tr>
+                                                          <th className="py-1 px-2 whitespace-nowrap">Date & Heure (Bénin)</th>
+                                                          <th className="py-1 px-2">Réf Quittance</th>
+                                                          <th className="py-1 px-2 text-right whitespace-nowrap">Montant Imputé</th>
+                                                          <th className="py-1 px-2">Mode</th>
+                                                          <th className="py-1 px-2">Motif / Notes</th>
+                                                          <th className="py-1 px-2 text-center">Quittance</th>
+                                                        </tr>
+                                                      </thead>
+                                                      <tbody className="divide-y divide-slate-50 font-mono">
+                                                        {inv.payments_imputes.map((pi: ImputedPayment, pIdx: number) => (
+                                                          <tr key={`${pi.payment_id}-${pIdx}`} className="hover:bg-slate-50/60">
+                                                            <td className="py-1.5 px-2 font-sans font-medium text-slate-700 whitespace-nowrap">
+                                                              {formatBeninDateTime(pi.payment_date)}
+                                                            </td>
+                                                            <td className="py-1.5 px-2 text-slate-700 font-bold">
+                                                              {pi.reference || '-'}
+                                                            </td>
+                                                            <td className="py-1.5 px-2 text-right font-black text-emerald-700 whitespace-nowrap">
+                                                              {fmt(pi.montant_impute)}
+                                                              {pi.montant_total_paiement > pi.montant_impute && (
+                                                                <span className="block text-[9px] font-sans font-normal text-slate-400">
+                                                                  sur total {fmt(pi.montant_total_paiement)}
+                                                                </span>
+                                                              )}
+                                                            </td>
+                                                            <td className="py-1.5 px-2 font-sans whitespace-nowrap">
+                                                              <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[10px] text-slate-700 font-semibold">
+                                                                {pi.payment_method}
+                                                              </span>
+                                                            </td>
+                                                            <td className="py-1.5 px-2 font-sans text-slate-500 truncate max-w-[150px]">
+                                                              {pi.notes || '-'}
+                                                            </td>
+                                                            <td className="py-1.5 px-2 text-center font-sans">
+                                                              <button
+                                                                type="button"
+                                                                onClick={() => {
+                                                                  const orig = (custInfo.payments || []).find((p: DebtPayment) => p.id === pi.payment_id)
+                                                                  if (orig) {
+                                                                    setActivePaymentReceipt({
+                                                                      payment: orig,
+                                                                      customer: activeDetailsCustomer,
+                                                                      debt: custInfo.debts[0] || null,
+                                                                    })
+                                                                  }
+                                                                }}
+                                                                className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded text-[10px] font-bold inline-flex items-center gap-1 transition"
+                                                              >
+                                                                <Printer className="w-2.5 h-2.5" /> Reçu
+                                                              </button>
+                                                            </td>
+                                                          </tr>
+                                                        ))}
+                                                      </tbody>
+                                                    </table>
+                                                  </div>
+                                                )}
+                                              </div>
+                                            </td>
+                                          </tr>
+                                        )}
+                                      </React.Fragment>
+                                    )
+                                  })}
+                                </tbody>
+                                <tfoot className="bg-slate-100/90 font-bold border-t-2 border-slate-300 text-slate-900 text-[11px]">
+                                  <tr>
+                                    <td colSpan={2} className="px-3.5 py-2.5 uppercase font-black text-slate-800">
+                                      TOTAL ({creditPurchases.length} achat{creditPurchases.length > 1 ? 's' : ''})
+                                    </td>
+                                    <td className="px-3.5 py-2.5 text-right font-mono font-black text-slate-900 whitespace-nowrap">
+                                      {fmt(creditPurchases.reduce((s, p) => s + p.montant_initial, 0))}
+                                    </td>
+                                    <td className="px-3.5 py-2.5 text-right font-mono font-black text-emerald-700 whitespace-nowrap">
+                                      {fmt(creditPurchases.reduce((s, p) => s + p.montant_rembourse, 0))}
+                                    </td>
+                                    <td className="px-3.5 py-2.5 text-right font-mono font-black text-rose-600 whitespace-nowrap">
+                                      {fmt(creditPurchases.reduce((s, p) => s + p.solde_restant, 0))}
+                                    </td>
+                                    <td colSpan={2} className="px-3.5 py-2.5 text-center text-[10px] font-semibold text-slate-600">
+                                      {creditPurchases.filter((p) => p.statut === 'SOLDÉ').length} soldé(s) • {creditPurchases.filter((p) => p.statut === 'EN COURS').length} en cours
+                                    </td>
+                                  </tr>
+                                </tfoot>
+                              </table>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    )
+                  })()}
                 </div>
               )
             })()}
@@ -2201,129 +2674,414 @@ const ClientsPage: React.FC = () => {
         </div>
       )}
 
-      {/* MODAL 6: Situation Globale Imprimable (Relevé Compte A5) */}
+      {/* MODAL 6: Situation Globale Imprimable (Relevé Compte Professionnel avec Filtre Période & Report Solde) */}
       {activeGlobalStatement && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[92vh] overflow-y-auto">
-            {/* Header Actions */}
-            <div className="no-print p-4 border-b border-slate-100 flex items-center justify-between bg-slate-50 rounded-t-2xl">
-              <div className="flex items-center gap-2">
-                <FileText className="w-5 h-5 text-emerald-600" />
-                <h3 className="font-bold text-slate-800 text-sm">Situation Globale du Compte Client</h3>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => window.print()}
-                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
-                >
-                  <Printer className="w-4 h-4" /> Imprimer la situation
-                </button>
-                <button
-                  onClick={() => setActiveGlobalStatement(null)}
-                  className="text-slate-400 hover:text-slate-600 p-1"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-            </div>
-
-            {/* Printable Content - #printable-area */}
-            <div id="printable-area" className="p-8 bg-white text-slate-800 font-sans text-xs space-y-4">
-              <div className="border-b-2 border-slate-900 pb-3 text-center">
-                <p className="font-black text-base text-slate-900 uppercase">{company?.name || 'ENTREPRISE COMMERCIALE'}</p>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  IFU: {(company as any)?.ifu_number || 'Non renseigné'} • Tél: {(company as any)?.phone || 'Non renseigné'}
-                </p>
-                <div className="mt-2 inline-block px-3 py-1 bg-slate-900 text-white font-bold text-xs uppercase tracking-wider rounded">
-                  RELEVÉ DE SITUATION DU COMPTE CRÉANCE
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[94vh] overflow-y-auto">
+            {/* Header Actions & Filtre par Période (cachés à l'impression) */}
+            <div className="no-print p-4 border-b border-slate-200 bg-slate-50 rounded-t-2xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-5 h-5 text-emerald-600" />
+                  <div>
+                    <h3 className="font-bold text-slate-800 text-sm">Situation des Créances & Relevé de Compte Client</h3>
+                    <p className="text-xs text-slate-500">
+                      {activeGlobalStatement.name} ({activeGlobalStatement.code})
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => window.print()}
+                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition"
+                  >
+                    <Printer className="w-4 h-4" /> Imprimer l'état des créances
+                  </button>
+                  <button
+                    onClick={() => {
+                      setActiveGlobalStatement(null)
+                      setStatementPeriodMode('all')
+                      setStatementStartDate('')
+                      setStatementEndDate('')
+                    }}
+                    className="text-slate-400 hover:text-slate-600 p-1"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
                 </div>
               </div>
 
-              {/* Client Info */}
-              <div className="flex justify-between items-start bg-slate-50 p-3 rounded border border-slate-200">
-                <div>
-                  <p className="font-bold text-sm text-slate-900">{activeGlobalStatement.name}</p>
-                  <p className="text-slate-600 font-mono text-[11px]">
-                    Code : {activeGlobalStatement.code} • Tél : {activeGlobalStatement.phone}
-                  </p>
-                  {activeGlobalStatement.ifu_number && (
-                    <p className="text-slate-600 text-[11px]">IFU : {activeGlobalStatement.ifu_number}</p>
-                  )}
+              {/* Barre de Filtrage par Période */}
+              <div className="p-3 bg-white rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-slate-700 flex items-center gap-1">
+                    <Calendar className="w-3.5 h-3.5 text-slate-500" /> Filtre d'édition :
+                  </span>
+                  <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+                    <button
+                      type="button"
+                      onClick={() => setStatementPeriodMode('all')}
+                      className={clsx(
+                        'px-2.5 py-1 rounded-md text-xs font-bold transition',
+                        statementPeriodMode === 'all'
+                          ? 'bg-white text-slate-900 shadow-xs'
+                          : 'text-slate-500 hover:text-slate-800'
+                      )}
+                    >
+                      Situation complète
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setStatementPeriodMode('period')
+                        if (!statementStartDate) {
+                          const now = new Date()
+                          const y = now.getFullYear()
+                          const m = String(now.getMonth() + 1).padStart(2, '0')
+                          setStatementStartDate(`${y}-${m}-01`)
+                          const lastDay = new Date(y, now.getMonth() + 1, 0).getDate()
+                          setStatementEndDate(`${y}-${m}-${String(lastDay).padStart(2, '0')}`)
+                        }
+                      }}
+                      className={clsx(
+                        'px-2.5 py-1 rounded-md text-xs font-bold transition',
+                        statementPeriodMode === 'period'
+                          ? 'bg-white text-emerald-800 shadow-xs'
+                          : 'text-slate-500 hover:text-slate-800'
+                      )}
+                    >
+                      Par période
+                    </button>
+                  </div>
                 </div>
-                <div className="text-right text-[11px] font-mono text-slate-500">
-                  <p>Édité le : {new Date().toLocaleDateString('fr-BJ')}</p>
-                  <p>Secteur : {currentSectorSlug.toUpperCase()}</p>
-                </div>
-              </div>
 
-              {/* Totaux */}
-              {(() => {
-                const info = getCustomerDetteInfo(activeGlobalStatement)
-                return (
-                  <div className="space-y-4">
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="p-2.5 bg-slate-50 border border-slate-200 rounded">
-                        <span className="text-[10px] font-bold uppercase text-slate-500">Total Dette</span>
-                        <p className="font-mono font-bold text-sm text-slate-800">{fmt(info.totalDette)}</p>
-                      </div>
-                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded">
-                        <span className="text-[10px] font-bold uppercase text-emerald-800">Total Remboursé</span>
-                        <p className="font-mono font-bold text-sm text-emerald-700">{fmt(info.totalRembourse)}</p>
-                      </div>
-                      <div className="p-2.5 bg-rose-50 border border-rose-200 rounded">
-                        <span className="text-[10px] font-bold uppercase text-rose-800">Solde Dû</span>
-                        <p className="font-mono font-black text-sm text-rose-600">{fmt(info.soldeDu)}</p>
-                      </div>
+                {statementPeriodMode === 'period' && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500 font-medium">Du :</span>
+                      <input
+                        type="date"
+                        value={statementStartDate}
+                        onChange={(e) => setStatementStartDate(e.target.value)}
+                        className="px-2.5 py-1 border border-slate-300 rounded-lg text-xs font-mono font-bold bg-white"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-500 font-medium">Au :</span>
+                      <input
+                        type="date"
+                        value={statementEndDate}
+                        onChange={(e) => setStatementEndDate(e.target.value)}
+                        className="px-2.5 py-1 border border-slate-300 rounded-lg text-xs font-mono font-bold bg-white"
+                      />
                     </div>
 
-                    {/* Table des règlements */}
-                    <div>
-                      <p className="font-bold uppercase text-[10px] text-slate-500 mb-1.5">Historique des Règlements</p>
-                      {info.payments.length === 0 ? (
-                        <p className="text-slate-400 italic text-[11px]">Aucun remboursement enregistré.</p>
-                      ) : (
-                        <table className="w-full text-left text-[11px] border border-slate-200">
-                          <thead className="bg-slate-100 font-bold text-slate-700 uppercase">
-                            <tr>
-                              <th className="p-2 border-b">Date</th>
-                              <th className="p-2 border-b">Réf</th>
-                              <th className="p-2 border-b text-right">Montant</th>
-                              <th className="p-2 border-b">Mode</th>
-                              <th className="p-2 border-b text-right">Reste</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-100 font-mono">
-                            {info.payments.map((p) => (
-                              <tr key={p.id}>
-                                <td className="p-2 font-sans font-medium text-slate-700">
-                                  {new Date(p.payment_date).toLocaleDateString('fr-BJ')}
-                                </td>
-                                <td className="p-2 text-slate-500">{p.reference || '-'}</td>
-                                <td className="p-2 text-right font-bold text-emerald-700">{fmt(p.amount)}</td>
-                                <td className="p-2 font-sans text-slate-700">{p.payment_method}</td>
-                                <td className="p-2 text-right font-bold text-slate-900">{fmt(p.reste_apres)}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      )}
+                    {/* Presets rapides */}
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const now = new Date()
+                          const y = now.getFullYear()
+                          const m = String(now.getMonth() + 1).padStart(2, '0')
+                          setStatementStartDate(`${y}-${m}-01`)
+                          const lastDay = new Date(y, now.getMonth() + 1, 0).getDate()
+                          setStatementEndDate(`${y}-${m}-${String(lastDay).padStart(2, '0')}`)
+                        }}
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10px] font-semibold"
+                      >
+                        Ce mois
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const now = new Date()
+                          const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1)
+                          const y = prev.getFullYear()
+                          const m = String(prev.getMonth() + 1).padStart(2, '0')
+                          setStatementStartDate(`${y}-${m}-01`)
+                          const lastDay = new Date(y, prev.getMonth() + 1, 0).getDate()
+                          setStatementEndDate(`${y}-${m}-${String(lastDay).padStart(2, '0')}`)
+                        }}
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[10px] font-semibold"
+                      >
+                        Mois dernier
+                      </button>
                     </div>
                   </div>
-                )
-              })()}
-
-              {/* Signatures */}
-              <div className="pt-6 grid grid-cols-2 gap-8 text-[11px] text-slate-700">
-                <div className="text-center">
-                  <p className="font-bold uppercase">Signature Client</p>
-                  <div className="h-14 border-b border-slate-400 w-36 mx-auto mt-2" />
-                </div>
-                <div className="text-center">
-                  <p className="font-bold uppercase">Cachet Entreprise</p>
-                  <div className="h-14 border-b border-slate-400 w-36 mx-auto mt-2" />
-                </div>
+                )}
               </div>
             </div>
+
+            {/* Zone Imprimable - #printable-area */}
+            {(() => {
+              const custInfo = getCustomerDetteInfo(activeGlobalStatement)
+              const creditPurchases = getClientCreditPurchases(activeGlobalStatement)
+              const statementData = filterPurchasesByPeriod(
+                creditPurchases,
+                custInfo.payments,
+                statementPeriodMode === 'period' ? statementStartDate : '',
+                statementPeriodMode === 'period' ? statementEndDate : ''
+              )
+
+              return (
+                <div id="printable-area" className="p-8 bg-white text-slate-800 font-sans text-xs space-y-5">
+                  <style>{`
+                    @media print {
+                      body * {
+                        visibility: hidden;
+                      }
+                      #printable-area, #printable-area * {
+                        visibility: visible;
+                      }
+                      #printable-area {
+                        position: absolute;
+                        left: 0;
+                        top: 0;
+                        width: 100%;
+                        padding: 12mm;
+                        background: white !important;
+                        color: #0f172a !important;
+                      }
+                      .no-print {
+                        display: none !important;
+                      }
+                    }
+                  `}</style>
+
+                  {/* En-tête officiel de l'entreprise */}
+                  <div className="border-b-2 border-slate-900 pb-3 text-center">
+                    <p className="font-black text-lg text-slate-900 uppercase tracking-wide">
+                      {company?.name || 'ENTREPRISE COMMERCIALE GESTIO229'}
+                    </p>
+                    <p className="text-[11px] text-slate-600 mt-0.5">
+                      IFU: {(company as any)?.ifu_number || 'Non renseigné'} • Tél: {(company as any)?.phone || 'Non renseigné'} • Ville: {(company as any)?.city || 'Cotonou'}
+                    </p>
+                    <div className="mt-2 inline-block px-4 py-1.5 bg-slate-900 text-white font-black text-xs uppercase tracking-wider rounded">
+                      SITUATION DES CRÉANCES CLIENT
+                    </div>
+                  </div>
+
+                  {/* Informations Client & Période */}
+                  <div className="grid grid-cols-2 gap-4 bg-slate-50 p-3.5 rounded-xl border border-slate-200">
+                    <div>
+                      <span className="text-[10px] uppercase font-bold text-slate-500 block mb-0.5">CLIENT</span>
+                      <p className="font-black text-sm text-slate-900">{activeGlobalStatement.name}</p>
+                      <div className="text-[11px] text-slate-600 font-mono space-y-0.5 mt-1">
+                        <p>Code Client : <strong className="text-slate-800">{activeGlobalStatement.code}</strong></p>
+                        <p>Téléphone : <strong className="text-slate-800">{activeGlobalStatement.phone}</strong></p>
+                        {activeGlobalStatement.city && <p>Ville : <strong className="text-slate-800">{activeGlobalStatement.city}</strong></p>}
+                        {activeGlobalStatement.ifu_number && <p>IFU : <strong className="text-slate-800">{activeGlobalStatement.ifu_number}</strong></p>}
+                      </div>
+                    </div>
+                    <div className="text-right flex flex-col justify-between">
+                      <div>
+                        <span className="text-[10px] uppercase font-bold text-slate-500 block mb-0.5">CADRE D'ÉDITION</span>
+                        <p className="font-bold text-xs text-slate-800">
+                          {statementData.isPeriod ? (
+                            <span>Période du <strong className="font-mono">{formatBeninDate(statementData.startDateStr)}</strong> au <strong className="font-mono">{formatBeninDate(statementData.endDateStr)}</strong></span>
+                          ) : (
+                            <span>Situation Globale Complète</span>
+                          )}
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-500 mt-1">
+                          Date & Heure : <strong>{formatBeninDateTime(new Date().toISOString())}</strong>
+                        </p>
+                        <p className="text-[11px] font-mono text-slate-500">
+                          Secteur : {currentSectorSlug.toUpperCase()}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Bloc de Report de Solde Antérieur (si filtre période actif) */}
+                  {statementData.isPeriod && (
+                    <div className="p-3 bg-amber-50/70 border border-amber-200 rounded-xl flex items-center justify-between text-xs">
+                      <div className="flex items-center gap-2 text-amber-900 font-bold">
+                        <History className="w-4 h-4 text-amber-700" />
+                        <span>Report de Solde Antérieur au début de la période ({formatBeninDate(statementData.startDateStr)}) :</span>
+                      </div>
+                      <span className="font-mono font-black text-sm text-amber-950">
+                        {fmt(statementData.soldeAnterieur)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Tableau Détaillé des Factures à Crédit */}
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-bold uppercase text-[11px] text-slate-700 tracking-wider">
+                        Tableau Détaillé des Achats à Crédit ({statementData.purchases.length})
+                      </p>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        Imputation automatique FIFO (Bénin UTC+1)
+                      </span>
+                    </div>
+
+                    {statementData.purchases.length === 0 ? (
+                      <p className="text-slate-400 italic text-center p-4 bg-slate-50 rounded border border-slate-200">
+                        Aucune créance enregistrée pour cette sélection.
+                      </p>
+                    ) : (
+                      <table className="w-full text-left text-[11px] border-collapse border border-slate-300">
+                        <thead className="bg-slate-100 font-bold text-slate-800 uppercase tracking-wider text-[10px]">
+                          <tr>
+                            <th className="p-2 border border-slate-300 whitespace-nowrap">Date Achat</th>
+                            <th className="p-2 border border-slate-300">Référence Facture</th>
+                            <th className="p-2 border border-slate-300 text-right whitespace-nowrap">Montant Achat</th>
+                            <th className="p-2 border border-slate-300 text-right whitespace-nowrap">Montant Remboursé</th>
+                            <th className="p-2 border border-slate-300 text-right whitespace-nowrap">Solde Restant</th>
+                            <th className="p-2 border border-slate-300 text-center">Statut</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-200">
+                          {statementData.purchases.map((p) => {
+                            const isSolde = p.statut === 'SOLDÉ'
+                            return (
+                              <tr key={p.id}>
+                                <td className="p-2 border border-slate-200 whitespace-nowrap font-medium text-slate-700">
+                                  {formatBeninDate(p.date)}
+                                </td>
+                                <td className="p-2 border border-slate-200 font-mono font-bold text-slate-900">
+                                  {p.reference}
+                                  {p.is_initial && <span className="text-[9px] text-amber-700 font-sans ml-1">(Initial)</span>}
+                                </td>
+                                <td className="p-2 border border-slate-200 text-right font-mono font-bold text-slate-900">
+                                  {fmt(p.montant_initial)}
+                                </td>
+                                <td className="p-2 border border-slate-200 text-right font-mono font-bold text-emerald-700">
+                                  {fmt(p.montant_rembourse)}
+                                </td>
+                                <td className="p-2 border border-slate-200 text-right font-mono font-black text-rose-600">
+                                  {fmt(p.solde_restant)}
+                                </td>
+                                <td className="p-2 border border-slate-200 text-center whitespace-nowrap">
+                                  <span className={clsx(
+                                    'px-2 py-0.5 rounded text-[9px] font-bold uppercase',
+                                    isSolde ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-900'
+                                  )}>
+                                    {p.statut}
+                                  </span>
+                                </td>
+                              </tr>
+                            )
+                          })}
+                        </tbody>
+                        <tfoot className="bg-slate-50 font-bold border-t-2 border-slate-400 text-slate-900">
+                          <tr>
+                            <td colSpan={2} className="p-2 border border-slate-300 uppercase">
+                              TOTAL ({statementData.purchases.length} achat{statementData.purchases.length > 1 ? 's' : ''})
+                            </td>
+                            <td className="p-2 border border-slate-300 text-right font-mono font-black">
+                              {fmt(statementData.purchases.reduce((s, p) => s + p.montant_initial, 0))}
+                            </td>
+                            <td className="p-2 border border-slate-300 text-right font-mono font-black text-emerald-700">
+                              {fmt(statementData.purchases.reduce((s, p) => s + p.montant_rembourse, 0))}
+                            </td>
+                            <td className="p-2 border border-slate-300 text-right font-mono font-black text-rose-600">
+                              {fmt(statementData.purchases.reduce((s, p) => s + p.solde_restant, 0))}
+                            </td>
+                            <td className="p-2 border border-slate-300 text-center text-[10px]">
+                              {statementData.soldesCount} soldé(s) • {statementData.enCoursCount} en cours
+                            </td>
+                          </tr>
+                        </tfoot>
+                      </table>
+                    )}
+                  </div>
+
+                  {/* Tableau des Règlements Effectués */}
+                  {statementData.paymentsInPeriod.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      <p className="font-bold uppercase text-[10px] text-slate-600 tracking-wider">
+                        Détail des Encaissments & Règlements ({statementData.paymentsInPeriod.length})
+                      </p>
+                      <table className="w-full text-left text-[10px] border border-slate-200">
+                        <thead className="bg-slate-100 font-bold text-slate-700 uppercase">
+                          <tr>
+                            <th className="p-1.5 border-b whitespace-nowrap">Date & Heure (Bénin)</th>
+                            <th className="p-1.5 border-b">Réf Quittance</th>
+                            <th className="p-1.5 border-b text-right whitespace-nowrap">Montant Encaissé</th>
+                            <th className="p-1.5 border-b">Mode</th>
+                            <th className="p-1.5 border-b text-right whitespace-nowrap">Reste après opération</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 font-mono">
+                          {statementData.paymentsInPeriod.map((p) => (
+                            <tr key={p.id}>
+                              <td className="p-1.5 font-sans font-medium text-slate-700 whitespace-nowrap">
+                                {formatBeninDateTime(p.payment_date)}
+                              </td>
+                              <td className="p-1.5 text-slate-700 font-bold">
+                                {p.reference || '-'}
+                              </td>
+                              <td className="p-1.5 text-right font-black text-emerald-700">
+                                {fmt(p.amount)}
+                              </td>
+                              <td className="p-1.5 font-sans text-slate-600">
+                                {p.payment_method}
+                              </td>
+                              <td className="p-1.5 text-right font-bold text-slate-800">
+                                {fmt(p.reste_apres)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+
+                  {/* Récapitulatif en bas du document */}
+                  <div className="p-3.5 bg-slate-50 border border-slate-300 rounded-xl space-y-2.5">
+                    <p className="font-bold text-[11px] uppercase text-slate-800 tracking-wider border-b border-slate-200 pb-1">
+                      RÉCAPITULATIF DE LA SITUATION DU CLIENT
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">TOTAL DES ACHATS À CRÉDIT</span>
+                        <strong className="font-mono text-slate-900 text-sm">
+                          {fmt(statementData.achatsPeriode + (statementData.isPeriod ? statementData.soldeAnterieur : 0))}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">TOTAL DES REMBOURSEMENTS</span>
+                        <strong className="font-mono text-emerald-700 text-sm">
+                          {fmt(statementData.remboursementsPeriode)}
+                        </strong>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block text-[10px]">CRÉANCES SOLDÉES / EN COURS</span>
+                        <span className="font-bold text-slate-800 text-xs">
+                          {statementData.soldesCount} soldée(s) • {statementData.enCoursCount} en cours
+                        </span>
+                      </div>
+                      <div className="text-right sm:text-right">
+                        <span className="text-slate-500 block text-[10px]">SOLDE GLOBAL RESTANT DÛ</span>
+                        <strong className="font-mono text-rose-600 text-base font-black">
+                          {fmt(statementData.soldeFinal)}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Signatures */}
+                  <div className="pt-6 grid grid-cols-2 gap-8 text-[11px] text-slate-700">
+                    <div className="text-center">
+                      <p className="font-bold uppercase">Signature & Mention "Bon pour accord" Client</p>
+                      <div className="h-16 border-b border-slate-400 w-44 mx-auto mt-2" />
+                    </div>
+                    <div className="text-center">
+                      <p className="font-bold uppercase">Cachet & Signature Caisse / Direction</p>
+                      <div className="h-16 border-b border-slate-400 w-44 mx-auto mt-2" />
+                    </div>
+                  </div>
+
+                  <div className="pt-2 text-center text-[10px] text-slate-400 border-t border-slate-200">
+                    État officiel certifié édité depuis GESTIO 229 SaaS • Système de Gestion Commerciale & Recouvrement
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         </div>
       )}
@@ -2694,4 +3452,5 @@ const ClientsPage: React.FC = () => {
   )
 }
 
+export { ClientsPage }
 export default ClientsPage
