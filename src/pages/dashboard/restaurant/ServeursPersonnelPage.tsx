@@ -14,6 +14,9 @@ import {
   attribuerBoissonServeuse,
   enregistrerVersementServeur,
   cloturerSessionServeuse,
+  cloturerSessionServeuseEtVerserCaisse,
+  obtenirSuiviSessionServeuse,
+  SessionSuiviDetail,
   enregistrerRetourEmballageSession,
   ServeurSession,
   BoissonConfiee,
@@ -64,6 +67,7 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [showPaiementCreanceModal, setShowPaiementCreanceModal] = useState(false)
 
   const [selectedSession, setSelectedSession] = useState<ServeurSession | null>(null)
+  const [sessionSuiviDetail, setSessionSuiviDetail] = useState<SessionSuiviDetail | null>(null)
   const [selectedStaffDetail, setSelectedStaffDetail] = useState<any | null>(null)
 
   // Formulaires
@@ -107,6 +111,8 @@ export const ServeursPersonnelPage: React.FC = () => {
   })
 
   const [clotureForm, setClotureForm] = useState({
+    montant_verse: 0,
+    mode_reglement: 'ESPECES',
     justification_ecart: ''
   })
 
@@ -167,6 +173,23 @@ export const ServeursPersonnelPage: React.FC = () => {
   useEffect(() => {
     loadAllData()
   }, [companyId])
+
+  // Chargement automatique du suivi bivalent (Bar + Restaurant) en temps réel
+  useEffect(() => {
+    if (!selectedSession?.id || !companyId) {
+      setSessionSuiviDetail(null)
+      return
+    }
+    let isMounted = true
+    obtenirSuiviSessionServeuse(selectedSession.id, companyId)
+      .then((detail) => {
+        if (isMounted) setSessionSuiviDetail(detail)
+      })
+      .catch((err) => {
+        console.warn('[ServeursPersonnelPage] Erreur chargement suivi session:', err)
+      })
+    return () => { isMounted = false }
+  }, [selectedSession?.id, companyId])
 
   // Actions
   const handleSaveMember = async (e: React.FormEvent) => {
@@ -263,7 +286,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       prix_vente_unitaire: Number(remiseForm.prix_vente_unitaire),
       cout_achat_unitaire: Number(remiseForm.cout_achat_unitaire),
       total_valeur_remise: Number(remiseForm.qte_remise) * Number(remiseForm.prix_vente_unitaire),
-      remis_par: user?.user_metadata?.full_name || user?.email || 'Gérant Bar',
+      remis_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant Bar',
       notes: remiseForm.notes,
       sector_slug: 'restaurant'
     })
@@ -287,7 +310,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       serveur_nom: selectedSession.serveur_nom,
       montant: Number(versementForm.montant),
       mode_reglement: versementForm.mode_reglement,
-      recu_par: user?.user_metadata?.full_name || user?.email || 'Gérant',
+      recu_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
       commentaire: versementForm.commentaire
     })
 
@@ -328,7 +351,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       format_bouteille: retourEmballageForm.format_bouteille,
       designation: retourEmballageForm.designation,
       qte_rendue: Number(retourEmballageForm.qte_rendue),
-      receptionne_par: user?.user_metadata?.full_name || user?.email || 'Gérant Bar',
+      receptionne_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant Bar',
       notes: retourEmballageForm.notes
     })
 
@@ -354,7 +377,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       serveur_nom: selectedSession.serveur_nom,
       montant_verse: Number(clotureForm.montant_verse) || 0,
       mode_reglement: clotureForm.mode_reglement || 'ESPECES',
-      cloture_par: user?.user_metadata?.full_name || user?.email || 'Gérant',
+      cloture_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
       justification_ecart: clotureForm.justification_ecart
     })
 
@@ -380,7 +403,7 @@ export const ServeursPersonnelPage: React.FC = () => {
         heure_prevue_arrivee: presenceForm.heure_prevue_arrivee,
         heure_reelle_arrivee: presenceForm.heure_reelle_arrivee,
         statut: presenceForm.statut,
-        enregistre_par: user?.user_metadata?.full_name || user?.email || 'Gérant',
+        enregistre_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
         commentaire: presenceForm.commentaire
       })
       toast.success('Pointage enregistré', `Présence notée pour ${presenceForm.nom_complet}.`)
@@ -400,7 +423,7 @@ export const ServeursPersonnelPage: React.FC = () => {
         type_incident: plainteForm.type_incident,
         gravite: plainteForm.gravite,
         description: plainteForm.description.trim(),
-        responsable_suivi: plainteForm.responsable_suivi.trim() || (user?.user_metadata?.full_name || 'Gérant'),
+        responsable_suivi: plainteForm.responsable_suivi.trim() || (((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || 'Gérant'),
         statut: 'SIGNALÉ'
       })
       toast.success('Incident consigné', `Dossier ouvert confidentiellement.`)
