@@ -1215,12 +1215,38 @@ const ClientsPage: React.FC = () => {
         }
       }
 
-      // 5. UPDATE cash_sessions (cash_especes, cash_momo, total_remboursements)
+      // 5. UPDATE caisse_sessions & cash_sessions (compteurs journaliers en direct)
       try {
         const isCash = normalizedMethod === 'Espèces'
+
+        // A. Mise à jour de la session de caisse active (caisse_sessions)
+        const { data: csRow } = await supabase
+          .from('caisse_sessions')
+          .select('id, especes_du_jour, momo_du_jour, fond_ouverture_especes, especes_theorique')
+          .eq('id', activeSession.id)
+          .maybeSingle()
+
+        if (csRow) {
+          const curEsp = Number(csRow.especes_du_jour) || 0
+          const curMomo = Number(csRow.momo_du_jour) || 0
+          const newEsp = isCash ? curEsp + paymentAmount : curEsp
+          const newMomo = !isCash ? curMomo + paymentAmount : curMomo
+          const fondOuv = Number(csRow.fond_ouverture_especes) || 0
+          await supabase
+            .from('caisse_sessions')
+            .update({
+              especes_du_jour: newEsp,
+              momo_du_jour: newMomo,
+              especes_theorique: fondOuv + newEsp,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', activeSession.id)
+        }
+
+        // B. Mise à jour de cash_sessions
         const { data: sessRow } = await supabase
           .from('cash_sessions')
-          .select('id, cash_especes, cash_momo, total_remboursements')
+          .select('id, cash_especes, cash_momo, total_remboursements, total_credit_collected')
           .eq('id', activeSession.id)
           .maybeSingle()
 
@@ -1231,11 +1257,12 @@ const ClientsPage: React.FC = () => {
               cash_especes: isCash ? (Number(sessRow.cash_especes) || 0) + paymentAmount : Number(sessRow.cash_especes) || 0,
               cash_momo: !isCash ? (Number(sessRow.cash_momo) || 0) + paymentAmount : Number(sessRow.cash_momo) || 0,
               total_remboursements: (Number(sessRow.total_remboursements) || 0) + paymentAmount,
+              total_credit_collected: (Number(sessRow.total_credit_collected) || 0) + paymentAmount,
             })
             .eq('id', activeSession.id)
         }
       } catch (sessUpdErr) {
-        console.warn('Erreur maj cash_sessions :', sessUpdErr)
+        console.warn('Erreur maj sessions caisse :', sessUpdErr)
       }
 
       // 6. Rétrocompatibilité clients (mise à jour current_debt)

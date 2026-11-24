@@ -670,22 +670,39 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       // Source principale : debt_payments (nouvelle table M028)
       let repList: any[] = []
       try {
+        const cleanSlug = cleanSectorSlug(currentSectorSlug)
+        const todayBenin = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date())
+
         const { data: debtPays } = await supabase
           .from('debt_payments')
-          .select('id, amount, payment_method, payment_date, created_at, client_id, reference')
+          .select('id, amount, payment_method, payment_date, created_at, client_id, reference, sector_code, cash_session_id')
           .eq('company_id', currentCompanyId)
-          .eq('sector_code', currentSectorSlug)
-          .gte('created_at', startOfDay)
           .order('created_at', { ascending: false })
+          .limit(200)
+
         if (debtPays && debtPays.length > 0) {
-          repList = debtPays.map((d: any) => ({
-            id: d.id,
-            created_at: d.created_at,
-            customer_name: 'Client',
-            amount: Number(d.amount) || 0,
-            payment_method: d.payment_method, // 'Espèces' | 'MTN MoMo' | 'Moov Money'
-            reference: d.reference || `DP-${d.id.slice(0, 6)}`
-          }))
+          repList = debtPays
+            .filter((d: any) => {
+              // Filtrer par date réelle d'encaissement (Bénin UTC+1)
+              const rawDate = d.payment_date || d.created_at
+              if (!rawDate) return false
+              const pBenin = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date(rawDate))
+              if (pBenin !== todayBenin) return false
+
+              // Filtrer par secteur ou session de caisse
+              const dSector = (d.sector_code || '').toLowerCase().trim().replace(/^sec-/, '')
+              const matchesSector = !cleanSlug || !dSector || dSector === cleanSlug || dSector === 'boutique'
+              const matchesSession = activeSessionId && d.cash_session_id === activeSessionId
+              return matchesSector || matchesSession
+            })
+            .map((d: any) => ({
+              id: d.id,
+              created_at: d.payment_date || d.created_at,
+              customer_name: 'Client',
+              amount: Number(d.amount) || 0,
+              payment_method: d.payment_method, // 'Espèces' | 'MTN MoMo' | 'Moov Money'
+              reference: d.reference || `DP-${d.id.slice(0, 6)}`
+            }))
         }
       } catch (dpErr) {
         console.warn('debt_payments fetch error :', dpErr)
@@ -1118,7 +1135,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     return repaymentsToday
       .filter((r) => {
         const m = (r.payment_method || '').toLowerCase()
-        return m.includes('momo') || m.includes('wave') || m.includes('moov')
+        return m.includes('momo') || m.includes('wave') || m.includes('moov') || m.includes('flooz')
       })
       .reduce((sum, r) => sum + (Number(r.amount) || 0), 0)
   }, [repaymentsToday])
@@ -1158,7 +1175,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   // =============================================================================
   // RÈGLES MÉTIER OFFICIELLES GESTIO 229 CAISSE : FOND ACTUEL vs SOLDE THÉORIQUE
-  // 1. Espèces du jour = ventes espèces du jour + remboursements espèces
+  // 1. Espèces du jour = ventes espèces du jour + remboursements espèces du jour
   //    Momo du jour = ventes Momo du jour + remboursements Momo du jour
   // 2. Fond Initial Matin = dernier montant laissé lors de la clôture de la veille
   // 3. Fond Actuel Espèces = Solde Théorique = Fond Initial Matin + Entrées jour (Espèces) - Dépenses - Versements
@@ -1171,19 +1188,31 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
   const sumDepensesMomo = Number(depensesMomo) || 0
   const sumRemboursements = (Number(remboursementsEspeces) || 0) + (Number(remboursementsMomo) || 0)
 
-  // 1. Compteurs Du Jour (Uniquement encaissements de la session ouverte active)
+  // 1. Compteurs Du Jour (Intègre systématiquement ventes du jour + recouvrements de créances)
   // RÈGLE COMPTABLE STRICTE : En session FERMÉE, les encaissements de session en cours sont à 0
+  const totalVentesEsp = (caisseJourData.ventes_especes_du_jour > 0)
+    ? caisseJourData.ventes_especes_du_jour
+    : sumVentesEspeces
+
+  const totalRembEsp = (caisseJourData.remboursements_especes_du_jour > 0)
+    ? caisseJourData.remboursements_especes_du_jour
+    : (Number(remboursementsEspeces) || 0)
+
   const especesDuJour = caisseStatus === 'FERMEE'
     ? 0
-    : (caisseJourData.especes_du_jour > 0
-        ? caisseJourData.especes_du_jour
-        : (sumVentesEspeces + (Number(remboursementsEspeces) || 0)))
+    : (totalVentesEsp + totalRembEsp)
+
+  const totalVentesMoMo = (caisseJourData.ventes_momo_du_jour > 0)
+    ? caisseJourData.ventes_momo_du_jour
+    : sumVentesMomo
+
+  const totalRembMoMo = (caisseJourData.remboursements_momo_du_jour > 0)
+    ? caisseJourData.remboursements_momo_du_jour
+    : (Number(remboursementsMomo) || 0)
 
   const momoDuJour = caisseStatus === 'FERMEE'
     ? 0
-    : (caisseJourData.momo_du_jour > 0
-        ? caisseJourData.momo_du_jour
-        : (sumVentesMomo + (Number(remboursementsMomo) || 0)))
+    : (totalVentesMoMo + totalRembMoMo)
 
   const nbVentesDuJour = caisseJourData.nb_ventes > 0
     ? caisseJourData.nb_ventes

@@ -49,6 +49,7 @@ export const DashboardPage: React.FC = () => {
   const [totalCustomersDebt, setTotalCustomersDebt] = useState<number>(0)
   const [resumeActivite, setResumeActivite] = useState<{ ca_ht: number, marge_brute: number }>({ ca_ht: 0, marge_brute: 0 })
   const [avoirsDuMois, setAvoirsDuMois] = useState<FactureAvoirRecord[]>([])
+  const [repaymentsToday, setRepaymentsToday] = useState<any[]>([])
 
   const currentSectorSlug = sectorSlug
   const sectorDisplayName = sectorMeta?.name || 'Sous-Logiciel'
@@ -154,11 +155,40 @@ export const DashboardPage: React.FC = () => {
       } catch (avErr) {
         console.warn('Avertissement chargement avoirs:', avErr)
       }
+
+      // 5. Recouvrements des créances clients du jour (date réelle d'encaissement, Cotonou)
+      try {
+        const cleanSlug = (currentSectorSlug || '').toLowerCase().trim().replace(/^sec-/, '')
+        const { data: debtPays } = await supabase
+          .from('debt_payments')
+          .select('id, amount, payment_method, payment_date, created_at, sector_code')
+          .eq('company_id', companyId)
+          .order('created_at', { ascending: false })
+          .limit(200)
+
+        if (debtPays && debtPays.length > 0) {
+          const filteredReps = debtPays.filter((d: any) => {
+            const rawDate = d.payment_date || d.created_at
+            if (!rawDate) return false
+            const pDate = extractCotonouDate(d.payment_date, d.created_at)
+            if (pDate !== todayStr) return false
+            const dSector = (d.sector_code || '').toLowerCase().trim().replace(/^sec-/, '')
+            return !cleanSlug || !dSector || dSector === cleanSlug || dSector === 'boutique'
+          })
+          setRepaymentsToday(filteredReps)
+        } else {
+          setRepaymentsToday([])
+        }
+      } catch (repErr) {
+        console.warn('Avertissement chargement debt_payments dashboard:', repErr)
+        setRepaymentsToday([])
+      }
     } catch (err: any) {
       console.error('Erreur chargement Dashboard :', err)
       setSalesToday([])
       setActiveProductsCount(0)
       setTotalProductsValue(0)
+      setRepaymentsToday([])
     } finally {
       setLoading(false)
     }
@@ -226,7 +256,7 @@ export const DashboardPage: React.FC = () => {
 
   const caDuJour = caDuJourNet
 
-  // Ventilation des règlements (Espèces, MoMo, Crédit) supportant le multi-paiement
+  // Ventilation des règlements (Espèces, MoMo, Crédit) supportant le multi-paiement et les recouvrements créances
   const { especesDuJour, momoDuJour, creancesDuJour } = useMemo(() => {
     let cash = 0
     let momo = 0
@@ -249,7 +279,7 @@ export const DashboardPage: React.FC = () => {
           const amt = Number(p.amount) || 0
           if (m === 'cash' || m === 'especes') {
             cash += amt
-          } else if (m.includes('momo') || m === 'wave' || m === 'flooz') {
+          } else if (m.includes('momo') || m === 'wave' || m === 'flooz' || m.includes('moov')) {
             momo += amt
           } else if (m === 'credit' || m === 'dette') {
             credit += amt
@@ -260,7 +290,7 @@ export const DashboardPage: React.FC = () => {
         const tot = Number(s.total_amount) || 0
         if (pm === 'cash' || pm === 'especes') {
           cash += tot
-        } else if (pm.includes('momo') || pm === 'wave' || pm === 'flooz') {
+        } else if (pm.includes('momo') || pm === 'wave' || pm === 'flooz' || pm.includes('moov')) {
           momo += tot
         } else if (pm === 'credit' || pm === 'dette') {
           credit += tot
@@ -268,8 +298,19 @@ export const DashboardPage: React.FC = () => {
       }
     })
 
+    // Intégrer les recouvrements des anciennes créances clients selon le moyen de paiement utilisé
+    repaymentsToday.forEach((r) => {
+      const m = String(r.payment_method || '').toLowerCase()
+      const amt = Number(r.amount) || 0
+      if (m === 'cash' || m === 'espèces' || m === 'especes') {
+        cash += amt
+      } else if (m.includes('momo') || m.includes('wave') || m.includes('moov') || m.includes('flooz')) {
+        momo += amt
+      }
+    })
+
     return { especesDuJour: cash, momoDuJour: momo, creancesDuJour: credit }
-  }, [salesToday])
+  }, [salesToday, repaymentsToday])
 
   const todayDateStr = new Date().toLocaleDateString('fr-BJ', {
     weekday: 'long',

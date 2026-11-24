@@ -1581,18 +1581,29 @@ export async function enregistrerMouvementCaisse(
     let activeSession: any = null
 
     try {
-      const { data: sessions } = await supabase
-        .from('caisse_sessions')
-        .select('*')
-        .eq('caisse_id', targetCaisseId)
-        .in('statut', ['ouverte', 'open'])
-        .is('date_fermeture', null)
-        .order('date_ouverture', { ascending: false })
-        .limit(1)
+      if (activeSessionId) {
+        const { data: sessById } = await supabase
+          .from('caisse_sessions')
+          .select('*')
+          .eq('id', activeSessionId)
+          .maybeSingle()
+        if (sessById) activeSession = sessById
+      }
 
-      if (sessions && sessions.length > 0) {
-        activeSession = sessions[0]
-        if (!activeSessionId) activeSessionId = activeSession.id
+      if (!activeSession) {
+        const { data: sessions } = await supabase
+          .from('caisse_sessions')
+          .select('*')
+          .eq('caisse_id', targetCaisseId)
+          .in('statut', ['ouverte', 'open'])
+          .is('date_fermeture', null)
+          .order('date_ouverture', { ascending: false })
+          .limit(1)
+
+        if (sessions && sessions.length > 0) {
+          activeSession = sessions[0]
+          if (!activeSessionId) activeSessionId = activeSession.id
+        }
       }
     } catch (e) {}
 
