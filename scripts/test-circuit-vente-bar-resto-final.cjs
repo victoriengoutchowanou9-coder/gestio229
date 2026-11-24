@@ -102,6 +102,13 @@ it('ServeursPersonnelPage présente SECTION 1 : BAR, SECTION 2 : RESTAURANT et l
   assert(serveursPageCode.includes('Total Général'), 'Total Général consolidé');
 });
 
+it('ServeursPersonnelPage déclare explicitement sessionSuiviDetail via useState et useEffect', () => {
+  assert(serveursPageCode.includes('const [sessionSuiviDetail, setSessionSuiviDetail] = useState<SessionSuiviDetail | null>(null)'), 'sessionSuiviDetail doit être déclaré avec useState');
+  assert(serveursPageCode.includes('obtenirSuiviSessionServeuse'), 'obtenirSuiviSessionServeuse doit être importé et appelé');
+  assert(serveursPageCode.includes('SessionSuiviDetail'), 'SessionSuiviDetail doit être importé');
+  assert(serveursPageCode.includes('setSessionSuiviDetail(detail)'), 'sessionSuiviDetail doit être mis à jour après chargement');
+});
+
 // ─── 4. ACCUMULATION AUTOMATIQUE PAR SECTION ──────────────────────────────────
 console.log('\n--- TEST 4 : ACCUMULATION AUTOMATIQUE DES PRODUITS PAR SECTION ---');
 

@@ -808,7 +808,7 @@ export async function enregistrerVersementServeur(params: {
       await enregistrerMouvementCaisse({
         company_id,
         sector_slug: 'restaurant',
-        caisse_id: null,
+        caisse_id: undefined,
         type: 'entree',
         sens: 'entree',
         montant_especes: mode_reglement === 'ESPECES' ? montant : 0,
@@ -1296,7 +1296,7 @@ export async function cloturerSessionServeuseEtVerserCaisse(params: {
         await enregistrerMouvementCaisse({
           company_id: compId,
           sector_slug: 'restaurant',
-          caisse_id: caisse_id || null,
+          caisse_id: caisse_id || undefined,
           type: 'entree',
           sens: 'entree',
           montant_especes: isCash ? montantVerserNum : 0,
@@ -1310,7 +1310,7 @@ export async function cloturerSessionServeuseEtVerserCaisse(params: {
         await enregistrerEntreeCaisse({
           company_id: compId,
           secteur_id: 'restaurant',
-          caisse_id: caisse_id || null,
+          caisse_id: caisse_id || undefined,
           montant: montantVerserNum,
           mode_paiement: isCash ? 'espece' : 'mtn_momo',
           source: 'VERSEMENT CLÔTURE SESSION SERVEUSE',
@@ -1404,8 +1404,8 @@ export async function payerCreanceServeuse(params: {
       await enregistrerMouvementCaisse({
         company_id,
         sector_slug: 'restaurant',
-        caisse_id: caisse_id || null,
-        caisse_session_id: caisse_session_id || null,
+        caisse_id: caisse_id || undefined,
+        caisse_session_id: caisse_session_id || undefined,
         type: 'entree',
         sens: 'entree',
         montant_especes: isCash ? montantEffectif : 0,

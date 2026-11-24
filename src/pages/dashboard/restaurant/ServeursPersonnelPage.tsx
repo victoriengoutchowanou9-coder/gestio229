@@ -273,7 +273,7 @@ export const ServeursPersonnelPage: React.FC = () => {
     if (!selectedSession || !remiseForm.produit_nom.trim() || remiseForm.qte_remise <= 0) return
 
     const success = await attribuerBoissonServeuse({
-      company_id: companyId,
+      company_id: companyId || '',
       session_id: selectedSession.id,
       serveur_nom: selectedSession.serveur_nom,
       produit_nom: remiseForm.produit_nom.trim(),
@@ -305,7 +305,7 @@ export const ServeursPersonnelPage: React.FC = () => {
     if (!selectedSession || versementForm.montant <= 0) return
 
     const res = await enregistrerVersementServeur({
-      company_id: companyId,
+      company_id: companyId || '',
       session_id: selectedSession.id,
       serveur_nom: selectedSession.serveur_nom,
       montant: Number(versementForm.montant),
@@ -344,7 +344,7 @@ export const ServeursPersonnelPage: React.FC = () => {
     }
 
     const res = await enregistrerRetourEmballageSession({
-      company_id: companyId,
+      company_id: companyId || '',
       session_id: selectedSession.id,
       serveur_nom: selectedSession.serveur_nom,
       boisson_id: retourEmballageForm.boisson_id || undefined,
@@ -373,7 +373,7 @@ export const ServeursPersonnelPage: React.FC = () => {
 
     const res = await cloturerSessionServeuseEtVerserCaisse({
       session_id: selectedSession.id,
-      company_id: companyId,
+      company_id: companyId || '',
       serveur_nom: selectedSession.serveur_nom,
       montant_verse: Number(clotureForm.montant_verse) || 0,
       mode_reglement: clotureForm.mode_reglement || 'ESPECES',
