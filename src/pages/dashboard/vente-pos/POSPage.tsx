@@ -1099,6 +1099,9 @@ export const POSPage: React.FC = () => {
             annulation_avoir: parsedNotes.annulation_avoir || null,
             lines,
             emballages_consignes: Array.isArray(parsedNotes.emballages_consignes) ? parsedNotes.emballages_consignes : undefined,
+            table_numero: s.sector_meta?.table_numero || parsedNotes.table_numero || s.table_numero || (s as any).table_numero || undefined,
+            couverts: Number(s.sector_meta?.couverts || parsedNotes.couverts || (s as any).couverts || 0) || undefined,
+            serveur_nom: s.sector_meta?.serveur_nom || parsedNotes.serveur_nom || s.server_name || (s as any).serveur_nom || undefined,
           }
         })
         setSalesHistory(mappedSales)
@@ -2310,6 +2313,29 @@ export const POSPage: React.FC = () => {
         }, 0)
         const totalCostHTRounded = Math.round(totalCostHT * 100) / 100
 
+        // Résolution préalable de la session active de la serveuse pour garantir la synchronisation
+        if (isRestaurant && restaurantServeurSnapshot && restaurantServeurSnapshot !== 'Client Comptoir Direct' && !restaurantSessionIdSnapshot) {
+          try {
+            let qSess = supabase
+              .from('restaurant_sessions_serveurs')
+              .select('id, serveur_id, serveur_nom')
+              .eq('company_id', company?.id ?? companyId ?? '')
+              .eq('statut', 'OUVERTE')
+            if (restaurantServeurIdSnapshot) {
+              qSess = qSess.or(`serveur_id.eq.${restaurantServeurIdSnapshot},serveur_nom.ilike.${restaurantServeurSnapshot.trim()}`)
+            } else {
+              qSess = qSess.ilike('serveur_nom', restaurantServeurSnapshot.trim())
+            }
+            const { data: dbSess } = await qSess.order('created_at', { ascending: false }).limit(1).maybeSingle()
+            if (dbSess) {
+              restaurantSessionIdSnapshot = dbSess.id
+              if (!restaurantServeurIdSnapshot && dbSess.serveur_id) {
+                restaurantServeurIdSnapshot = dbSess.serveur_id
+              }
+            }
+          } catch (_) {}
+        }
+
         const todayDate = new Date().toISOString().split('T')[0]
         const encodedMeta = `PAY:${primaryMethod}|CL:${custName.slice(0, 20)}|SEC:${currentSectorSlug}|ST:${isDeferredSnapshot ? 'A_LIVRER' : 'COMPLET'}`.slice(0, 100)
         const notesPayload = {
@@ -2740,6 +2766,17 @@ export const POSPage: React.FC = () => {
                       updated_at: new Date().toISOString()
                     })
                     .eq('id', targetSessionId)
+
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('gestio:restaurant-sale-completed', {
+                      detail: { order_number: orderNum, session_id: targetSessionId, serveur_nom: srvNom }
+                    }))
+                    try {
+                      localStorage.setItem('gestio_last_restaurant_sale', JSON.stringify({
+                        order_number: orderNum, session_id: targetSessionId, timestamp: Date.now()
+                      }))
+                    } catch (_) {}
+                  }
                 }
               } catch (sessUpErr) {
                 console.warn('[POSPage] Erreur mise à jour session serveuse:', sessUpErr)
@@ -5029,10 +5066,15 @@ export const POSPage: React.FC = () => {
 
               <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-0.5 text-[11px]">
                 <p className="font-bold">{modalDocTitle} : {currentSale?.order_number}</p>
-                <p>Client : {currentSale?.customer_name}</p>
+                <p>Client : {currentSale?.customer_name || 'Client Comptoir'}</p>
                 {currentSale?.table_numero && (
+                  <p className="font-semibold text-slate-700">
+                    Table : {currentSale.table_numero}
+                  </p>
+                )}
+                {currentSale?.serveur_nom && (
                   <p className="font-black text-rose-700">
-                    Table : {currentSale.table_numero} {currentSale?.serveur_nom ? `• Serveur : ${currentSale.serveur_nom}` : ''}
+                    Serveuse responsable : {currentSale.serveur_nom}
                   </p>
                 )}
               </div>
@@ -5042,22 +5084,19 @@ export const POSPage: React.FC = () => {
                   <tr className="border-b border-slate-200">
                     <th className="text-left pb-1">Article</th>
                     <th className="text-center pb-1">Qté</th>
-                    <th className="text-center pb-1">Régime</th>
+                    <th className="text-right pb-1">P.U.</th>
                     <th className="text-right pb-1">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {currentSale?.lines.map((l, i) => {
-                    const isVat = isProductVatSubject(l.product)
-                    return (
-                      <tr key={i}>
-                        <td className="py-1">{l.product.name}</td>
-                        <td className="py-1 text-center font-bold">{l.qty}</td>
-                        <td className="py-1 text-center text-[10px] text-slate-500">{isVat ? 'TVA 18%' : 'Exonéré'}</td>
-                        <td className="py-1 text-right">{fmt(l.qty * l.unitPrice)}</td>
-                      </tr>
-                    )
-                  })}
+                  {currentSale?.lines.map((l, i) => (
+                    <tr key={i}>
+                      <td className="py-1">{l.product.name}</td>
+                      <td className="py-1 text-center font-bold">{l.qty}</td>
+                      <td className="py-1 text-right text-slate-600">{fmt(l.unitPrice)}</td>
+                      <td className="py-1 text-right font-black">{fmt(l.qty * l.unitPrice)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
 
@@ -5090,7 +5129,17 @@ export const POSPage: React.FC = () => {
                 {((currentSaleFiscalSummary?.totalAib ?? currentSale?.total_aib ?? 0) > 0) && (
                   <p className="text-[10px] text-amber-800 font-bold">Dont AIB : {fmt(currentSaleFiscalSummary?.totalAib ?? currentSale?.total_aib ?? 0)}</p>
                 )}
-                <p className="text-xs text-emerald-700 font-bold">Payé : {fmt(currentSale?.amount_paid || currentSaleFiscalSummary?.totalRegle || 0)}</p>
+                <p className="text-[11px] text-slate-600">
+                  Mode de règlement : {(() => {
+                    const pm = currentSale?.payments?.[0]?.method || (currentSale as any)?.payment_method || 'especes'
+                    if (pm === 'momo' || pm === 'MTN_MOMO' || pm === 'MOOV_MONEY' || pm === 'mobile_money') return 'Mobile Money (MoMo)'
+                    if (pm === 'cheque') return 'Chèque'
+                    if (pm === 'virement') return 'Virement'
+                    if (pm === 'credit') return 'À crédit'
+                    return 'Espèces'
+                  })()}
+                </p>
+                <p className="text-xs text-emerald-700 font-bold">Montant payé : {fmt(currentSale?.amount_paid || currentSaleFiscalSummary?.totalRegle || 0)}</p>
                 {(currentSale?.ancienne_dette_avant_facture || 0) > 0 && (
                   <p className="text-[11px] text-slate-600">Dette ant. : {fmt(currentSale?.ancienne_dette_avant_facture || 0)}</p>
                 )}

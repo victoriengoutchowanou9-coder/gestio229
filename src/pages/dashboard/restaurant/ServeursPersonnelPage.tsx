@@ -23,6 +23,7 @@ import {
   VersementServeur
 } from '../../../services/restaurantService'
 import clsx from 'clsx'
+import { supabase } from '../../../lib/supabase'
 
 const fmt = (n: number) => formatFCFA(n)
 
@@ -175,7 +176,36 @@ export const ServeursPersonnelPage: React.FC = () => {
 
   useEffect(() => {
     loadAllData()
-  }, [companyId])
+  }, [loadAllData])
+
+  // Synchronisation temps réel automatique (Ventes POS, Versements, Sessions)
+  useEffect(() => {
+    const handleSync = () => {
+      loadAllData()
+      if (selectedSession?.id && companyId) {
+        obtenirSuiviSessionServeuse(selectedSession.id, companyId).then(setSessionSuiviDetail)
+      }
+    }
+    window.addEventListener('gestio:restaurant-sale-completed', handleSync)
+    window.addEventListener('gestio:versement_serveur_created', handleSync)
+    window.addEventListener('gestio:caisse_mouvement_created', handleSync)
+    window.addEventListener('storage', handleSync)
+
+    const channel = supabase
+      .channel(`restaurant-ops-sync-${companyId || 'global'}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_sessions_serveurs' }, handleSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'restaurant_versements_serveurs' }, handleSync)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'sales_orders' }, handleSync)
+      .subscribe()
+
+    return () => {
+      window.removeEventListener('gestio:restaurant-sale-completed', handleSync)
+      window.removeEventListener('gestio:versement_serveur_created', handleSync)
+      window.removeEventListener('gestio:caisse_mouvement_created', handleSync)
+      window.removeEventListener('storage', handleSync)
+      supabase.removeChannel(channel)
+    }
+  }, [loadAllData, selectedSession?.id, companyId])
 
   // Chargement automatique du suivi bivalent (Bar + Restaurant) en temps réel
   useEffect(() => {
@@ -648,13 +678,16 @@ export const ServeursPersonnelPage: React.FC = () => {
                 const isCloturee = s.statut === 'CLOTUREE'
 
                 // Données de suivi fiabilisées
-                const boissonsConfieesVal = Number(s.total_boissons_confiees_ttc) || Number(s.details_suivi?.total_boissons_confiees) || 0
-                const platsConfiesVal = Number(s.details_suivi?.total_plats_confies) || Number(s.total_restaurant_ttc) || 0
+                const dotationBoissons = boissonsConfiees
+                  .filter(b => b.session_id === s.id)
+                  .reduce((acc, b) => acc + (Number(b.valeur_totale_ttc) || (Number(b.qte_remise || 0) * Number(b.prix_unitaire || 0))), 0)
                 const totalBarVal = Number(s.total_bar_ttc) || Number(s.details_suivi?.total_bar) || 0
                 const totalRestoVal = Number(s.total_restaurant_ttc) || Number(s.details_suivi?.total_restaurant) || 0
+                const boissonsConfieesVal = Number(s.total_boissons_confiees_ttc) || Number(s.details_suivi?.total_boissons_confiees) || dotationBoissons || totalBarVal
+                const platsConfiesVal = Number(s.details_suivi?.total_plats_confies) || Number(s.total_restaurant_ttc) || totalRestoVal
                 const totalVentesVal = Number(s.total_ventes_declarees_ttc) || (totalBarVal + totalRestoVal)
                 const verseAuGerantVal = Number(s.total_versements_recus) || 0
-                const soldeDuVal = Number(s.solde_restant_a_remettre) || 0
+                const soldeDuVal = Math.max(0, totalVentesVal - verseAuGerantVal)
                 const heureOuvStr = s.heure_ouverture
                   ? new Date(s.heure_ouverture).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
                   : s.date_session
@@ -821,7 +854,9 @@ export const ServeursPersonnelPage: React.FC = () => {
                     </button>
                     <button
                       onClick={() => {
-                        const reste = Number(selectedSession.solde_restant_a_remettre) || 0
+                        const totVentes = Number(sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0)
+                        const totVerse = Number(selectedSession.total_versements_recus ?? 0)
+                        const reste = Math.max(0, totVentes - totVerse)
                         setVersementForm({
                           montant: reste > 0 ? reste : 0,
                           mode_reglement: 'ESPECES',
@@ -835,14 +870,16 @@ export const ServeursPersonnelPage: React.FC = () => {
                     </button>
                     <button
                       onClick={() => {
-    const reste = sessionSuiviDetail?.solde_restant ?? selectedSession.solde_restant_a_remettre ?? 0
-    setClotureForm({
-      montant_verse: reste,
-      mode_reglement: 'ESPECES',
-      justification_ecart: ''
-    })
-    setShowClotureModal(true)
-  }}
+                        const totVentes = Number(sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0)
+                        const totVerse = Number(selectedSession.total_versements_recus ?? 0)
+                        const reste = Math.max(0, totVentes - totVerse)
+                        setClotureForm({
+                          montant_verse: reste,
+                          mode_reglement: 'ESPECES',
+                          justification_ecart: ''
+                        })
+                        setShowClotureModal(true)
+                      }}
                       className="px-3.5 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" /> Clôturer Session
@@ -985,13 +1022,23 @@ export const ServeursPersonnelPage: React.FC = () => {
                     <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200/70">
                       <span className="text-[10px] uppercase font-bold text-amber-800 block">Boissons Confiées</span>
                       <strong className="text-sm font-black font-mono text-amber-950">
-                        {fmt(sessionSuiviDetail?.total_boissons_confiees ?? selectedSession.total_boissons_confiees_ttc ?? 0)}
+                        {fmt(
+                          Number(sessionSuiviDetail?.total_boissons_confiees) ||
+                          Number(selectedSession.total_boissons_confiees_ttc) ||
+                          boissonsConfiees.filter(b => b.session_id === selectedSession.id).reduce((acc, b) => acc + (Number(b.valeur_totale_ttc) || (Number(b.qte_remise || 0) * Number(b.prix_unitaire || 0))), 0) ||
+                          Number(sessionSuiviDetail?.total_bar) ||
+                          Number(selectedSession.total_bar_ttc) || 0
+                        )}
                       </strong>
                     </div>
                     <div className="p-2.5 bg-rose-50/70 rounded-xl border border-rose-200/70">
                       <span className="text-[10px] uppercase font-bold text-rose-800 block">Plats Confiés</span>
                       <strong className="text-sm font-black font-mono text-rose-950">
-                        {fmt(sessionSuiviDetail?.total_plats_confies ?? selectedSession.total_restaurant_ttc ?? 0)}
+                        {fmt(
+                          Number(sessionSuiviDetail?.total_plats_confies) ||
+                          Number(selectedSession.total_restaurant_ttc) ||
+                          Number(sessionSuiviDetail?.total_restaurant) || 0
+                        )}
                       </strong>
                     </div>
                     <div className="p-2.5 bg-amber-100/60 rounded-xl border border-amber-300/70">
@@ -1021,14 +1068,21 @@ export const ServeursPersonnelPage: React.FC = () => {
                   </div>
                   <div className="mt-2 pt-2 border-t flex items-center justify-between text-xs">
                     <span className="font-bold text-slate-700">Solde Restant à Reverser par la Serveuse :</span>
-                    <strong className={clsx(
-                      'text-base font-black font-mono px-3 py-1 rounded-xl',
-                      (sessionSuiviDetail?.solde_restant ?? selectedSession.solde_restant_a_remettre ?? 0) > 0
-                        ? 'bg-rose-100 text-rose-700 border border-rose-200'
-                        : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
-                    )}>
-                      {fmt(sessionSuiviDetail?.solde_restant ?? selectedSession.solde_restant_a_remettre ?? 0)}
-                    </strong>
+                    {(() => {
+                      const totVentes = Number(sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0)
+                      const totVerse = Number(selectedSession.total_versements_recus ?? 0)
+                      const soldeCalcul = Math.max(0, totVentes - totVerse)
+                      return (
+                        <strong className={clsx(
+                          'text-base font-black font-mono px-3 py-1 rounded-xl',
+                          soldeCalcul > 0
+                            ? 'bg-rose-100 text-rose-700 border border-rose-200'
+                            : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                        )}>
+                          {fmt(soldeCalcul)}
+                        </strong>
+                      )
+                    })()}
                   </div>
                 </div>
 

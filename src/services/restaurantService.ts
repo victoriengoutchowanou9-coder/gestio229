@@ -788,9 +788,17 @@ export async function enregistrerVersementServeur(params: {
       return { success: true, soldeApres: Number(recentDup[0].solde_apres) || 0, reference: recentDup[0].reference }
     }
 
-    const soldeAvant = Number(sess.solde_restant_a_remettre) || 0
-    const soldeApres = Math.round((soldeAvant - montant) * 100) / 100
-    const totalVersements = (Number(sess.total_versements_recus) || 0) + montant
+    const totalVentes = Number(sess.total_ventes_declarees_ttc) ||
+      ((Number(sess.total_bar_ttc) || 0) + (Number(sess.total_restaurant_ttc) || 0)) ||
+      (Number(sess.details_suivi?.total_general) || 0)
+
+    const versementsDejaFaits = Number(sess.total_versements_recus) || 0
+    const soldeAvant = Number(sess.solde_restant_a_remettre) > 0
+      ? Number(sess.solde_restant_a_remettre)
+      : Math.max(0, totalVentes - versementsDejaFaits)
+
+    const totalVersements = versementsDejaFaits + montant
+    const soldeApres = Math.max(0, Math.round((totalVentes - totalVersements) * 100) / 100)
     const ref = `VMT-${Date.now().toString().slice(-6)}`
 
     const { error: vErr } = await supabase
@@ -811,11 +819,21 @@ export async function enregistrerVersementServeur(params: {
 
     if (vErr) throw vErr
 
+    let updatedDetailsSuivi = sess.details_suivi || null
+    if (updatedDetailsSuivi && typeof updatedDetailsSuivi === 'object') {
+      updatedDetailsSuivi = {
+        ...updatedDetailsSuivi,
+        total_versements: totalVersements,
+        solde_restant: soldeApres
+      }
+    }
+
     await supabase
       .from('restaurant_sessions_serveurs')
       .update({
         total_versements_recus: totalVersements,
         solde_restant_a_remettre: soldeApres,
+        details_suivi: updatedDetailsSuivi,
         updated_at: new Date().toISOString()
       })
       .eq('id', session_id)
@@ -1013,6 +1031,12 @@ export async function accumulerVenteDansSessionServeuse(params: {
       } catch (_) {}
     }
 
+    // Idempotence : si la vente est déjà présente dans l'historique de cette session, ne pas réaccumuler
+    if (order_number && suivi.historique_ventes.some((h: any) => h.order_number === order_number)) {
+      console.log(`[RestaurantService] Commande ${order_number} déjà enregistrée dans la session ${session_id}`)
+      return { success: true }
+    }
+
     const itemsSummaryForHistory: Array<{ nom: string; quantite: number; prix_unitaire: number; total: number }> = []
 
     for (const it of items) {
@@ -1175,6 +1199,17 @@ export async function obtenirSuiviSessionServeuse(
       detail.total_boissons_confiees = Number(sess.total_boissons_confiees_ttc) || Number(sess.details_suivi?.total_boissons_confiees) || 0
       detail.total_plats_confies = Number(sess.details_suivi?.total_plats_confies) || Number(sess.total_restaurant_ttc) || 0
 
+      // Si total_boissons_confiees est à 0, chercher dans la table restaurant_boissons_confiees
+      if (!detail.total_boissons_confiees) {
+        const { data: bConf } = await supabase
+          .from('restaurant_boissons_confiees')
+          .select('valeur_totale_ttc, qte_remise, prix_unitaire')
+          .eq('session_id', session_id)
+        if (bConf && bConf.length > 0) {
+          detail.total_boissons_confiees = bConf.reduce((s, b) => s + (Number(b.valeur_totale_ttc) || (Number(b.qte_remise || 0) * Number(b.prix_unitaire || 0))), 0)
+        }
+      }
+
       // Priorité 1: details_suivi structuré (M089) ou notes JSON
       const jsonSource = sess.details_suivi || (sess.notes ? (typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes) : null)
       if (jsonSource) {
@@ -1310,6 +1345,8 @@ export async function obtenirSuiviSessionServeuse(
     detail.total_bar = Math.round(detail.bar_items.reduce((acc, b) => acc + b.total, 0))
     detail.total_restaurant = Math.round(detail.restaurant_items.reduce((acc, r) => acc + r.total, 0))
     detail.total_general = Math.round(detail.total_bar + detail.total_restaurant)
+    if (!detail.total_boissons_confiees) detail.total_boissons_confiees = detail.total_bar
+    if (!detail.total_plats_confies) detail.total_plats_confies = detail.total_restaurant
     detail.solde_restant = Math.max(0, detail.total_general - detail.total_verse)
     detail.ecart = detail.total_general - detail.total_verse
   } catch (err: any) {
