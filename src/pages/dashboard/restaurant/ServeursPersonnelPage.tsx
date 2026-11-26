@@ -4,7 +4,7 @@ import {
   Phone, UserCheck, Shield, ChevronRight, X, Search,
   Wine, Wallet, ArrowDownRight, CheckCircle2, Clock,
   AlertTriangle, FileText, Check, ShieldAlert, RotateCcw, Package,
-  Sparkles, Utensils, Printer
+  Sparkles, Utensils, Printer, ArrowRight
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
@@ -217,10 +217,46 @@ export const ServeursPersonnelPage: React.FC = () => {
     }
   }
 
+  const handleToggleStaffStatut = async (staffId: string, currentStatut: string) => {
+    const newStatut = currentStatut === 'ACTIF' ? 'INACTIF' : 'ACTIF'
+    try {
+      await supabaseTenant('restaurant_serveurs').update({
+        statut: newStatut,
+        updated_at: new Date().toISOString()
+      }).eq('id', staffId)
+      toast.success('Statut mis à jour', `Le statut a été passé à ${newStatut}.`)
+      loadAllData()
+    } catch (err: any) {
+      toast.error('Erreur', err.message)
+    }
+  }
+
+  const handleArchiveStaff = async (staffId: string, nom: string) => {
+    if (!window.confirm(`Archiver définitivement le compte de ${nom} ? Toutes les opérations passées et la traçabilité resteront conservées.`)) return
+    try {
+      await supabaseTenant('restaurant_serveurs').update({
+        statut: 'ARCHIVE',
+        updated_at: new Date().toISOString()
+      }).eq('id', staffId)
+      toast.success('Compte archivé', `${nom} a été archivé(e).`)
+      loadAllData()
+    } catch (err: any) {
+      toast.error('Erreur', err.message)
+    }
+  }
+
   const handleOpenSession = async (e: React.FormEvent) => {
     e.preventDefault()
     const srvNom = sessionForm.serveur_nom.trim()
     if (!srvNom) return
+
+    // Règle d'or : 1 seule session active à la fois par serveuse
+    const alreadyOpen = sessions.find(s => s.statut === 'OUVERTE' && s.serveur_nom?.trim().toLowerCase() === srvNom.toLowerCase())
+    if (alreadyOpen) {
+      toast.error('Session déjà en cours', `Une session de service active existe déjà pour ${srvNom}.`)
+      return
+    }
+
     try {
       // 1. Rechercher ou créer automatiquement la serveuse dans restaurant_serveurs
       let srvId: string | null = null
@@ -602,63 +638,131 @@ export const ServeursPersonnelPage: React.FC = () => {
             </button>
           </div>
 
-          {/* Liste des sessions */}
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {/* Liste des sessions — Fiches serveuses complètes et modernes */}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
             {sessions
+              .filter(s => !s.serveur_nom?.toLowerCase().includes('test_') && !s.serveur_nom?.toLowerCase().includes('fictif'))
               .filter(s => filterSessionStatut === 'ALL' || s.statut === filterSessionStatut)
               .map(s => {
                 const isSelected = selectedSession?.id === s.id
                 const isCloturee = s.statut === 'CLOTUREE'
+
+                // Données de suivi fiabilisées
+                const boissonsConfieesVal = Number(s.total_boissons_confiees_ttc) || Number(s.details_suivi?.total_boissons_confiees) || 0
+                const platsConfiesVal = Number(s.details_suivi?.total_plats_confies) || Number(s.total_restaurant_ttc) || 0
+                const totalBarVal = Number(s.total_bar_ttc) || Number(s.details_suivi?.total_bar) || 0
+                const totalRestoVal = Number(s.total_restaurant_ttc) || Number(s.details_suivi?.total_restaurant) || 0
+                const totalVentesVal = Number(s.total_ventes_declarees_ttc) || (totalBarVal + totalRestoVal)
+                const verseAuGerantVal = Number(s.total_versements_recus) || 0
+                const soldeDuVal = Number(s.solde_restant_a_remettre) || 0
+                const heureOuvStr = s.heure_ouverture
+                  ? new Date(s.heure_ouverture).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                  : s.date_session
 
                 return (
                   <div
                     key={s.id}
                     onClick={() => setSelectedSession(s)}
                     className={clsx(
-                      'p-5 rounded-3xl border cursor-pointer transition-all flex flex-col justify-between shadow-sm',
+                      'p-5 rounded-3xl border cursor-pointer transition-all flex flex-col justify-between shadow-sm hover:shadow-md',
                       isSelected ? 'ring-2 ring-rose-500 bg-rose-50/20 border-rose-300' : 'bg-white border-slate-200 hover:border-slate-300'
                     )}
                   >
-                    <div>
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="font-black text-slate-900 text-sm flex items-center gap-1.5">
-                          <Wine className="w-4 h-4 text-rose-600" />
-                          {s.serveur_nom}
+                    <div className="space-y-3">
+                      {/* 1. Nom de la serveuse & 2. Statut de la session */}
+                      <div className="flex items-center justify-between">
+                        <span className="font-black text-slate-900 text-sm flex items-center gap-2">
+                          <div className="w-8 h-8 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center font-black text-xs shadow-xs">
+                            {s.serveur_nom?.slice(0, 2).toUpperCase() || 'SV'}
+                          </div>
+                          <div>
+                            <div className="leading-tight font-black">{s.serveur_nom}</div>
+                            <div className="text-[10px] text-slate-400 font-normal">Session #{s.id.slice(0, 6)}</div>
+                          </div>
                         </span>
                         <span className={clsx(
-                          'text-[10px] font-black px-2 py-0.5 rounded-full uppercase',
-                          isCloturee ? 'bg-slate-100 text-slate-600' : 'bg-emerald-100 text-emerald-800'
+                          'text-[10px] font-black px-2.5 py-1 rounded-full uppercase tracking-wider flex items-center gap-1',
+                          isCloturee ? 'bg-slate-100 text-slate-600 border border-slate-200' : 'bg-emerald-100 text-emerald-800 border border-emerald-200 shadow-xs'
                         )}>
+                          {!isCloturee && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}
                           {s.statut}
                         </span>
                       </div>
 
-                      <div className="space-y-1.5 text-xs">
-                        <div className="flex justify-between text-slate-500">
-                          <span>Boissons Confiées :</span>
-                          <strong className="text-slate-900 font-mono">{fmt(s.total_boissons_confiees_ttc)}</strong>
+                      {/* 10. Date et Heure d'ouverture */}
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-100">
+                        <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <span>Ouverture : <strong className="text-slate-700">{heureOuvStr}</strong></span>
+                      </div>
+
+                      {/* 3. Total boissons confiées & 4. Total plats confiés */}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="p-2 rounded-xl bg-amber-50/60 border border-amber-200/50">
+                          <span className="text-[10px] font-bold text-amber-800 uppercase block truncate">Boissons Confiées</span>
+                          <strong className="text-amber-950 font-mono font-black">{fmt(boissonsConfieesVal)}</strong>
                         </div>
-                        <div className="flex justify-between text-slate-500">
-                          <span>Total Versé au Gérant :</span>
-                          <strong className="text-emerald-600 font-mono">{fmt(s.total_versements_recus)}</strong>
+                        <div className="p-2 rounded-xl bg-rose-50/60 border border-rose-200/50">
+                          <span className="text-[10px] font-bold text-rose-800 uppercase block truncate">Plats Confiés</span>
+                          <strong className="text-rose-950 font-mono font-black">{fmt(platsConfiesVal)}</strong>
                         </div>
-                        <div className="flex justify-between text-slate-700 font-bold border-t border-slate-100 pt-1.5">
-                          <span>Solde Dû par Serveuse :</span>
-                          <strong className={clsx('font-mono font-black', s.solde_restant_a_remettre > 0 ? 'text-rose-600' : 'text-emerald-600')}>
-                            {fmt(s.solde_restant_a_remettre)}
-                          </strong>
+                      </div>
+
+                      {/* 5. Total ventes BAR & 6. Total ventes RESTAURANT */}
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <div className="p-2 rounded-xl bg-amber-50/90 border border-amber-200">
+                          <span className="text-[10px] font-bold text-amber-900 uppercase block flex items-center gap-1">
+                            <Wine className="w-3 h-3 text-amber-600" /> Ventes BAR
+                          </span>
+                          <strong className="text-amber-800 font-mono font-black text-xs">{fmt(totalBarVal)}</strong>
                         </div>
+                        <div className="p-2 rounded-xl bg-rose-50/90 border border-rose-200">
+                          <span className="text-[10px] font-bold text-rose-900 uppercase block flex items-center gap-1">
+                            <Utensils className="w-3 h-3 text-rose-600" /> Ventes RESTO
+                          </span>
+                          <strong className="text-rose-800 font-mono font-black text-xs">{fmt(totalRestoVal)}</strong>
+                        </div>
+                      </div>
+
+                      {/* 7. Total général des ventes & 8. Total déjà versé au gérant */}
+                      <div className="space-y-1.5 text-xs pt-1 border-t border-slate-100">
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span className="font-bold flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-indigo-500" /> Total Général Ventes :
+                          </span>
+                          <strong className="text-slate-900 font-mono font-black">{fmt(totalVentesVal)}</strong>
+                        </div>
+                        <div className="flex justify-between items-center text-slate-600">
+                          <span className="font-bold flex items-center gap-1">
+                            <Wallet className="w-3 h-3 text-emerald-600" /> Déjà Versé au Gérant :
+                          </span>
+                          <strong className="text-emerald-600 font-mono font-black">+{fmt(verseAuGerantVal)}</strong>
+                        </div>
+                      </div>
+
+                      {/* 9. Solde restant dû */}
+                      <div className="flex justify-between items-center p-2.5 rounded-xl border border-rose-200 bg-rose-50/50">
+                        <span className="text-xs font-black uppercase text-rose-950">Solde Restant Dû :</span>
+                        <strong className={clsx(
+                          'font-mono font-black text-sm',
+                          soldeDuVal > 0 ? 'text-rose-600' : 'text-emerald-600'
+                        )}>
+                          {fmt(soldeDuVal)}
+                        </strong>
                       </div>
                     </div>
 
-                    <div className="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-[11px]">
-                      <span className="text-slate-400">Date : {s.date_session}</span>
-                      <span className="text-rose-600 font-bold">Sélectionner →</span>
+                    <div className="mt-3 pt-2.5 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                      <span className="text-slate-400">Cliquez pour le détail</span>
+                      <span className="text-rose-600 font-bold flex items-center gap-1">
+                        Sélectionner <ArrowRight className="w-3.5 h-3.5" />
+                      </span>
                     </div>
                   </div>
                 )
               })}
-            {sessions.filter(s => filterSessionStatut === 'ALL' || s.statut === filterSessionStatut).length === 0 && (
+            {sessions
+              .filter(s => !s.serveur_nom?.toLowerCase().includes('test_') && !s.serveur_nom?.toLowerCase().includes('fictif'))
+              .filter(s => filterSessionStatut === 'ALL' || s.statut === filterSessionStatut).length === 0 && (
               <div className="col-span-3 p-8 text-center bg-white rounded-3xl border border-dashed border-slate-200 text-slate-400 text-xs">
                 Aucune session trouvée pour ce filtre.
               </div>
@@ -877,21 +981,33 @@ export const ServeursPersonnelPage: React.FC = () => {
                     <DollarSign className="w-4 h-4 text-indigo-600" />
                     Récapitulatif Financier de la Session
                   </h5>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-1 text-xs">
-                    <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200/60">
-                      <span className="text-[10px] uppercase font-bold text-amber-800 block">Total BAR</span>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-1 text-xs">
+                    <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200/70">
+                      <span className="text-[10px] uppercase font-bold text-amber-800 block">Boissons Confiées</span>
+                      <strong className="text-sm font-black font-mono text-amber-950">
+                        {fmt(sessionSuiviDetail?.total_boissons_confiees ?? selectedSession.total_boissons_confiees_ttc ?? 0)}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 bg-rose-50/70 rounded-xl border border-rose-200/70">
+                      <span className="text-[10px] uppercase font-bold text-rose-800 block">Plats Confiés</span>
+                      <strong className="text-sm font-black font-mono text-rose-950">
+                        {fmt(sessionSuiviDetail?.total_plats_confies ?? selectedSession.total_restaurant_ttc ?? 0)}
+                      </strong>
+                    </div>
+                    <div className="p-2.5 bg-amber-100/60 rounded-xl border border-amber-300/70">
+                      <span className="text-[10px] uppercase font-bold text-amber-900 block">Total BAR</span>
                       <strong className="text-sm font-black font-mono text-amber-900">
                         {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
                       </strong>
                     </div>
-                    <div className="p-2.5 bg-rose-50 rounded-xl border border-rose-200/60">
-                      <span className="text-[10px] uppercase font-bold text-rose-800 block">Total RESTAURANT</span>
+                    <div className="p-2.5 bg-rose-100/60 rounded-xl border border-rose-300/70">
+                      <span className="text-[10px] uppercase font-bold text-rose-900 block">Total RESTAURANT</span>
                       <strong className="text-sm font-black font-mono text-rose-900">
                         {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
                       </strong>
                     </div>
                     <div className="p-2.5 bg-indigo-50 rounded-xl border border-indigo-200/60">
-                      <span className="text-[10px] uppercase font-bold text-indigo-800 block">Total Attendu</span>
+                      <span className="text-[10px] uppercase font-bold text-indigo-800 block">Total Général Ventes</span>
                       <strong className="text-sm font-black font-mono text-indigo-950">
                         {fmt(sessionSuiviDetail?.total_general ?? selectedSession.total_ventes_declarees_ttc ?? 0)}
                       </strong>
@@ -1199,6 +1315,7 @@ export const ServeursPersonnelPage: React.FC = () => {
                   <th className="py-3 px-4">Zone Assignée</th>
                   <th className="py-3 px-4 text-center">Commission</th>
                   <th className="py-3 px-4 text-center">Statut</th>
+                  <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -1217,7 +1334,37 @@ export const ServeursPersonnelPage: React.FC = () => {
                       <td className="py-3 px-4 font-mono text-slate-600">{p.telephone || '-'}</td>
                       <td className="py-3 px-4 font-bold text-slate-700">{p.zone_attribuee}</td>
                       <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">{p.taux_commission} %</td>
-                      <td className="py-3 px-4 text-center"><span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">{p.statut}</span></td>
+                      <td className="py-3 px-4 text-center">
+                        <span className={clsx(
+                          'px-2 py-0.5 rounded-full text-[10px] font-bold',
+                          p.statut === 'ACTIF' ? 'bg-emerald-100 text-emerald-800' : p.statut === 'ARCHIVE' ? 'bg-slate-100 text-slate-600' : 'bg-amber-100 text-amber-800'
+                        )}>
+                          {p.statut}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 text-right">
+                        <div className="flex items-center justify-end gap-1.5" onClick={e => e.stopPropagation()}>
+                          <button
+                            type="button"
+                            onClick={() => handleToggleStaffStatut(p.id, p.statut)}
+                            className={clsx(
+                              'px-2.5 py-1 rounded-lg text-[10px] font-bold border transition',
+                              p.statut === 'ACTIF' ? 'bg-amber-50 text-amber-800 border-amber-200 hover:bg-amber-100' : 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                            )}
+                          >
+                            {p.statut === 'ACTIF' ? 'Désactiver' : 'Activer'}
+                          </button>
+                          {p.statut !== 'ARCHIVE' && (
+                            <button
+                              type="button"
+                              onClick={() => handleArchiveStaff(p.id, p.nom_complet)}
+                              className="px-2.5 py-1 rounded-lg text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200 hover:bg-rose-50 hover:text-rose-700 hover:border-rose-200 transition"
+                            >
+                              Archiver
+                            </button>
+                          )}
+                        </div>
+                      </td>
                     </tr>
                   ))}
               </tbody>
@@ -1338,15 +1485,30 @@ export const ServeursPersonnelPage: React.FC = () => {
             </div>
             <form onSubmit={handleOpenSession} className="space-y-3.5">
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Nom de la Serveuse / Serveur *</label>
-                <input
-                  type="text"
+                <label className="text-xs font-bold text-slate-700 block mb-1">Choisir la Serveuse / Serveur *</label>
+                <select
                   required
-                  placeholder="Ex: Awa Traoré"
                   value={sessionForm.serveur_nom}
                   onChange={e => setSessionForm({ ...sessionForm, serveur_nom: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-rose-500"
-                />
+                  className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none focus:ring-2 focus:ring-rose-500 bg-white"
+                >
+                  <option value="">-- Sélectionner une serveuse dans l'effectif actif --</option>
+                  {personnel
+                    .filter(p => p.statut === 'ACTIF' && !p.nom_complet.toLowerCase().includes('test_') && !p.nom_complet.toLowerCase().includes('fictif'))
+                    .map(p => {
+                      const hasOpen = sessions.some(s => s.statut === 'OUVERTE' && s.serveur_nom?.trim().toLowerCase() === p.nom_complet?.trim().toLowerCase())
+                      return (
+                        <option key={p.id} value={p.nom_complet} disabled={hasOpen}>
+                          {p.nom_complet} {hasOpen ? '⚠️ [Session déjà ouverte]' : '🟢 [Disponible]'}
+                        </option>
+                      )
+                    })}
+                </select>
+                {personnel.filter(p => p.statut === 'ACTIF').length === 0 && (
+                  <p className="text-[11px] text-amber-700 mt-1">
+                    Aucune serveuse active disponible. Ajoutez-en dans l'onglet « Effectif & Équipe ».
+                  </p>
+                )}
               </div>
               <div>
                 <label className="text-xs font-bold text-slate-700 block mb-1">Fonds Initial Remis (F CFA)</label>

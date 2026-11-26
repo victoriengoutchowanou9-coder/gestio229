@@ -93,6 +93,8 @@ export interface SessionSuiviDetail {
   total_bar: number
   total_restaurant: number
   total_general: number
+  total_boissons_confiees: number
+  total_plats_confies: number
   total_verse: number
   solde_restant: number
   ecart: number
@@ -979,12 +981,17 @@ export async function accumulerVenteDansSessionServeuse(params: {
       return { success: false, error: 'Session introuvable' }
     }
 
+    const totalBoissonsConfiees = Number(sess.total_boissons_confiees_ttc) || Number(sess.details_suivi?.total_boissons_confiees) || 0
+    const totalPlatsConfies = Number(sess.details_suivi?.total_plats_confies) || (Number(sess.total_restaurant_ttc) || 0)
+
     let suivi: SessionSuiviDetail = {
       bar_items: [],
       restaurant_items: [],
       total_bar: 0,
       total_restaurant: 0,
       total_general: 0,
+      total_boissons_confiees: totalBoissonsConfiees,
+      total_plats_confies: totalPlatsConfies,
       total_verse: Number(sess.total_versements_recus) || 0,
       solde_restant: 0,
       ecart: 0,
@@ -1106,6 +1113,13 @@ export async function accumulerVenteDansSessionServeuse(params: {
       total_restaurant_ttc: suivi.total_restaurant,
       solde_restant_a_remettre: suivi.solde_restant,
       details_suivi: {
+        total_bar: suivi.total_bar,
+        total_restaurant: suivi.total_restaurant,
+        total_general: suivi.total_general,
+        total_boissons_confiees: totalBoissonsConfiees,
+        total_plats_confies: totalPlatsConfies > 0 ? totalPlatsConfies : suivi.total_restaurant,
+        total_versements: Number(sess.total_versements_recus) || 0,
+        solde_restant: suivi.solde_restant,
         bar_items: suivi.bar_items,
         restaurant_items: suivi.restaurant_items,
         historique_ventes: suivi.historique_ventes
@@ -1139,6 +1153,8 @@ export async function obtenirSuiviSessionServeuse(
     total_bar: 0,
     total_restaurant: 0,
     total_general: 0,
+    total_boissons_confiees: 0,
+    total_plats_confies: 0,
     total_verse: 0,
     solde_restant: 0,
     ecart: 0,
@@ -1156,6 +1172,8 @@ export async function obtenirSuiviSessionServeuse(
 
     if (sess) {
       detail.total_verse = Number(sess.total_versements_recus) || 0
+      detail.total_boissons_confiees = Number(sess.total_boissons_confiees_ttc) || Number(sess.details_suivi?.total_boissons_confiees) || 0
+      detail.total_plats_confies = Number(sess.details_suivi?.total_plats_confies) || Number(sess.total_restaurant_ttc) || 0
 
       // Priorité 1: details_suivi structuré (M089) ou notes JSON
       const jsonSource = sess.details_suivi || (sess.notes ? (typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes) : null)

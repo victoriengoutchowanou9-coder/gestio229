@@ -783,41 +783,48 @@ export const POSPage: React.FC = () => {
 
         const srvMap = new Map<string, any>()
 
-        // 1. D'abord les serveurs enregistrés dans restaurant_serveurs
+        // 1. D'abord les serveurs enregistrés dans restaurant_serveurs (uniquement actifs, hors comptes tests/fictifs)
         if (srvRes.data) {
           srvRes.data.forEach((s: any) => {
             const key = (s.nom_complet || '').trim().toLowerCase()
             if (!key) return
+            // Exclure les serveurs inactifs ou archivés ou comptes tests
+            if (s.statut === 'ARCHIVE' || s.statut === 'INACTIF' || key.includes('test_') || key.includes('fictif')) return
             srvMap.set(key, {
               id: s.id,
               matricule: s.matricule || `SRV-${s.nom_complet.slice(0, 3).toUpperCase()}`,
               nom_complet: s.nom_complet.trim(),
               role: s.role || 'SERVEUR',
               telephone: s.telephone || '',
+              statut: s.statut || 'ACTIF',
               has_open_session: false,
               active_session_id: null
             })
           })
         }
 
-        // 2. Fusionner avec les sessions ouvertes dans restaurant_sessions_serveurs
+        // 2. Associer les sessions ouvertes aux serveurs réels enregistrés
         if (sessRes.data) {
           sessRes.data.forEach((sess: any) => {
             const srvNom = (sess.serveur_nom || '').trim()
             if (!srvNom) return
             const key = srvNom.toLowerCase()
+            // Ignorer les comptes tests manifestes
+            if (key.includes('test_') || key.includes('fictif')) return
             if (srvMap.has(key)) {
               const existing = srvMap.get(key)
               existing.has_open_session = true
               existing.active_session_id = sess.id
               if (!existing.id && sess.serveur_id) existing.id = sess.serveur_id
-            } else {
+            } else if (sess.serveur_id) {
+              // Si la session a un serveur_id connu
               srvMap.set(key, {
-                id: sess.serveur_id || `sess-${sess.id}`,
+                id: sess.serveur_id,
                 matricule: `SRV-${srvNom.slice(0, 3).toUpperCase()}`,
                 nom_complet: srvNom,
                 role: 'SERVEUR',
                 telephone: '',
+                statut: 'ACTIF',
                 has_open_session: true,
                 active_session_id: sess.id
               })
@@ -2199,11 +2206,14 @@ export const POSPage: React.FC = () => {
 
     let restaurantServeurIdSnapshot = restaurantServeurId || null
     let restaurantSessionIdSnapshot = restaurantSessionId || null
-    if (!restaurantServeurIdSnapshot && restaurantServeurSnapshot && restaurantServeursList.length > 0) {
-      const matched = restaurantServeursList.find(s => (s.nom_complet || '').trim().toLowerCase() === restaurantServeurSnapshot.trim().toLowerCase())
+    if (restaurantServeurSnapshot && restaurantServeursList.length > 0) {
+      const matched = restaurantServeursList.find(s => 
+        (restaurantServeurIdSnapshot && s.id === restaurantServeurIdSnapshot) ||
+        (s.nom_complet || '').trim().toLowerCase() === restaurantServeurSnapshot.trim().toLowerCase()
+      )
       if (matched) {
-        restaurantServeurIdSnapshot = matched.id
-        restaurantSessionIdSnapshot = matched.active_session_id || null
+        if (!restaurantServeurIdSnapshot) restaurantServeurIdSnapshot = matched.id
+        if (!restaurantSessionIdSnapshot && matched.active_session_id) restaurantSessionIdSnapshot = matched.active_session_id
       }
     }
     const loadedPendingBonSnapshot = loadedPendingBon ? { ...loadedPendingBon } : null
@@ -2392,7 +2402,8 @@ export const POSPage: React.FC = () => {
             total_ht: lineHt,
             total_ttc: lineTotal,
             company_id: company?.id ?? companyId ?? '',
-            sector_slug: currentSectorSlug || 'bar_restaurant'
+            sector_slug: currentSectorSlug || 'bar_restaurant',
+            sector_meta: { circuit: resolveProductCircuit(line.product) }
           }
         })
 
@@ -2675,43 +2686,60 @@ export const POSPage: React.FC = () => {
             }
 
             // 6. Accumulation automatique des produits dans la session active de la serveuse
-            if (restaurantSessionIdSnapshot) {
+            if (srvNom && srvNom !== 'Client Comptoir Direct' && srvNom !== 'Serveur de Salle') {
               try {
-                const { accumulerVenteDansSessionServeuse } = await import('../../../services/restaurantService')
-                await accumulerVenteDansSessionServeuse({
-                  session_id: restaurantSessionIdSnapshot,
-                  order_number: orderNum,
-                  circuit: isBarCircuit ? 'BAR' : 'RESTAURANT',
-                  table_numero: numTable,
-                  items: cartSnapshot.map(c => {
-                    const itemCircuit = resolveProductCircuit(c.product)
-                    return {
-                      produit_id: c.product.id,
-                      nom: c.product.name,
-                      quantite: c.qty,
-                      prix_unitaire: c.unitPrice,
-                      total: c.qty * c.unitPrice,
-                      circuit: itemCircuit
-                    }
-                  }),
-                  total_vente: totalNetTTCSnapshot
-                })
+                let targetSessionId = restaurantSessionIdSnapshot
+                // Si la session n'est pas résolue dans le state local, vérifier directement dans la base de données
+                if (!targetSessionId) {
+                  let q = supabase
+                    .from('restaurant_sessions_serveurs')
+                    .select('id')
+                    .eq('company_id', compId)
+                    .eq('statut', 'OUVERTE')
+                  if (restaurantServeurIdSnapshot) {
+                    q = q.or(`serveur_id.eq.${restaurantServeurIdSnapshot},serveur_nom.ilike.${srvNom}`)
+                  } else {
+                    q = q.ilike('serveur_nom', srvNom)
+                  }
+                  const { data: dbSess } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle()
+                  if (dbSess) targetSessionId = dbSess.id
+                }
 
-                // Incrémenter total_ventes_declarees_ttc sur la session active de la serveuse
-                const { data: curSess } = await supabase
-                  .from('restaurant_sessions_serveurs')
-                  .select('total_ventes_declarees_ttc')
-                  .eq('id', restaurantSessionIdSnapshot)
-                  .maybeSingle()
-                if (curSess) {
-                  const newTotal = (Number(curSess.total_ventes_declarees_ttc) || 0) + totalNetTTCSnapshot
+                if (targetSessionId) {
+                  const { accumulerVenteDansSessionServeuse } = await import('../../../services/restaurantService')
+                  await accumulerVenteDansSessionServeuse({
+                    session_id: targetSessionId,
+                    order_number: orderNum,
+                    circuit: isBarCircuit ? 'BAR' : 'RESTAURANT',
+                    table_numero: numTable,
+                    items: cartSnapshot.map(c => {
+                      const itemCircuit = resolveProductCircuit(c.product)
+                      return {
+                        produit_id: c.product.id,
+                        nom: c.product.name,
+                        quantite: c.qty,
+                        prix_unitaire: c.unitPrice,
+                        total: c.qty * c.unitPrice,
+                        circuit: itemCircuit
+                      }
+                    }),
+                    total_vente: totalNetTTCSnapshot
+                  })
+
+                  // Consolider total_ventes_declarees_ttc sur la session active de la serveuse
+                  const { data: curSess } = await supabase
+                    .from('restaurant_sessions_serveurs')
+                    .select('total_ventes_declarees_ttc')
+                    .eq('id', targetSessionId)
+                    .maybeSingle()
+                  const newTotal = Number(curSess?.total_ventes_declarees_ttc) || 0
                   await supabase
                     .from('restaurant_sessions_serveurs')
                     .update({
                       total_ventes_declarees_ttc: newTotal,
                       updated_at: new Date().toISOString()
                     })
-                    .eq('id', restaurantSessionIdSnapshot)
+                    .eq('id', targetSessionId)
                 }
               } catch (sessUpErr) {
                 console.warn('[POSPage] Erreur mise à jour session serveuse:', sessUpErr)
@@ -3643,6 +3671,12 @@ export const POSPage: React.FC = () => {
                               </option>
                             ))}
                           </select>
+                        </div>
+                      )}
+                      {restaurantServeur && restaurantServeur !== 'Client Comptoir Direct' && !restaurantSessionId && (
+                        <div className="mt-1 text-[11px] font-bold text-amber-800 bg-amber-50 px-2.5 py-1 rounded-xl border border-amber-200 flex items-center gap-1.5">
+                          <span>⚠️</span>
+                          <span>Aucune session de service ouverte pour {restaurantServeur}. Ouvrez sa session dans « Serveurs & Personnel » pour le suivi.</span>
                         </div>
                       )}
                     </div>
