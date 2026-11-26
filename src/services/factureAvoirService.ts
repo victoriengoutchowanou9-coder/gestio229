@@ -220,7 +220,7 @@ export async function getClientEmballagesCreance(
 export async function getAvoirsByFacture(companyId: string, factureId: string): Promise<FactureAvoirRecord[]> {
   let list: FactureAvoirRecord[] = []
 
-  // Supabase
+  // 1. Supabase factures_avoirs si disponible
   try {
     const { data, error } = await supabase
       .from('factures_avoirs')
@@ -229,12 +229,72 @@ export async function getAvoirsByFacture(companyId: string, factureId: string): 
       .eq('facture_initiale_id', factureId)
       .neq('statut', 'annule')
 
-    if (!error && Array.isArray(data)) {
+    if (!error && Array.isArray(data) && data.length > 0) {
       list = data as FactureAvoirRecord[]
     }
-  } catch {
-    // table peut ne pas exister, fallback
-  }
+  } catch {}
+
+  // 2. Persistance directe dans sales_orders (notes.annulation_avoir ou statut ANNULÉE PAR AVOIR)
+  try {
+    const { data: saleFound } = await supabase
+      .from('sales_orders')
+      .select('id, order_number, notes, total_amount, subtotal_ht, tva_amount, customer_name, customer_id, created_at, status, sector_slug')
+      .eq('company_id', companyId)
+      .eq('id', factureId)
+      .maybeSingle()
+
+    if (saleFound) {
+      let pNotes: any = {}
+      try {
+        pNotes = typeof saleFound.notes === 'string' ? JSON.parse(saleFound.notes) : (saleFound.notes || {})
+      } catch (_) {}
+
+      const stUp = String(saleFound.status || '').toUpperCase()
+      if (pNotes.annulation_avoir || stUp.includes('ANNUL') || stUp === 'AVOIR') {
+        const ann = pNotes.annulation_avoir || {}
+        const avoirIdFromSale = ann.avoir_id || `av-${saleFound.id}`
+        if (!list.some(a => a.id === avoirIdFromSale)) {
+          const lines = Array.isArray(pNotes.lines)
+            ? pNotes.lines.map((l: any, idx: number) => ({
+                id: `line-${idx}`,
+                avoir_id: avoirIdFromSale,
+                article_id: l.product?.id || '',
+                article_nom: l.product?.name || l.nom || 'Article',
+                qte_retournee: Number(l.qty ?? l.quantite ?? 1),
+                prix_unitaire: Number(l.unitPrice ?? l.prix_unitaire ?? 0),
+                prix_achat: Number(l.product?.cost_price || 0),
+                total_ligne: Number(l.total ?? ((l.qty || 1) * (l.unitPrice || 0))),
+                etat_article: 'bon' as const
+              }))
+            : []
+
+          list.push({
+            id: avoirIdFromSale,
+            numero: ann.avoir_numero || `AV-${saleFound.order_number}`,
+            company_id: companyId,
+            sector_slug: saleFound.sector_slug || 'boutique',
+            facture_initiale_id: saleFound.id,
+            facture_initiale_numero: saleFound.order_number,
+            client_id: saleFound.customer_id,
+            client_nom: saleFound.customer_name,
+            client_telephone: ann.client_telephone || pNotes.customer_phone || '',
+            client_ifu: ann.client_ifu || pNotes.customer_ifu || '',
+            date_avoir: ann.date_annulation || saleFound.created_at,
+            motif: ann.motif || 'Annulation intégrale de facture par avoir',
+            montant_total_avoir: Number(saleFound.total_amount || 0),
+            montant_ht: Number(saleFound.subtotal_ht || saleFound.total_amount || 0),
+            montant_tva: Number(saleFound.tva_amount || 0),
+            mode_remboursement: 'credit_client',
+            remboursement_effectue: false,
+            statut: 'valide',
+            created_by_nom: ann.annule_par || 'Utilisateur',
+            created_at: ann.date_annulation || saleFound.created_at,
+            lignes: lines
+          })
+        }
+      }
+    }
+  } catch {}
 
   // Fusionner avec le cache local
   const local = getLocalAvoirs(companyId).filter(
@@ -648,13 +708,18 @@ export async function handleValidationAvoir(
   const nouveauTotalAvoirs = sommeAvoirsPrecedents + montantTotalAvoir
 
   try {
+    let curNotes: any = {}
+    try {
+      curNotes = typeof factureInitiale.notes === 'string' ? JSON.parse(factureInitiale.notes) : (factureInitiale.notes || {})
+    } catch (_) {}
+    curNotes.montant_total_net = nouveauMontantNet
+    curNotes.total_avoirs = nouveauTotalAvoirs
+
     await supabase
       .from('sales_orders')
       .update({
-        montant_total_net: nouveauMontantNet,
-        total_avoirs: nouveauTotalAvoirs,
-        // Si la facture est totalement avoirée, marquer son payment_status
-        payment_status: nouveauMontantNet === 0 ? 'avoir' : factureInitiale.payment_status
+        payment_status: nouveauMontantNet === 0 ? 'avoir' : factureInitiale.payment_status,
+        notes: JSON.stringify(curNotes)
       })
       .eq('id', facture_initiale_id)
   } catch (updFactErr) {
@@ -955,5 +1020,527 @@ export async function handleValidationAvoir(
     success: true,
     avoir: createdRecord,
     message: `Avoir ${numeroAvoir} validé avec succès (${montantTotalAvoir.toLocaleString()} FCFA).`
+  }
+}
+
+
+// =============================================================================
+// GESTIO 229 — ANNULATION INTÉGRALE DE FACTURE PAR AVOIR AVEC VÉRIFICATION STRICTE
+// =============================================================================
+
+export interface AvoirSaisieLigneInput {
+  designation: string
+  code?: string
+  quantite: number
+  prix_unitaire: number
+}
+
+export interface AnnulationIntegraleInput {
+  company_id: string
+  sector_slug: string
+  secteur_id?: string | null
+  reference_facture: string
+  client_nom: string
+  client_telephone?: string
+  client_ifu?: string
+  lignes: AvoirSaisieLigneInput[]
+  total_ht_saisi?: number
+  tva_saisie?: number
+  total_ttc_saisi: number
+  motif?: string
+  user_id?: string
+  user_nom?: string
+}
+
+export interface AnnulationIntegraleResult {
+  success: boolean
+  avoir?: FactureAvoirRecord & {
+    montant_ht?: number
+    montant_tva?: number
+    client_telephone?: string
+    client_ifu?: string
+  }
+  errors?: string[]
+  message: string
+}
+
+const inFlightAnnulations = new Set<string>()
+
+function normStr(val?: string | null): string {
+  return String(val || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, ' ')
+}
+
+function canonicalSector(slug?: string | null): string {
+  const s = normStr(slug).replace(/^sec-/, '')
+  if (['bar', 'bar-restaurant', 'bar_restaurant', 'bar-restaurant-maquis', 'maquis', 'fast-food', 'restaurant'].includes(s)) {
+    return 'restaurant'
+  }
+  if (['station', 'stationservice', 'station-service'].includes(s)) return 'station-service'
+  if (['brasserie', 'depot_boissons', 'depot-boissons', 'brasserie_depot_boissons'].includes(s)) return 'brasserie'
+  return s
+}
+
+/**
+ * Recherche l'ancienne facture par sa référence, compare strictement tous les champs saisis
+ * (client, articles, codes, quantités, prix unitaires, HT, TVA, TTC) et exécute l'annulation
+ * intégrale atomique + réintégration du stock.
+ */
+export async function verifierEtAnnulerFactureParAvoir(
+  input: AnnulationIntegraleInput
+): Promise<AnnulationIntegraleResult> {
+  const {
+    company_id,
+    sector_slug,
+    secteur_id,
+    reference_facture,
+    client_nom,
+    client_telephone,
+    client_ifu,
+    lignes,
+    total_ht_saisi,
+    tva_saisie,
+    total_ttc_saisi,
+    motif,
+    user_id,
+    user_nom
+  } = input
+
+  const refClean = String(reference_facture || '').trim()
+  if (!company_id) {
+    return { success: false, errors: ['Entreprise non identifiée.'], message: 'Entreprise non identifiée.' }
+  }
+  if (!refClean) {
+    return { success: false, errors: ['La référence de la facture initiale est obligatoire.'], message: 'Référence manquante.' }
+  }
+  if (!lignes || lignes.length === 0) {
+    return { success: false, errors: ['Veuillez renseigner au moins un produit de la facture initiale.'], message: 'Aucun produit saisi.' }
+  }
+
+  const lockKey = `${company_id}::${refClean.toUpperCase()}`
+  if (inFlightAnnulations.has(lockKey)) {
+    return { success: false, errors: ['Une validation est déjà en cours pour cette facture.'], message: 'Traitement déjà en cours.' }
+  }
+  inFlightAnnulations.add(lockKey)
+
+  try {
+    // 1. Rechercher l'ancienne facture dans Supabase par order_number (isolation company_id)
+    const { data: matchedOrders, error: findErr } = await supabase
+      .from('sales_orders')
+      .select('*, customer:customers(id, name, phone, ifu_number)')
+      .eq('company_id', company_id)
+      .ilike('order_number', refClean)
+      .limit(5)
+
+    if (findErr) {
+      return { success: false, errors: [`Erreur de recherche base de données : ${findErr.message}`], message: findErr.message }
+    }
+
+    const facture = (matchedOrders || []).find(
+      (o: any) => String(o.order_number || '').trim().toUpperCase() === refClean.toUpperCase()
+    )
+
+    if (!facture) {
+      return {
+        success: false,
+        errors: [`Référence introuvable : aucune facture « ${refClean} » n'existe pour cette entreprise.`],
+        message: `Facture « ${refClean} » introuvable.`
+      }
+    }
+
+    // 2. Vérifier isolation secteur
+    if (facture.sector_slug && sector_slug && canonicalSector(facture.sector_slug) !== canonicalSector(sector_slug)) {
+      return {
+        success: false,
+        errors: [`Isolation sectorielle : la facture « ${refClean} » appartient au secteur « ${facture.sector_slug} » et ne peut pas être annulée depuis « ${sector_slug} ».`],
+        message: 'Facture appartenant à un autre secteur.'
+      }
+    }
+
+    // 3. Vérifier si déjà annulée par avoir
+    const stUpper = String(facture.status || '').toUpperCase()
+    const psLower = String(facture.payment_status || '').toLowerCase()
+    if (
+      stUpper.includes('ANNUL') ||
+      stUpper === 'AVOIR' ||
+      stUpper === 'CANCELLED' ||
+      psLower === 'avoir'
+    ) {
+      return {
+        success: false,
+        errors: [`Facture déjà annulée : la facture « ${refClean} » a déjà fait l'objet d'une annulation intégrale (Statut : ${facture.status}).`],
+        message: 'Cette facture a déjà été annulée par avoir.'
+      }
+    }
+
+    const existingAvoirs = await getAvoirsByFacture(company_id, facture.id)
+    if (existingAvoirs.some(a => a.statut !== 'annule')) {
+      return {
+        success: false,
+        errors: [`Doublon interdit : un avoir validé (${existingAvoirs[0].numero}) est déjà rattaché à la facture « ${refClean} ».`],
+        message: 'Un avoir existe déjà pour cette facture.'
+      }
+    }
+
+    // 4. Extraire les données réelles de la facture (notes + sales_order_lines)
+    let parsedNotes: any = {}
+    if (facture.notes) {
+      try {
+        parsedNotes = typeof facture.notes === 'string' ? JSON.parse(facture.notes) : facture.notes
+      } catch (_) {}
+    }
+
+    const { data: dbLines } = await supabase
+      .from('sales_order_lines')
+      .select('*, product:products(id, code, name, cost_price, sector_meta, is_recipe)')
+      .eq('order_id', facture.id)
+
+    const notesLines: any[] = Array.isArray(parsedNotes?.lines) ? parsedNotes.lines : []
+    const realLines: Array<{
+      product_id: string
+      designation: string
+      code: string
+      quantite: number
+      prix_unitaire: number
+      prix_achat: number
+      total_ttc: number
+      is_recipe: boolean
+    }> = []
+
+    if (dbLines && dbLines.length > 0) {
+      dbLines.forEach((dl: any) => {
+        const matchNote = notesLines.find(
+          (nl: any) => (nl.product?.id && nl.product.id === dl.product_id) || normStr(nl.product?.name) === normStr(dl.product_name)
+        )
+        realLines.push({
+          product_id: dl.product_id || matchNote?.product?.id || '',
+          designation: dl.product_name || dl.product?.name || matchNote?.product?.name || '',
+          code: dl.product?.code || matchNote?.product?.code || '',
+          quantite: Number(dl.quantity) || 0,
+          prix_unitaire: Number(dl.unit_price) || 0,
+          prix_achat: Number(dl.unit_cost) || Number(dl.product?.cost_price) || 0,
+          total_ttc: Number(dl.total_ttc) || (Number(dl.quantity) * Number(dl.unit_price)),
+          is_recipe: Boolean(dl.product?.is_recipe || matchNote?.product?.is_recipe)
+        })
+      })
+    } else if (notesLines.length > 0) {
+      notesLines.forEach((nl: any) => {
+        const qty = Number(nl.qty ?? nl.quantite ?? 0)
+        const pu = Number(nl.unitPrice ?? nl.prix_unitaire ?? 0)
+        realLines.push({
+          product_id: nl.product?.id || '',
+          designation: nl.product?.name || nl.nom || '',
+          code: nl.product?.code || '',
+          quantite: qty,
+          prix_unitaire: pu,
+          prix_achat: Number(nl.product?.cost_price || 0),
+          total_ttc: qty * pu,
+          is_recipe: Boolean(nl.product?.is_recipe)
+        })
+      })
+    }
+
+    // 5. CONTRÔLES STRICTS DE CORRESPONDANCE (AUCUNE DIFFÉRENCE TOLÉRÉE)
+    const errors: string[] = []
+
+    // 5a. Client
+    const realClientName = facture.customer?.name || facture.customer_name || parsedNotes.customer_name || 'Client Comptoir'
+    const saisiClientNorm = normStr(client_nom)
+    const realClientNorm = normStr(realClientName)
+    const isRealComptoir = realClientNorm.includes('comptoir') || realClientNorm === 'client' || realClientNorm === ''
+    const isSaisiComptoir = saisiClientNorm.includes('comptoir')
+
+    if (!saisiClientNorm) {
+      errors.push('Client : le nom du client ou « Client comptoir » est obligatoire.')
+    } else if (saisiClientNorm !== realClientNorm && !(isRealComptoir && isSaisiComptoir)) {
+      errors.push(`Client non conforme : saisi « ${client_nom} », facture originale « ${realClientName} ».`)
+    }
+
+    const realPhone = String(facture.customer?.phone || parsedNotes.customer_phone || '').trim()
+    if (client_telephone && client_telephone.trim() !== '' && realPhone && normStr(client_telephone) !== normStr(realPhone)) {
+      errors.push(`Téléphone client non conforme : saisi « ${client_telephone} », facture originale « ${realPhone} ».`)
+    }
+
+    const realIfu = String(facture.customer?.ifu_number || parsedNotes.customer_ifu || '').trim()
+    if (client_ifu && client_ifu.trim() !== '' && realIfu && normStr(client_ifu) !== normStr(realIfu)) {
+      errors.push(`IFU client non conforme : saisi « ${client_ifu} », facture originale « ${realIfu} ».`)
+    }
+
+    // 5b. Nombre et correspondance exacte des articles
+    if (realLines.length === 0) {
+      errors.push('Impossible de vérifier les lignes de la facture originale (aucune ligne enregistrée).')
+    } else if (lignes.length !== realLines.length) {
+      errors.push(`Nombre de produits différent : ${lignes.length} produit(s) saisi(s) contre ${realLines.length} sur la facture originale.`)
+    }
+
+    const usedRealIndices = new Set<number>()
+    lignes.forEach((sLigne, idx) => {
+      const sNom = normStr(sLigne.designation)
+      const sCode = normStr(sLigne.code)
+      const sQty = Number(sLigne.quantite) || 0
+      const sPu = Number(sLigne.prix_unitaire) || 0
+
+      const matchIndex = realLines.findIndex((r, rIdx) => {
+        if (usedRealIndices.has(rIdx)) return false
+        return normStr(r.designation) === sNom || (sCode && normStr(r.code) === sCode)
+      })
+
+      if (matchIndex === -1) {
+        errors.push(`Ligne ${idx + 1} (« ${sLigne.designation} ») : produit absent de la facture originale.`)
+      } else {
+        usedRealIndices.add(matchIndex)
+        const real = realLines[matchIndex]
+        if (normStr(real.designation) !== sNom) {
+          errors.push(`Ligne ${idx + 1} : désignation saisie « ${sLigne.designation} » différente de « ${real.designation} ».`)
+        }
+        if (sCode && real.code && sCode !== normStr(real.code)) {
+          errors.push(`Ligne ${idx + 1} (« ${sLigne.designation} ») : code saisi « ${sLigne.code} » différent de « ${real.code} ».`)
+        }
+        if (Math.abs(sQty - real.quantite) > 0.001) {
+          errors.push(`Quantité « ${sLigne.designation} » non conforme : saisie ${sQty}, facturée ${real.quantite}.`)
+        }
+        if (Math.abs(sPu - real.prix_unitaire) > 0.5) {
+          errors.push(`Prix unitaire « ${sLigne.designation} » non conforme : saisi ${sPu.toLocaleString()} FCFA, facturé ${real.prix_unitaire.toLocaleString()} FCFA.`)
+        }
+      }
+    })
+
+    // 5c. Montants HT, TVA, TTC
+    const realTTC = Math.round(Number(facture.total_amount || 0))
+    const realHT = Math.round(Number(facture.subtotal_ht || realTTC))
+    const realTVA = Math.round(Number(facture.tva_amount || 0))
+    const saisiTTC = Math.round(Number(total_ttc_saisi || 0))
+
+    if (Math.abs(saisiTTC - realTTC) > 1) {
+      errors.push(`Montant Total TTC non conforme : saisi ${saisiTTC.toLocaleString()} FCFA, facture originale ${realTTC.toLocaleString()} FCFA.`)
+    }
+    if (total_ht_saisi !== undefined && Math.abs(Math.round(total_ht_saisi) - realHT) > 1) {
+      errors.push(`Montant HT non conforme : saisi ${Math.round(total_ht_saisi).toLocaleString()} FCFA, facture originale ${realHT.toLocaleString()} FCFA.`)
+    }
+    if (tva_saisie !== undefined && Math.abs(Math.round(tva_saisie) - realTVA) > 1) {
+      errors.push(`Montant TVA non conforme : saisi ${Math.round(tva_saisie).toLocaleString()} FCFA, facture originale ${realTVA.toLocaleString()} FCFA.`)
+    }
+
+    if (errors.length > 0) {
+      return {
+        success: false,
+        errors,
+        message: 'Les informations saisies ne correspondent pas exactement à la facture originale.'
+      }
+    }
+
+    // 6. EXÉCUTION ATOMIQUE DE L'ANNULATION INTÉGRALE
+    const nowIso = new Date().toISOString()
+    const numeroAvoir = await genererNumeroAvoirUnique(company_id)
+    const avoirId = crypto.randomUUID()
+
+    const avoirLignesRecord: AvoirLigneRecord[] = realLines.map(r => ({
+      id: crypto.randomUUID(),
+      avoir_id: avoirId,
+      article_id: r.product_id,
+      article_nom: r.designation,
+      qte_retournee: r.quantite,
+      prix_unitaire: r.prix_unitaire,
+      prix_achat: r.prix_achat,
+      total_ligne: r.total_ttc,
+      etat_article: 'bon'
+    }))
+
+    const createdRecord: FactureAvoirRecord & {
+      montant_ht?: number
+      montant_tva?: number
+      client_telephone?: string
+      client_ifu?: string
+    } = {
+      id: avoirId,
+      numero: numeroAvoir,
+      company_id,
+      secteur_id: secteur_id || null,
+      sector_slug: facture.sector_slug || sector_slug,
+      facture_initiale_id: facture.id,
+      facture_initiale_numero: facture.order_number,
+      client_id: facture.customer_id || null,
+      client_nom: realClientName,
+      client_telephone: realPhone || client_telephone || '',
+      client_ifu: realIfu || client_ifu || '',
+      date_avoir: nowIso,
+      motif: motif || 'Annulation intégrale de facture par avoir',
+      montant_ht: realHT,
+      montant_tva: realTVA,
+      montant_total_avoir: realTTC,
+      mode_remboursement: 'credit_client',
+      remboursement_effectue: false,
+      statut: 'valide',
+      created_by: user_id || null,
+      created_by_nom: user_nom || 'Utilisateur',
+      lignes: avoirLignesRecord,
+      created_at: nowIso
+    }
+
+    // 6a. Insérer l'avoir dans factures_avoirs
+    const { error: avInsertErr } = await supabase.from('factures_avoirs').insert({
+      id: createdRecord.id,
+      numero: createdRecord.numero,
+      company_id: createdRecord.company_id,
+      secteur_id: createdRecord.secteur_id,
+      sector_slug: createdRecord.sector_slug,
+      facture_initiale_id: createdRecord.facture_initiale_id,
+      client_id: createdRecord.client_id,
+      client_nom: createdRecord.client_nom,
+      date_avoir: createdRecord.date_avoir,
+      motif: createdRecord.motif,
+      montant_total_avoir: createdRecord.montant_total_avoir,
+      mode_remboursement: createdRecord.mode_remboursement,
+      remboursement_effectue: false,
+      statut: 'valide',
+      created_by: createdRecord.created_by,
+      created_by_nom: createdRecord.created_by_nom,
+      notes: {
+        type_annulation: 'INTEGRALE',
+        facture_initiale_numero: facture.order_number,
+        montant_ht: realHT,
+        montant_tva: realTVA,
+        client_telephone: createdRecord.client_telephone,
+        client_ifu: createdRecord.client_ifu,
+        lignes: createdRecord.lignes
+      }
+    })
+
+    if (avInsertErr) {
+      throw new Error(`Impossible d'enregistrer l'avoir en base : ${avInsertErr.message}`)
+    }
+
+    // 6b. Insérer les lignes dans avoir_lignes
+    if (avoirLignesRecord.length > 0) {
+      await supabase.from('avoir_lignes').insert(
+        avoirLignesRecord.map(l => ({
+          avoir_id: createdRecord.id,
+          article_id: l.article_id || null,
+          article_nom: l.article_nom,
+          qte_retournee: l.qte_retournee,
+          prix_unitaire: l.prix_unitaire,
+          prix_achat: l.prix_achat,
+          total_ligne: l.total_ligne,
+          etat_article: 'bon'
+        }))
+      )
+    }
+
+    // 6c. Mettre à jour l'ancienne facture -> ANNULÉE PAR AVOIR (sans la supprimer)
+    const updatedNotes = {
+      ...parsedNotes,
+      montant_total_net: 0,
+      total_avoirs: realTTC,
+      annulation_avoir: {
+        avoir_id: createdRecord.id,
+        avoir_numero: createdRecord.numero,
+        date_annulation: nowIso,
+        annule_par: user_nom || 'Utilisateur',
+        motif: createdRecord.motif
+      }
+    }
+
+    const { error: updErr } = await supabase
+      .from('sales_orders')
+      .update({
+        status: 'ANNULÉE PAR AVOIR',
+        payment_status: 'avoir',
+        motif_annulation: `Annulée par avoir ${createdRecord.numero}`,
+        notes: JSON.stringify(updatedNotes)
+      })
+      .eq('id', facture.id)
+      .eq('company_id', company_id)
+
+    if (updErr) {
+      // Rollback avoir si la mise à jour de la facture échoue
+      await supabase.from('avoir_lignes').delete().eq('avoir_id', createdRecord.id)
+      await supabase.from('factures_avoirs').delete().eq('id', createdRecord.id)
+      throw new Error(`Échec mise à jour statut facture (rollback effectué) : ${updErr.message}`)
+    }
+
+    // 6d. Réintégrer intégralement les produits physiques dans le stock du secteur d'origine
+    for (const r of realLines) {
+      if (!r.product_id || r.is_recipe || r.quantite <= 0) continue
+      try {
+        const { data: prod } = await supabase
+          .from('products')
+          .select('id, sector_meta, stock_vente, cost_price')
+          .eq('id', r.product_id)
+          .eq('company_id', company_id)
+          .maybeSingle()
+
+        if (prod) {
+          const meta = prod.sector_meta || {}
+          const curStock = Number(meta.stock_vente ?? prod.stock_vente ?? 0)
+          const newStock = Math.round((curStock + r.quantite) * 1000) / 1000
+          const updatedMeta = { ...meta, stock_vente: newStock }
+
+          await supabase
+            .from('products')
+            .update({ sector_meta: updatedMeta, updated_at: nowIso })
+            .eq('id', prod.id)
+            .eq('company_id', company_id)
+
+          await supabase.from('stock_movements').insert({
+            company_id,
+            sector_slug: facture.sector_slug || sector_slug,
+            product_id: prod.id,
+            movement_type: 'AVOIR_RETOUR',
+            reference_type: 'facture_avoir',
+            reference_id: createdRecord.id,
+            reference_number: createdRecord.numero,
+            quantity: r.quantite,
+            previous_stock: curStock,
+            new_stock: newStock,
+            unit_cost: r.prix_achat,
+            total_cost: r.quantite * r.prix_achat,
+            notes: `Réintégration intégrale suite à avoir ${createdRecord.numero} (Facture ${facture.order_number})`,
+            created_at: nowIso
+          })
+        }
+      } catch (stkErr) {
+        console.warn('[factureAvoirService] Notice réintégration stock:', stkErr)
+      }
+    }
+
+    // 6e. Réduire la créance client si vente à crédit
+    if (facture.customer_id && Number(facture.credit_amount || 0) > 0) {
+      try {
+        const { data: cust } = await supabase
+          .from('customers')
+          .select('current_debt, solde_du')
+          .eq('id', facture.customer_id)
+          .maybeSingle()
+
+        if (cust) {
+          const prevDebt = Number(cust.current_debt ?? cust.solde_du ?? 0)
+          const newDebt = Math.max(0, prevDebt - Number(facture.credit_amount || 0))
+          await supabase
+            .from('customers')
+            .update({ current_debt: newDebt, solde_du: newDebt, updated_at: nowIso })
+            .eq('id', facture.customer_id)
+        }
+      } catch (_) {}
+    }
+
+    saveLocalAvoir(company_id, createdRecord)
+
+    return {
+      success: true,
+      avoir: createdRecord,
+      message: `Avoir ${createdRecord.numero} validé. Facture ${facture.order_number} annulée intégralement et stock réintégré.`
+    }
+  } catch (err: any) {
+    return {
+      success: false,
+      errors: [err?.message || 'Erreur technique lors de l\'annulation par avoir.'],
+      message: err?.message || 'Erreur lors de l\'annulation.'
+    }
+  } finally {
+    inFlightAnnulations.delete(lockKey)
   }
 }

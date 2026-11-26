@@ -322,8 +322,11 @@ export function computeConsolidatedFinancials(params: {
   let avoirsCOGS = 0;
 
   for (const av of avoirs) {
-    const totTTC = safeNum(av.montant_total);
-    const totHT = safeNum(av.montant_ht) > 0 ? safeNum(av.montant_ht) : Math.round((totTTC / 1.18) * 100) / 100;
+    if ((av as any).statut === 'annule') continue;
+    const totTTC = safeNum(av.montant_total ?? (av as any).montant_total_avoir);
+    const totHT = safeNum(av.montant_ht) > 0
+      ? safeNum(av.montant_ht)
+      : (safeNum((av as any).montant_tva) > 0 ? Math.max(0, totTTC - safeNum((av as any).montant_tva)) : totTTC);
     avoirsTTC += totTTC;
     avoirsHT += totHT;
 
@@ -331,7 +334,7 @@ export function computeConsolidatedFinancials(params: {
     if (Array.isArray(av.lignes)) {
       for (const al of av.lignes) {
         const qte = safeNum(al.qte_retournee ?? al.quantite, 0);
-        const cout = safeNum(al.prix_achat_unitaire ?? al.unit_cost, 0);
+        const cout = safeNum(al.prix_achat_unitaire ?? al.unit_cost ?? al.prix_achat, 0);
         avoirsCOGS += qte * cout;
       }
     }

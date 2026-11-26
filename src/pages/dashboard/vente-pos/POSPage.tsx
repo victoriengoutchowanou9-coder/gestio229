@@ -184,6 +184,7 @@ interface SaleRecord {
   payments: PaymentLine[]
   is_deferred: boolean
   status: 'COMPLET' | 'A_LIVRER' | 'AVOIR'
+  annulation_avoir?: { avoir_id?: string; avoir_numero?: string; date_annulation?: string; annule_par?: string; motif?: string } | null
   lines: CartItem[]
   emballages_consignes?: { code: string; designation: string; sortie: number; retour: number; net_du: number }[]
   table_numero?: string
@@ -518,6 +519,7 @@ export const POSPage: React.FC = () => {
   const [showInvoiceModal, setShowInvoiceModal] = useState(false)
   const [showAvoirModal, setShowAvoirModal] = useState(false)
   const [selectedSaleForAvoir, setSelectedSaleForAvoir] = useState<SaleRecord | null>(null)
+  const [selectedAvoirForConsult, setSelectedAvoirForConsult] = useState<any | null>(null)
   const [printFormat, setPrintFormat] = useState<'ticket80' | 'ticket80_double' | 'factureA4' | 'brasserie' | 'bon_cuisine'>('factureA4')
   const [currentSale, setCurrentSale] = useState<SaleRecord | null>(null)
 
@@ -1059,8 +1061,9 @@ export const POSPage: React.FC = () => {
             ]
           }
 
+          const stUpper = String(s.status || '').toUpperCase()
           const isDeferredSale = s.order_type === 'pos_deferred' || s.status === 'pending_delivery' || metaFromUid.st === 'A_LIVRER'
-          const isAvoir = s.payment_status === 'avoir' || s.status === 'cancelled' || metaFromUid.st === 'AVOIR'
+          const isAvoir = s.payment_status === 'avoir' || stUpper.includes('ANNUL') || stUpper === 'AVOIR' || stUpper === 'CANCELLED' || metaFromUid.st === 'AVOIR'
 
           const ancienneDette = Number(s.ancienne_dette_avant_facture ?? parsedNotes.ancienne_dette_avant_facture ?? 0)
           const creditActuel = Number(s.montant_credit_actuel ?? parsedNotes.montant_credit_actuel ?? s.credit_amount ?? 0)
@@ -1086,6 +1089,7 @@ export const POSPage: React.FC = () => {
             payments: paymentsList,
             is_deferred: isDeferredSale,
             status: isAvoir ? 'AVOIR' : isDeferredSale ? 'A_LIVRER' : 'COMPLET',
+            annulation_avoir: parsedNotes.annulation_avoir || null,
             lines,
             emballages_consignes: Array.isArray(parsedNotes.emballages_consignes) ? parsedNotes.emballages_consignes : undefined,
           }
@@ -2802,11 +2806,59 @@ export const POSPage: React.FC = () => {
 
   const handleOpenAvoirModal = (sale?: SaleRecord) => {
     if (sale && sale.status === "AVOIR") {
-      toast.error("Opération impossible", "Cette facture fait déjà l'objet d'un avoir.")
+      toast.error("Opération impossible", "Cette facture a déjà été annulée par un avoir.")
       return
     }
+    setSelectedAvoirForConsult(null)
     setSelectedSaleForAvoir(sale || null)
     setShowAvoirModal(true)
+  }
+
+  const handleConsultAvoir = async (sale: SaleRecord) => {
+    try {
+      const { getAvoirsByFacture } = await import('../../../services/factureAvoirService')
+      const compId = company?.id ?? companyId ?? ''
+      const list = await getAvoirsByFacture(compId, sale.id)
+      if (list && list.length > 0) {
+        setSelectedAvoirForConsult(list[0])
+      } else {
+        setSelectedAvoirForConsult({
+          id: sale.annulation_avoir?.avoir_id || sale.id,
+          numero: sale.annulation_avoir?.avoir_numero || `AV-${sale.order_number}`,
+          company_id: compId,
+          sector_slug: currentSectorSlug,
+          facture_initiale_id: sale.id,
+          facture_initiale_numero: sale.order_number,
+          client_nom: sale.customer_name,
+          client_ifu: sale.customer_ifu,
+          date_avoir: sale.annulation_avoir?.date_annulation || sale.date,
+          motif: sale.annulation_avoir?.motif || 'Annulation intégrale de facture par avoir',
+          montant_ht: sale.total_ht,
+          montant_tva: sale.total_tva,
+          montant_total_avoir: sale.total_amount,
+          mode_remboursement: 'credit_client',
+          remboursement_effectue: false,
+          statut: 'valide',
+          created_by_nom: sale.annulation_avoir?.annule_par || 'Utilisateur',
+          created_at: sale.annulation_avoir?.date_annulation || sale.date,
+          lignes: (sale.lines || []).map((l, idx) => ({
+            id: `line-${idx}`,
+            avoir_id: sale.id,
+            article_id: l.product.id,
+            article_nom: l.product.name,
+            qte_retournee: l.qty,
+            prix_unitaire: l.unitPrice,
+            prix_achat: Number(l.product.cost_price || 0),
+            total_ligne: l.qty * l.unitPrice,
+            etat_article: 'bon'
+          }))
+        })
+      }
+      setSelectedSaleForAvoir(null)
+      setShowAvoirModal(true)
+    } catch (_) {
+      toast.error('Erreur', 'Impossible de charger le document d’avoir associé.')
+    }
   }
 
   const handleCreateAvoir = (sale: SaleRecord) => {
@@ -4249,8 +4301,13 @@ export const POSPage: React.FC = () => {
                           s.status === 'A_LIVRER' ? 'bg-amber-100 text-amber-800' :
                           'bg-red-100 text-red-800'
                         )}>
-                          {s.status === 'COMPLET' ? 'Payé' : s.status === 'A_LIVRER' ? 'Différé' : 'Avoir'}
+                          {s.status === 'COMPLET' ? 'Payé' : s.status === 'A_LIVRER' ? 'Différé' : 'ANNULÉE PAR AVOIR'}
                         </span>
+                        {s.status === 'AVOIR' && s.annulation_avoir?.avoir_numero && (
+                          <span className="block text-[9px] text-rose-700 font-mono mt-0.5" title={`Annulée le ${s.annulation_avoir.date_annulation ? new Date(s.annulation_avoir.date_annulation).toLocaleString('fr-FR') : '-'} par ${s.annulation_avoir.annule_par || '-'}`}>
+                            {s.annulation_avoir.avoir_numero}
+                          </span>
+                        )}
                       </td>
                       <td className="p-3 text-center">
                         <div className="flex items-center justify-center gap-1.5">
@@ -4268,13 +4325,21 @@ export const POSPage: React.FC = () => {
                           >
                             <Printer className="w-3.5 h-3.5" />
                           </button>
-                          {s.status !== 'AVOIR' && (
+                          {s.status !== 'AVOIR' ? (
                             <button
                               onClick={() => handleCreateAvoir(s)}
                               className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs"
                               title="Créer Facture d'Avoir"
                             >
                               <RotateCcw className="w-3.5 h-3.5" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => handleConsultAvoir(s)}
+                              className="p-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-lg text-xs font-bold flex items-center gap-1"
+                              title="Consulter l'avoir associé"
+                            >
+                              <FileText className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>
@@ -5158,12 +5223,14 @@ export const POSPage: React.FC = () => {
         onClose={() => {
           setShowAvoirModal(false)
           setSelectedSaleForAvoir(null)
+          setSelectedAvoirForConsult(null)
         }}
         onSuccess={(nouvelAvoir) => {
           toast.success("Facture d'Avoir générée", `Avoir ${nouvelAvoir.numero} enregistré avec succès.`)
           loadData()
         }}
         initialFactureId={selectedSaleForAvoir?.id || null}
+        initialAvoirRecord={selectedAvoirForConsult}
         currentSectorSlug={currentSectorSlug}
         caisseStatus={{
           isTodayOpen: activeCaisse ? !activeCaisse.is_previous_day : false,
