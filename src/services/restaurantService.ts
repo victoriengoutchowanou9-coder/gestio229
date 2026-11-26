@@ -818,24 +818,32 @@ export async function enregistrerVersementServeur(params: {
       })
       .eq('id', session_id)
 
-    // Intégrer également à la caisse principale de l'établissement
+    // Intégrer également à la caisse principale de l'établissement Bar / Restaurant
     try {
+      const isCash = mode_reglement === 'ESPECES' || mode_reglement === 'espece'
+      const isMomo = ['MTN_MOMO', 'MOOV_MONEY', 'MOMO', 'momo_mtn', 'momo_moov'].includes(mode_reglement)
+
       await enregistrerMouvementCaisse({
         company_id,
         sector_slug: 'restaurant',
         caisse_id: undefined,
-        type: 'entree',
+        type: 'ENCAISSEMENT VERSEMENT SERVEUSE',
         sens: 'entree',
-        montant_especes: mode_reglement === 'ESPECES' ? montant : 0,
-        montant_momo: ['MTN_MOMO', 'MOOV_MONEY'].includes(mode_reglement) ? montant : 0,
+        montant_especes: isCash ? montant : 0,
+        montant_momo: isMomo ? montant : 0,
         source_module: 'restaurant_serveurs',
         source_id: ref,
-        motif: `Versement session serveuse ${serveur_nom} (${ref})`,
+        motif: `ENCAISSEMENT VERSEMENT SERVEUSE - ${serveur_nom} (${ref})`,
         user_name: recu_par
       })
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('gestio:caisse_mouvement_created', { detail: { sector: 'restaurant', ref, montant, mode: mode_reglement } }))
+        window.dispatchEvent(new CustomEvent('gestio:versement_serveur_created', { detail: { sector: 'restaurant', ref, montant, mode: mode_reglement } }))
+      }
     } catch (_) {}
 
-    return { success: true, soldeApres, reference: ref }
+    return { success: true, soldeAvant, soldeApres, reference: ref }
   } catch (err: any) {
     console.error('[RestaurantService] Erreur versement:', err.message)
     return { success: false, soldeApres: 0, reference: '' }
