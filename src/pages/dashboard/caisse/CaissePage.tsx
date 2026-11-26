@@ -772,6 +772,9 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             else if (m.type === 'ajustement') movType = 'AJUSTEMENT'
             else if (m.type === 'transfert' || m.type === 'retrait') movType = 'TRANSFERT'
 
+            const espVal = Number(m.montant_especes) || (isCash ? Number(m.montant) || 0 : 0)
+            const momoVal = Number(m.montant_momo) || (isMomo ? Number(m.montant) || 0 : 0)
+
             return {
               id: m.id,
               created_at: m.created_at,
@@ -779,6 +782,9 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
               type: movType,
               payment_channel: channel,
               amount: Number(m.montant) || 0,
+              montant_especes: espVal,
+              montant_momo: momoVal,
+              sens: m.sens || 'entree',
               motif: m.motif || `Mouvement ${m.type}`,
               reference: m.source_id || m.reference_id || `MVT-${m.id.slice(0, 6)}`,
               status: 'VALIDE' as const
@@ -1198,9 +1204,35 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
     ? caisseJourData.remboursements_especes_du_jour
     : (Number(remboursementsEspeces) || 0)
 
+  // SYNCHRONISATION ABSOLUE AVEC L'HISTORIQUE RÉEL DES MOUVEMENTS (RÈGLE 4)
+  // Prise en compte immédiate des encaissements, versements serveuses et entrées de caisse validés
+  const todayBeninStr = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date())
+
+  const mvtEntreesEspeces = movementsHistory
+    .filter((m: any) => {
+      if (m.type === 'CLOTURE' || m.type === 'AJUSTEMENT' || m.type === 'RETRAIT' || m.sens === 'sortie') return false
+      const mDate = m.created_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date(m.created_at)) : todayBeninStr
+      return mDate === todayBeninStr
+    })
+    .reduce((sum: number, m: any) => {
+      const esp = Number(m.montant_especes) || (['Espèces', 'especes', 'cash'].includes(m.payment_channel) ? Number(m.amount) || 0 : 0)
+      return sum + esp
+    }, 0)
+
+  const mvtEntreesMomo = movementsHistory
+    .filter((m: any) => {
+      if (m.type === 'CLOTURE' || m.type === 'AJUSTEMENT' || m.type === 'RETRAIT' || m.sens === 'sortie') return false
+      const mDate = m.created_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date(m.created_at)) : todayBeninStr
+      return mDate === todayBeninStr
+    })
+    .reduce((sum: number, m: any) => {
+      const mo = Number(m.montant_momo) || (['MoMo', 'momo', 'wave', 'mtn', 'moov'].includes(m.payment_channel) ? Number(m.amount) || 0 : 0)
+      return sum + mo
+    }, 0)
+
   const especesDuJour = caisseStatus === 'FERMEE'
     ? 0
-    : (totalVentesEsp + totalRembEsp)
+    : Math.max(totalVentesEsp + totalRembEsp, mvtEntreesEspeces)
 
   const totalVentesMoMo = (caisseJourData.ventes_momo_du_jour > 0)
     ? caisseJourData.ventes_momo_du_jour
@@ -1212,7 +1244,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   const momoDuJour = caisseStatus === 'FERMEE'
     ? 0
-    : (totalVentesMoMo + totalRembMoMo)
+    : Math.max(totalVentesMoMo + totalRembMoMo, mvtEntreesMomo)
 
   const nbVentesDuJour = caisseJourData.nb_ventes > 0
     ? caisseJourData.nb_ventes

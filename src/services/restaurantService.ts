@@ -771,6 +771,21 @@ export async function enregistrerVersementServeur(params: {
 
     if (sErr || !sess) throw new Error('Session introuvable.')
 
+    // IDEMPOTENCE : Vérifier si un versement identique a été validé dans les 5 dernières secondes pour cette session
+    const fiveSecondsAgo = new Date(Date.now() - 5000).toISOString()
+    const { data: recentDup } = await supabase
+      .from('restaurant_versements_serveurs')
+      .select('*')
+      .eq('session_id', session_id)
+      .eq('montant', montant)
+      .gte('date_versement', fiveSecondsAgo)
+      .limit(1)
+
+    if (recentDup && recentDup.length > 0) {
+      console.warn('[RestaurantService] Doublon versement prévenu (idempotence):', recentDup[0].reference)
+      return { success: true, soldeApres: Number(recentDup[0].solde_apres) || 0, reference: recentDup[0].reference }
+    }
+
     const soldeAvant = Number(sess.solde_restant_a_remettre) || 0
     const soldeApres = Math.round((soldeAvant - montant) * 100) / 100
     const totalVersements = (Number(sess.total_versements_recus) || 0) + montant
@@ -868,6 +883,58 @@ export async function cloturerSessionServeuse(params: {
 }
 
 /**
+ * RÈGLE D'OR GESTIO 229 : RATTACHEMENT STRICT ET ÉTANCHE BAR vs RESTAURANT/MAQUIS
+ * Chaque produit doit être rattaché à une seule section selon sa configuration.
+ * - Les boissons et produits du Bar doivent apparaître UNIQUEMENT dans la section Bar.
+ * - Les plats, repas et préparations culinaires doivent apparaître UNIQUEMENT dans la section Restaurant/Maquis.
+ * - Les ventes doivent être classées selon la section réelle du produit, et non simplement selon son nom.
+ */
+export function resolveProductCircuit(item: any): 'BAR' | 'RESTAURANT' {
+  if (!item) return 'BAR'
+
+  // 1. Recette ou fiche technique cuisine : Toujours RESTAURANT
+  if (item.is_recipe || item.sector_meta?.is_recipe || item.recipe_id) return 'RESTAURANT'
+
+  // 2. Circuit explicitement configuré dans sector_meta ou propriété
+  const explicitCircuit = String(item.sector_meta?.restaurant_circuit || item.restaurant_circuit || item.circuit || '').toUpperCase()
+  if (explicitCircuit === 'CUISINE' || explicitCircuit === 'RESTAURANT') return 'RESTAURANT'
+  if (explicitCircuit === 'BAR') return 'BAR'
+
+  const cat = String(item.category?.name || item.category || item.category_name || '').toLowerCase()
+  const nom = String(item.name || item.nom || item.designation || item.product_name || item.product?.name || '').toLowerCase()
+
+  // 3. Mots-clés indiscutables de plats, repas, cuisine & préparations culinaires
+  const isCuisineKeyword =
+    nom.includes('pizza') || nom.includes('burger') || nom.includes('chawarma') || nom.includes('shawarma') ||
+    nom.includes('sandwich') || nom.includes('frite') || nom.includes('riz') || nom.includes('poulet') ||
+    nom.includes('poisson brais') || nom.includes('viande') || nom.includes('sauce') || nom.includes('attieke') ||
+    nom.includes('attiéké') || nom.includes('igname') || nom.includes('pate') || nom.includes('pâte') ||
+    nom.includes('salade') || nom.includes('omelette') || nom.includes('plat') || nom.includes('repas') ||
+    nom.includes('soupe') || nom.includes('brochette') || nom.includes('alloco') || nom.includes('aloco') ||
+    nom.includes('spaghetti') || nom.includes('macaroni') || nom.includes('steak') || nom.includes('porc') ||
+    nom.includes('dindon') || nom.includes('poisson frit') || nom.includes('grillade') || nom.includes('cuisine') ||
+    cat.includes('plat') || cat.includes('repas') || cat.includes('cuisine') || cat.includes('restaurant') ||
+    cat.includes('recette') || cat.includes('maquis')
+
+  if (isCuisineKeyword) return 'RESTAURANT'
+
+  // 4. Mots-clés indiscutables de boissons & bar
+  const isBarKeyword =
+    nom.includes('biere') || nom.includes('bière') || nom.includes('bouteille') || nom.includes('casier') ||
+    nom.includes('vin') || nom.includes('whisky') || nom.includes('rhum') || nom.includes('vodka') ||
+    nom.includes('liqueur') || nom.includes('cocktail') || nom.includes('champagne') || nom.includes('soda') ||
+    nom.includes('jus') || nom.includes('eau') || nom.includes('boisson') || nom.includes('coca') ||
+    nom.includes('fanta') || nom.includes('sprite') || nom.includes('youki') || nom.includes('flag') ||
+    nom.includes('beaufort') || nom.includes('castel') || nom.includes('guinness') || nom.includes('doppel') ||
+    nom.includes('heineken') || nom.includes('desperados') || nom.includes('12t') || nom.includes('20t') || nom.includes('24t') ||
+    cat.includes('boisson') || cat.includes('biere') || cat.includes('bière') || cat.includes('vin') || cat.includes('bar')
+
+  if (isBarKeyword) return 'BAR'
+
+  return 'BAR'
+}
+
+/**
  * 4.b Accumulation automatique des produits dans la session active d'une serveuse
  * - Maintient deux sections étanches : BAR et RESTAURANT/MAQUIS
  * - Cumule les quantités pour un même produit / plat
@@ -923,8 +990,8 @@ export async function accumulerVenteDansSessionServeuse(params: {
           suivi = {
             ...suivi,
             ...parsed,
-            bar_items: Array.isArray(parsed.bar_items) ? parsed.bar_items : [],
-            restaurant_items: Array.isArray(parsed.restaurant_items) ? parsed.restaurant_items : [],
+            bar_items: Array.isArray(parsed.bar_items) ? parsed.bar_items.filter((b: any) => resolveProductCircuit(b) === 'BAR') : [],
+            restaurant_items: Array.isArray(parsed.restaurant_items) ? parsed.restaurant_items.filter((r: any) => resolveProductCircuit(r) === 'RESTAURANT') : [],
             historique_ventes: Array.isArray(parsed.historique_ventes) ? parsed.historique_ventes : []
           }
         }
@@ -939,7 +1006,7 @@ export async function accumulerVenteDansSessionServeuse(params: {
       const lineTot = Number(it.total ?? qte * pu)
       if (qte <= 0) continue
 
-      const itemCircuit: 'BAR' | 'RESTAURANT' = it.circuit || circuit
+      const itemCircuit: 'BAR' | 'RESTAURANT' = resolveProductCircuit(it)
       const cleanNom = (it.nom || 'Article').trim()
       const prodId = it.produit_id || cleanNom
 
@@ -951,6 +1018,8 @@ export async function accumulerVenteDansSessionServeuse(params: {
       })
 
       if (itemCircuit === 'BAR') {
+        // Nettoyer du tableau restaurant si présent par erreur
+        suivi.restaurant_items = suivi.restaurant_items.filter(r => r.nom.toLowerCase() !== cleanNom.toLowerCase())
         const existingIdx = suivi.bar_items.findIndex(
           b => (b.produit_id && it.produit_id && b.produit_id === it.produit_id) || b.nom.toLowerCase() === cleanNom.toLowerCase()
         )
@@ -961,7 +1030,8 @@ export async function accumulerVenteDansSessionServeuse(params: {
             ...prev,
             quantite: newQty,
             prix_unitaire: pu > 0 ? pu : prev.prix_unitaire,
-            total: Math.round(newQty * (pu > 0 ? pu : prev.prix_unitaire))
+            total: Math.round(newQty * (pu > 0 ? pu : prev.prix_unitaire)),
+            circuit: 'BAR'
           }
         } else {
           suivi.bar_items.push({
@@ -974,6 +1044,8 @@ export async function accumulerVenteDansSessionServeuse(params: {
           })
         }
       } else {
+        // Nettoyer du tableau bar si présent par erreur
+        suivi.bar_items = suivi.bar_items.filter(b => b.nom.toLowerCase() !== cleanNom.toLowerCase())
         const existingIdx = suivi.restaurant_items.findIndex(
           r => (r.produit_id && it.produit_id && r.produit_id === it.produit_id) || r.nom.toLowerCase() === cleanNom.toLowerCase()
         )
@@ -984,7 +1056,8 @@ export async function accumulerVenteDansSessionServeuse(params: {
             ...prev,
             quantite: newQty,
             prix_unitaire: pu > 0 ? pu : prev.prix_unitaire,
-            total: Math.round(newQty * (pu > 0 ? pu : prev.prix_unitaire))
+            total: Math.round(newQty * (pu > 0 ? pu : prev.prix_unitaire)),
+            circuit: 'RESTAURANT'
           }
         } else {
           suivi.restaurant_items.push({
@@ -998,6 +1071,10 @@ export async function accumulerVenteDansSessionServeuse(params: {
         }
       }
     }
+
+    // Filtrage strict final pour garantir l'étanchéité absolue
+    suivi.bar_items = suivi.bar_items.filter(b => resolveProductCircuit(b) === 'BAR')
+    suivi.restaurant_items = suivi.restaurant_items.filter(r => resolveProductCircuit(r) === 'RESTAURANT')
 
     suivi.total_bar = Math.round(suivi.bar_items.reduce((s, b) => s + b.total, 0))
     suivi.total_restaurant = Math.round(suivi.restaurant_items.reduce((s, r) => s + r.total, 0))
@@ -1020,6 +1097,11 @@ export async function accumulerVenteDansSessionServeuse(params: {
       total_bar_ttc: suivi.total_bar,
       total_restaurant_ttc: suivi.total_restaurant,
       solde_restant_a_remettre: suivi.solde_restant,
+      details_suivi: {
+        bar_items: suivi.bar_items,
+        restaurant_items: suivi.restaurant_items,
+        historique_ventes: suivi.historique_ventes
+      },
       notes: JSON.stringify(suivi),
       updated_at: new Date().toISOString()
     }
@@ -1066,24 +1148,19 @@ export async function obtenirSuiviSessionServeuse(
 
     if (sess) {
       detail.total_verse = Number(sess.total_versements_recus) || 0
-      detail.total_bar = Number(sess.total_bar_ttc) || 0
-      detail.total_restaurant = Number(sess.total_restaurant_ttc) || 0
-      detail.total_general = Number(sess.total_ventes_declarees_ttc) || (detail.total_bar + detail.total_restaurant)
-      detail.solde_restant = Number(sess.solde_restant_a_remettre) || Math.max(0, detail.total_general - detail.total_verse)
-      detail.ecart = Number(sess.ecart_financier) || detail.solde_restant
 
-      if (sess.notes) {
-        try {
-          const parsed = typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes
-          if (parsed) {
-            if (Array.isArray(parsed.bar_items)) detail.bar_items = parsed.bar_items
-            if (Array.isArray(parsed.restaurant_items)) detail.restaurant_items = parsed.restaurant_items
-            if (Array.isArray(parsed.historique_ventes)) detail.historique_ventes = parsed.historique_ventes
-            if (parsed.total_bar) detail.total_bar = Number(parsed.total_bar)
-            if (parsed.total_restaurant) detail.total_restaurant = Number(parsed.total_restaurant)
-            if (parsed.total_general) detail.total_general = Number(parsed.total_general)
-          }
-        } catch (_) {}
+      // Priorité 1: details_suivi structuré (M089) ou notes JSON
+      const jsonSource = sess.details_suivi || (sess.notes ? (typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes) : null)
+      if (jsonSource) {
+        if (Array.isArray(jsonSource.bar_items)) {
+          detail.bar_items = jsonSource.bar_items.filter((b: any) => resolveProductCircuit(b) === 'BAR')
+        }
+        if (Array.isArray(jsonSource.restaurant_items)) {
+          detail.restaurant_items = jsonSource.restaurant_items.filter((r: any) => resolveProductCircuit(r) === 'RESTAURANT')
+        }
+        if (Array.isArray(jsonSource.historique_ventes)) {
+          detail.historique_ventes = jsonSource.historique_ventes
+        }
       }
     }
 
@@ -1112,13 +1189,21 @@ export async function obtenirSuiviSessionServeuse(
         const restoMap = new Map<string, LigneAccumuleeSession>()
         const histo: HistoriqueVenteSession[] = []
 
-        detail.bar_items.forEach(b => barMap.set(b.nom.toLowerCase(), { ...b }))
-        detail.restaurant_items.forEach(r => restoMap.set(r.nom.toLowerCase(), { ...r }))
+        detail.bar_items.forEach(b => {
+          if (resolveProductCircuit(b) === 'BAR') {
+            barMap.set(b.nom.toLowerCase(), { ...b, circuit: 'BAR' })
+          }
+        })
+        detail.restaurant_items.forEach(r => {
+          if (resolveProductCircuit(r) === 'RESTAURANT') {
+            restoMap.set(r.nom.toLowerCase(), { ...r, circuit: 'RESTAURANT' })
+          }
+        })
 
         sessionSales.forEach(s => {
           let parsedNotes: any = {}
           try { if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes } catch (_) {}
-          const saleCircuit: 'BAR' | 'RESTAURANT' = (s.sector_meta?.circuit === 'CUISINE' || parsedNotes.circuit === 'CUISINE') ? 'RESTAURANT' : 'BAR'
+          const saleCircuit: 'BAR' | 'RESTAURANT' = (s.sector_meta?.circuit === 'CUISINE' || parsedNotes.circuit === 'CUISINE' || s.sector_meta?.circuit === 'RESTAURANT') ? 'RESTAURANT' : 'BAR'
           const lines = (s.items && s.items.length > 0) ? s.items : (parsedNotes.lines || [])
 
           const itemsHisto: Array<{ nom: string; quantite: number; prix_unitaire: number; total: number }> = []
@@ -1128,13 +1213,14 @@ export async function obtenirSuiviSessionServeuse(
             const qte = Number(l.quantity || l.qty || 1)
             const pu = Number(l.unit_price || l.unitPrice || 0)
             const tot = Number(l.total_ttc || l.total || (qte * pu))
-            const isRecipe = Boolean(l.is_recipe || l.product?.is_recipe)
-            const lineCirc: 'BAR' | 'RESTAURANT' = (isRecipe || saleCircuit === 'RESTAURANT') ? 'RESTAURANT' : 'BAR'
+            const lineCirc: 'BAR' | 'RESTAURANT' = resolveProductCircuit(l)
             const key = nom.toLowerCase()
 
             itemsHisto.push({ nom, quantite: qte, prix_unitaire: pu, total: tot })
 
             if (lineCirc === 'BAR') {
+              // RÈGLE STRICTE : Ne peut JAMAIS être dans restaurant
+              restoMap.delete(key)
               if (barMap.has(key)) {
                 const inExistingHisto = detail.historique_ventes.some(h => h.order_number === s.order_number)
                 if (!inExistingHisto) {
@@ -1153,6 +1239,8 @@ export async function obtenirSuiviSessionServeuse(
                 })
               }
             } else {
+              // RÈGLE STRICTE : Ne peut JAMAIS être dans bar
+              barMap.delete(key)
               if (restoMap.has(key)) {
                 const inExistingHisto = detail.historique_ventes.some(h => h.order_number === s.order_number)
                 if (!inExistingHisto) {
@@ -1186,16 +1274,18 @@ export async function obtenirSuiviSessionServeuse(
           }
         })
 
-        detail.bar_items = Array.from(barMap.values())
-        detail.restaurant_items = Array.from(restoMap.values())
+        detail.bar_items = Array.from(barMap.values()).filter(b => resolveProductCircuit(b) === 'BAR')
+        detail.restaurant_items = Array.from(restoMap.values()).filter(r => resolveProductCircuit(r) === 'RESTAURANT')
         detail.historique_ventes = [...histo, ...detail.historique_ventes]
-        detail.total_bar = Math.round(detail.bar_items.reduce((acc, b) => acc + b.total, 0))
-        detail.total_restaurant = Math.round(detail.restaurant_items.reduce((acc, r) => acc + r.total, 0))
-        detail.total_general = Math.round(detail.total_bar + detail.total_restaurant)
-        detail.solde_restant = Math.max(0, detail.total_general - detail.total_verse)
-        detail.ecart = detail.solde_restant
       }
     }
+
+    // Calculs finaux séparés et stricts
+    detail.total_bar = Math.round(detail.bar_items.reduce((acc, b) => acc + b.total, 0))
+    detail.total_restaurant = Math.round(detail.restaurant_items.reduce((acc, r) => acc + r.total, 0))
+    detail.total_general = Math.round(detail.total_bar + detail.total_restaurant)
+    detail.solde_restant = Math.max(0, detail.total_general - detail.total_verse)
+    detail.ecart = detail.total_general - detail.total_verse
   } catch (err: any) {
     console.error('[RestaurantService] Erreur obtenirSuiviSessionServeuse:', err.message)
   }
@@ -1238,6 +1328,16 @@ export async function cloturerSessionServeuseEtVerserCaisse(params: {
       .single()
 
     if (sErr || !sess) throw new Error('Session introuvable.')
+
+    if (sess.statut === 'CLOTUREE') {
+      return {
+        success: true,
+        reference_versement: 'SESSION_DEJA_CLOTUREE',
+        total_attendu: Number(sess.total_ventes_declarees_ttc) || 0,
+        montant_verse: 0,
+        ecart: Number(sess.ecart_financier) || 0
+      }
+    }
 
     const suivi = await obtenirSuiviSessionServeuse(session_id, company_id)
     const totalAttendu = Number(suivi.total_general) || Number(sess.total_ventes_declarees_ttc) || 0
@@ -2116,6 +2216,7 @@ export async function traiterCommandesExpirees(company_id: string): Promise<numb
 }
 
 export default {
+  resolveProductCircuit,
   destockerMatieresPlat,
   attribuerBoissonServeuse,
   enregistrerVersementServeur,

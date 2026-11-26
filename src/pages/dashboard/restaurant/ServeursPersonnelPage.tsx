@@ -65,6 +65,8 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [showPresenceModal, setShowPresenceModal] = useState(false)
   const [showPlainteModal, setShowPlainteModal] = useState(false)
   const [showPaiementCreanceModal, setShowPaiementCreanceModal] = useState(false)
+  const [isSubmittingVersement, setIsSubmittingVersement] = useState(false)
+  const [isSubmittingCloture, setIsSubmittingCloture] = useState(false)
 
   const [selectedSession, setSelectedSession] = useState<ServeurSession | null>(null)
   const [sessionSuiviDetail, setSessionSuiviDetail] = useState<SessionSuiviDetail | null>(null)
@@ -302,24 +304,29 @@ export const ServeursPersonnelPage: React.FC = () => {
 
   const handleVersement = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedSession || versementForm.montant <= 0) return
+    if (!selectedSession || versementForm.montant <= 0 || isSubmittingVersement) return
+    setIsSubmittingVersement(true)
 
-    const res = await enregistrerVersementServeur({
-      company_id: companyId || '',
-      session_id: selectedSession.id,
-      serveur_nom: selectedSession.serveur_nom,
-      montant: Number(versementForm.montant),
-      mode_reglement: versementForm.mode_reglement,
-      recu_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
-      commentaire: versementForm.commentaire
-    })
+    try {
+      const res = await enregistrerVersementServeur({
+        company_id: companyId || '',
+        session_id: selectedSession.id,
+        serveur_nom: selectedSession.serveur_nom,
+        montant: Number(versementForm.montant),
+        mode_reglement: versementForm.mode_reglement,
+        recu_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
+        commentaire: versementForm.commentaire
+      })
 
-    if (res.success) {
-      toast.success('Versement encaissé', `Reçu ${refFormat(res.reference)} : ${fmt(versementForm.montant)}. Reste dû : ${fmt(res.soldeApres)}`)
-      setShowVersementModal(false)
-      loadAllData()
-    } else {
-      toast.error('Erreur', 'Échec enregistrement versement.')
+      if (res.success) {
+        toast.success('Versement encaissé', `Reçu ${refFormat(res.reference)} : ${fmt(versementForm.montant)}. Reste dû : ${fmt(res.soldeApres)}`)
+        setShowVersementModal(false)
+        loadAllData()
+      } else {
+        toast.error('Erreur', 'Échec enregistrement versement.')
+      }
+    } finally {
+      setIsSubmittingVersement(false)
     }
   }
 
@@ -369,27 +376,32 @@ export const ServeursPersonnelPage: React.FC = () => {
 
   const handleCloture = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!selectedSession) return
+    if (!selectedSession || isSubmittingCloture) return
+    setIsSubmittingCloture(true)
 
-    const res = await cloturerSessionServeuseEtVerserCaisse({
-      session_id: selectedSession.id,
-      company_id: companyId || '',
-      serveur_nom: selectedSession.serveur_nom,
-      montant_verse: Number(clotureForm.montant_verse) || 0,
-      mode_reglement: clotureForm.mode_reglement || 'ESPECES',
-      cloture_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
-      justification_ecart: clotureForm.justification_ecart
-    })
+    try {
+      const res = await cloturerSessionServeuseEtVerserCaisse({
+        session_id: selectedSession.id,
+        company_id: companyId || '',
+        serveur_nom: selectedSession.serveur_nom,
+        montant_verse: Number(clotureForm.montant_verse) || 0,
+        mode_reglement: clotureForm.mode_reglement || 'ESPECES',
+        cloture_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
+        justification_ecart: clotureForm.justification_ecart
+      })
 
-    if (res.success) {
-      toast.success(
-        'Session clôturée & Versement Caisse validé',
-        `Versement de ${fmt(res.montant_verse)} validé en Caisse (Réf: ${res.reference_versement}). Écart: ${fmt(res.ecart)}`
-      )
-      setShowClotureModal(false)
-      loadAllData()
-    } else {
-      toast.error('Erreur', res.error || 'Impossible de clôturer la session.')
+      if (res.success) {
+        toast.success(
+          'Session clôturée & Versement Caisse validé',
+          `Versement de ${fmt(res.montant_verse)} validé en Caisse (Réf: ${res.reference_versement}). Écart: ${fmt(res.ecart)}`
+        )
+        setShowClotureModal(false)
+        loadAllData()
+      } else {
+        toast.error('Erreur', res.error || 'Impossible de clôturer la session.')
+      }
+    } finally {
+      setIsSubmittingCloture(false)
     }
   }
 
@@ -1502,7 +1514,9 @@ export const ServeursPersonnelPage: React.FC = () => {
               </div>
               <div className="pt-3 flex justify-end gap-2 border-t">
                 <button type="button" onClick={() => setShowVersementModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
-                <button type="submit" className="px-4 py-2 bg-emerald-600 text-white rounded-xl text-xs font-black shadow-md">Encaisser & Reçu</button>
+                <button type="submit" disabled={isSubmittingVersement} className="px-4 py-2 bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2">
+                  {isSubmittingVersement ? 'Enregistrement...' : 'Encaisser & Reçu'}
+                </button>
               </div>
             </form>
           </div>
@@ -1715,9 +1729,9 @@ export const ServeursPersonnelPage: React.FC = () => {
 
               <div className="pt-3 flex justify-end gap-2 border-t">
                 <button type="button" onClick={() => setShowClotureModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
-                <button type="submit" className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-black shadow-lg shadow-rose-600/30 transition flex items-center gap-2">
+                <button type="submit" disabled={isSubmittingCloture} className="px-5 py-2.5 bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-lg shadow-rose-600/30 transition flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4" />
-                  Valider Clôture & Versement en Caisse
+                  {isSubmittingCloture ? 'Clôture en cours...' : 'Valider Clôture & Versement en Caisse'}
                 </button>
               </div>
             </form>

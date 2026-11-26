@@ -19,6 +19,7 @@ import {
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
 import { formatFCFA } from '../../../utils/tax'
+import { resolveProductCircuit } from '../../../services/restaurantService'
 import clsx from 'clsx'
 
 const fmt = (n: number) => formatFCFA(n)
@@ -569,6 +570,36 @@ export const RestaurantReportingPage: React.FC = () => {
         payment_method: so.payment_method || so.payment_status || 'ESPECES',
         payment_status: so.payment_status || 'paye'
       })
+
+      // Décomposer les lignes d'articles pour alimenter les listes Bar et Restaurant
+      let parsedNotes: any = null
+      if (so.notes) {
+        try {
+          parsedNotes = typeof so.notes === 'string' ? JSON.parse(so.notes) : so.notes
+        } catch (_) {}
+      }
+      const lines = parsedNotes?.lines || parsedNotes?.items || []
+      lines.forEach((l: any) => {
+        const pNom = l.product?.name || l.nom || l.name || 'Article'
+        const qte = Number(l.qty || l.quantite || 1)
+        const pu = Number(l.unitPrice || l.prix_unitaire || (l.total ? l.total / qte : 0))
+        const total = Number(l.total || (qte * pu))
+        const circuit = l.circuit || l.product?.circuit || resolveProductCircuit(l.product || { name: pNom })
+
+        if (circuit === 'BAR') {
+          if (!srvMap[cleanNom].produits_bar[pNom]) {
+            srvMap[cleanNom].produits_bar[pNom] = { nom: pNom, quantite: 0, montant_total: 0, prix_unitaire: pu }
+          }
+          srvMap[cleanNom].produits_bar[pNom].quantite += qte
+          srvMap[cleanNom].produits_bar[pNom].montant_total += total
+        } else {
+          if (!srvMap[cleanNom].plats_restaurant[pNom]) {
+            srvMap[cleanNom].plats_restaurant[pNom] = { nom: pNom, quantite: 0, montant_total: 0, prix_unitaire: pu }
+          }
+          srvMap[cleanNom].plats_restaurant[pNom].quantite += qte
+          srvMap[cleanNom].plats_restaurant[pNom].montant_total += total
+        }
+      })
     })
 
     // 3. Intégrer les créances, versements et contenants consignés
@@ -681,6 +712,8 @@ export const RestaurantReportingPage: React.FC = () => {
 
       return {
         ...srv,
+        produits_bar_list: Object.values(srv.produits_bar),
+        plats_restaurant_list: Object.values(srv.plats_restaurant),
         marge_brute: marge,
         jours_service: jours,
         moyenne_journaliere: moyJour,

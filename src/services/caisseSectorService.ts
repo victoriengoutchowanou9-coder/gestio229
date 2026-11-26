@@ -71,7 +71,7 @@ export function cleanSectorSlug(slug?: string | null): string {
   if (clean === 'microfinance-tontine' || clean === 'tontine') return 'microfinance'
   if (clean === 'location' || clean === 'gestion-locative' || clean === 'gestion_locative') return 'immobilier'
   if (clean === 'agro-business' || clean === 'agro') return 'agrobusiness'
-  if (clean === 'bar-restaurant-maquis' || clean === 'maquis' || clean === 'fast-food') return 'restaurant'
+  if (clean === 'bar' || clean === 'bar-restaurant' || clean === 'bar_restaurant' || clean === 'bar-restaurant-maquis' || clean === 'maquis' || clean === 'fast-food') return 'restaurant'
   return clean
 }
 

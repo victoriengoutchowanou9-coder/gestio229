@@ -54,7 +54,7 @@ import {
 } from '../../../services/brasseriePricingService'
 import clsx from 'clsx'
 import { RestaurantOrderWidget } from '../restaurant/RestaurantOrderWidget'
-import { destockerMatieresPlat } from '../../../services/restaurantService'
+import { destockerMatieresPlat, resolveProductCircuit } from '../../../services/restaurantService'
 import { enregistrerMouvementCaisse, checkSectorCaisseStatus, resolveValidCashSession } from '../../../services/caisseSectorService'
 import { enregistrerEntreeCaisse } from '../../../services/caisseDepensesService'
 import { isVraiCodeEmballage } from '../../../utils/emballages'
@@ -2308,7 +2308,7 @@ export const POSPage: React.FC = () => {
           session_id: restaurantSessionIdSnapshot || null,
           total_exonere: cartFiscalSummarySnapshot.totalExonere, ancienne_dette_avant_facture: ancienneDetteEstim,
           montant_credit_actuel: creditActuel, montant_restant_du_global: montantRestantDuGlobalEstim,
-          lines: cartSnapshot.map(c => ({ product: { id: c.product.id, code: c.product.code, name: c.product.name, unit: c.product.unit || c.product.uv || 'Pièce', cost_price: c.product.cost_price, selling_price: c.product.selling_price, is_vat_subject: c.product.is_vat_subject, vat_rate: c.product.vat_rate, is_aib_subject: c.product.is_aib_subject, aib_rate: c.product.aib_rate, coef: c.product.coef }, qty: c.qty, unitPrice: c.unitPrice, discount: c.discount })),
+          lines: cartSnapshot.map(c => ({ product: { id: c.product.id, code: c.product.code, name: c.product.name, unit: c.product.unit || c.product.uv || 'Pièce', cost_price: c.product.cost_price, selling_price: c.product.selling_price, is_vat_subject: c.product.is_vat_subject, vat_rate: c.product.vat_rate, is_aib_subject: c.product.is_aib_subject, aib_rate: c.product.aib_rate, coef: c.product.coef, circuit: resolveProductCircuit(c.product) }, circuit: resolveProductCircuit(c.product), qty: c.qty, unitPrice: c.unitPrice, discount: c.discount })),
           emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons') ? brasserieEmballageRowsSnapshot.map(e => ({ code: e.code, designation: e.designation, precedent: e.precedent, facture: e.facture, sortie: e.facture, rendus: e.rendus, retour: e.rendus, reste: e.reste, net_du: e.reste })) : undefined
         }
 
@@ -2334,7 +2334,8 @@ export const POSPage: React.FC = () => {
             serveur_nom: restaurantServeurSnapshot || null,
             serveur_id: restaurantServeurIdSnapshot || null,
             session_id: restaurantSessionIdSnapshot || null,
-            table_numero: restaurantTableSnapshot || null
+            table_numero: restaurantTableSnapshot || null,
+            circuit: isBarCircuit ? 'BAR' : 'RESTAURANT'
           },
           e_mecef_uid: encodedMeta,
           created_by: user?.id || null,
@@ -2678,14 +2679,17 @@ export const POSPage: React.FC = () => {
                   order_number: orderNum,
                   circuit: isBarCircuit ? 'BAR' : 'RESTAURANT',
                   table_numero: numTable,
-                  items: cartSnapshot.map(c => ({
-                    produit_id: c.product.id,
-                    nom: c.product.name,
-                    quantite: c.qty,
-                    prix_unitaire: c.unitPrice,
-                    total: c.qty * c.unitPrice,
-                    circuit: (isBarCircuit && !c.product.is_recipe) ? 'BAR' : 'RESTAURANT'
-                  })),
+                  items: cartSnapshot.map(c => {
+                    const itemCircuit = resolveProductCircuit(c.product)
+                    return {
+                      produit_id: c.product.id,
+                      nom: c.product.name,
+                      quantite: c.qty,
+                      prix_unitaire: c.unitPrice,
+                      total: c.qty * c.unitPrice,
+                      circuit: itemCircuit
+                    }
+                  }),
                   total_vente: totalNetTTCSnapshot
                 })
 
@@ -2887,10 +2891,17 @@ export const POSPage: React.FC = () => {
       })
     }
 
-    // Mode RESTAURANT : Afficher les plats et recettes enregistrées dans Fiche et Recette
+    // Mode RESTAURANT / MAQUIS : Afficher strictement les plats, repas et recettes
     if (restaurantCircuit === 'CUISINE') {
       const activeRecipes = recipeProducts.filter(p => Number(p.selling_price) > 0)
-      return activeRecipes.filter((p) => {
+      const standardKitchenProducts = products.filter(p => {
+        const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
+        if (isMatiere) return false
+        return resolveProductCircuit(p) === 'RESTAURANT'
+      })
+      const recipeIds = new Set(activeRecipes.map(r => r.id))
+      const combined = [...activeRecipes, ...standardKitchenProducts.filter(p => !recipeIds.has(p.id))]
+      return combined.filter((p) => {
         if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
           return false
         }
@@ -2898,20 +2909,14 @@ export const POSPage: React.FC = () => {
       })
     }
 
-    // Mode BAR : Afficher uniquement les boissons et produits disponibles dans le stock de vente existant
+    // Mode BAR : Afficher strictement les boissons et produits du Bar (jamais de plats ni recettes)
     return products.filter((p) => {
       if (search && !p.name.toLowerCase().includes(search.toLowerCase()) && !p.code.toLowerCase().includes(search.toLowerCase())) {
         return false
       }
       const isMatiere = Boolean(p.sector_meta?.is_matiere_premiere || (p as any).is_matiere_premiere)
-      if (isMatiere) return false // Ne jamais vendre de matière première brute
-
-      const cat = ((p.category?.name || p.category || (p as any).category_name || '') as string).toLowerCase()
-      const nom = (p.name || '').toLowerCase()
-      const pCircuit = p.sector_meta?.restaurant_circuit || (p as any).restaurant_circuit || (
-        (cat.includes('boisson') || cat.includes('biere') || cat.includes('vin') || cat.includes('bar') || nom.includes('biere') || nom.includes('coca') || nom.includes('fanta') || nom.includes('eau ') || nom.includes('jus')) ? 'BAR' : 'CUISINE'
-      )
-      return pCircuit === 'BAR'
+      if (isMatiere) return false
+      return resolveProductCircuit(p) === 'BAR'
     })
   }, [products, recipeProducts, search, isRestaurant, restaurantCircuit])
 
