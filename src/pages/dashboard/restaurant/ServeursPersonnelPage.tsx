@@ -4,7 +4,7 @@ import {
   Phone, UserCheck, Shield, ChevronRight, X, Search,
   Wine, Wallet, ArrowDownRight, CheckCircle2, Clock,
   AlertTriangle, FileText, Check, ShieldAlert, RotateCcw, Package,
-  Sparkles, Utensils
+  Sparkles, Utensils, Printer
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
@@ -60,6 +60,7 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [showSessionModal, setShowSessionModal] = useState(false)
   const [showRemiseModal, setShowRemiseModal] = useState(false)
   const [showVersementModal, setShowVersementModal] = useState(false)
+  const [receiptVersement, setReceiptVersement] = useState<any | null>(null)
   const [showRetourEmballageModal, setShowRetourEmballageModal] = useState(false)
   const [showClotureModal, setShowClotureModal] = useState(false)
   const [showPresenceModal, setShowPresenceModal] = useState(false)
@@ -305,23 +306,49 @@ export const ServeursPersonnelPage: React.FC = () => {
   const handleVersement = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedSession || versementForm.montant <= 0 || isSubmittingVersement) return
+
+    const soldeRestant = Number(selectedSession.solde_restant_a_remettre) || 0
+    if (Number(versementForm.montant) > soldeRestant && soldeRestant > 0) {
+      const ok = window.confirm(
+        `Le montant versé (${fmt(versementForm.montant)}) dépasse le solde restant dû (${fmt(soldeRestant)}).\n\nConfirmez-vous cet enregistrement avec avance / trop-perçu ?`
+      )
+      if (!ok) return
+    }
+
     setIsSubmittingVersement(true)
 
     try {
+      const recuParNom = ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant'
       const res = await enregistrerVersementServeur({
         company_id: companyId || '',
         session_id: selectedSession.id,
         serveur_nom: selectedSession.serveur_nom,
         montant: Number(versementForm.montant),
         mode_reglement: versementForm.mode_reglement,
-        recu_par: ((user as any)?.user_metadata?.full_name || (user as any)?.full_name) || user?.email || 'Gérant',
+        recu_par: recuParNom,
         commentaire: versementForm.commentaire
       })
 
       if (res.success) {
-        toast.success('Versement encaissé', `Reçu ${refFormat(res.reference)} : ${fmt(versementForm.montant)}. Reste dû : ${fmt(res.soldeApres)}`)
+        toast.success('Versement encaissé avec succès', `Reçu ${res.reference} : ${fmt(versementForm.montant)}. Reste dû : ${fmt(res.soldeApres)}`)
+
+        // Générer le reçu officiel d'encaissement
+        setReceiptVersement({
+          reference: res.reference,
+          date: new Date().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }),
+          heure: new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }),
+          serveur_nom: selectedSession.serveur_nom,
+          session_id: selectedSession.id,
+          montant: Number(versementForm.montant),
+          mode_reglement: versementForm.mode_reglement === 'ESPECES' ? 'Espèces (Caisse)' : 'Mobile Money (MoMo)',
+          solde_avant: res.soldeAvant ?? soldeRestant,
+          solde_apres: res.soldeApres,
+          recu_par: recuParNom,
+          commentaire: versementForm.commentaire
+        })
+
         setShowVersementModal(false)
-        loadAllData()
+        await loadAllData()
       } else {
         toast.error('Erreur', 'Échec enregistrement versement.')
       }
@@ -689,7 +716,15 @@ export const ServeursPersonnelPage: React.FC = () => {
                       <RotateCcw className="w-3.5 h-3.5" /> Retour Emballage
                     </button>
                     <button
-                      onClick={() => setShowVersementModal(true)}
+                      onClick={() => {
+                        const reste = Number(selectedSession.solde_restant_a_remettre) || 0
+                        setVersementForm({
+                          montant: reste > 0 ? reste : 0,
+                          mode_reglement: 'ESPECES',
+                          commentaire: ''
+                        })
+                        setShowVersementModal(true)
+                      }}
                       className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-sm transition"
                     >
                       <DollarSign className="w-3.5 h-3.5" /> Encaisser Versement
@@ -1473,52 +1508,169 @@ export const ServeursPersonnelPage: React.FC = () => {
         </div>
       )}
 
-      {/* ── MODALE 3 : VERSEMENT SUCCESSIF AU GÉRANT ── */}
+      {/* ── MODALE 3 : VERSEMENT SUCCESSIF AU GÉRANT AVEC SYNCHRONISATION CAISSE ── */}
       {showVersementModal && selectedSession && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-md rounded-3xl p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b pb-3">
-              <h3 className="font-black text-slate-900 text-base">Encaisser Versement de {selectedSession.serveur_nom}</h3>
+              <div>
+                <h3 className="font-black text-slate-900 text-base">Encaisser Versement Serveuse</h3>
+                <p className="text-[11px] text-slate-500">{selectedSession.serveur_nom} • Session {selectedSession.id.slice(0, 8).toUpperCase()}</p>
+              </div>
               <button onClick={() => setShowVersementModal(false)}><X className="w-5 h-5 text-slate-400" /></button>
             </div>
-            <form onSubmit={handleVersement} className="space-y-3.5">
-              <div className="p-3 bg-slate-50 rounded-xl text-xs space-y-1">
-                <div className="flex justify-between text-slate-500">
-                  <span>Solde restant dû par la serveuse :</span>
-                  <strong className="text-rose-600 font-mono font-bold">{fmt(selectedSession.solde_restant_a_remettre)}</strong>
-                </div>
+
+            {/* Récapitulatif de la session de la serveuse (Exigence Point 2.3) */}
+            <div className="grid grid-cols-2 gap-2 p-3 bg-slate-50 border border-slate-200/80 rounded-2xl text-xs">
+              <div className="space-y-0.5">
+                <span className="text-[10px] text-slate-400 font-bold uppercase">Boissons confiées</span>
+                <p className="font-mono font-bold text-slate-700">{fmt(selectedSession.total_boissons_confiees_ttc || 0)}</p>
               </div>
+              <div className="space-y-0.5">
+                <span className="text-[10px] text-slate-400 font-bold uppercase">Ventes réalisées</span>
+                <p className="font-mono font-bold text-slate-800">{fmt(selectedSession.total_ventes_declarees_ttc || 0)}</p>
+              </div>
+              <div className="space-y-0.5 pt-1.5 border-t border-slate-200">
+                <span className="text-[10px] text-slate-400 font-bold uppercase">Déjà versé au gérant</span>
+                <p className="font-mono font-bold text-emerald-600">{fmt(selectedSession.total_versements_recus || 0)}</p>
+              </div>
+              <div className="space-y-0.5 pt-1.5 border-t border-slate-200">
+                <span className="text-[10px] text-rose-500 font-black uppercase">Solde restant dû</span>
+                <p className="font-mono font-black text-rose-600">{fmt(selectedSession.solde_restant_a_remettre || 0)}</p>
+              </div>
+            </div>
+
+            <form onSubmit={handleVersement} className="space-y-3.5">
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Montant Versé (F CFA) *</label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-bold text-slate-700">Montant que la serveuse verse (FCFA) *</label>
+                  {Number(selectedSession.solde_restant_a_remettre || 0) > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setVersementForm({ ...versementForm, montant: Number(selectedSession.solde_restant_a_remettre || 0) })}
+                      className="text-[10px] font-bold text-emerald-600 hover:underline"
+                    >
+                      Tout verser ({fmt(selectedSession.solde_restant_a_remettre)})
+                    </button>
+                  )}
+                </div>
                 <input
                   type="number"
                   min="1"
                   required
-                  value={versementForm.montant}
+                  value={versementForm.montant || ''}
                   onChange={e => setVersementForm({ ...versementForm, montant: Number(e.target.value) })}
+                  placeholder="Ex: 5000"
                   className="w-full px-3 py-2 border rounded-xl text-base font-mono font-black text-emerald-600 outline-none focus:ring-2 focus:ring-emerald-500"
                 />
               </div>
+
               <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Mode de règlement</label>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Mode de règlement *</label>
                 <select
                   value={versementForm.mode_reglement}
                   onChange={e => setVersementForm({ ...versementForm, mode_reglement: e.target.value as any })}
-                  className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none"
+                  className="w-full px-3 py-2 border rounded-xl text-xs font-bold outline-none bg-white focus:ring-2 focus:ring-emerald-500"
                 >
                   <option value="ESPECES">Espèces (Caisse)</option>
-                  <option value="MTN_MOMO">MTN Mobile Money</option>
-                  <option value="MOOV_MONEY">Moov Money</option>
-                  <option value="CARTE">Carte Bancaire / TPE</option>
+                  <option value="MTN_MOMO">Mobile Money (MoMo)</option>
+                  <option value="MOOV_MONEY">Moov Money (MoMo)</option>
                 </select>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  {versementForm.mode_reglement === 'ESPECES'
+                    ? 'Alimentera automatiquement le compteur « ESPÈCES DU JOUR » de la Caisse Bar/Restaurant.'
+                    : 'Alimentera automatiquement le compteur « MOMO DU JOUR » de la Caisse Bar/Restaurant.'}
+                </p>
               </div>
+
+              <div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">Commentaire / Référence additionnelle</label>
+                <input
+                  type="text"
+                  value={versementForm.commentaire}
+                  onChange={e => setVersementForm({ ...versementForm, commentaire: e.target.value })}
+                  placeholder="Ex: Versement mi-service salle"
+                  className="w-full px-3 py-2 border rounded-xl text-xs outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+
               <div className="pt-3 flex justify-end gap-2 border-t">
-                <button type="button" onClick={() => setShowVersementModal(false)} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">Annuler</button>
-                <button type="submit" disabled={isSubmittingVersement} className="px-4 py-2 bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2">
+                <button type="button" onClick={() => setShowVersementModal(false)} className="px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-bold transition">Annuler</button>
+                <button type="submit" disabled={isSubmittingVersement} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl text-xs font-black shadow-md flex items-center gap-2 transition">
                   {isSubmittingVersement ? 'Enregistrement...' : 'Encaisser & Reçu'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODALE REÇU OFFICIEL D'ENCAISSEMENT VERSEMENT SERVEUSE ── */}
+      {receiptVersement && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl space-y-4 border border-slate-200 animate-in fade-in zoom-in duration-150">
+            <div className="text-center border-b pb-3 space-y-1">
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-emerald-100 text-emerald-800 tracking-wider">
+                Secteur Bar & Restaurant
+              </span>
+              <h3 className="font-black text-slate-900 text-sm uppercase tracking-wide">
+                REÇU D'ENCAISSEMENT VERSEMENT
+              </h3>
+              <p className="text-[11px] font-mono font-bold text-slate-500">Réf : {receiptVersement.reference}</p>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="flex justify-between text-slate-600">
+                <span>Date & Heure :</span>
+                <span className="font-mono font-medium">{receiptVersement.date} à {receiptVersement.heure}</span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Serveuse concernée :</span>
+                <strong className="text-slate-900">{receiptVersement.serveur_nom}</strong>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>Mode de règlement :</span>
+                <span className="font-bold text-emerald-700">{receiptVersement.mode_reglement}</span>
+              </div>
+
+              <div className="p-3 bg-emerald-50 rounded-2xl border border-emerald-200 text-center space-y-0.5 my-2">
+                <span className="text-[10px] font-bold text-emerald-800 uppercase tracking-wider">Montant Encaissé</span>
+                <p className="text-xl font-black font-mono text-emerald-700">{fmt(receiptVersement.montant)}</p>
+              </div>
+
+              <div className="p-2.5 bg-slate-50 rounded-xl space-y-1 text-[11px]">
+                <div className="flex justify-between text-slate-500">
+                  <span>Solde avant versement :</span>
+                  <span className="font-mono">{fmt(receiptVersement.solde_avant)}</span>
+                </div>
+                <div className="flex justify-between font-bold text-slate-800">
+                  <span>Nouveau solde restant dû :</span>
+                  <span className="font-mono text-rose-600">{fmt(receiptVersement.solde_apres)}</span>
+                </div>
+              </div>
+
+              <div className="flex justify-between text-[11px] text-slate-500 pt-1">
+                <span>Encaissé par le gérant :</span>
+                <strong className="text-slate-700">{receiptVersement.recu_par}</strong>
+              </div>
+            </div>
+
+            <div className="pt-3 border-t flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center gap-1.5"
+              >
+                <Printer className="w-3.5 h-3.5" /> Imprimer le Reçu
+              </button>
+              <button
+                type="button"
+                onClick={() => setReceiptVersement(null)}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-black shadow-md transition"
+              >
+                Fermer
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -977,6 +977,33 @@ export async function calculerSoldesSessionAutomatique(params: {
     }
   } catch (_) {}
 
+  // 3b. Mouvements d'entrée directs de caisse (notamment versements des serveuses Bar/Restaurant)
+  let sumVersementsServeursEspeces = 0
+  let sumVersementsServeursMomo = 0
+
+  try {
+    const { data: mvtsDirects } = await supabase
+      .from('caisse_mouvements')
+      .select('montant_especes, montant_momo, montant, type, sens, source_module')
+      .eq('company_id', companyId)
+      .eq('sector_slug', clean)
+      .eq('sens', 'entree')
+      .gte('created_at', startIso)
+
+    if (mvtsDirects && mvtsDirects.length > 0) {
+      mvtsDirects.forEach((m: any) => {
+        // Ignorer les ventes déjà comptées via sales_orders pour éviter les doublons
+        if (m.type === 'vente' || m.source_module === 'vente_pos') return
+        const isCash = (Number(m.montant_especes) > 0) || (m.type === 'especes') || (!m.montant_momo && m.sens === 'entree')
+        const isMomo = (Number(m.montant_momo) > 0) || (m.type === 'momo')
+        const esp = Number(m.montant_especes) || (isCash ? Number(m.montant) || 0 : 0)
+        const mo = Number(m.montant_momo) || (isMomo ? Number(m.montant) || 0 : 0)
+        sumVersementsServeursEspeces += esp
+        sumVersementsServeursMomo += mo
+      })
+    }
+  } catch (_) {}
+
   // 4. Dépenses de la session (table officielle expenses isolée par sector_slug)
   let sumDepensesEspeces = 0
   let sumDepensesMomo = 0
@@ -1056,8 +1083,8 @@ export async function calculerSoldesSessionAutomatique(params: {
   } catch (_) {}
 
   // Rapprochement avec les données de secours fournies par le composant (tolérance zéro perte)
-  const entreesEspeces = Math.max(sumVentesEspeces + sumRemboursementsEspeces, Number(params.fallbackEspecesJour) || 0)
-  const entreesMomo = Math.max(sumVentesMomo + sumRemboursementsMomo, Number(params.fallbackMomoJour) || 0)
+  const entreesEspeces = Math.max(sumVentesEspeces + sumRemboursementsEspeces + sumVersementsServeursEspeces, Number(params.fallbackEspecesJour) || 0)
+  const entreesMomo = Math.max(sumVentesMomo + sumRemboursementsMomo + sumVersementsServeursMomo, Number(params.fallbackMomoJour) || 0)
   const depensesEspeces = Math.max(sumDepensesEspeces, Number(params.fallbackDepensesEsp) || 0)
   const versementsEspeces = Math.max(sumVersementsEspeces, Number(params.fallbackRetraitsEsp) || 0)
   const versementsMomo = Math.max(sumVersementsMomo, Number(params.fallbackRetraitsMomo) || 0)
@@ -1622,9 +1649,11 @@ export async function enregistrerMouvementCaisse(
       montant: totalMontant,
       source_module: params.source_module,
       source_id: params.source_id || null,
+      reference_id: params.source_id || null,
       motif: params.motif || `Mouvement ${params.type}`,
       user_name: params.user_name || 'Utilisateur',
       user_id: params.user_id || null,
+      statut: 'valide',
       created_at: nowIso,
     })
 
@@ -1644,6 +1673,11 @@ export async function enregistrerMouvementCaisse(
       const newCaDuJour = params.type === 'vente' ? curCaDuJour + totalMontant : curCaDuJour
       const newEspTheorique = fondOuverture + newEspDuJour
 
+      const curFondEsp = Number(activeSession.fond_actuel_especes) || (fondOuverture + curEspDuJour)
+      const curFondMomo = Number(activeSession.fond_actuel_momo) || curMomoDuJour
+      const newFondEsp = sens === 'entree' ? curFondEsp + esp : curFondEsp - esp
+      const newFondMomo = sens === 'entree' ? curFondMomo + momo : curFondMomo - momo
+
       await supabase
         .from('caisse_sessions')
         .update({
@@ -1651,9 +1685,17 @@ export async function enregistrerMouvementCaisse(
           momo_du_jour: newMomoDuJour,
           ca_du_jour: newCaDuJour,
           especes_theorique: newEspTheorique,
+          fond_actuel_especes: newFondEsp,
+          fond_actuel_momo: newFondMomo,
           updated_at: nowIso,
         })
         .eq('id', activeSession.id)
+    }
+
+    // 6. Notification en temps réel aux pages et composants
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('gestio:caisse_mouvement_created', { detail: { sector: clean, type: params.type, sens, montant_especes: esp, montant_momo: momo, ref: params.source_id } }))
+      window.dispatchEvent(new CustomEvent('gestio:transaction_created', { detail: { sector: clean } }))
     }
   } catch (err) {
     console.warn('[CAISSE-SERVICE] Erreur enregistrerMouvementCaisse:', err)

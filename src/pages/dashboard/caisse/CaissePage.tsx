@@ -85,9 +85,12 @@ interface CashMovement {
   id: string
   created_at: string
   user_name: string
-  type: 'ENCAISSEMENT' | 'REMBOURSEMENT' | 'RETRAIT' | 'TRANSFERT' | 'AJUSTEMENT' | 'CLOTURE'
+  type: 'ENCAISSEMENT' | 'REMBOURSEMENT' | 'RETRAIT' | 'TRANSFERT' | 'AJUSTEMENT' | 'CLOTURE' | 'ENCAISSEMENT VERSEMENT SERVEUSE'
   payment_channel: 'Espèces' | 'MoMo' | 'Tous'
   amount: number
+  montant_especes?: number
+  montant_momo?: number
+  sens?: 'entree' | 'sortie'
   motif: string
   reference: string
   status: 'VALIDE' | 'EN_ATTENTE' | 'REFUSE'
@@ -766,7 +769,14 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
             const channel = (isCash && isMomo) ? 'Tous' : isMomo ? 'MoMo' : 'Espèces'
 
             let movType: CashMovement['type'] = 'ENCAISSEMENT'
-            if (m.type === 'cloture') movType = 'CLOTURE'
+            if (
+              m.type === 'ENCAISSEMENT VERSEMENT SERVEUSE' ||
+              m.source_module === 'restaurant_serveurs' ||
+              m.source_module === 'restaurant_cloture_session' ||
+              (m.motif && m.motif.toUpperCase().includes('VERSEMENT SERVEUSE'))
+            ) {
+              movType = 'ENCAISSEMENT VERSEMENT SERVEUSE'
+            } else if (m.type === 'cloture') movType = 'CLOTURE'
             else if (m.type === 'depense' || m.sens === 'sortie') movType = 'RETRAIT'
             else if (m.type === 'reglement_client') movType = 'REMBOURSEMENT'
             else if (m.type === 'ajustement') movType = 'AJUSTEMENT'
@@ -1033,13 +1043,21 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       loadBonsEnAttente()
     }
 
+    const handleMouvementSync = () => {
+      triggerSync('caisse_mouvements')
+    }
+
     window.addEventListener('focus', handleWindowFocus)
     window.addEventListener('online', handleWindowFocus)
+    window.addEventListener('gestio:caisse_mouvement_created', handleMouvementSync)
+    window.addEventListener('gestio:versement_serveur_created', handleMouvementSync)
 
     return () => {
       if (debounceTimer) clearTimeout(debounceTimer)
       window.removeEventListener('focus', handleWindowFocus)
       window.removeEventListener('online', handleWindowFocus)
+      window.removeEventListener('gestio:caisse_mouvement_created', handleMouvementSync)
+      window.removeEventListener('gestio:versement_serveur_created', handleMouvementSync)
       supabase.removeChannel(channel)
     }
   }, [currentCompanyId, company?.id, currentSectorSlug, loadSessions, loadCaisseData, loadBonsEnAttente, refreshFonds])
@@ -1230,9 +1248,36 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       return sum + mo
     }, 0)
 
+  // Synchronisation stricte avec les versements serveuses Bar/Restaurant
+  const mvtVersementsEsp = movementsHistory
+    .filter((m: any) => {
+      if (m.sens === 'sortie' || m.type === 'RETRAIT' || m.type === 'CLOTURE' || m.type === 'AJUSTEMENT') return false
+      const isVersement = m.type === 'ENCAISSEMENT VERSEMENT SERVEUSE' || m.source_module === 'restaurant_serveurs' || m.source_module === 'restaurant_cloture_session' || (m.motif && m.motif.toUpperCase().includes('VERSEMENT SERVEUSE'))
+      if (!isVersement) return false
+      const mDate = m.created_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date(m.created_at)) : todayBeninStr
+      return mDate === todayBeninStr
+    })
+    .reduce((sum: number, m: any) => {
+      const esp = Number(m.montant_especes) || (['Espèces', 'especes', 'cash'].includes(m.payment_channel) ? Number(m.amount) || 0 : 0)
+      return sum + esp
+    }, 0)
+
+  const mvtVersementsMomo = movementsHistory
+    .filter((m: any) => {
+      if (m.sens === 'sortie' || m.type === 'RETRAIT' || m.type === 'CLOTURE' || m.type === 'AJUSTEMENT') return false
+      const isVersement = m.type === 'ENCAISSEMENT VERSEMENT SERVEUSE' || m.source_module === 'restaurant_serveurs' || m.source_module === 'restaurant_cloture_session' || (m.motif && m.motif.toUpperCase().includes('VERSEMENT SERVEUSE'))
+      if (!isVersement) return false
+      const mDate = m.created_at ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date(m.created_at)) : todayBeninStr
+      return mDate === todayBeninStr
+    })
+    .reduce((sum: number, m: any) => {
+      const mo = Number(m.montant_momo) || (['MoMo', 'momo', 'wave', 'mtn', 'moov'].includes(m.payment_channel) ? Number(m.amount) || 0 : 0)
+      return sum + mo
+    }, 0)
+
   const especesDuJour = caisseStatus === 'FERMEE'
     ? 0
-    : Math.max(totalVentesEsp + totalRembEsp, mvtEntreesEspeces)
+    : Math.max(totalVentesEsp + totalRembEsp + mvtVersementsEsp, mvtEntreesEspeces, Number(sessionDuJour?.especes_du_jour) || 0)
 
   const totalVentesMoMo = (caisseJourData.ventes_momo_du_jour > 0)
     ? caisseJourData.ventes_momo_du_jour
@@ -1244,7 +1289,7 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
 
   const momoDuJour = caisseStatus === 'FERMEE'
     ? 0
-    : Math.max(totalVentesMoMo + totalRembMoMo, mvtEntreesMomo)
+    : Math.max(totalVentesMoMo + totalRembMoMo + mvtVersementsMomo, mvtEntreesMomo, Number(sessionDuJour?.momo_du_jour) || 0)
 
   const nbVentesDuJour = caisseJourData.nb_ventes > 0
     ? caisseJourData.nb_ventes
@@ -3884,7 +3929,9 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
                     <td className="p-3.5 font-sans font-bold text-slate-700">{m.user_name}</td>
                     <td className="p-3.5 font-sans">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                        m.type === 'ENCAISSEMENT'
+                        m.type === 'ENCAISSEMENT VERSEMENT SERVEUSE'
+                          ? 'bg-emerald-600 text-white font-black shadow-xs'
+                          : m.type === 'ENCAISSEMENT'
                           ? 'bg-emerald-100 text-emerald-800'
                           : m.type === 'RETRAIT'
                           ? 'bg-rose-100 text-rose-800'
