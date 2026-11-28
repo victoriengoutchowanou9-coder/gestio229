@@ -2370,17 +2370,32 @@ export const POSPage: React.FC = () => {
         // Résolution ou création automatique de la session active de la serveuse pour garantir la synchronisation
         if (isRestaurant && restaurantServeurSnapshot && restaurantServeurSnapshot !== 'Client Comptoir Direct' && restaurantServeurSnapshot !== 'Serveur de Salle' && !restaurantSessionIdSnapshot) {
           try {
-            let qSess = supabase
-              .from('restaurant_sessions_serveurs')
-              .select('id, serveur_id, serveur_nom')
-              .eq('company_id', company?.id ?? companyId ?? '')
-              .eq('statut', 'OUVERTE')
+            const compId = company?.id ?? companyId ?? ''
+            let dbSess: any = null
             if (restaurantServeurIdSnapshot) {
-              qSess = qSess.or(`serveur_id.eq.${restaurantServeurIdSnapshot},serveur_nom.ilike.${restaurantServeurSnapshot.trim()}`)
-            } else {
-              qSess = qSess.ilike('serveur_nom', restaurantServeurSnapshot.trim())
+              const { data: sIdRes } = await supabase
+                .from('restaurant_sessions_serveurs')
+                .select('id, serveur_id, serveur_nom')
+                .eq('company_id', compId)
+                .eq('statut', 'OUVERTE')
+                .eq('serveur_id', restaurantServeurIdSnapshot)
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+              if (sIdRes) dbSess = sIdRes
             }
-            const { data: dbSess } = await qSess.order('created_at', { ascending: false }).limit(1).maybeSingle()
+            if (!dbSess && restaurantServeurSnapshot) {
+              const { data: sNomRes } = await supabase
+                .from('restaurant_sessions_serveurs')
+                .select('id, serveur_id, serveur_nom')
+                .eq('company_id', compId)
+                .eq('statut', 'OUVERTE')
+                .ilike('serveur_nom', restaurantServeurSnapshot.trim())
+                .order('created_at', { ascending: false })
+                .limit(1)
+                .maybeSingle()
+              if (sNomRes) dbSess = sNomRes
+            }
             if (dbSess) {
               restaurantSessionIdSnapshot = dbSess.id
               if (!restaurantServeurIdSnapshot && dbSess.serveur_id) {
@@ -2392,7 +2407,7 @@ export const POSPage: React.FC = () => {
               const { data: autoSess } = await supabase
                 .from('restaurant_sessions_serveurs')
                 .insert({
-                  company_id: company?.id ?? companyId ?? '',
+                  company_id: compId,
                   sector_slug: currentSectorSlug || 'bar_restaurant',
                   serveur_id: restaurantServeurIdSnapshot || null,
                   serveur_nom: restaurantServeurSnapshot.trim(),
@@ -2408,7 +2423,7 @@ export const POSPage: React.FC = () => {
                   details_suivi: { bar_items: [], restaurant_items: [], historique_ventes: [] }
                 })
                 .select('id')
-                .single()
+                .maybeSingle()
               if (autoSess) {
                 restaurantSessionIdSnapshot = autoSess.id
               }
@@ -2775,6 +2790,7 @@ export const POSPage: React.FC = () => {
               order_number: orderNum,
               serveur_nom: srvNom,
               serveur_id: restaurantServeurIdSnapshot,
+              session_id: restaurantSessionIdSnapshot || null,
               circuit: restaurantCircuit,
               montant_initial: totalNetTTCSnapshot,
               montant_paye: totalNetTTCSnapshot - creditAmount,
@@ -2782,7 +2798,17 @@ export const POSPage: React.FC = () => {
               statut: creditAmount > 0 ? 'PARTIEL' : 'PAYE',
               consignes_bouteilles_dues: nbConsignes,
               consignes_bouteilles_rendues: 0,
-              details: cartSnapshot.map(c => ({ name: c.product.name, qty: c.qty, price: c.unitPrice })),
+              details: cartSnapshot.map(c => ({
+                produit_id: c.product.id,
+                nom: c.product.name,
+                name: c.product.name,
+                quantite: c.qty,
+                qty: c.qty,
+                prix_unitaire: c.unitPrice,
+                price: c.unitPrice,
+                total: c.qty * c.unitPrice,
+                circuit: resolveProductCircuit(c.product)
+              })),
               date_creation: new Date().toISOString()
             })
 
@@ -2799,19 +2825,29 @@ export const POSPage: React.FC = () => {
               try {
                 let targetSessionId = restaurantSessionIdSnapshot
                 // Si la session n'est pas résolue dans le state local, vérifier directement dans la base de données
-                if (!targetSessionId) {
-                  let q = supabase
+                if (!targetSessionId && restaurantServeurIdSnapshot) {
+                  const { data: dbSess1 } = await supabase
                     .from('restaurant_sessions_serveurs')
                     .select('id')
                     .eq('company_id', compId)
                     .eq('statut', 'OUVERTE')
-                  if (restaurantServeurIdSnapshot) {
-                    q = q.or(`serveur_id.eq.${restaurantServeurIdSnapshot},serveur_nom.ilike.${srvNom}`)
-                  } else {
-                    q = q.ilike('serveur_nom', srvNom)
-                  }
-                  const { data: dbSess } = await q.order('created_at', { ascending: false }).limit(1).maybeSingle()
-                  if (dbSess) targetSessionId = dbSess.id
+                    .eq('serveur_id', restaurantServeurIdSnapshot)
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
+                  if (dbSess1?.id) targetSessionId = dbSess1.id
+                }
+                if (!targetSessionId && srvNom) {
+                  const { data: dbSess2 } = await supabase
+                    .from('restaurant_sessions_serveurs')
+                    .select('id')
+                    .eq('company_id', compId)
+                    .eq('statut', 'OUVERTE')
+                    .ilike('serveur_nom', srvNom.trim())
+                    .order('created_at', { ascending: false })
+                    .limit(1)
+                    .maybeSingle()
+                  if (dbSess2?.id) targetSessionId = dbSess2.id
                 }
 
                 if (targetSessionId) {
@@ -2852,11 +2888,11 @@ export const POSPage: React.FC = () => {
 
                   if (typeof window !== 'undefined') {
                     window.dispatchEvent(new CustomEvent('gestio:restaurant-sale-completed', {
-                      detail: { order_number: orderNum, session_id: targetSessionId, serveur_nom: srvNom }
+                      detail: { order_number: orderNum, session_id: targetSessionId, serveur_nom: srvNom, serveur_id: restaurantServeurIdSnapshot }
                     }))
                     try {
                       localStorage.setItem('gestio_last_restaurant_sale', JSON.stringify({
-                        order_number: orderNum, session_id: targetSessionId, timestamp: Date.now()
+                        order_number: orderNum, session_id: targetSessionId, serveur_nom: srvNom, timestamp: Date.now()
                       }))
                     } catch (_) {}
                   }

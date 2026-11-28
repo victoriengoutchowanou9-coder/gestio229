@@ -20,7 +20,8 @@ import {
   enregistrerRetourEmballageSession,
   ServeurSession,
   BoissonConfiee,
-  VersementServeur
+  VersementServeur,
+  resolveProductCircuit
 } from '../../../services/restaurantService'
 import clsx from 'clsx'
 import { supabase } from '../../../lib/supabase'
@@ -45,7 +46,8 @@ export const ServeursPersonnelPage: React.FC = () => {
   const [creances, setCreances] = useState<any[]>([])
   const [reglements, setReglements] = useState<any[]>([])
   const [commandesList, setCommandesList] = useState<any[]>([])
-  const [staffModalTab, setStaffModalTab] = useState<'COMMANDES' | 'PAIEMENTS' | 'HISTORIQUE' | 'BOUTEILLES' | 'ANNULATIONS' | 'SESSIONS'>('COMMANDES')
+  const [commandeLignes, setCommandeLignes] = useState<any[]>([])
+  const [staffModalTab, setStaffModalTab] = useState<'PRODUITS' | 'COMMANDES' | 'PAIEMENTS' | 'HISTORIQUE' | 'BOUTEILLES' | 'ANNULATIONS' | 'SESSIONS'>('PRODUITS')
   const [selectedCreanceForBottles, setSelectedCreanceForBottles] = useState<any | null>(null)
   const [bottleReturnQty, setBottleReturnQty] = useState<number>(1)
   const [showBottleReturnModal, setShowBottleReturnModal] = useState<boolean>(false)
@@ -141,7 +143,7 @@ export const ServeursPersonnelPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [srvRes, sessRes, confRes, vmtRes, presRes, pltRes, creanceRes, reglRes, cmdRes] = await Promise.all([
+      const [srvRes, sessRes, confRes, vmtRes, presRes, pltRes, creanceRes, reglRes, cmdRes, cmdLignesRes] = await Promise.all([
         supabaseTenant('restaurant_serveurs').select('*').order('nom_complet'),
         supabaseTenant('restaurant_sessions_serveurs').select('*').order('created_at', { ascending: false }).limit(50),
         supabaseTenant('restaurant_boissons_confiees').select('*').order('created_at', { ascending: false }).limit(100),
@@ -150,7 +152,8 @@ export const ServeursPersonnelPage: React.FC = () => {
         supabaseTenant('restaurant_plaintes_incidents').select('*').order('created_at', { ascending: false }).limit(50),
         supabaseTenant('restaurant_creances_serveuses').select('*').order('date_creation', { ascending: false }).limit(100),
         supabaseTenant('restaurant_reglements_serveuses').select('*').order('date_reglement', { ascending: false }).limit(100),
-        supabaseTenant('restaurant_commandes').select('*').order('created_at', { ascending: false }).limit(100)
+        supabaseTenant('restaurant_commandes').select('*').order('created_at', { ascending: false }).limit(100),
+        supabaseTenant('restaurant_commande_lignes').select('*').order('heure_commande', { ascending: false }).limit(200)
       ])
 
       setPersonnel(srvRes.data || [])
@@ -162,6 +165,7 @@ export const ServeursPersonnelPage: React.FC = () => {
       setCreances(creanceRes.data || [])
       setReglements(reglRes.data || [])
       setCommandesList(cmdRes.data || [])
+      setCommandeLignes(cmdLignesRes?.data || [])
 
       if (selectedSession) {
         const updated = (sessRes.data || []).find((s: any) => s.id === selectedSession.id)
@@ -913,7 +917,7 @@ export const ServeursPersonnelPage: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <h5 className="text-xs font-black uppercase text-amber-900 flex items-center gap-1.5">
                       <Wine className="w-4 h-4 text-amber-600" />
-                      A. BOISSONS CONFIÉES (Boissons Réellement Vendues)
+                      A. BOISSONS CONFIÉES (SECTION 1 : BAR - Boissons Réellement Vendues)
                     </h5>
                     <span className="text-xs font-black text-amber-950 font-mono bg-amber-100/80 px-2.5 py-0.5 rounded-lg border border-amber-200">
                       Total Boissons : {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
@@ -965,7 +969,7 @@ export const ServeursPersonnelPage: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <h5 className="text-xs font-black uppercase text-rose-900 flex items-center gap-1.5">
                       <Utensils className="w-4 h-4 text-rose-600" />
-                      B. PLATS CONFIÉS (Plats & Repas Réellement Vendus)
+                      B. PLATS CONFIÉS (SECTION 2 : RESTAURANT - Plats & Repas Réellement Vendus)
                     </h5>
                     <span className="text-xs font-black text-rose-950 font-mono bg-rose-100/80 px-2.5 py-0.5 rounded-lg border border-rose-200">
                       Total Plats : {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
@@ -2364,14 +2368,125 @@ export const ServeursPersonnelPage: React.FC = () => {
               </div>
             </div>
 
-            {/* Récapitulatif financier de la serveuse */}
+            {/* Récapitulatif financier et produits de la serveuse */}
             {(() => {
-              const staffCreances = creances.filter(c => c.serveur_nom === selectedStaffDetail.nom_complet)
+              const sId = selectedStaffDetail.id
+              const sNom = (selectedStaffDetail.nom_complet || '').trim().toLowerCase()
+
+              const staffCreances = creances.filter(c =>
+                (c.serveur_id && sId && c.serveur_id === sId) ||
+                ((c.serveur_nom || '').trim().toLowerCase() === sNom)
+              )
               const totalBarDu = staffCreances.filter(c => c.circuit === 'BAR').reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
-              const totalCuisineDu = staffCreances.filter(c => c.circuit === 'CUISINE').reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
+              const totalCuisineDu = staffCreances.filter(c => c.circuit === 'CUISINE' || c.circuit === 'RESTAURANT').reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
               const totalGeneralDu = staffCreances.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
               const totalGeneralPaye = staffCreances.reduce((acc, c) => acc + Number(c.montant_paye || 0), 0)
               const totalBouteillesDues = staffCreances.reduce((acc, c) => acc + Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0)), 0)
+
+              // ── AGRÉGATION DES PRODUITS ET ARTICLES VENDUS PAR LA SERVEUSE ──
+              const barProductsMap = new Map<string, { nom: string; quantite: number; prix_unitaire: number; total: number; dernier_bon: string }>()
+              const restoProductsMap = new Map<string, { nom: string; quantite: number; prix_unitaire: number; total: number; dernier_bon: string }>()
+
+              // 1. Depuis restaurant_creances_serveuses (details du panier)
+              staffCreances.forEach(c => {
+                const orderRef = c.order_number || ''
+                const items = Array.isArray(c.details) ? c.details : []
+                items.forEach((it: any) => {
+                  const nom = (it.nom || it.name || it.designation || 'Article').trim()
+                  const qte = Number(it.quantite || it.qty || 1)
+                  const pu = Number(it.prix_unitaire || it.price || it.pu || 0)
+                  const tot = Number(it.total || (qte * pu))
+                  const circ = resolveProductCircuit(it)
+                  const key = nom.toLowerCase()
+                  if (circ === 'BAR') {
+                    if (barProductsMap.has(key)) {
+                      const ex = barProductsMap.get(key)!
+                      ex.quantite = Math.round((ex.quantite + qte) * 1000) / 1000
+                      ex.total = Math.round(ex.total + tot)
+                      ex.dernier_bon = orderRef || ex.dernier_bon
+                    } else {
+                      barProductsMap.set(key, { nom, quantite: qte, prix_unitaire: pu, total: tot, dernier_bon: orderRef })
+                    }
+                  } else {
+                    if (restoProductsMap.has(key)) {
+                      const ex = restoProductsMap.get(key)!
+                      ex.quantite = Math.round((ex.quantite + qte) * 1000) / 1000
+                      ex.total = Math.round(ex.total + tot)
+                      ex.dernier_bon = orderRef || ex.dernier_bon
+                    } else {
+                      restoProductsMap.set(key, { nom, quantite: qte, prix_unitaire: pu, total: tot, dernier_bon: orderRef })
+                    }
+                  }
+                })
+              })
+
+              // 2. Depuis restaurant_commande_lignes
+              const staffCmdLignes = commandeLignes.filter(l =>
+                (l.serveur_id && sId && l.serveur_id === sId) ||
+                ((l.serveur_nom || '').trim().toLowerCase() === sNom)
+              )
+              staffCmdLignes.forEach(l => {
+                const orderRef = l.commande_numero || ''
+                if (staffCreances.some(c => c.order_number === orderRef)) return
+                const nom = (l.designation || 'Article').trim()
+                const qte = Number(l.quantite || 1)
+                const pu = Number(l.prix_unitaire || 0)
+                const tot = Number(l.total_ligne || (qte * pu))
+                const circ = l.destination === 'BAR' ? 'BAR' : resolveProductCircuit(l)
+                const key = nom.toLowerCase()
+                if (circ === 'BAR') {
+                  if (barProductsMap.has(key)) {
+                    const ex = barProductsMap.get(key)!
+                    ex.quantite = Math.round((ex.quantite + qte) * 1000) / 1000
+                    ex.total = Math.round(ex.total + tot)
+                    ex.dernier_bon = orderRef || ex.dernier_bon
+                  } else {
+                    barProductsMap.set(key, { nom, quantite: qte, prix_unitaire: pu, total: tot, dernier_bon: orderRef })
+                  }
+                } else {
+                  if (restoProductsMap.has(key)) {
+                    const ex = restoProductsMap.get(key)!
+                    ex.quantite = Math.round((ex.quantite + qte) * 1000) / 1000
+                    ex.total = Math.round(ex.total + tot)
+                    ex.dernier_bon = orderRef || ex.dernier_bon
+                  } else {
+                    restoProductsMap.set(key, { nom, quantite: qte, prix_unitaire: pu, total: tot, dernier_bon: orderRef })
+                  }
+                }
+              })
+
+              // 3. Depuis les sessions ouvertes / historiques de la serveuse
+              const staffSessions = sessions.filter(s =>
+                (s.serveur_id && sId && s.serveur_id === sId) ||
+                ((s.serveur_nom || '').trim().toLowerCase() === sNom)
+              )
+              staffSessions.forEach(s => {
+                const suivi = s.details_suivi || (s.notes ? (typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes) : null)
+                if (suivi) {
+                  if (Array.isArray(suivi.bar_items)) {
+                    suivi.bar_items.forEach((b: any) => {
+                      const key = (b.nom || '').trim().toLowerCase()
+                      if (key && !barProductsMap.has(key)) {
+                        barProductsMap.set(key, { nom: b.nom, quantite: Number(b.quantite || 0), prix_unitaire: Number(b.prix_unitaire || 0), total: Number(b.total || 0), dernier_bon: `Session #${s.id.slice(0, 6)}` })
+                      }
+                    })
+                  }
+                  if (Array.isArray(suivi.restaurant_items)) {
+                    suivi.restaurant_items.forEach((r: any) => {
+                      const key = (r.nom || '').trim().toLowerCase()
+                      if (key && !restoProductsMap.has(key)) {
+                        restoProductsMap.set(key, { nom: r.nom, quantite: Number(r.quantite || 0), prix_unitaire: Number(r.prix_unitaire || 0), total: Number(r.total || 0), dernier_bon: `Session #${s.id.slice(0, 6)}` })
+                      }
+                    })
+                  }
+                }
+              })
+
+              const staffBarItems = Array.from(barProductsMap.values())
+              const staffRestoItems = Array.from(restoProductsMap.values())
+              const totalBarVentes = staffBarItems.reduce((acc, b) => acc + b.total, 0)
+              const totalRestoVentes = staffRestoItems.reduce((acc, r) => acc + r.total, 0)
+              const totalArticlesQty = staffBarItems.reduce((acc, b) => acc + b.quantite, 0) + staffRestoItems.reduce((acc, r) => acc + r.quantite, 0)
 
               return (
                 <div className="space-y-6">
@@ -2399,8 +2514,19 @@ export const ServeursPersonnelPage: React.FC = () => {
                     </div>
                   </div>
 
-                  {/* Sélecteur des 6 Sous-onglets Spécialisés (Point 9 des spécifications) */}
+                  {/* Sélecteur des Sous-onglets Spécialisés */}
                   <div className="flex border-b border-slate-200 overflow-x-auto gap-1 pb-1">
+                    <button
+                      onClick={() => setStaffModalTab('PRODUITS')}
+                      className={clsx(
+                        'px-3.5 py-2 text-xs font-black rounded-xl transition whitespace-nowrap flex items-center gap-1.5',
+                        staffModalTab === 'PRODUITS'
+                          ? 'bg-rose-600 text-white shadow-sm'
+                          : 'text-slate-600 hover:bg-slate-100'
+                      )}
+                    >
+                      <Wine className="w-4 h-4" /> 🛍️ Produits Vendus ({totalArticlesQty})
+                    </button>
                     <button
                       onClick={() => setStaffModalTab('COMMANDES')}
                       className={clsx(
@@ -2469,6 +2595,126 @@ export const ServeursPersonnelPage: React.FC = () => {
                     </button>
                   </div>
 
+                  {/* ── SOUS-ONGLET 0 : PRODUITS & CONSOMMATIONS VENDUS (BAR & RESTO SÉPARÉS) ── */}
+                  {staffModalTab === 'PRODUITS' && (
+                    <div className="space-y-5">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <h4 className="font-black text-xs text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                            <span>🍸</span> Consommations & Produits Vendus — {selectedStaffDetail.nom_complet}
+                          </h4>
+                          <p className="text-[11px] text-slate-500">
+                            Synchronisation directe POS & Sessions : quantités cumulées, prix unitaires et montants réels
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <span className="text-xs font-black text-blue-900 bg-blue-50 px-2.5 py-1 rounded-xl border border-blue-200">
+                            Bar : {fmt(totalBarVentes)}
+                          </span>
+                          <span className="text-xs font-black text-orange-900 bg-orange-50 px-2.5 py-1 rounded-xl border border-orange-200">
+                            Cuisine : {fmt(totalRestoVentes)}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Section Boissons Confiées Bar */}
+                      <div className="space-y-2">
+                        <h5 className="text-xs font-black uppercase text-amber-900 flex items-center gap-1.5">
+                          <Wine className="w-4 h-4 text-amber-600" />
+                          A. BOISSONS CONFIÉES & VENDUES ({staffBarItems.length})
+                        </h5>
+                        <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-amber-50/70 text-amber-950 font-black text-[10px] uppercase border-b border-amber-200/60">
+                              <tr>
+                                <th className="p-3">Boisson</th>
+                                <th className="p-3 text-center">Quantité Cumulée</th>
+                                <th className="p-3 text-right">Prix Unitaire</th>
+                                <th className="p-3 text-right">Montant Total</th>
+                                <th className="p-3 text-center">Dernière Réf</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {staffBarItems.map((b, idx) => (
+                                <tr key={idx} className="hover:bg-amber-50/20 transition">
+                                  <td className="p-3 font-bold text-slate-900">{b.nom}</td>
+                                  <td className="p-3 text-center font-mono font-black text-slate-800 bg-slate-50/50">{b.quantite}</td>
+                                  <td className="p-3 text-right font-mono text-slate-600">{fmt(b.prix_unitaire)}</td>
+                                  <td className="p-3 text-right font-mono font-black text-amber-700">{fmt(b.total)}</td>
+                                  <td className="p-3 text-center font-mono text-[10px] text-slate-400">{b.dernier_bon || '-'}</td>
+                                </tr>
+                              ))}
+                              {staffBarItems.length === 0 && (
+                                <tr>
+                                  <td colSpan={5} className="p-6 text-center text-slate-400 italic">
+                                    Aucune boisson vendue enregistrée pour cette serveuse.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                            {staffBarItems.length > 0 && (
+                              <tfoot className="bg-amber-50/50 border-t border-amber-200/80 font-black text-xs">
+                                <tr>
+                                  <td colSpan={3} className="p-3 text-amber-950 uppercase font-bold">Total Boissons Confiées :</td>
+                                  <td className="p-3 text-right font-mono text-amber-700 text-sm font-black">{fmt(totalBarVentes)}</td>
+                                  <td></td>
+                                </tr>
+                              </tfoot>
+                            )}
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Section Plats Confiés Restaurant */}
+                      <div className="space-y-2">
+                        <h5 className="text-xs font-black uppercase text-rose-900 flex items-center gap-1.5">
+                          <Utensils className="w-4 h-4 text-rose-600" />
+                          B. PLATS CONFIÉS & VENDUS ({staffRestoItems.length})
+                        </h5>
+                        <div className="border border-slate-200 rounded-2xl overflow-hidden bg-white shadow-sm">
+                          <table className="w-full text-xs text-left">
+                            <thead className="bg-rose-50/70 text-rose-950 font-black text-[10px] uppercase border-b border-rose-200/60">
+                              <tr>
+                                <th className="p-3">Plat / Préparation</th>
+                                <th className="p-3 text-center">Quantité Cumulée</th>
+                                <th className="p-3 text-right">Prix Unitaire</th>
+                                <th className="p-3 text-right">Montant Total</th>
+                                <th className="p-3 text-center">Dernière Réf</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100">
+                              {staffRestoItems.map((r, idx) => (
+                                <tr key={idx} className="hover:bg-rose-50/20 transition">
+                                  <td className="p-3 font-bold text-slate-900">{r.nom}</td>
+                                  <td className="p-3 text-center font-mono font-black text-slate-800 bg-slate-50/50">{r.quantite}</td>
+                                  <td className="p-3 text-right font-mono text-slate-600">{fmt(r.prix_unitaire)}</td>
+                                  <td className="p-3 text-right font-mono font-black text-rose-700">{fmt(r.total)}</td>
+                                  <td className="p-3 text-center font-mono text-[10px] text-slate-400">{r.dernier_bon || '-'}</td>
+                                </tr>
+                              ))}
+                              {staffRestoItems.length === 0 && (
+                                <tr>
+                                  <td colSpan={5} className="p-6 text-center text-slate-400 italic">
+                                    Aucun plat vendu enregistré pour cette serveuse.
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                            {staffRestoItems.length > 0 && (
+                              <tfoot className="bg-rose-50/50 border-t border-rose-200/80 font-black text-xs">
+                                <tr>
+                                  <td colSpan={3} className="p-3 text-rose-950 uppercase font-bold">Total Plats Confiés :</td>
+                                  <td className="p-3 text-right font-mono text-rose-700 text-sm font-black">{fmt(totalRestoVentes)}</td>
+                                  <td></td>
+                                </tr>
+                              </tfoot>
+                            )}
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* ── SOUS-ONGLET 1 : COMMANDES & PRODUITS EN COURS (BAR / CUISINE SÉPARÉS) ── */}
                   {staffModalTab === 'COMMANDES' && (
                     <div className="space-y-4">
@@ -2509,6 +2755,15 @@ export const ServeursPersonnelPage: React.FC = () => {
                                   <td className="p-3 font-mono font-bold text-slate-900">
                                     {c.order_number}
                                     <span className="text-[10px] text-slate-400 block font-normal">{new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}</span>
+                                    {Array.isArray(c.details) && c.details.length > 0 && (
+                                      <div className="flex flex-wrap gap-1 mt-1">
+                                        {c.details.map((d: any, di: number) => (
+                                          <span key={di} className="inline-block text-[9px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-sans">
+                                            {d.qty || d.quantite || 1}x {d.name || d.nom}
+                                          </span>
+                                        ))}
+                                      </div>
+                                    )}
                                   </td>
                                   <td className="p-3">
                                     <span className={clsx('px-2 py-0.5 rounded text-[10px] font-black', c.circuit === 'CUISINE' ? 'bg-orange-100 text-orange-800' : 'bg-blue-100 text-blue-800')}>
@@ -2713,7 +2968,18 @@ export const ServeursPersonnelPage: React.FC = () => {
                                     const btlsRestantes = Math.max(0, (Number(c.consignes_bouteilles_dues) || 0) - (Number(c.consignes_bouteilles_rendues) || 0))
                                     return (
                                       <tr key={c.id} className="hover:bg-slate-50/50">
-                                        <td className="p-3 font-mono font-bold text-slate-900">{c.order_number}</td>
+                                        <td className="p-3 font-mono font-bold text-slate-900">
+                                         {c.order_number}
+                                         {Array.isArray(c.details) && c.details.length > 0 && (
+                                           <div className="flex flex-wrap gap-1 mt-1">
+                                             {c.details.map((d: any, di: number) => (
+                                               <span key={di} className="inline-block text-[9px] bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded font-sans">
+                                                 {d.qty || d.quantite || 1}x {d.name || d.nom}
+                                               </span>
+                                             ))}
+                                           </div>
+                                         )}
+                                       </td>
                                         <td className="p-3 text-slate-500 text-[11px]">
                                           {new Date(c.date_creation).toLocaleDateString('fr-BJ', { hour: '2-digit', minute: '2-digit' })}
                                         </td>

@@ -1185,6 +1185,9 @@ export async function accumulerVenteDansSessionServeuse(params: {
                 qte_remise: newRemise,
                 qte_vendue: newVendue,
                 total_valeur_remise: Math.round(newRemise * (pu > 0 ? pu : 0)),
+                valeur_totale_ttc: Math.round(newRemise * (pu > 0 ? pu : 0)),
+                prix_vente_unitaire: pu > 0 ? pu : (Number(existingB.prix_vente_unitaire) || 0),
+                prix_unitaire: pu > 0 ? pu : (Number(existingB.prix_vente_unitaire) || 0),
                 updated_at: new Date().toISOString()
               })
               .eq('id', existingB.id)
@@ -1205,8 +1208,10 @@ export async function accumulerVenteDansSessionServeuse(params: {
                 qte_cassee: 0,
                 qte_restante_declaree: 0,
                 prix_vente_unitaire: pu,
+                prix_unitaire: pu,
                 cout_achat_unitaire: 0,
                 total_valeur_remise: Math.round(qte * pu),
+                valeur_totale_ttc: Math.round(qte * pu),
                 remis_par: 'POS Vente',
                 notes: `Vente ${order_number}`
               })
@@ -1259,24 +1264,38 @@ export async function obtenirSuiviSessionServeuse(
       detail.total_boissons_confiees = Number(sess.total_boissons_confiees_ttc) || Number(sess.details_suivi?.total_boissons_confiees) || 0
       detail.total_plats_confies = Number(sess.details_suivi?.total_plats_confies) || Number(sess.total_restaurant_ttc) || 0
 
-      // Si total_boissons_confiees est à 0, chercher dans la table restaurant_boissons_confiees
-      if (!detail.total_boissons_confiees) {
-        const { data: bConf } = await supabase
-          .from('restaurant_boissons_confiees')
-          .select('valeur_totale_ttc, qte_remise, prix_unitaire')
-          .eq('session_id', session_id)
-        if (bConf && bConf.length > 0) {
-          detail.total_boissons_confiees = bConf.reduce((s, b) => s + (Number(b.valeur_totale_ttc) || (Number(b.qte_remise || 0) * Number(b.prix_unitaire || 0))), 0)
+      // Si total_boissons_confiees est à 0 ou partiel, chercher dans la table restaurant_boissons_confiees
+      const { data: bConf } = await supabase
+        .from('restaurant_boissons_confiees')
+        .select('*')
+        .eq('session_id', session_id)
+      if (bConf && bConf.length > 0) {
+        const sumB = bConf.reduce((s, b) => {
+          const tot = Number(b.total_valeur_remise || b.valeur_totale_ttc || (Number(b.qte_remise || b.qte_vendue || 0) * Number(b.prix_vente_unitaire || b.prix_unitaire || 0)))
+          return s + tot
+        }, 0)
+        if (!detail.total_boissons_confiees || sumB > detail.total_boissons_confiees) {
+          detail.total_boissons_confiees = sumB
+        }
+        if (detail.bar_items.length === 0) {
+          detail.bar_items = bConf.map((b: any) => ({
+            produit_id: b.produit_id || b.produit_nom,
+            nom: b.produit_nom,
+            prix_unitaire: Number(b.prix_vente_unitaire || b.prix_unitaire || 0),
+            quantite: Number(b.qte_vendue || b.qte_remise || 0),
+            total: Number(b.total_valeur_remise || b.valeur_totale_ttc || 0) || Math.round(Number(b.qte_vendue || b.qte_remise || 0) * Number(b.prix_vente_unitaire || b.prix_unitaire || 0)),
+            circuit: 'BAR' as const
+          }))
         }
       }
 
       // Priorité 1: details_suivi structuré (M089) ou notes JSON
       const jsonSource = sess.details_suivi || (sess.notes ? (typeof sess.notes === 'string' ? JSON.parse(sess.notes) : sess.notes) : null)
       if (jsonSource) {
-        if (Array.isArray(jsonSource.bar_items)) {
+        if (Array.isArray(jsonSource.bar_items) && jsonSource.bar_items.length > 0) {
           detail.bar_items = jsonSource.bar_items.filter((b: any) => resolveProductCircuit(b) === 'BAR')
         }
-        if (Array.isArray(jsonSource.restaurant_items)) {
+        if (Array.isArray(jsonSource.restaurant_items) && jsonSource.restaurant_items.length > 0) {
           detail.restaurant_items = jsonSource.restaurant_items.filter((r: any) => resolveProductCircuit(r) === 'RESTAURANT')
         }
         if (Array.isArray(jsonSource.historique_ventes)) {
@@ -1285,29 +1304,49 @@ export async function obtenirSuiviSessionServeuse(
       }
     }
 
-    const { data: sales } = await supabase
-      .from('sales_orders')
-      .select('*, items:sales_order_items(*)')
-      .eq('company_id', company_id)
-      .neq('status', 'ANNULE')
-      .order('created_at', { ascending: false })
-      .limit(200)
+    let sales: any[] = []
+    try {
+      const { data: salesData } = await supabase
+        .from('sales_orders')
+        .select('*, items:sales_order_items(*)')
+        .eq('company_id', company_id)
+        .neq('status', 'ANNULE')
+        .order('created_at', { ascending: false })
+        .limit(200)
+      if (salesData) sales = salesData
+    } catch (_) {
+      try {
+        const { data: fallbackSales } = await supabase
+          .from('sales_orders')
+          .select('*')
+          .eq('company_id', company_id)
+          .neq('status', 'ANNULE')
+          .order('created_at', { ascending: false })
+          .limit(200)
+        if (fallbackSales) sales = fallbackSales
+      } catch (__) {}
+    }
 
     if (sales && sales.length > 0) {
       const sessionSales = sales.filter(s => {
         const meta = s.sector_meta || {}
         let parsedNotes: any = {}
         try { if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes } catch (_) {}
-        const srv1 = (meta.serveur_nom || parsedNotes.serveur_nom || s.serveur_nom || '').trim().toLowerCase()
+        const srv1 = (meta.serveur_nom || parsedNotes.serveur_nom || s.serveur_nom || s.server_name || '').trim().toLowerCase()
         const srv2 = (sess?.serveur_nom || '').trim().toLowerCase()
         const sameServer = Boolean(srv1 && srv2 && (srv1 === srv2 || srv1.includes(srv2) || srv2.includes(srv1)))
+        const srvId1 = meta.serveur_id || parsedNotes.serveur_id
+        const srvId2 = sess?.serveur_id
+        const sameServerId = Boolean(srvId1 && srvId2 && srvId1 === srvId2)
         const sDate = (s.order_date || s.created_at || '').slice(0, 10)
-        const sessDate = (sess?.date_session || '').slice(0, 10)
-        const sameDate = Boolean(sessDate && sDate === sessDate)
+        const sessDate = (sess?.date_session || sess?.created_at || '').slice(0, 10)
+        const sameDate = Boolean(!sessDate || !sDate || sDate === sessDate)
+        const isSessionOpen = sess?.statut === 'OUVERTE'
         return (
           meta.session_id === session_id ||
           parsedNotes.session_id === session_id ||
-          (sameServer && sameDate)
+          (sameServerId && (isSessionOpen || sameDate)) ||
+          (sameServer && (isSessionOpen || sameDate))
         )
       })
 
