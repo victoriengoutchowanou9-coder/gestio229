@@ -11,7 +11,7 @@ import {
   Clock, Printer, RotateCcw, AlertTriangle, X, Plus, Minus,
   Layers, CreditCard, DollarSign, Smartphone, Landmark, Info, Download,
   ChevronRight, ArrowDown, Lock, Package, ArrowRightLeft, Tag,
-  CheckCircle, Wine, ChefHat, Edit3, XCircle, Fuel
+  CheckCircle, Wine, ChefHat, Edit3, XCircle, Fuel, FileText
 } from 'lucide-react'
 import { isFuelProduct } from '../../../utils/stationFuelHelper'
 import jsPDF from 'jspdf'
@@ -5264,6 +5264,7 @@ export const POSPage: React.FC = () => {
                 {currentSale?.serveur_nom && (
                   <p className="font-black text-rose-700">
                     SERVEUR RESPONSABLE : {currentSale.serveur_nom}
+                    <span className="text-[10px] block font-normal text-slate-500">Serveuse responsable : {currentSale.serveur_nom}</span>
                   </p>
                 )}
               </div>
