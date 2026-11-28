@@ -197,10 +197,12 @@ export function computeOrderCOGS(order: FinancialSaleOrder): { cogsHT: number; h
     return { cogsHT: directCost, hasKnownCost: true };
   }
 
-  // Si gross_margin est stockée dans la table (colonne générée ou calculée)
-  if (typeof order.gross_margin === 'number' && !Number.isNaN(order.gross_margin)) {
-    const computedCogs = Math.max(0, subtotalHT - order.gross_margin);
-    if (computedCogs > 0 || order.gross_margin === subtotalHT) {
+  // RÈGLE STRICTE (GESTIO 229) : Ne JAMAIS assimiler le chiffre d'affaires au coût d'achat !
+  // Si gross_margin est strictement positive et inférieure au CA, on peut en déduire le COGS réel.
+  // Si gross_margin vaut 0 ou n'est pas renseignée, il est INTERDIT de poser COGS = CA !
+  if (typeof order.gross_margin === 'number' && !Number.isNaN(order.gross_margin) && order.gross_margin > 0 && order.gross_margin < subtotalHT) {
+    const computedCogs = Math.round((subtotalHT - order.gross_margin) * 100) / 100;
+    if (computedCogs > 0) {
       return { cogsHT: computedCogs, hasKnownCost: true };
     }
   }

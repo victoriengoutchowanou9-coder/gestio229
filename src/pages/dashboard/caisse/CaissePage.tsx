@@ -751,6 +751,21 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       }
       setRepaymentsToday(repList)
 
+      // 2b. Dépenses d'exploitation réelles du jour depuis 'expenses'
+      let expList: any[] = []
+      try {
+        const { data: expData } = await supabase
+          .from('expenses')
+          .select('*')
+          .eq('company_id', currentCompanyId)
+          .gte('created_at', startOfDay)
+          .order('created_at', { ascending: false })
+        if (expData) expList = expData
+      } catch (expErr) {
+        console.warn('Fallback expenses error:', expErr)
+      }
+      setDepensesToday(expList)
+
       // 3. Charger l'Historique réel et persistant des mouvements de caisse (RÈGLE 4)
       let allDbMovements: CashMovement[] = []
       try {
@@ -809,6 +824,50 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
       if (allDbMovements.length > 0) {
         setMovementsHistory(allDbMovements)
       } else {
+        const saleMovements: CashMovement[] = (parsedSales || []).map((s: any) => ({
+          id: s.id,
+          created_at: s.created_at,
+          user_name: s.cashier_name || 'Caissier',
+          type: 'ENCAISSEMENT' as const,
+          payment_channel: (s.parsedPayments?.[0]?.method === 'momo' || s.parsedPayments?.[0]?.method === 'MTN_MOMO' || s.parsedPayments?.[0]?.method === 'MOOV_MONEY') ? 'MoMo' as const : 'Espèces' as const,
+          amount: Number(s.total_amount) || 0,
+          montant_especes: s.parsedPayments?.reduce((acc: number, p: any) => (p.method === 'especes' || p.method === 'cash') ? acc + Number(p.amount || 0) : acc, 0) || 0,
+          montant_momo: s.parsedPayments?.reduce((acc: number, p: any) => (p.method === 'momo' || p.method === 'MTN_MOMO' || p.method === 'MOOV_MONEY') ? acc + Number(p.amount || 0) : acc, 0) || 0,
+          sens: 'entree' as const,
+          motif: `Vente ${s.order_number}`,
+          reference: s.order_number,
+          status: 'VALIDE' as const
+        }))
+        const repaymentMovements: CashMovement[] = (repList || []).map((r: any) => ({
+          id: r.id,
+          created_at: r.created_at,
+          user_name: 'Caissier',
+          type: 'REMBOURSEMENT' as const,
+          payment_channel: (r.payment_method?.toLowerCase().includes('mo')) ? 'MoMo' as const : 'Espèces' as const,
+          amount: Number(r.amount) || 0,
+          montant_especes: (r.payment_method?.toLowerCase().includes('mo')) ? 0 : Number(r.amount) || 0,
+          montant_momo: (r.payment_method?.toLowerCase().includes('mo')) ? Number(r.amount) || 0 : 0,
+          sens: 'entree' as const,
+          motif: `Règlement dette ${r.customer_name || ''}`,
+          reference: r.reference || `RC-${r.id.slice(0, 6)}`,
+          status: 'VALIDE' as const
+        }))
+        const depensesMovements: CashMovement[] = (expList || []).map((e: any) => ({
+          id: e.id,
+          created_at: e.created_at,
+          user_name: 'Caissier',
+          type: 'RETRAIT' as const,
+          payment_channel: (e.payment_method?.toLowerCase().includes('mo')) ? 'MoMo' as const : 'Espèces' as const,
+          amount: Number(e.amount) || 0,
+          montant_especes: (e.payment_method?.toLowerCase().includes('mo')) ? 0 : Number(e.amount) || 0,
+          montant_momo: (e.payment_method?.toLowerCase().includes('mo')) ? Number(e.amount) || 0 : 0,
+          sens: 'sortie' as const,
+          motif: e.notes || e.category || 'Dépense',
+          reference: e.expense_number || `DEP-${e.id.slice(0, 6)}`,
+          status: 'VALIDE' as const
+        }))
+        const transferMovements: CashMovement[] = []
+
         setMovementsHistory(
           [...transferMovements, ...depensesMovements, ...repaymentMovements, ...saleMovements].sort(
             (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
@@ -1590,7 +1649,28 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
           }
           return acc
         }, 0)
-        const coutAchatEstimeCloture = salesToday.reduce((acc: number, s: any) => acc + (Number(s.total_cost) || 0), 0) || Math.max(0, (syn.caDuJour || caDuJour) - margeBruteJour)
+        // RÈGLE STRICTE GESTIO 229 : Coût des matières calculé sur la consommation réelle (JAMAIS égal au CA)
+        const coutAchatEstimeCloture = Math.round(salesToday.reduce((acc: number, s: any) => {
+          if (s.status === 'CANCELLED' || s.status === 'annule') return acc
+          let cost = Number(s.total_cost || 0)
+          if (cost <= 0) {
+            let lines = Array.isArray(s.lines) ? s.lines : null
+            if (!lines && s.notes) {
+              try {
+                const p = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+                if (Array.isArray(p.lines)) lines = p.lines
+              } catch (_) {}
+            }
+            if (Array.isArray(lines) && lines.length > 0) {
+              cost = lines.reduce((sub: number, l: any) => {
+                const q = Number(l.qty || l.quantity || 1)
+                const c = Number(l.unit_cost || l.product?.cost_price || l.cost_price || 0)
+                return sub + (q * c)
+              }, 0)
+            }
+          }
+          return acc + Math.max(0, cost)
+        }, 0) * 100) / 100
         const salesAnnuleesCloture = salesToday.filter((s: any) => s.status === 'CANCELLED' || s.status === 'annule')
         const clientsServisCountCloture = new Set(salesToday.filter((s: any) => s.status !== 'CANCELLED' && s.status !== 'annule').map((s: any) => s.customer_id || s.customer_name || s.id)).size
         const depensesDetailsListCloture = movementsHistory
@@ -1944,7 +2024,28 @@ export const CaissePage: React.FC<CaissePageProps> = ({ sector_key, sectorKey })
         }
         return acc
       }, 0)
-      const coutAchatEstimeMan = salesToday.reduce((acc: number, s: any) => acc + (Number(s.total_cost) || 0), 0) || Math.max(0, caDuJour - margeBruteJour)
+      // RÈGLE STRICTE GESTIO 229 : Coût des matières calculé sur la consommation réelle (JAMAIS égal au CA)
+      const coutAchatEstimeMan = Math.round(salesToday.reduce((acc: number, s: any) => {
+        if (s.status === 'CANCELLED' || s.status === 'annule') return acc
+        let cost = Number(s.total_cost || 0)
+        if (cost <= 0) {
+          let lines = Array.isArray(s.lines) ? s.lines : null
+          if (!lines && s.notes) {
+            try {
+              const p = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes
+              if (Array.isArray(p.lines)) lines = p.lines
+            } catch (_) {}
+          }
+          if (Array.isArray(lines) && lines.length > 0) {
+            cost = lines.reduce((sub: number, l: any) => {
+              const q = Number(l.qty || l.quantity || 1)
+              const c = Number(l.unit_cost || l.product?.cost_price || l.cost_price || 0)
+              return sub + (q * c)
+            }, 0)
+          }
+        }
+        return acc + Math.max(0, cost)
+      }, 0) * 100) / 100
       const salesAnnuleesMan = salesToday.filter((s: any) => s.status === 'CANCELLED' || s.status === 'annule')
       const clientsServisCountMan = new Set(salesToday.filter((s: any) => s.status !== 'CANCELLED' && s.status !== 'annule').map((s: any) => s.customer_id || s.customer_name || s.id)).size
       const depensesDetailsListMan = movementsHistory

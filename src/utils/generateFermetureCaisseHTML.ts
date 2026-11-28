@@ -82,20 +82,24 @@ export function generateFermetureCaisseHTML(data: FermetureCaisseData): string {
   const heureFormatted = data.heure || new Date().toLocaleTimeString('fr-BJ', { hour: '2-digit', minute: '2-digit' })
   const dateHeure = data.dateHeure || `${dateFormatted} à ${heureFormatted}`
 
-  // 1. Chiffre d'affaires
+  // 1. Chiffre d'affaires & Encaissements par mode (Séparation stricte Espèces, MTN MoMo, Moov Money)
   const caTotal = Number(data.ca || 0)
   const caEspeces = Number(data.espece || 0)
-  const caMomo = Number(data.momo || 0)
+  const caMtn = Number(data.caMtn || (data as any).mtnMomo || 0)
+  const caMoov = Number(data.caMoov || (data as any).moovMoney || 0)
+  const caMomo = Number(data.momo || (caMtn + caMoov) || 0)
   const caCredit = Number(data.ventesCredit || 0)
   const nbVentes = Number(data.nombreVentes ?? 0)
   const nbArticles = Number(data.nombreArticles ?? 0)
 
-  // 2. Marge
+  // 2. Marge & Coût des Matières (Ne JAMAIS poser coût = CA !)
   const margeVal = Number(data.marge || 0)
   const margePct = typeof data.margePercent === 'number'
     ? data.margePercent
     : (caTotal > 0 ? Math.round((margeVal / caTotal) * 100) : 0)
-  const coutAchat = Number(data.coutAchat ?? (caTotal > margeVal ? caTotal - margeVal : 0))
+  const coutAchat = typeof data.coutAchat === 'number'
+    ? Number(data.coutAchat)
+    : (margeVal > 0 && caTotal >= margeVal ? caTotal - margeVal : 0)
 
   // 3. Bilan Caisse Espèces
   const fondInitial = Number(data.fondInitialEspeces || 0)
@@ -289,12 +293,30 @@ export function generateFermetureCaisseHTML(data: FermetureCaisseData): string {
                             </tr>
                             <tr>
                               <td align="left" style="padding: 4px 0; font-size: 13px; color: #334155;">
-                                • Paiements Mobile Money (MTN / Moov)
+                                • Paiements Mobile Money Total
                               </td>
                               <td align="right" style="padding: 4px 0; font-size: 13px; font-weight: 800; color: #0284C7;">
                                 ${fmt(caMomo)}
                               </td>
                             </tr>
+                            ${caMtn > 0 || caMoov > 0 ? `
+                            <tr>
+                              <td align="left" style="padding: 2px 0 2px 14px; font-size: 12px; color: #64748B;">
+                                - Dont MTN MoMo
+                              </td>
+                              <td align="right" style="padding: 2px 0; font-size: 12px; font-weight: 700; color: #0284C7;">
+                                ${fmt(caMtn)}
+                              </td>
+                            </tr>
+                            <tr>
+                              <td align="left" style="padding: 2px 0 2px 14px; font-size: 12px; color: #64748B;">
+                                - Dont Moov Money
+                              </td>
+                              <td align="right" style="padding: 2px 0; font-size: 12px; font-weight: 700; color: #0284C7;">
+                                ${fmt(caMoov)}
+                              </td>
+                            </tr>
+                            ` : ''}
                             <tr>
                               <td align="left" style="padding: 4px 0; font-size: 13px; color: #334155;">
                                 • Ventes à Crédit (Créances clients créées)

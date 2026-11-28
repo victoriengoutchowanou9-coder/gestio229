@@ -229,11 +229,35 @@ export const POSPage: React.FC = () => {
   const isRestaurant = currentSectorSlug === 'restaurant' || currentSectorSlug === 'bar-restaurant-maquis' || currentSectorSlug === 'bar' || currentSectorSlug === 'maquis' || currentSectorSlug === 'fastfood'
   const [restaurantCircuit, setRestaurantCircuit] = useState<'BAR' | 'CUISINE'>('BAR')
   const [restaurantTable, setRestaurantTable] = useState('')
+  const [restaurantTableId, setRestaurantTableId] = useState<string>('')
+  const [restaurantTablesList, setRestaurantTablesList] = useState<any[]>([])
+  const [restaurantSaleMode, setRestaurantSaleMode] = useState<'TABLE' | 'COMPTOIR'>('TABLE')
   const [restaurantCouverts, setRestaurantCouverts] = useState(1)
   const [restaurantServeur, setRestaurantServeur] = useState('')
   const [restaurantServeurId, setRestaurantServeurId] = useState<string>('')
   const [restaurantSessionId, setRestaurantSessionId] = useState<string>('')
   const [restaurantServeursList, setRestaurantServeursList] = useState<any[]>([])
+
+  // Synchronisation automatique et bidirectionnelle de la table sélectionnée
+  useEffect(() => {
+    if (!restaurantTablesList || restaurantTablesList.length === 0) return
+    if (restaurantTable) {
+      const cleanT = restaurantTable.trim().toLowerCase()
+      const matched = restaurantTablesList.find(t =>
+        (t.numero_table && t.numero_table.trim().toLowerCase() === cleanT) ||
+        (t.nom && t.nom.trim().toLowerCase() === cleanT) ||
+        (restaurantTableId && t.id === restaurantTableId)
+      )
+      if (matched && (!restaurantTableId || restaurantTableId !== matched.id)) {
+        setRestaurantTableId(matched.id)
+      }
+    } else if (restaurantTableId) {
+      const matched = restaurantTablesList.find(t => t.id === restaurantTableId)
+      if (matched && matched.numero_table !== restaurantTable) {
+        setRestaurantTable(matched.numero_table)
+      }
+    }
+  }, [restaurantTable, restaurantTableId, restaurantTablesList])
   // Synchronisation automatique et bidirectionnelle de la serveuse sélectionnée
   useEffect(() => {
     if (!restaurantServeursList || restaurantServeursList.length === 0) return
@@ -774,12 +798,34 @@ export const POSPage: React.FC = () => {
     // 3. Charger les fiches techniques (Recettes Restaurant) et les serveuses (unification serveurs + sessions + personnel)
     if (isRestaurant) {
       try {
-        const [fichesRes, srvRes, sessRes, staffRes] = await Promise.all([
+        const [fichesRes, srvRes, sessRes, staffRes, tablesRes] = await Promise.all([
           supabaseTenant('restaurant_fiches_techniques').select('*').order('plat_nom'),
           supabaseTenant('restaurant_serveurs').select('*').eq('statut', 'ACTIF').order('nom_complet'),
           supabaseTenant('restaurant_sessions_serveurs').select('*').eq('statut', 'OUVERTE').order('created_at', { ascending: false }),
-          supabaseTenant('staff_members').select('*').eq('is_active', true)
+          supabaseTenant('staff_members').select('*').eq('is_active', true),
+          supabaseTenant('restaurant_tables').select('*').order('numero_table')
         ])
+
+        if (tablesRes.data) {
+          setRestaurantTablesList(tablesRes.data)
+          const urlParams = new URLSearchParams(window.location.search)
+          const urlTable = urlParams.get('table')
+          if (urlTable) {
+            const matchedT = tablesRes.data.find((t: any) =>
+              (t.numero_table && t.numero_table.trim().toLowerCase() === urlTable.trim().toLowerCase()) ||
+              (t.nom && t.nom.trim().toLowerCase() === urlTable.trim().toLowerCase()) ||
+              t.id === urlTable
+            )
+            if (matchedT) {
+              setRestaurantTable(matchedT.numero_table)
+              setRestaurantTableId(matchedT.id)
+              setRestaurantSaleMode('TABLE')
+            } else {
+              setRestaurantTable(urlTable)
+              setRestaurantSaleMode('TABLE')
+            }
+          }
+        }
 
         const srvMap = new Map<string, any>()
 
@@ -2151,33 +2197,26 @@ export const POSPage: React.FC = () => {
       return
     }
 
-    // Règle 2 : Pour toute vente BAR ou RESTAURANT / MAQUIS, la sélection d'une serveuse avec session active est obligatoire
+    // Règle 2 : Pour toute vente BAR ou RESTAURANT / MAQUIS
     if (isRestaurant) {
+      if (restaurantSaleMode === 'TABLE') {
+        const cleanTable = (restaurantTable || '').trim()
+        if (!cleanTable && !restaurantTableId) {
+          toast.error('Table requise', 'Pour une vente sur table, veuillez obligatoirement sélectionner une table dans la liste.')
+          return
+        }
+      }
+
       const cleanSrv = (restaurantServeur || '').trim()
-      const isInvalidServeur = !cleanSrv ||
+      const isComptoirSale = !cleanSrv ||
         cleanSrv.toLowerCase() === 'client comptoir' ||
         cleanSrv.toLowerCase() === 'client comptoir direct' ||
         cleanSrv.toLowerCase() === 'serveur de salle' ||
-        cleanSrv.toLowerCase() === 'comptoir'
+        cleanSrv.toLowerCase() === 'comptoir' ||
+        restaurantSaleMode === 'COMPTOIR'
 
-      if (isInvalidServeur) {
-        toast.error('Serveuse obligatoire', 'Pour toute vente BAR ou RESTAURANT / MAQUIS, la sélection d\'une serveuse est obligatoire. Client Comptoir n\'est pas une serveuse.')
-        return
-      }
-
-      const matchedSrv = restaurantServeursList.find(s =>
-        (s.nom_complet && s.nom_complet.trim().toLowerCase() === cleanSrv.toLowerCase()) ||
-        (restaurantServeurId && s.id === restaurantServeurId)
-      )
-
-      const hasActiveSession = Boolean(
-        restaurantSessionId ||
-        matchedSrv?.has_open_session ||
-        matchedSrv?.active_session_id
-      )
-
-      if (!hasActiveSession) {
-        toast.error('Session active requise', `La serveuse "${cleanSrv}" ne dispose d'aucune session de service active. Veuillez ouvrir sa session dans le module Personnel & Serveurs.`)
+      if (restaurantSaleMode === 'TABLE' && isComptoirSale) {
+        toast.error('Serveuse obligatoire', 'Pour une vente sur table, veuillez sélectionner la serveuse responsable de la commande.')
         return
       }
     }
@@ -2233,7 +2272,12 @@ export const POSPage: React.FC = () => {
     const randStr = Math.random().toString(36).substring(2, 6).toUpperCase()
     const timeStr = Date.now().toString().slice(-4)
     const orderNum = `${secteurCode}-${dateStr}-${timeStr}-${randStr}`
-    const custName = selectedCustomerSnapshot ? selectedCustomerSnapshot.name : (isRestaurant && restaurantTableSnapshot ? `Table ${restaurantTableSnapshot}` : 'Client Comptoir')
+    const displayTable = restaurantTableSnapshot
+      ? (restaurantTableSnapshot.toLowerCase().startsWith('table') ? restaurantTableSnapshot : `Table ${restaurantTableSnapshot}`)
+      : ''
+    const custName = selectedCustomerSnapshot
+      ? (displayTable ? `${selectedCustomerSnapshot.name} (${displayTable})` : selectedCustomerSnapshot.name)
+      : (isRestaurant && displayTable ? displayTable : 'Client Comptoir')
 
     // Vente directe POS validée immédiatement (circuits BAR et RESTAURANT)
 
@@ -2275,7 +2319,7 @@ export const POSPage: React.FC = () => {
       is_deferred: isDeferredSnapshot,
       status: isDeferredSnapshot ? 'A_LIVRER' : 'COMPLET',
       lines: cartSnapshot,
-      table_numero: restaurantTableSnapshot,
+      table_numero: displayTable || restaurantTableSnapshot || undefined,
       couverts: restaurantCouvertsSnapshot,
       serveur_nom: restaurantServeurSnapshot,
       emballages_consignes: (currentSectorSlug === 'brasserie' || currentSectorSlug === 'brasserie-depot-boissons')
@@ -2303,18 +2347,28 @@ export const POSPage: React.FC = () => {
     // ─── INSERTION DIRECTE VERS SUPABASE & SYNCHRONISATION ──────────────────────
     ;(async () => {
       try {
+        // RÈGLE STRICTE GESTIO 229 : Calcul du coût réel des matières (Boissons + Recettes)
         const totalCostHT = cartSnapshot.reduce((sum, item) => {
           const coef = Math.max(1, Number(item.product.coef || item.product.sector_meta?.coef || 1))
           const isTaxed = Boolean(item.product.is_vat_subject ?? item.product.is_taxable ?? (Number(item.product.tva_rate) > 0))
           const vatRate = isTaxed ? Number(item.product.vat_rate ?? item.product.tva_rate ?? 18) : 0
-          const uvCostTTC = (Number(item.product.cost_price) || 0) / coef
+          
+          let rawUnitCost = Number(item.product.cost_price || item.product.purchase_price || item.product.sector_meta?.price_achat_ht || 0)
+          if (rawUnitCost <= 0 && isRestaurant) {
+            const matchedRec = recipeProducts.find(r => r.name.toLowerCase() === item.product.name.toLowerCase())
+            if (matchedRec) {
+              rawUnitCost = Number(matchedRec.cost_price || (matchedRec as any).cout_revient_portion || (matchedRec as any).cout_matiere || 0)
+            }
+          }
+          const uvCostTTC = rawUnitCost / coef
           const uvCostHT = isTaxed ? (uvCostTTC / (1 + vatRate / 100)) : uvCostTTC
           return sum + (item.qty * uvCostHT)
         }, 0)
         const totalCostHTRounded = Math.round(totalCostHT * 100) / 100
+        const grossMarginCalculated = Math.round((cartFiscalSummarySnapshot.ht - totalCostHTRounded) * 100) / 100
 
-        // Résolution préalable de la session active de la serveuse pour garantir la synchronisation
-        if (isRestaurant && restaurantServeurSnapshot && restaurantServeurSnapshot !== 'Client Comptoir Direct' && !restaurantSessionIdSnapshot) {
+        // Résolution ou création automatique de la session active de la serveuse pour garantir la synchronisation
+        if (isRestaurant && restaurantServeurSnapshot && restaurantServeurSnapshot !== 'Client Comptoir Direct' && restaurantServeurSnapshot !== 'Serveur de Salle' && !restaurantSessionIdSnapshot) {
           try {
             let qSess = supabase
               .from('restaurant_sessions_serveurs')
@@ -2331,6 +2385,32 @@ export const POSPage: React.FC = () => {
               restaurantSessionIdSnapshot = dbSess.id
               if (!restaurantServeurIdSnapshot && dbSess.serveur_id) {
                 restaurantServeurIdSnapshot = dbSess.serveur_id
+              }
+            } else {
+              // Ouverture automatique de la session de service du jour pour cette serveuse
+              const todayBenin = new Intl.DateTimeFormat('en-CA', { timeZone: 'Africa/Porto-Novo' }).format(new Date())
+              const { data: autoSess } = await supabase
+                .from('restaurant_sessions_serveurs')
+                .insert({
+                  company_id: company?.id ?? companyId ?? '',
+                  sector_slug: currentSectorSlug || 'bar_restaurant',
+                  serveur_id: restaurantServeurIdSnapshot || null,
+                  serveur_nom: restaurantServeurSnapshot.trim(),
+                  date_session: todayBenin,
+                  heure_ouverture: new Date().toISOString(),
+                  statut: 'OUVERTE',
+                  fonds_initial: 0,
+                  total_boissons_confiees_ttc: 0,
+                  total_restaurant_ttc: 0,
+                  total_ventes_declarees_ttc: 0,
+                  total_versements_recus: 0,
+                  solde_restant_a_remettre: 0,
+                  details_suivi: { bar_items: [], restaurant_items: [], historique_ventes: [] }
+                })
+                .select('id')
+                .single()
+              if (autoSess) {
+                restaurantSessionIdSnapshot = autoSess.id
               }
             }
           } catch (_) {}
@@ -2616,57 +2696,60 @@ export const POSPage: React.FC = () => {
             const srvNom = restaurantServeurSnapshot || 'Serveur'
             const isBarCircuit = restaurantCircuit === 'BAR'
 
-            // Pour VENTE RESTAURANT / MAQUIS uniquement : Enregistrer dans restaurant_commandes et déstocker matières premières
-            if (!isBarCircuit) {
-              // 1. Enregistrer dans restaurant_commandes (statut conforme à la contrainte CHECK)
-              const { data: restCmd } = await supabase.from('restaurant_commandes').insert({
-                company_id: compId,
-                sector_slug: currentSectorSlug || 'bar_restaurant',
-                numero_commande: orderNum,
-                table_numero: numTable,
-                type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
-                serveur_nom: srvNom,
-                serveur_id: restaurantServeurIdSnapshot,
-                client_nom: custName,
-                statut: 'EN_PREPARATION',
-                statut_paiement: creditAmount >= totalNetTTCSnapshot ? 'EN_ATTENTE' : 'SOLDE',
-                total_ht: cartFiscalSummarySnapshot.ht,
-                total_tva: cartFiscalSummarySnapshot.tva,
-                total_aib: cartFiscalSummarySnapshot.aib,
-                total_ttc: totalNetTTCSnapshot,
-                total_paye: totalNetTTCSnapshot - creditAmount,
-                reste_a_payer: creditAmount,
-                mode_reglement: primaryMethod,
-                couverts: restaurantCouvertsSnapshot || 1,
-                heure_ouverture: new Date().toISOString()
-              }).select('id').maybeSingle()
+            // Enregistrer TOUTES les commandes Restaurant/Bar dans restaurant_commandes (Traçabilité intégrale)
+            const { data: restCmd } = await supabase.from('restaurant_commandes').insert({
+              company_id: compId,
+              sector_slug: currentSectorSlug || 'bar_restaurant',
+              numero_commande: orderNum,
+              table_id: restaurantTableId || null,
+              table_numero: displayTable || numTable,
+              type_commande: numTable === 'COMPTOIR' ? 'A_EMPORTER' : 'SUR_PLACE',
+              serveur_nom: srvNom,
+              serveur_id: restaurantServeurIdSnapshot,
+              client_nom: custName,
+              statut: 'EN_PREPARATION',
+              statut_paiement: creditAmount >= totalNetTTCSnapshot ? 'EN_ATTENTE' : 'SOLDE',
+              total_ht: cartFiscalSummarySnapshot.ht,
+              total_tva: cartFiscalSummarySnapshot.tva,
+              total_aib: cartFiscalSummarySnapshot.aib,
+              total_ttc: totalNetTTCSnapshot,
+              total_paye: totalNetTTCSnapshot - creditAmount,
+              reste_a_payer: creditAmount,
+              mode_reglement: primaryMethod,
+              couverts: restaurantCouvertsSnapshot || 1,
+              heure_ouverture: new Date().toISOString()
+            }).select('id').maybeSingle()
 
-              const restCmdId = restCmd?.id || null
+            const restCmdId = restCmd?.id || null
 
-              // 2. Insérer les lignes dans restaurant_commande_lignes pour affichage KDS direct
-              const kdsLignes = cartSnapshot.map(line => ({
+            // 2. Insérer les lignes dans restaurant_commande_lignes pour affichage KDS Bar et Cuisine
+            const kdsLignes = cartSnapshot.map(line => {
+              const itemCircuit = resolveProductCircuit(line.product)
+              return {
                 company_id: compId,
                 sector_slug: currentSectorSlug || 'bar_restaurant',
                 commande_id: restCmdId,
                 commande_numero: orderNum,
-                table_numero: numTable,
+                table_numero: displayTable || numTable,
                 serveur_nom: srvNom,
                 produit_id: line.product.id,
                 designation: line.product.name,
-                destination: 'CUISINE',
+                destination: itemCircuit === 'BAR' ? 'BAR' : 'CUISINE',
                 quantite: line.qty,
                 prix_unitaire: line.unitPrice,
                 total_ligne: line.qty * line.unitPrice,
                 statut_preparation: 'NOUVEAU',
                 heure_commande: new Date().toISOString()
-              }))
-
-              if (kdsLignes.length > 0) {
-                await supabase.from('restaurant_commande_lignes').insert(kdsLignes)
               }
+            })
 
-              // 3. Déstockage automatique des matières premières de cuisine selon fiches techniques
-              for (const line of cartSnapshot) {
+            if (kdsLignes.length > 0) {
+              await supabase.from('restaurant_commande_lignes').insert(kdsLignes)
+            }
+
+            // 3. Déstockage automatique des matières premières de cuisine selon fiches techniques pour les plats
+            for (const line of cartSnapshot) {
+              if (resolveProductCircuit(line.product) === 'RESTAURANT' || line.product.is_recipe) {
                 await destockerMatieresPlat({
                   company_id: compId,
                   order_id: savedDbSale.id,
@@ -3640,25 +3723,127 @@ export const POSPage: React.FC = () => {
                   </div>
                 )}
 
-                {/* 1. Sélection Client & Attribution Serveuse (Comptoir) */}
+                {/* 1. Sélection Client & Attribution Serveuse (Comptoir / Tables) */}
                 <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-2">
-                  <div className="flex items-center gap-2">
-                    <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
-                    <select
-                      value={selectedCustomerId}
-                      onChange={(e) => setSelectedCustomerId(e.target.value)}
-                      className="flex-1 text-xs border border-slate-200 rounded-xl p-2 bg-white font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    >
-                      <option value="">👤 Client Comptoir (Par défaut)</option>
-                      {customers.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name} {c.current_debt > 0 ? `(Dette : ${fmt(c.current_debt)})` : ''}
-                          {c.credit_authorized === false ? ' [Crédit non autorisé]' : ''}
-                          {c.discount_eligible && (c.discount_rate || 0) > 0 ? ` [Remise ${c.discount_rate}%]` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {isRestaurant ? (
+                    <div className="space-y-2.5">
+                      {/* Choix du mode : Vente sur Table ou Vente Directe Comptoir */}
+                      <div className="grid grid-cols-2 gap-1.5 p-1 bg-slate-200/80 rounded-xl">
+                        <button
+                          type="button"
+                          onClick={() => setRestaurantSaleMode('TABLE')}
+                          className={clsx(
+                            'py-1.5 px-2 rounded-lg text-xs font-black transition flex items-center justify-center gap-1.5',
+                            restaurantSaleMode === 'TABLE' ? 'bg-rose-600 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                          )}
+                        >
+                          <span>🍽️</span> Vente sur Table
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setRestaurantSaleMode('COMPTOIR')
+                            setRestaurantTable('')
+                            setRestaurantTableId('')
+                          }}
+                          className={clsx(
+                            'py-1.5 px-2 rounded-lg text-xs font-black transition flex items-center justify-center gap-1.5',
+                            restaurantSaleMode === 'COMPTOIR' ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-600 hover:text-slate-900'
+                          )}
+                        >
+                          <span>🥤</span> Vente Comptoir
+                        </button>
+                      </div>
+
+                      {/* Si Vente sur Table : Choix obligatoire de la table */}
+                      {restaurantSaleMode === 'TABLE' ? (
+                        <div className="space-y-1">
+                          <div className="flex items-center justify-between">
+                            <label className="text-[10px] font-black text-rose-950 uppercase tracking-wider flex items-center gap-1">
+                              <span>🍽️</span> Table Sélectionnée * :
+                            </label>
+                            <span className="text-[9px] bg-rose-100 text-rose-800 font-bold px-2 py-0.5 rounded-full">
+                              Obligatoire
+                            </span>
+                          </div>
+                          {restaurantTablesList.length === 0 ? (
+                            <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-[11px] text-amber-800 font-semibold">
+                              ⚠️ Aucune table enregistrée. Veuillez configurer vos tables dans le module <strong>« Services et Tables »</strong>.
+                            </div>
+                          ) : (
+                            <select
+                              value={restaurantTableId || ''}
+                              onChange={(e) => {
+                                const tId = e.target.value
+                                setRestaurantTableId(tId)
+                                const found = restaurantTablesList.find(t => t.id === tId)
+                                if (found) {
+                                  setRestaurantTable(found.numero_table)
+                                } else {
+                                  setRestaurantTable('')
+                                }
+                              }}
+                              className="w-full text-xs border-2 border-rose-400 rounded-xl p-2 bg-white font-black text-rose-950 focus:outline-none focus:ring-2 focus:ring-rose-500 shadow-sm"
+                            >
+                              <option value="">-- Choisir une table parmi les tables existantes * --</option>
+                              {restaurantTablesList.map((t) => {
+                                const label = t.nom && t.nom.trim() !== t.numero_table.trim() ? `${t.numero_table} - ${t.nom}` : t.numero_table
+                                return (
+                                  <option key={t.id} value={t.id}>
+                                    {label} {t.zone ? `(${t.zone})` : ''} {t.statut ? `[${t.statut}]` : ''}
+                                  </option>
+                                )
+                              })}
+                            </select>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 p-2 bg-slate-100 rounded-xl border border-slate-200 text-xs font-bold text-slate-700">
+                          <span>🥤</span>
+                          <span>Vente directe comptoir / À emporter (Sans table)</span>
+                        </div>
+                      )}
+
+                      {/* Client optionnel pour compte fidélité / dette */}
+                      <div className="space-y-1 pt-1 border-t border-slate-200/60">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase flex items-center gap-1">
+                          <UserCheck className="w-3.5 h-3.5" />
+                          Client Associé (Optionnel) :
+                        </label>
+                        <select
+                          value={selectedCustomerId}
+                          onChange={(e) => setSelectedCustomerId(e.target.value)}
+                          className="w-full text-xs border border-slate-200 rounded-xl p-1.5 bg-white font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        >
+                          <option value="">👤 Client Comptoir / Standard</option>
+                          {customers.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.name} {c.current_debt > 0 ? `(Dette : ${fmt(c.current_debt)})` : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+                  ) : (
+                    /* Autre secteur : Affichage standard */
+                    <div className="flex items-center gap-2">
+                      <UserCheck className="w-4 h-4 text-slate-500 shrink-0" />
+                      <select
+                        value={selectedCustomerId}
+                        onChange={(e) => setSelectedCustomerId(e.target.value)}
+                        className="flex-1 text-xs border border-slate-200 rounded-xl p-2 bg-white font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="">👤 Client Comptoir (Par défaut)</option>
+                        {customers.map((c) => (
+                          <option key={c.id} value={c.id}>
+                            {c.name} {c.current_debt > 0 ? `(Dette : ${fmt(c.current_debt)})` : ''}
+                            {c.credit_authorized === false ? ' [Crédit non autorisé]' : ''}
+                            {c.discount_eligible && (c.discount_rate || 0) > 0 ? ` [Remise ${c.discount_rate}%]` : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
 
                   {/* Attribution de la commande à une serveuse en mode Restaurant / Bar / Maquis */}
                   {isRestaurant && (
@@ -4877,8 +5062,15 @@ export const POSPage: React.FC = () => {
               {/* Bloc Client */}
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200 flex justify-between">
                 <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Facturé à :</span>
-                  <p className="text-sm font-bold text-slate-900">{currentSale?.customer_name}</p>
+                  <span className="text-[10px] uppercase font-bold text-slate-400">Facturé à / CLIENT :</span>
+                  <p className="text-sm font-bold text-slate-900">
+                    {currentSale?.table_numero ? (currentSale.table_numero.toLowerCase().startsWith('table') ? currentSale.table_numero : `Table ${currentSale.table_numero}`) : (currentSale?.customer_name || 'Client Comptoir')}
+                  </p>
+                  {currentSale?.serveur_nom && (
+                    <p className="text-xs font-bold text-rose-700 mt-0.5">
+                      SERVEUR RESPONSABLE : {currentSale.serveur_nom}
+                    </p>
+                  )}
                   {currentSale?.customer_ifu && (
                     <p className="text-slate-500 font-mono text-[11px]">N° IFU Client : {currentSale.customer_ifu}</p>
                   )}
@@ -5066,15 +5258,12 @@ export const POSPage: React.FC = () => {
 
               <div className="border-t border-b border-dashed border-slate-300 py-1.5 space-y-0.5 text-[11px]">
                 <p className="font-bold">{modalDocTitle} : {currentSale?.order_number}</p>
-                <p>Client : {currentSale?.customer_name || 'Client Comptoir'}</p>
-                {currentSale?.table_numero && (
-                  <p className="font-semibold text-slate-700">
-                    Table : {currentSale.table_numero}
-                  </p>
-                )}
+                <p className="font-bold text-slate-900">
+                  CLIENT : {currentSale?.table_numero ? (currentSale.table_numero.toLowerCase().startsWith('table') ? currentSale.table_numero : `Table ${currentSale.table_numero}`) : (currentSale?.customer_name || 'Client Comptoir')}
+                </p>
                 {currentSale?.serveur_nom && (
                   <p className="font-black text-rose-700">
-                    Serveuse responsable : {currentSale.serveur_nom}
+                    SERVEUR RESPONSABLE : {currentSale.serveur_nom}
                   </p>
                 )}
               </div>

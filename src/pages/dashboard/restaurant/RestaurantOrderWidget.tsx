@@ -198,20 +198,20 @@ export const RestaurantOrderWidget: React.FC<RestaurantOrderWidgetProps> = ({
             >
               <option value="" className="bg-slate-900 text-white">Comptoir / Emporter</option>
               {tablesList.length === 0 ? (
-                <>
-                  <option value="T 01" className="bg-slate-900 text-white">T 01 (Salle)</option>
-                  <option value="T 02" className="bg-slate-900 text-white">T 02 (Salle)</option>
-                  <option value="T 03" className="bg-slate-900 text-white">T 03 (Salle)</option>
-                  <option value="VIP 01" className="bg-slate-900 text-white">VIP 01</option>
-                  <option value="TER 01" className="bg-slate-900 text-white">TER 01 (Terrasse)</option>
-                  <option value="BAR 01" className="bg-slate-900 text-white">BAR 01 (Comptoir)</option>
-                </>
+                <option value="" disabled className="bg-slate-900 text-slate-400">
+                  (Aucune table enregistrée dans Services et Tables)
+                </option>
               ) : (
-                tablesList.map(t => (
-                  <option key={t.id || t.numero_table} value={t.numero_table} className="bg-slate-900 text-white">
-                    {t.numero_table} {t.zone ? `(${t.zone})` : ''} {t.statut ? `- ${t.statut}` : ''}
-                  </option>
-                ))
+                tablesList.map(t => {
+                  const label = t.nom && t.nom.trim() !== t.numero_table.trim()
+                    ? `${t.numero_table} - ${t.nom}`
+                    : t.numero_table
+                  return (
+                    <option key={t.id || t.numero_table} value={t.numero_table} className="bg-slate-900 text-white">
+                      {label} {t.zone ? `(${t.zone})` : ''} {t.statut ? `[${t.statut}]` : ''}
+                    </option>
+                  )
+                })
               )}
             </select>
           </div>

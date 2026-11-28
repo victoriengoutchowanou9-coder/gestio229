@@ -14,7 +14,7 @@ import {
   BarChart3, TrendingUp, TrendingDown, RefreshCw, Calendar,
   Filter, Users, Package, Wine, UtensilsCrossed, Printer, Download,
   Layers, DollarSign, Clock, ShieldCheck, AlertCircle, FileSpreadsheet,
-  CheckCircle2, ChevronRight, Search
+  CheckCircle2, ChevronRight, Search, ShoppingBag, Store, Receipt, Percent, Tag
 } from 'lucide-react'
 import { useTenant } from '../../../hooks/useTenant'
 import { useUIStore } from '../../../store/uiStore'
@@ -29,7 +29,7 @@ export const RestaurantReportingPage: React.FC = () => {
   const { toast } = useUIStore()
 
   // Navigation par onglets analytiques
-  const [activeTab, setActiveTab] = useState<'MATIERES' | 'PLATS' | 'BAR' | 'SERVEUSES'>('PLATS')
+  const [activeTab, setActiveTab] = useState<'VENTES' | 'COUTS' | 'RENTABILITE' | 'SERVEUSES' | 'PLATS' | 'MATIERES'>('VENTES')
 
   // Filtres temporels obligatoires (Section 11.1)
   const [periodPreset, setPeriodPreset] = useState<'today' | 'yesterday' | 'week' | 'month' | 'last_month' | 'year' | 'select_month' | 'custom'>('month')
@@ -56,6 +56,7 @@ export const RestaurantReportingPage: React.FC = () => {
   const [products, setProducts] = useState<any[]>([])
   const [pertes, setPertes] = useState<any[]>([])
   const [serveursList, setServeursList] = useState<any[]>([])
+  const [expensesList, setExpensesList] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
   // Calcul des bornes de dates selon le preset
@@ -108,15 +109,16 @@ export const RestaurantReportingPage: React.FC = () => {
     if (!companyId) return
     setLoading(true)
     try {
-      const [destockRes, salesRes, cmdRes, creanceRes, sessRes, prodRes, pertesRes, srvRes] = await Promise.all([
+      const [destockRes, salesRes, cmdRes, creanceRes, sessRes, prodRes, pertesRes, srvRes, expRes] = await Promise.all([
         supabaseTenant('restaurant_destockage_log').select('*').order('created_at', { ascending: false }),
-        supabaseTenant('sales_orders').select('*').order('created_at', { ascending: false }).limit(2000),
+        supabaseTenant('sales_orders').select('*, items:sales_order_items(*)').order('created_at', { ascending: false }).limit(2000),
         supabaseTenant('restaurant_commandes').select('*').order('created_at', { ascending: false }),
         supabaseTenant('restaurant_creances_serveuses').select('*').order('date_creation', { ascending: false }),
         supabaseTenant('restaurant_sessions_serveurs').select('*').order('created_at', { ascending: false }),
         supabaseTenant('products').select('*').order('name'),
         supabaseTenant('restaurant_pertes_gaspillage').select('*').order('created_at', { ascending: false }),
-        supabaseTenant('restaurant_serveurs').select('*').order('nom_complet')
+        supabaseTenant('restaurant_serveurs').select('*').order('nom_complet'),
+        supabaseTenant('expenses').select('*').order('created_at', { ascending: false })
       ])
 
       setDestockageLogs(destockRes.data || [])
@@ -126,6 +128,7 @@ export const RestaurantReportingPage: React.FC = () => {
       setSessionsServeuses(sessRes.data || [])
       setProducts(prodRes.data || [])
       setPertes(pertesRes.data || [])
+      setExpensesList(expRes?.data || [])
 
       // Unification des serveuses (restaurant_serveurs + restaurant_sessions_serveurs)
       const unifiedSrvMap = new Map<string, any>()
@@ -756,12 +759,265 @@ export const RestaurantReportingPage: React.FC = () => {
     }
   }, [activeServeusesList])
 
-  // Totaux globaux de la période
+  // Ventes valides de la période
+  const periodSales = useMemo(() => {
+    return salesOrders.filter(so => {
+      if (!isWithinPeriod(so.created_at || so.order_date)) return false
+      const isAnnulee = so.status === 'ANNULE' || so.status === 'canceled' || so.status === 'annule' || Boolean(so.motif_annulation)
+      if (isAnnulee) return false
+      if (filterServeuse !== 'all' && (so.serveur_nom || '').toLowerCase() !== filterServeuse.toLowerCase()) return false
+      return true
+    })
+  }, [salesOrders, isWithinPeriod, filterServeuse])
+
+  // Comparatifs temporels de Chiffre d'Affaires (Section A)
+  const caPeriodes = useMemo(() => {
+    const now = new Date()
+    const todayStr = now.toISOString().slice(0, 10)
+    
+    // Semaine
+    const day = now.getDay() || 7
+    const monday = new Date(now)
+    monday.setDate(now.getDate() - day + 1)
+    monday.setHours(0, 0, 0, 0)
+    
+    // Mois
+    const firstDayMonth = new Date(now.getFullYear(), now.getMonth(), 1)
+
+    let caJour = 0
+    let caSemaine = 0
+    let caMois = 0
+
+    salesOrders.forEach(so => {
+      const isAnnulee = so.status === 'ANNULE' || so.status === 'canceled' || so.status === 'annule' || Boolean(so.motif_annulation)
+      if (isAnnulee) return
+      const d = new Date(so.created_at || so.order_date)
+      const amt = Number(so.total_amount || 0)
+      if ((so.created_at || so.order_date || '').startsWith(todayStr)) {
+        caJour += amt
+      }
+      if (d >= monday) {
+        caSemaine += amt
+      }
+      if (d >= firstDayMonth) {
+        caMois += amt
+      }
+    })
+
+    return { caJour, caSemaine, caMois }
+  }, [salesOrders])
+
+  // =============================================================================
+  // SECTION A : RAPPORT DÉTAILLÉ DES VENTES
+  // =============================================================================
+  const ventesReport = useMemo(() => {
+    let totalCA = 0
+    let totalQte = 0
+    let caBar = 0
+    let qteBar = 0
+    let caRestaurant = 0
+    let qteRestaurant = 0
+
+    const parServeuse: Record<string, { nom: string; nbCommandes: number; caBar: number; caRestaurant: number; totalCA: number }> = {}
+    const parTable: Record<string, { table: string; nbCommandes: number; totalCA: number; isComptoir: boolean }> = {}
+    const parProduit: Record<string, { nom: string; circuit: string; qte: number; ca: number; cout: number; puMoyen: number }> = {}
+
+    periodSales.forEach(so => {
+      const montantCommande = Number(so.total_amount || 0)
+      totalCA += montantCommande
+
+      // Serveuse
+      const srvNom = so.serveur_nom || 'Comptoir Direct'
+      if (!parServeuse[srvNom]) {
+        parServeuse[srvNom] = { nom: srvNom, nbCommandes: 0, caBar: 0, caRestaurant: 0, totalCA: 0 }
+      }
+      parServeuse[srvNom].nbCommandes += 1
+      parServeuse[srvNom].totalCA += montantCommande
+
+      // Table vs Comptoir
+      const rawTable = so.table_numero || (so.customer_name?.toLowerCase().includes('table') ? so.customer_name : null)
+      const isComptoir = !rawTable || rawTable.toLowerCase().includes('comptoir')
+      const tableKey = isComptoir ? 'Comptoir Direct' : (rawTable.toLowerCase().startsWith('table') ? rawTable : `Table ${rawTable}`)
+      if (!parTable[tableKey]) {
+        parTable[tableKey] = { table: tableKey, nbCommandes: 0, totalCA: 0, isComptoir }
+      }
+      parTable[tableKey].nbCommandes += 1
+      parTable[tableKey].totalCA += montantCommande
+
+      // Lignes de commande
+      let parsedNotes: any = null
+      if (so.notes) {
+        try { parsedNotes = typeof so.notes === 'string' ? JSON.parse(so.notes) : so.notes } catch (_) {}
+      }
+      const rawLines = (so.items && so.items.length > 0)
+        ? so.items.map((it: any) => ({
+            name: it.product_name,
+            qty: Number(it.quantity || 1),
+            unitPrice: Number(it.unit_price || 0),
+            unitCost: Number(it.unit_cost || 0),
+            total: Number(it.subtotal || (Number(it.quantity || 1) * Number(it.unit_price || 0))),
+            category: it.category
+          }))
+        : (parsedNotes?.lines || parsedNotes?.items || [])
+
+      let hasLine = false
+      rawLines.forEach((l: any) => {
+        hasLine = true
+        const pNom = l.product?.name || l.name || l.designation || 'Article'
+        const qte = Number(l.qty || l.quantite || 1)
+        const pu = Number(l.unitPrice || l.prix_unitaire || (l.total ? l.total / qte : 0))
+        const total = Number(l.total || (qte * pu))
+        const circuit = l.circuit || l.product?.circuit || resolveProductCircuit(l.product || { name: pNom })
+        const unitCost = Number(l.unitCost || l.product?.cost_price || 0)
+
+        totalQte += qte
+        if (circuit === 'BAR') {
+          caBar += total
+          qteBar += qte
+          parServeuse[srvNom].caBar += total
+        } else {
+          caRestaurant += total
+          qteRestaurant += qte
+          parServeuse[srvNom].caRestaurant += total
+        }
+
+        if (!parProduit[pNom]) {
+          parProduit[pNom] = { nom: pNom, circuit, qte: 0, ca: 0, cout: 0, puMoyen: pu }
+        }
+        parProduit[pNom].qte += qte
+        parProduit[pNom].ca += total
+        parProduit[pNom].cout += (unitCost * qte)
+      })
+
+      if (!hasLine) {
+        totalQte += 1
+        const defaultCircuit = so.sector_slug === 'restaurant' ? 'CUISINE' : 'BAR'
+        if (defaultCircuit === 'BAR') {
+          caBar += montantCommande
+          qteBar += 1
+          parServeuse[srvNom].caBar += montantCommande
+        } else {
+          caRestaurant += montantCommande
+          qteRestaurant += 1
+          parServeuse[srvNom].caRestaurant += montantCommande
+        }
+      }
+    })
+
+    return {
+      totalCA,
+      totalCommandes: periodSales.length,
+      totalQte,
+      caBar,
+      qteBar,
+      caRestaurant,
+      qteRestaurant,
+      partBarPct: totalCA > 0 ? Math.round((caBar / totalCA) * 100) : 0,
+      partRestoPct: totalCA > 0 ? Math.round((caRestaurant / totalCA) * 100) : 0,
+      ventesParServeuse: Object.values(parServeuse).sort((a, b) => b.totalCA - a.totalCA),
+      ventesParTable: Object.values(parTable).sort((a, b) => b.totalCA - a.totalCA),
+      ventesParProduit: Object.values(parProduit).map(p => ({
+        ...p,
+        puMoyen: p.qte > 0 ? Math.round(p.ca / p.qte) : p.puMoyen,
+        marge: p.ca - p.cout
+      })).sort((a, b) => b.ca - a.ca)
+    }
+  }, [periodSales])
+
+  // =============================================================================
+  // SECTION B : RAPPORT DÉTAILLÉ DES COÛTS DES MATIÈRES
+  // =============================================================================
+  const coutsReport = useMemo(() => {
+    let coutBoissons = 0
+    const logsPeriode = destockageLogs.filter(l => isWithinPeriod(l.created_at))
+    const coutCuisineLogs = logsPeriode.reduce((acc, l) => acc + Number(l.total_cout || 0), 0)
+
+    ventesReport.ventesParProduit.forEach(p => {
+      if (p.circuit === 'BAR') {
+        coutBoissons += p.cout
+      }
+    })
+
+    let coutCuisine = coutCuisineLogs
+    if (coutCuisine === 0) {
+      ventesReport.ventesParProduit.forEach(p => {
+        if (p.circuit !== 'BAR') {
+          coutCuisine += p.cout
+        }
+      })
+    }
+
+    const coutTotal = coutBoissons + coutCuisine
+    const ratioCoutSurCA = ventesReport.totalCA > 0 ? Math.round((coutTotal / ventesReport.totalCA) * 100) : 0
+
+    return {
+      coutBoissons,
+      coutCuisine,
+      coutTotal,
+      ratioCoutSurCA,
+      logsPeriode,
+      matieresConsommees: matieresConsommeesReport
+    }
+  }, [destockageLogs, isWithinPeriod, ventesReport, matieresConsommeesReport])
+
+  // =============================================================================
+  // SECTION C : RAPPORT DE RENTABILITÉ GLOBALE & COMPTE DE RÉSULTAT
+  // =============================================================================
+  const rentabiliteReport = useMemo(() => {
+    const ca = ventesReport.totalCA
+    const coutMatieres = coutsReport.coutTotal
+    const margeBrute = ca - coutMatieres
+    const tauxMargeBrute = ca > 0 ? Math.round((margeBrute / ca) * 100) : 0
+
+    const expPeriode = expensesList.filter(e => isWithinPeriod(e.created_at))
+
+    let depensesExploitation = 0
+    let chargesPersonnel = 0
+    const listExploitation: any[] = []
+    const listPersonnel: any[] = []
+
+    expPeriode.forEach(e => {
+      const amt = Number(e.amount || 0)
+      const cat = (e.category || '').toLowerCase()
+      const isPersonnel = cat.includes('salaire') || cat.includes('personnel') || cat.includes('remuneration') || cat.includes('paie')
+      if (isPersonnel) {
+        chargesPersonnel += amt
+        listPersonnel.push(e)
+      } else {
+        depensesExploitation += amt
+        listExploitation.push(e)
+      }
+    })
+
+    const totalCharges = depensesExploitation + chargesPersonnel
+    const resultatApresCharges = margeBrute - totalCharges
+    const tauxRentabiliteNette = ca > 0 ? Math.round((resultatApresCharges / ca) * 100) : 0
+
+    return {
+      ca,
+      coutMatieres,
+      margeBrute,
+      tauxMargeBrute,
+      depensesExploitation,
+      chargesPersonnel,
+      totalCharges,
+      resultatApresCharges,
+      tauxRentabiliteNette,
+      listExploitation,
+      listPersonnel
+    }
+  }, [ventesReport, coutsReport, expensesList, isWithinPeriod])
+
+  // Totaux globaux de la période pour KPIs
   const kpis = useMemo(() => {
-    const totalCA = platsRentabiliteReport.reduce((acc, p) => acc + p.ca_ttc, 0)
-    const totalFoodCost = platsRentabiliteReport.reduce((acc, p) => acc + p.cout_matiere_total, 0)
-    const totalMargeBrute = totalCA - totalFoodCost
-    const tauxMargeGlobal = totalFoodCost > 0 ? Math.round((totalMargeBrute / totalFoodCost) * 100) : 0
+    const totalCA = ventesReport.totalCA
+    const totalFoodCost = coutsReport.coutTotal
+    const totalMargeBrute = rentabiliteReport.margeBrute
+    const tauxMargeGlobal = rentabiliteReport.tauxMargeBrute
+    const totalDepenses = rentabiliteReport.depensesExploitation
+    const totalPersonnel = rentabiliteReport.chargesPersonnel
+    const resultatNet = rentabiliteReport.resultatApresCharges
+    const tauxRentabilite = rentabiliteReport.tauxRentabiliteNette
     const totalCreancesActives = creances.reduce((acc, c) => acc + Number(c.solde_restant || 0), 0)
     const totalBouteillesConsigneesEnCours = creances.reduce((acc, c) => acc + Math.max(0, Number(c.consignes_bouteilles_dues || 0) - Number(c.consignes_bouteilles_rendues || 0)), 0)
 
@@ -770,10 +1026,14 @@ export const RestaurantReportingPage: React.FC = () => {
       totalFoodCost,
       totalMargeBrute,
       tauxMargeGlobal,
+      totalDepenses,
+      totalPersonnel,
+      resultatNet,
+      tauxRentabilite,
       totalCreancesActives,
       totalBouteillesConsigneesEnCours
     }
-  }, [platsRentabiliteReport, creances])
+  }, [ventesReport, coutsReport, rentabiliteReport, creances])
 
   return (
     <div className="space-y-6 animate-fadeIn pb-12">
@@ -815,44 +1075,48 @@ export const RestaurantReportingPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Cartes Synthétiques KPIs ─────────────────────────────────────────── */}
+      {/* ── Cartes Synthétiques KPIs (Conforme Audit Formules Spécifications) ─ */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
           <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Chiffre d'Affaires</p>
           <p className="text-base font-black text-slate-900 font-mono mt-1">{fmt(kpis.totalCA)}</p>
-          <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5 mt-0.5">
-            <TrendingUp className="w-3 h-3" /> Période active
+          <span className="text-[10px] text-emerald-600 font-bold flex items-center gap-0.5 mt-0.5 truncate">
+            <TrendingUp className="w-3 h-3 flex-shrink-0" /> Bar: {fmt(ventesReport.caBar)} | Resto: {fmt(ventesReport.caRestaurant)}
           </span>
         </div>
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coût Matière / Food Cost</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Coût Matières Réel</p>
           <p className="text-base font-black text-amber-600 font-mono mt-1">{fmt(kpis.totalFoodCost)}</p>
-          <span className="text-[10px] text-slate-500">Matières consommées</span>
+          <span className="text-[10px] text-slate-500 font-semibold">{coutsReport.ratioCoutSurCA}% du CA total</span>
         </div>
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Marge Brute Globale</p>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Marge Brute sur Matières</p>
           <p className="text-base font-black text-emerald-600 font-mono mt-1">{fmt(kpis.totalMargeBrute)}</p>
-          <span className="text-[10px] text-emerald-600 font-bold">CA − Coût de revient</span>
+          <span className="text-[10px] text-emerald-600 font-bold">Taux marge : +{kpis.tauxMargeGlobal}%</span>
         </div>
 
         <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Taux de Marge Moyen</p>
-          <p className="text-base font-black text-blue-600 font-mono mt-1">+{kpis.tauxMargeGlobal}%</p>
-          <span className="text-[10px] text-slate-500">Marge / Coût × 100</span>
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Dépenses Exploitation</p>
+          <p className="text-base font-black text-rose-600 font-mono mt-1">{fmt(kpis.totalDepenses)}</p>
+          <span className="text-[10px] text-slate-500 font-bold">Charges opérationnelles</span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-rose-200 shadow-sm bg-rose-50/20">
-          <p className="text-[10px] font-black text-rose-800 uppercase tracking-wider">Créances Serveuses</p>
-          <p className="text-base font-black text-rose-600 font-mono mt-1">{fmt(kpis.totalCreancesActives)}</p>
-          <span className="text-[10px] text-rose-700 font-bold">À recouvrer</span>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Charges Personnel</p>
+          <p className="text-base font-black text-indigo-600 font-mono mt-1">{fmt(kpis.totalPersonnel)}</p>
+          <span className="text-[10px] text-slate-500 font-bold">Salaires & services</span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-amber-200 shadow-sm bg-amber-50/20">
-          <p className="text-[10px] font-black text-amber-800 uppercase tracking-wider">Bouteilles Dues</p>
-          <p className="text-base font-black text-amber-900 font-mono mt-1">{kpis.totalBouteillesConsigneesEnCours} btls</p>
-          <span className="text-[10px] text-amber-700 font-bold">Contenants consignés</span>
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm bg-slate-50/50">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Résultat Net Après Charges</p>
+          <p className={clsx("text-base font-black font-mono mt-1", kpis.resultatNet >= 0 ? "text-emerald-700" : "text-rose-600")}>
+            {fmt(kpis.resultatNet)}
+          </p>
+          <span className={clsx("text-[10px] font-bold", kpis.resultatNet >= 0 ? "text-emerald-600" : "text-rose-600")}>
+            Rentabilité nette : {kpis.tauxRentabilite}%
+          </span>
         </div>
       </div>
 
@@ -970,60 +1234,586 @@ export const RestaurantReportingPage: React.FC = () => {
         </div>
       </div>
 
-      {/* ── Onglets de Sélection des 4 Rapports Normés ───────────────────────── */}
-      <div className="flex border-b border-slate-200 gap-2">
+      {/* ── Onglets de Sélection des Rapports Normés ───────────────────────── */}
+      <div className="flex border-b border-slate-200 gap-2 overflow-x-auto pb-1">
         <button
-          onClick={() => setActiveTab('PLATS')}
+          onClick={() => setActiveTab('VENTES')}
           className={clsx(
-            'px-5 py-3 text-xs font-black border-b-2 transition flex items-center gap-2',
-            activeTab === 'PLATS'
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
+            activeTab === 'VENTES'
               ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           )}
         >
-          <UtensilsCrossed className="w-4 h-4" />
-          <span>11.2 Rentabilité des Plats ({platsRentabiliteReport.length})</span>
+          <BarChart3 className="w-4 h-4" />
+          <span>A. Rapport des Ventes ({ventesReport.totalCommandes})</span>
         </button>
 
         <button
-          onClick={() => setActiveTab('MATIERES')}
+          onClick={() => setActiveTab('COUTS')}
           className={clsx(
-            'px-5 py-3 text-xs font-black border-b-2 transition flex items-center gap-2',
-            activeTab === 'MATIERES'
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
+            activeTab === 'COUTS'
               ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           )}
         >
           <Package className="w-4 h-4" />
-          <span>11.1 Consommation Matières Premières ({matieresConsommeesReport.length})</span>
+          <span>B. Rapport des Coûts</span>
         </button>
 
         <button
-          onClick={() => setActiveTab('BAR')}
+          onClick={() => setActiveTab('RENTABILITE')}
           className={clsx(
-            'px-5 py-3 text-xs font-black border-b-2 transition flex items-center gap-2',
-            activeTab === 'BAR'
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
+            activeTab === 'RENTABILITE'
               ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           )}
         >
-          <Wine className="w-4 h-4" />
-          <span>11.3 Rentabilité BAR & Boissons ({barRentabiliteReport.length})</span>
+          <TrendingUp className="w-4 h-4" />
+          <span>C. Rapport de Rentabilité</span>
         </button>
 
         <button
           onClick={() => setActiveTab('SERVEUSES')}
           className={clsx(
-            'px-5 py-3 text-xs font-black border-b-2 transition flex items-center gap-2',
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
             activeTab === 'SERVEUSES'
               ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
               : 'border-transparent text-slate-500 hover:text-slate-800'
           )}
         >
           <Users className="w-4 h-4" />
-          <span>11.4 Rapport des Serveuses ({serveusesReport.length})</span>
+          <span>D. Serveuses & Personnel ({serveusesReport.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('PLATS')}
+          className={clsx(
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
+            activeTab === 'PLATS'
+              ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          )}
+        >
+          <UtensilsCrossed className="w-4 h-4" />
+          <span>E. Plats & Recettes ({platsRentabiliteReport.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('MATIERES')}
+          className={clsx(
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
+            activeTab === 'MATIERES'
+              ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          )}
+        >
+          <Layers className="w-4 h-4" />
+          <span>F. Matières Premières ({matieresConsommeesReport.length})</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('BAR')}
+          className={clsx(
+            'px-4 py-3 text-xs font-black border-b-2 transition flex items-center gap-2 whitespace-nowrap',
+            activeTab === 'BAR'
+              ? 'border-rose-600 text-rose-600 bg-rose-50/30 rounded-t-xl'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          )}
+        >
+          <Wine className="w-4 h-4" />
+          <span>G. Stock Vente BAR ({barRentabiliteReport.length})</span>
         </button>
       </div>
+
+      {/* ── CONTENU ONGLET A : RAPPORT DES VENTES ─────────────────────────────── */}
+      {activeTab === 'VENTES' && (
+        <div className="space-y-6">
+          {/* Cartes Comparatives de Chiffre d'Affaires */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">CA Aujourd'hui</span>
+              <p className="text-xl font-black font-mono text-slate-900 mt-1">{fmt(caPeriodes.caJour)}</p>
+              <p className="text-xs text-slate-500 mt-1">Activité en direct du jour</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">CA Cette Semaine</span>
+              <p className="text-xl font-black font-mono text-indigo-700 mt-1">{fmt(caPeriodes.caSemaine)}</p>
+              <p className="text-xs text-slate-500 mt-1">Du lundi au dimanche</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-black uppercase text-slate-400 tracking-wider">CA Ce Mois</span>
+              <p className="text-xl font-black font-mono text-blue-700 mt-1">{fmt(caPeriodes.caMois)}</p>
+              <p className="text-xs text-slate-500 mt-1">Mois calendaire en cours</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border-2 border-rose-300 shadow-sm bg-rose-50/30">
+              <span className="text-[10px] font-black uppercase text-rose-800 tracking-wider">CA Période Sélectionnée</span>
+              <p className="text-xl font-black font-mono text-rose-700 mt-1">{fmt(ventesReport.totalCA)}</p>
+              <p className="text-xs text-rose-900 font-bold mt-1">
+                {ventesReport.totalCommandes} commandes • {ventesReport.totalQte} articles
+              </p>
+            </div>
+          </div>
+
+          {/* Répartition BAR vs RESTAURANT */}
+          <div className="bg-white p-6 rounded-3xl border border-slate-200 shadow-sm space-y-4">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <span>🍷 / 🍽️</span> Répartition Sectorielle : Ventes BAR vs Ventes RESTAURANT
+            </h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="bg-blue-50/60 p-4 rounded-2xl border border-blue-200 flex justify-between items-center">
+                <div>
+                  <span className="text-xs font-black uppercase text-blue-900">Ventes BAR (Boissons)</span>
+                  <p className="text-2xl font-black font-mono text-blue-800 mt-1">{fmt(ventesReport.caBar)}</p>
+                  <p className="text-xs text-blue-700 font-bold mt-0.5">{ventesReport.qteBar} boissons servies</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-3xl font-black font-mono text-blue-600">{ventesReport.partBarPct}%</span>
+                  <p className="text-[10px] text-blue-700 font-bold">du chiffre d'affaires</p>
+                </div>
+              </div>
+
+              <div className="bg-orange-50/60 p-4 rounded-2xl border border-orange-200 flex justify-between items-center">
+                <div>
+                  <span className="text-xs font-black uppercase text-orange-900">Ventes RESTAURANT & MAQUIS (Cuisine)</span>
+                  <p className="text-2xl font-black font-mono text-orange-800 mt-1">{fmt(ventesReport.caRestaurant)}</p>
+                  <p className="text-xs text-orange-700 font-bold mt-0.5">{ventesReport.qteRestaurant} plats & préparations</p>
+                </div>
+                <div className="text-right">
+                  <span className="text-3xl font-black font-mono text-orange-600">{ventesReport.partRestoPct}%</span>
+                  <p className="text-[10px] text-orange-700 font-bold">du chiffre d'affaires</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Barre de répartition visuelle */}
+            {ventesReport.totalCA > 0 && (
+              <div className="h-3 w-full bg-slate-100 rounded-full overflow-hidden flex shadow-inner">
+                <div
+                  className="bg-blue-600 transition-all duration-500"
+                  style={{ width: `${ventesReport.partBarPct}%` }}
+                  title={`BAR: ${ventesReport.partBarPct}%`}
+                />
+                <div
+                  className="bg-orange-500 transition-all duration-500"
+                  style={{ width: `${ventesReport.partRestoPct}%` }}
+                  title={`RESTAURANT: ${ventesReport.partRestoPct}%`}
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Tableau 1 : Ventes par Serveuse */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Users className="w-4 h-4 text-rose-600" /> Ventes par Serveuse Responsable
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Serveuse Responsable</th>
+                    <th className="p-3 text-center">Commandes</th>
+                    <th className="p-3 text-right">Ventes BAR</th>
+                    <th className="p-3 text-right">Ventes RESTAURANT</th>
+                    <th className="p-3 text-right">Total CA TTC</th>
+                    <th className="p-3 text-right">Part dans le CA</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {ventesReport.ventesParServeuse.map((s, idx) => {
+                    const pct = ventesReport.totalCA > 0 ? Math.round((s.totalCA / ventesReport.totalCA) * 100) : 0
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="p-3 font-black text-slate-900">{s.nom}</td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-700">{s.nbCommandes}</td>
+                        <td className="p-3 text-right font-mono text-blue-700 font-bold">{fmt(s.caBar)}</td>
+                        <td className="p-3 text-right font-mono text-orange-700 font-bold">{fmt(s.caRestaurant)}</td>
+                        <td className="p-3 text-right font-mono font-black text-slate-900">{fmt(s.totalCA)}</td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-600">{pct}%</td>
+                      </tr>
+                    )
+                  })}
+                  {ventesReport.ventesParServeuse.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="p-6 text-center text-slate-400">
+                        Aucune vente enregistrée sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Tableau 2 : Ventes par Table & Vente Directe Comptoir */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Store className="w-4 h-4 text-indigo-600" /> Ventes par Table & Ventes Directes Comptoir
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Emplacement / Table</th>
+                    <th className="p-3 text-center">Type de Vente</th>
+                    <th className="p-3 text-center">Nombre de Commandes</th>
+                    <th className="p-3 text-right">Chiffre d'Affaires Réalisé</th>
+                    <th className="p-3 text-right">Part dans le CA</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {ventesReport.ventesParTable.map((t, idx) => {
+                    const pct = ventesReport.totalCA > 0 ? Math.round((t.totalCA / ventesReport.totalCA) * 100) : 0
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="p-3 font-black text-slate-900">{t.table}</td>
+                        <td className="p-3 text-center">
+                          <span className={clsx(
+                            'px-2 py-0.5 rounded-full font-bold text-[10px]',
+                            t.isComptoir ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-800'
+                          )}>
+                            {t.isComptoir ? 'Vente Comptoir Direct' : 'Vente sur Table'}
+                          </span>
+                        </td>
+                        <td className="p-3 text-center font-mono font-bold text-slate-700">{t.nbCommandes}</td>
+                        <td className="p-3 text-right font-mono font-black text-slate-900">{fmt(t.totalCA)}</td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-600">{pct}%</td>
+                      </tr>
+                    )
+                  })}
+                  {ventesReport.ventesParTable.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="p-6 text-center text-slate-400">
+                        Aucune vente par table enregistrée sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Tableau 3 : Ventes par Produit */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <ShoppingBag className="w-4 h-4 text-emerald-600" /> Ventes Détaillées par Produit
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Produit / Article</th>
+                    <th className="p-3 text-center">Circuit</th>
+                    <th className="p-3 text-right">Quantité Vendue</th>
+                    <th className="p-3 text-right">Prix Moyen</th>
+                    <th className="p-3 text-right">CA Total TTC</th>
+                    <th className="p-3 text-right">Marge Dégagée</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {ventesReport.ventesParProduit.map((p, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="p-3 font-bold text-slate-900">{p.nom}</td>
+                      <td className="p-3 text-center">
+                        <span className={clsx(
+                          'px-2 py-0.5 rounded font-black text-[9px]',
+                          p.circuit === 'BAR' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'
+                        )}>
+                          {p.circuit}
+                        </span>
+                      </td>
+                      <td className="p-3 text-right font-mono font-black text-slate-800">{p.qte}</td>
+                      <td className="p-3 text-right font-mono text-slate-600">{fmt(p.puMoyen)}</td>
+                      <td className="p-3 text-right font-mono font-black text-slate-900">{fmt(p.ca)}</td>
+                      <td className="p-3 text-right font-mono font-bold text-emerald-700">{fmt(p.marge)}</td>
+                    </tr>
+                  ))}
+                  {ventesReport.ventesParProduit.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="p-6 text-center text-slate-400">
+                        Aucun produit vendu sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CONTENU ONGLET B : RAPPORT DES COÛTS ───────────────────────────────── */}
+      {activeTab === 'COUTS' && (
+        <div className="space-y-6">
+          {/* Synthèse des Coûts Réels */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-black uppercase text-blue-800 tracking-wider">Coût Réel Boissons</span>
+              <p className="text-xl font-black font-mono text-blue-900 mt-1">{fmt(coutsReport.coutBoissons)}</p>
+              <p className="text-xs text-slate-500 mt-1">Calculé au coût d'achat unitaire réel</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-black uppercase text-orange-800 tracking-wider">Coût Matières Plats</span>
+              <p className="text-xl font-black font-mono text-orange-900 mt-1">{fmt(coutsReport.coutCuisine)}</p>
+              <p className="text-xs text-slate-500 mt-1">Ingrédients déstockés via fiches recettes</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border-2 border-amber-300 shadow-sm bg-amber-50/20">
+              <span className="text-[10px] font-black uppercase text-amber-900 tracking-wider">Coût Total des Matières</span>
+              <p className="text-xl font-black font-mono text-amber-700 mt-1">{fmt(coutsReport.coutTotal)}</p>
+              <p className="text-xs text-amber-900 font-bold mt-1">Consommations réelles certifiées</p>
+            </div>
+            <div className="bg-white p-5 rounded-3xl border border-slate-200 shadow-sm">
+              <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">Ratio Food Cost / CA</span>
+              <p className="text-xl font-black font-mono text-indigo-700 mt-1">{coutsReport.ratioCoutSurCA}%</p>
+              <p className="text-xs text-slate-500 mt-1">Coût matières ÷ Chiffre d'affaires</p>
+            </div>
+          </div>
+
+          {/* Tableau du Coût Réel par Produit */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Package className="w-4 h-4 text-amber-600" /> Détail du Coût Réel de Revient par Produit
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Produit / Article</th>
+                    <th className="p-3 text-center">Circuit</th>
+                    <th className="p-3 text-right">Quantité Vendue</th>
+                    <th className="p-3 text-right">Coût Unitaire Réel</th>
+                    <th className="p-3 text-right">Coût Total Consommé</th>
+                    <th className="p-3 text-right">CA Réalisé</th>
+                    <th className="p-3 text-right">Ratio Coût / CA</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {ventesReport.ventesParProduit.map((p, idx) => {
+                    const ratio = p.ca > 0 ? Math.round((p.cout / p.ca) * 100) : 0
+                    const coutU = p.qte > 0 ? Math.round(p.cout / p.qte) : 0
+                    return (
+                      <tr key={idx} className="hover:bg-slate-50/50">
+                        <td className="p-3 font-bold text-slate-900">{p.nom}</td>
+                        <td className="p-3 text-center">
+                          <span className={clsx(
+                            'px-2 py-0.5 rounded font-black text-[9px]',
+                            p.circuit === 'BAR' ? 'bg-blue-100 text-blue-800' : 'bg-orange-100 text-orange-800'
+                          )}>
+                            {p.circuit}
+                          </span>
+                        </td>
+                        <td className="p-3 text-right font-mono font-black text-slate-800">{p.qte}</td>
+                        <td className="p-3 text-right font-mono text-slate-700">{fmt(coutU)}</td>
+                        <td className="p-3 text-right font-mono font-black text-amber-600">{fmt(p.cout)}</td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-900">{fmt(p.ca)}</td>
+                        <td className="p-3 text-right font-mono font-bold text-slate-600">{ratio}%</td>
+                      </tr>
+                    )
+                  })}
+                  {ventesReport.ventesParProduit.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="p-6 text-center text-slate-400">
+                        Aucun mouvement de stock ou vente sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Registre des Matières Premières Consommées */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Layers className="w-4 h-4 text-rose-600" /> Sorties Réelles de Matières Premières (Fiches Recettes)
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Ingrédient / Matière Première</th>
+                    <th className="p-3 text-right">Quantité Déstockée</th>
+                    <th className="p-3 text-center">Unité</th>
+                    <th className="p-3 text-right">Coût Unitaire Moyen</th>
+                    <th className="p-3 text-right">Coût Total Matière</th>
+                    <th className="p-3">Plats Ayant Consommé l'Ingrédient</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {matieresConsommeesReport.map((m, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="p-3 font-black text-slate-900">{m.matiere_nom}</td>
+                      <td className="p-3 text-right font-mono font-black text-rose-600">{m.total_qte}</td>
+                      <td className="p-3 text-center font-mono text-slate-500">{m.unite}</td>
+                      <td className="p-3 text-right font-mono text-slate-700">{fmt(m.cout_unitaire_moyen)} / {m.unite}</td>
+                      <td className="p-3 text-right font-mono font-black text-amber-700">{fmt(m.total_cout)}</td>
+                      <td className="p-3 text-slate-700">
+                        <div className="flex flex-wrap gap-1 max-w-xs">
+                          {m.platsList.map((p, pIdx) => (
+                            <span key={pIdx} className="bg-slate-100 text-slate-700 px-1.5 py-0.5 rounded text-[10px] font-bold">
+                              {p}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {matieresConsommeesReport.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="p-6 text-center text-slate-400">
+                        Aucun déstockage d'ingrédient enregistré sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CONTENU ONGLET C : RAPPORT DE RENTABILITÉ GLOBALE ─────────────────── */}
+      {activeTab === 'RENTABILITE' && (
+        <div className="space-y-6">
+          {/* Tableau de Bord Compte de Résultat d'Exploitation CHR */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-6 space-y-6">
+            <div>
+              <h3 className="text-base font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+                <TrendingUp className="w-5 h-5 text-emerald-600" />
+                Compte de Résultat d'Exploitation CHR • Secteur Bar & Restauration
+              </h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Calcul exact et indépendant : Marge Brute = CA − Coût Matières • Résultat Après Charges = Marge Brute − Dépenses − Personnel
+              </p>
+            </div>
+
+            <div className="bg-slate-50 rounded-2xl p-6 border border-slate-200 space-y-4 max-w-3xl">
+              <div className="flex justify-between items-center py-2 border-b border-slate-200">
+                <span className="font-bold text-slate-700 text-sm">(+) CHIFFRE D'AFFAIRES RÉEL TTC :</span>
+                <span className="font-mono font-black text-lg text-slate-900">{fmt(rentabiliteReport.ca)}</span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-slate-200 text-amber-800">
+                <span className="font-bold text-sm">(-) COÛT TOTAL RÉEL DES MATIÈRES :</span>
+                <span className="font-mono font-bold text-base text-amber-700">− {fmt(rentabiliteReport.coutMatieres)}</span>
+              </div>
+              <div className="flex justify-between items-center py-3 bg-emerald-50/70 p-3 rounded-xl border border-emerald-200 text-emerald-900">
+                <div>
+                  <span className="font-black text-sm">(=) MARGE BRUTE SUR MATIÈRES :</span>
+                  <p className="text-[10px] text-emerald-700 font-bold">Taux de marge brute : +{rentabiliteReport.tauxMargeBrute}%</p>
+                </div>
+                <span className="font-mono font-black text-xl text-emerald-700">{fmt(rentabiliteReport.margeBrute)}</span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-slate-200 text-rose-800">
+                <span className="font-bold text-sm">(-) DÉPENSES D'EXPLOITATION (Charges opérationnelles) :</span>
+                <span className="font-mono font-bold text-base text-rose-700">− {fmt(rentabiliteReport.depensesExploitation)}</span>
+              </div>
+              <div className="flex justify-between items-center py-2 border-b border-slate-200 text-indigo-800">
+                <span className="font-bold text-sm">(-) CHARGES DE PERSONNEL (Salaires & Rémunérations) :</span>
+                <span className="font-mono font-bold text-base text-indigo-700">− {fmt(rentabiliteReport.chargesPersonnel)}</span>
+              </div>
+              <div className={clsx(
+                'flex justify-between items-center py-4 p-4 rounded-2xl border-2',
+                rentabiliteReport.resultatApresCharges >= 0
+                  ? 'bg-emerald-100/60 border-emerald-400 text-emerald-950'
+                  : 'bg-rose-100/60 border-rose-400 text-rose-950'
+              )}>
+                <div>
+                  <span className="font-black text-base uppercase">(=) RÉSULTAT APRÈS CHARGES (Résultat Net) :</span>
+                  <p className="text-xs font-bold mt-0.5">
+                    Taux de rentabilité nette : {rentabiliteReport.tauxRentabiliteNette}% du chiffre d'affaires
+                  </p>
+                </div>
+                <span className="font-mono font-black text-2xl">{fmt(rentabiliteReport.resultatApresCharges)}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Dépenses Réelles d'Exploitation */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Receipt className="w-4 h-4 text-rose-600" /> Dépenses d'Exploitation Enregistrées sur la Période
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Réf / N° Dépense</th>
+                    <th className="p-3">Catégorie</th>
+                    <th className="p-3">Bénéficiaire / Motif</th>
+                    <th className="p-3 text-center">Paiement</th>
+                    <th className="p-3 text-right">Montant</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rentabiliteReport.listExploitation.map((e, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="p-3 font-mono text-slate-600">
+                        {new Date(e.created_at).toLocaleDateString('fr-BJ', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-slate-800">{e.expense_number || `DEP-${e.id?.slice(0, 6)}`}</td>
+                      <td className="p-3 font-bold text-slate-700">{e.category}</td>
+                      <td className="p-3 text-slate-800">{e.beneficiary || e.notes || 'Dépense courante'}</td>
+                      <td className="p-3 text-center capitalize font-semibold">{e.payment_method || 'Espèces'}</td>
+                      <td className="p-3 text-right font-mono font-black text-rose-600">{fmt(Number(e.amount) || 0)}</td>
+                    </tr>
+                  ))}
+                  {rentabiliteReport.listExploitation.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="p-6 text-center text-slate-400">
+                        Aucune dépense d'exploitation enregistrée sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Charges de Personnel */}
+          <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm p-5 space-y-3">
+            <h3 className="text-sm font-black text-slate-900 uppercase tracking-wider flex items-center gap-2">
+              <Users className="w-4 h-4 text-indigo-600" /> Charges de Personnel Enregistrées sur la Période
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="bg-slate-50 text-slate-500 font-bold uppercase text-[10px]">
+                  <tr>
+                    <th className="p-3">Date</th>
+                    <th className="p-3">Réf</th>
+                    <th className="p-3">Employé / Bénéficiaire</th>
+                    <th className="p-3">Motif / Notes</th>
+                    <th className="p-3 text-right">Montant</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {rentabiliteReport.listPersonnel.map((e, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50/50">
+                      <td className="p-3 font-mono text-slate-600">
+                        {new Date(e.created_at).toLocaleDateString('fr-BJ', { day: '2-digit', month: '2-digit', year: 'numeric' })}
+                      </td>
+                      <td className="p-3 font-mono font-bold text-slate-800">{e.expense_number || `SAL-${e.id?.slice(0, 6)}`}</td>
+                      <td className="p-3 font-black text-slate-900">{e.beneficiary || 'Personnel'}</td>
+                      <td className="p-3 text-slate-700">{e.notes || 'Rémunération / Charge salariale'}</td>
+                      <td className="p-3 text-right font-mono font-black text-indigo-700">{fmt(Number(e.amount) || 0)}</td>
+                    </tr>
+                  ))}
+                  {rentabiliteReport.listPersonnel.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="p-6 text-center text-slate-400">
+                        Aucune charge salariale enregistrée sur cette période.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── CONTENU ONGLET 11.2 : RENTABILITÉ DES PLATS ───────────────────────── */}
       {activeTab === 'PLATS' && (

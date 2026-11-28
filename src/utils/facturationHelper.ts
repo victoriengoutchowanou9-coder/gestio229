@@ -391,7 +391,7 @@ export function generateFactureA4Pdf(data: FacturationDocumentData): jsPDF {
 
   // 3. Bloc Client
   doc.setFillColor(248, 250, 252)
-  doc.roundedRect(margin, y, pageWidth - 2 * margin, 15, 2, 2, 'F')
+  doc.roundedRect(margin, y, pageWidth - 2 * margin, 18, 2, 2, 'F')
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(8)
   doc.setTextColor(100, 116, 139)
@@ -400,7 +400,17 @@ export function generateFactureA4Pdf(data: FacturationDocumentData): jsPDF {
   doc.setFont('helvetica', 'bold')
   doc.setFontSize(10)
   doc.setTextColor(15, 23, 42)
-  doc.text(data.customer.name || 'Client Comptoir', margin + 4, y + 11)
+  const clientNameA4 = data.sale.table_numero
+    ? (data.sale.table_numero.toLowerCase().startsWith('table') ? data.sale.table_numero : `Table ${data.sale.table_numero}`)
+    : (data.customer.name || 'Client Comptoir')
+  doc.text(clientNameA4, margin + 4, y + 11)
+
+  if (data.sale.serveur_nom) {
+    doc.setFontSize(8)
+    doc.setFont('helvetica', 'bold')
+    doc.setTextColor(190, 24, 93)
+    doc.text(`SERVEUR RESPONSABLE : ${data.sale.serveur_nom}`, margin + 4, y + 15.5)
+  }
 
   if (data.customer.ifu) {
     doc.setFont('helvetica', 'normal')
@@ -408,7 +418,7 @@ export function generateFactureA4Pdf(data: FacturationDocumentData): jsPDF {
     doc.setTextColor(100, 116, 139)
     doc.text(`N° IFU : ${data.customer.ifu}`, rightColX, y + 11)
   }
-  y += 18
+  y += 21
 
   // 4. Tableau des Lignes avec colonne Régime fiscal
   const tableBody = data.summary.lines.map((line) => [
@@ -641,7 +651,14 @@ export function generateTicket80Pdf(data: FacturationDocumentData): jsPDF {
   y += 3.5
   doc.text(`Date : ${formatBeninDateTime(data.sale.date)}`, 4, y)
   y += 3.5
-  doc.text(`Client : ${data.customer.name || 'Client Comptoir'}`, 4, y)
+  const clientDisplay80 = data.sale.table_numero
+    ? (data.sale.table_numero.toLowerCase().startsWith('table') ? data.sale.table_numero : `Table ${data.sale.table_numero}`)
+    : (data.customer.name || 'Client Comptoir')
+  doc.text(`CLIENT : ${clientDisplay80}`, 4, y)
+  if (data.sale.serveur_nom) {
+    y += 3.5
+    doc.text(`SERVEUR RESPONSABLE : ${data.sale.serveur_nom}`, 4, y)
+  }
   if (data.customer.ifu) {
     y += 3.5
     doc.text(`IFU Client : ${data.customer.ifu}`, 4, y)

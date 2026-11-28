@@ -95,10 +95,11 @@ export const ClotureCaisse: React.FC = () => {
         .select('*')
         .eq('company_id', companyId)
 
-      // Construire les lignes par (Secteur x Mode)
-      const modes: Array<{ key: 'espece' | 'mtn_momo'; label: string }> = [
-        { key: 'espece', label: 'Espèce' },
-        { key: 'mtn_momo', label: 'MoMo' }
+      // Construire les lignes par (Secteur x Mode) - Séparation stricte Espèces, MTN MoMo, Moov Money
+      const modes: Array<{ key: 'espece' | 'mtn_momo' | 'moov'; label: string }> = [
+        { key: 'espece', label: 'Espèces' },
+        { key: 'mtn_momo', label: 'MTN MoMo' },
+        { key: 'moov', label: 'Moov Money' }
       ]
 
       const nouvellesLignes: ClotureLigne[] = []
@@ -119,17 +120,21 @@ export const ClotureCaisse: React.FC = () => {
             f.caisse_id === caisse.id
           )
 
-          // Calculer Total Entrées du jour pour ce secteur et ce mode
+          // Calculer Total Entrées du jour pour ce secteur et ce mode (uniquement encaissements réels, exclure créances non réglées)
           const entreesVentes = (salesData || [])
             .filter((s: any) => {
               const sec = (s.sector_slug || s.secteur_slug || 'boutique').toLowerCase().replace(/^sec-/, '')
               if (sec !== cleanSlug) return false
               const pm = (s.payment_method || s.payment_status || 'espece').toLowerCase()
               if (mode.key === 'espece') return pm === 'espece' || pm === 'especes' || pm === 'cash'
-              if (mode.key === 'mtn_momo') return pm.includes('momo') || pm.includes('wave') || pm.includes('moov')
+              if (mode.key === 'mtn_momo') return (pm.includes('mtn') || pm.includes('momo') || pm.includes('wave')) && !pm.includes('moov')
+              if (mode.key === 'moov') return pm.includes('moov') || pm.includes('flooz')
               return false
             })
-            .reduce((sum: number, s: any) => sum + (Number(s.paid_amount || s.total_amount) || 0), 0)
+            .reduce((sum: number, s: any) => {
+              if (s.payment_status === 'credit' && (!s.paid_amount || Number(s.paid_amount) <= 0)) return sum
+              return sum + (Number(s.paid_amount || (s.payment_status === 'credit' ? 0 : s.total_amount)) || 0)
+            }, 0)
 
           // Calculer Total Sorties (Dépenses) du jour strictement pour ce secteur et ce mode (sans double comptage)
           const sortiesDepenses = (expensesData || [])
@@ -138,7 +143,8 @@ export const ClotureCaisse: React.FC = () => {
               if (sec !== cleanSlug) return false
               const pm = (e.payment_method || 'especes').toLowerCase()
               if (mode.key === 'espece') return pm === 'especes' || pm === 'espece' || pm === 'cash'
-              if (mode.key === 'mtn_momo') return pm.includes('momo') || pm.includes('wave') || pm.includes('moov')
+              if (mode.key === 'mtn_momo') return (pm.includes('mtn') || pm.includes('momo') || pm.includes('wave')) && !pm.includes('moov')
+              if (mode.key === 'moov') return pm.includes('moov') || pm.includes('flooz')
               return false
             })
             .reduce((sum: number, exp: any) => sum + (Number(exp.amount || exp.montant) || 0), 0)
@@ -147,6 +153,8 @@ export const ClotureCaisse: React.FC = () => {
           let soldeDebut = Number(caisse.fond_ouverture_especes || 0)
           if (mode.key === 'mtn_momo') {
             soldeDebut = Number(caisse.fond_ouverture_momo || 0)
+          } else if (mode.key === 'moov') {
+            soldeDebut = Number((caisse as any).fond_ouverture_moov || 0)
           }
 
           // Solde actuel : priorité au solde BDD fonds_actuels s'il existe, sinon soldeDebut + entrees - sorties

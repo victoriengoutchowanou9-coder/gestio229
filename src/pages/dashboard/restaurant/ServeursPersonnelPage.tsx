@@ -908,15 +908,15 @@ export const ServeursPersonnelPage: React.FC = () => {
                   </span>
                 </div>
 
-                {/* ── SECTION 1 : BAR ── */}
+                {/* ── SECTION A : BOISSONS CONFIÉES ── */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h5 className="text-xs font-black uppercase text-amber-900 flex items-center gap-1.5">
                       <Wine className="w-4 h-4 text-amber-600" />
-                      SECTION 1 : BAR (Boissons & Produits Bar)
+                      A. BOISSONS CONFIÉES (Boissons Réellement Vendues)
                     </h5>
                     <span className="text-xs font-black text-amber-950 font-mono bg-amber-100/80 px-2.5 py-0.5 rounded-lg border border-amber-200">
-                      Total BAR : {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
+                      Total Boissons : {fmt(sessionSuiviDetail?.total_bar ?? selectedSession.total_bar_ttc ?? 0)}
                     </span>
                   </div>
 
@@ -924,10 +924,10 @@ export const ServeursPersonnelPage: React.FC = () => {
                     <table className="w-full text-xs text-left">
                       <thead className="bg-amber-50/70 text-amber-950 font-black text-[10px] uppercase border-b border-amber-200/60">
                         <tr>
-                          <th className="p-3">Produit Bar</th>
-                          <th className="p-3 text-center">Quantité Vente</th>
+                          <th className="p-3">Boisson Réellement Vendue</th>
+                          <th className="p-3 text-center">Quantité</th>
                           <th className="p-3 text-right">Prix Unitaire</th>
-                          <th className="p-3 text-right">Total</th>
+                          <th className="p-3 text-right">Montant</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">
@@ -943,7 +943,7 @@ export const ServeursPersonnelPage: React.FC = () => {
                         ) : (
                           <tr>
                             <td colSpan={4} className="p-4 text-center text-slate-400 italic">
-                              Aucune vente BAR enregistrée pour cette session.
+                              Aucune boisson vendue enregistrée pour cette session.
                             </td>
                           </tr>
                         )}
@@ -951,8 +951,8 @@ export const ServeursPersonnelPage: React.FC = () => {
                       {sessionSuiviDetail && sessionSuiviDetail.bar_items.length > 0 && (
                         <tfoot className="bg-amber-50/50 border-t border-amber-200/80 font-black text-xs">
                           <tr>
-                            <td colSpan={3} className="p-3 text-amber-950 uppercase">Total Ventes BAR :</td>
-                            <td className="p-3 text-right font-mono text-amber-700 text-sm">{fmt(sessionSuiviDetail.total_bar)}</td>
+                            <td colSpan={3} className="p-3 text-amber-950 uppercase font-bold">Total Boissons Confiées :</td>
+                            <td className="p-3 text-right font-mono text-amber-700 text-sm font-black">{fmt(sessionSuiviDetail.total_bar)}</td>
                           </tr>
                         </tfoot>
                       )}
@@ -960,15 +960,15 @@ export const ServeursPersonnelPage: React.FC = () => {
                   </div>
                 </div>
 
-                {/* ── SECTION 2 : RESTAURANT / MAQUIS ── */}
+                {/* ── SECTION B : PLATS CONFIÉS ── */}
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
                     <h5 className="text-xs font-black uppercase text-rose-900 flex items-center gap-1.5">
                       <Utensils className="w-4 h-4 text-rose-600" />
-                      SECTION 2 : RESTAURANT / MAQUIS (Plats & Repas)
+                      B. PLATS CONFIÉS (Plats & Repas Réellement Vendus)
                     </h5>
                     <span className="text-xs font-black text-rose-950 font-mono bg-rose-100/80 px-2.5 py-0.5 rounded-lg border border-rose-200">
-                      Total RESTAURANT : {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
+                      Total Plats : {fmt(sessionSuiviDetail?.total_restaurant ?? selectedSession.total_restaurant_ttc ?? 0)}
                     </span>
                   </div>
 
@@ -976,10 +976,10 @@ export const ServeursPersonnelPage: React.FC = () => {
                     <table className="w-full text-xs text-left">
                       <thead className="bg-rose-50/70 text-rose-950 font-black text-[10px] uppercase border-b border-rose-200/60">
                         <tr>
-                          <th className="p-3">Plat / Repas</th>
-                          <th className="p-3 text-center">Quantité Vendue</th>
+                          <th className="p-3">Plat Réellement Vendu</th>
+                          <th className="p-3 text-center">Quantité</th>
                           <th className="p-3 text-right">Prix Unitaire</th>
-                          <th className="p-3 text-right">Total</th>
+                          <th className="p-3 text-right">Montant</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-100">

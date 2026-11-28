@@ -749,7 +749,7 @@ export async function enregistrerVersementServeur(params: {
   mode_reglement?: 'ESPECES' | 'MTN_MOMO' | 'MOOV_MONEY' | 'CARTE' | 'CHEQUE' | 'AUTRE'
   recu_par: string
   commentaire?: string
-}): Promise<{ success: boolean; soldeApres: number; reference: string }> {
+}): Promise<{ success: boolean; soldeApres: number; reference: string; soldeAvant?: number }> {
   const {
     company_id,
     session_id,
@@ -840,7 +840,7 @@ export async function enregistrerVersementServeur(params: {
 
     // Intégrer également à la caisse principale de l'établissement Bar / Restaurant
     try {
-      const isCash = mode_reglement === 'ESPECES' || mode_reglement === 'espece'
+      const isCash = (mode_reglement as any) === 'ESPECES' || (mode_reglement as any) === 'espece'
       const isMomo = ['MTN_MOMO', 'MOOV_MONEY', 'MOMO', 'momo_mtn', 'momo_moov'].includes(mode_reglement)
 
       await enregistrerMouvementCaisse({
@@ -1135,13 +1135,14 @@ export async function accumulerVenteDansSessionServeuse(params: {
       total_ventes_declarees_ttc: suivi.total_general,
       total_bar_ttc: suivi.total_bar,
       total_restaurant_ttc: suivi.total_restaurant,
+      total_boissons_confiees_ttc: suivi.total_bar,
       solde_restant_a_remettre: suivi.solde_restant,
       details_suivi: {
         total_bar: suivi.total_bar,
         total_restaurant: suivi.total_restaurant,
         total_general: suivi.total_general,
-        total_boissons_confiees: totalBoissonsConfiees,
-        total_plats_confies: totalPlatsConfies > 0 ? totalPlatsConfies : suivi.total_restaurant,
+        total_boissons_confiees: suivi.total_bar,
+        total_plats_confies: suivi.total_restaurant,
         total_versements: Number(sess.total_versements_recus) || 0,
         solde_restant: suivi.solde_restant,
         bar_items: suivi.bar_items,
@@ -1156,6 +1157,65 @@ export async function accumulerVenteDansSessionServeuse(params: {
       .from('restaurant_sessions_serveurs')
       .update(updatePayload)
       .eq('id', session_id)
+
+    // Alimentation de la table relationnelle restaurant_boissons_confiees pour synchronisation du module Serveurs & Personnel
+    try {
+      for (const it of items) {
+        if (resolveProductCircuit(it) === 'BAR') {
+          const qte = Number(it.quantite) || 0
+          const pu = Number(it.prix_unitaire) || 0
+          const nom = (it.nom || 'Boisson').trim()
+          const prodId = it.produit_id || nom
+          if (qte <= 0) continue
+
+          const { data: existingB } = await supabase
+            .from('restaurant_boissons_confiees')
+            .select('id, qte_remise, qte_vendue, total_valeur_remise')
+            .eq('session_id', session_id)
+            .ilike('produit_nom', nom)
+            .limit(1)
+            .maybeSingle()
+
+          if (existingB) {
+            const newRemise = Math.round((Number(existingB.qte_remise || 0) + qte) * 1000) / 1000
+            const newVendue = Math.round((Number(existingB.qte_vendue || 0) + qte) * 1000) / 1000
+            await supabase
+              .from('restaurant_boissons_confiees')
+              .update({
+                qte_remise: newRemise,
+                qte_vendue: newVendue,
+                total_valeur_remise: Math.round(newRemise * (pu > 0 ? pu : 0)),
+                updated_at: new Date().toISOString()
+              })
+              .eq('id', existingB.id)
+          } else {
+            await supabase
+              .from('restaurant_boissons_confiees')
+              .insert({
+                company_id: sess.company_id,
+                sector_slug: sess.sector_slug || 'restaurant',
+                session_id: session_id,
+                serveur_nom: sess.serveur_nom,
+                produit_id: prodId,
+                produit_nom: nom,
+                qte_remise: qte,
+                qte_retournee: 0,
+                qte_vendue: qte,
+                qte_offerte: 0,
+                qte_cassee: 0,
+                qte_restante_declaree: 0,
+                prix_vente_unitaire: pu,
+                cout_achat_unitaire: 0,
+                total_valeur_remise: Math.round(qte * pu),
+                remis_par: 'POS Vente',
+                notes: `Vente ${order_number}`
+              })
+          }
+        }
+      }
+    } catch (confErr) {
+      console.warn('[RestaurantService] Notice insertion restaurant_boissons_confiees:', confErr)
+    }
 
     return { success: true }
   } catch (err: any) {
@@ -1238,10 +1298,16 @@ export async function obtenirSuiviSessionServeuse(
         const meta = s.sector_meta || {}
         let parsedNotes: any = {}
         try { if (s.notes) parsedNotes = typeof s.notes === 'string' ? JSON.parse(s.notes) : s.notes } catch (_) {}
+        const srv1 = (meta.serveur_nom || parsedNotes.serveur_nom || s.serveur_nom || '').trim().toLowerCase()
+        const srv2 = (sess?.serveur_nom || '').trim().toLowerCase()
+        const sameServer = Boolean(srv1 && srv2 && (srv1 === srv2 || srv1.includes(srv2) || srv2.includes(srv1)))
+        const sDate = (s.order_date || s.created_at || '').slice(0, 10)
+        const sessDate = (sess?.date_session || '').slice(0, 10)
+        const sameDate = Boolean(sessDate && sDate === sessDate)
         return (
           meta.session_id === session_id ||
           parsedNotes.session_id === session_id ||
-          (sess && s.sector_meta?.serveur_nom === sess.serveur_nom && s.order_date === sess.date_session)
+          (sameServer && sameDate)
         )
       })
 
